@@ -90,18 +90,28 @@ def build_implant(os_target="linux", arch_target="amd64", c2_urls="http://127.0.
         src_file
     ]
     
+    core_c2_dir = os.path.join(base_dir, "core", "c2")
+    
+    print(f"  {C_CYAN}[*] Downloading Go dependencies (go mod tidy)...{C_RESET}")
+    try:
+        subprocess.run(["go", "mod", "tidy"], cwd=core_c2_dir, check=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        print(f"  {C_RED}[!] Failed to download Go dependencies:{C_RESET}\n{e.stderr.decode('utf-8', errors='ignore')}")
+        sys.exit(1)
+        
     try:
         # Check if garble is installed
         subprocess.run(["garble", "version"], capture_output=True, check=True)
     except FileNotFoundError:
         print(f"  {C_RED}[!] 'garble' is not installed or not in PATH.{C_RESET}")
         print(f"  {C_YELLOW}Install with: go install mvdan.cc/garble@latest{C_RESET}")
+        print(f"  {C_YELLOW}Also make sure ~/go/bin is in your PATH.{C_RESET}")
         sys.exit(1)
         
     print(f"  {C_CYAN}[*] Running: {' '.join(cmd)}{C_RESET}")
     
     try:
-        subprocess.run(cmd, env=env, check=True)
+        subprocess.run(cmd, env=env, cwd=core_c2_dir, check=True)
         print(f"  {C_GREEN}[+] Build complete: {out_file}{C_RESET}")
     except subprocess.CalledProcessError as e:
         print(f"  {C_RED}[!] Build failed: {e}{C_RESET}")
