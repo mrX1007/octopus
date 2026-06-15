@@ -1,0 +1,1226 @@
+# ═══════════════════════════════════════════════
+# DATABASE
+# ═══════════════════════════════════════════════
+db:
+  host: "localhost"
+  user: "octopus"
+  password: "123"
+  database: "octopus"
+
+# ═══════════════════════════════════════════════
+# OLLAMA / LLM (v7.0)
+# ═══════════════════════════════════════════════
+ollama:
+  url: "http://localhost:11434/api/generate"
+  model: "octopus-qwen"
+  max_tokens: 4096           # match Modelfile num_predict (12GB VRAM safe)
+  temperature: 0.4           # v7.0: lowered for deterministic tool selection
+  top_p: 0.9
+  timeout: 1200              # seconds — max wait for one generation
+  retries: 3                 # how many times to retry on timeout
+  context_window: 6          # 6 exchanges preserved in agent history
+  max_tool_loops: 25         # max iterations for full kill chain
+  summarize_threshold: 8000  # v7.0: increased for 16K context window
+  concurrent_tools: 8        # parallel tool execution workers
+  num_gpu: 28                # 12GB VRAM → 28 of ~40 layers on GPU
+  num_threads: 16            # i9 CPU threads for offloaded layers
+  num_ctx: 16384             # v7.0: doubled from 8192 for better reasoning
+  num_batch: 512             # v7.0: batch size for faster inference
+  repeat_penalty: 1.15       # v7.0: reduced from 1.2
+
+# ═══════════════════════════════════════════════
+# SCRAPLING
+# ═══════════════════════════════════════════════
+scrapling:
+  enabled: true
+  timeout: 30                # per-page fetch timeout
+  max_crawl_pages: 10        # max pages for deep crawl
+  use_stealth: true          # use StealthyFetcher (anti-bot bypass)
+
+# ═══════════════════════════════════════════════
+# SHODAN (v8.0)
+# ═══════════════════════════════════════════════
+# API key is loaded from .env file (SHODAN_API_KEY), NOT from here!
+shodan:
+  max_results: 100           # max results per search
+  timeout: 30                # API request timeout
+  auto_scan: false           # auto-lookup targets on scan start
+  save_results: true         # save results to DB + JSON
+  results_dir: "/tmp/octopus_shodan"
+  auto_pipeline: true        # auto-feed into killchain pipeline
+
+# ═══════════════════════════════════════════════
+# HASH CRACKER (v8.0)
+# ═══════════════════════════════════════════════
+# Optimized for: Intel i9-14900 / RTX 4080 / 64GB RAM
+hash_cracker:
+  preferred: "hashcat"       # hashcat (GPU) or john (CPU)
+  gpu_device: 0              # CUDA device ID
+  workload: 3                # hashcat -w (1=low, 2=med, 3=high, 4=insane)
+  timeout: 600               # max seconds per cracking phase
+  max_wordlist_size: 50000000 # max lines to process from wordlist
+
+# ═══════════════════════════════════════════════
+# KILL CHAIN (v7.0 — 9 stages)
+# ═══════════════════════════════════════════════
+killchain:
+  enabled: true
+  stages:
+    vuln_assess: true        # Stage 1: auto CVE matching via searchsploit/nuclei
+    exploitation: true       # Stage 2: auto MSF module matching
+    privesc: true            # Stage 3: automated privilege escalation
+    persistence: true        # Stage 4: ACTIVE — SSH keys, crontab, SUID shell
+    lateral_movement: true   # Stage 5: ACTIVE — auto-try creds on internal hosts
+    data_exfil: true         # Stage 6: dump shadow, keys, configs, DB creds
+    cleanup: true            # Stage 9 (v7.0): stealth evidence destruction
+  exfil_dir: "/tmp"          # base dir for exfiltrated files
+
+# ═══════════════════════════════════════════════
+# STRATEGY (v7.0)
+# ═══════════════════════════════════════════════
+strategy:
+  prefer_stealth: true       # use evasion by default
+  max_bruteforce_time: 600   # max seconds for bruteforce attempts
+  auto_killchain: true       # auto-run kill chain when creds found
+  auto_cleanup: true         # auto-run Stage 9 cleanup after assessment
+  parallel_tools: 8          # max concurrent tool executions
+  max_director_loops: 10     # max Director AI loops
+
+# ═══════════════════════════════════════════════
+# REPORTING (v7.0)
+# ═══════════════════════════════════════════════
+reporting:
+  auto_export: false         # auto-generate PDF after scan
+  include_raw_output: false  # include raw tool output in report
+  cvss_scoring: true         # calculate CVSS base scores
+
+# ═══════════════════════════════════════════════
+# BRUTEFORCE ANTI-BLOCK
+# ═══════════════════════════════════════════════
+bruteforce:
+  adaptive_threads: true     # auto-reduce threads on fail2ban detection
+  ssh_thread_levels: [4, 2, 1]  # adaptive: drop on rate-limit
+  max_retries: 3             # retries per tier on block
+  backoff_seconds: [30, 60, 120]  # exponential backoff
+  ssh_wait_W: 15             # hydra -W flag (inter-connect wait)
+  ssh_wait_w: 15             # hydra -w flag (response wait)
+  cooldown_between_tiers: 10 # seconds between tier 1 and tier 1.5
+
+# ═══════════════════════════════════════════════
+# PATHS
+# ═══════════════════════════════════════════════
+paths:
+  reports: "~/OCTOPUS/reports"
+  logs: "~/OCTOPUS/logs"
+  checkpoints: "/tmp"       # checkpoint files dir
+  memory: "~/OCTOPUS/memory" # v7.0: ChromaDB vector memory storage
+
+# ═══════════════════════════════════════════════
+# WORDLISTS
+# ═══════════════════════════════════════════════
+# Lists are tried in order — first existing file wins.
+# Add your custom paths at the top for priority.
+
+wordlists:
+  # ── PASSWORD LISTS ─────────────────────────
+  passwords:
+    - /usr/share/wordlists/rockyou.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/000webhost.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/adobe100.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/alleged-gmail-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/Ashley-Madison.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/bible.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/bible-withcount.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/carders.cc.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/elitehacker.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/elitehacker-withcount.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/faithwriters.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/faithwriters-withcount.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/fortinet-2021_passwords-dup.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/fortinet-2021_passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/hak5.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/hak5-withcount.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/honeynet2.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/honeynet.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/honeynet-withcount.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/hotmail.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/izmy.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/Lizard-Squad.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/md5decryptor-uk.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/muslimMatch.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/muslimMatch-withcount.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/myspace.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/myspace-withcount.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/NordVPN.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/phpbb-cleaned-up.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/phpbb.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/phpbb-withcount.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/porn-unknown.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/porn-unknown-withcount.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-05.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-10.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-15.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-20.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-25.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-30.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-35.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-40.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-45.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-50.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-55.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-60.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-65.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-70.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-75.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-withcount.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/singles.org.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/singles.org-withcount.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/tuscl.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/twitter-banned.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/youporn2012-raw.txt
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/youporn2012.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/10k-most-common.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/1900-2020.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/2020-200_most_used_passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/2023-200_most_used_passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/2024-197_most_used_passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/2025-199_most_used_passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/500-worst-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/best1050.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/best110.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/best15.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/common-passwords-win.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/darkweb2017_top-10000.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/darkweb2017_top-1000.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/darkweb2017_top-100.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/darkweb2017_top-10.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/four-digit-pin-codes-sorted-by-frequency-withcount.csv
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/medical-devices.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/probable-v2_top-12000.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/probable-v2_top-1575.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/probable-v2_top-207.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/Pwdb_top-10000000.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/Pwdb_top-1000000.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/Pwdb_top-100000.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/Pwdb_top-10000.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/Pwdb_top-1000.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/SplashData-2014.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/SplashData-2015-1.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/SplashData-2015-2.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/top-20-common-SSH-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/top-passwords-shortlist.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/worst-passwords-2017-top100-slashdata.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/xato-net-10-million-passwords-1000000.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/xato-net-10-million-passwords-100000.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/xato-net-10-million-passwords-10000.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/xato-net-10-million-passwords-1000.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/xato-net-10-million-passwords-100.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/xato-net-10-million-passwords-10.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/xato-net-10-million-passwords-dup.txt
+    - /usr/share/wordlists/seclists/Passwords/Common-Credentials/xato-net-10-million-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/clarkson-university-82.txt
+    - /usr/share/wordlists/seclists/Passwords/corporate_passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/darkc0de.txt
+    - /usr/share/wordlists/seclists/Passwords/days.txt
+    - /usr/share/wordlists/seclists/Passwords/months.txt
+    - /usr/share/wordlists/seclists/Passwords/Most-Popular-Letter-Passes.txt
+    - /usr/share/wordlists/seclists/Passwords/mssql-passwords-nansh0u-guardicore.txt
+    - /usr/share/wordlists/seclists/Passwords/openwall.net-all.txt
+    - /usr/share/wordlists/seclists/Passwords/SCRABBLE-hackerhouse.tgz
+    - /usr/share/wordlists/seclists/Passwords/scraped-JWT-secrets.txt
+    - /usr/share/wordlists/seclists/Passwords/seasons.txt
+    - /usr/share/wordlists/seclists/Passwords/stupid-ones-in-production.txt
+    - /usr/share/wordlists/seclists/Passwords/unkown-azul.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/avaya_defaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/cirt-net_collection.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/citrix.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/cryptominers.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/db2-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/default-passwords.csv
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/ftp-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/mssql-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/mysql-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/oracle-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Oracle EBS passwordlist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Oracle EBS userlist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/postgres-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/scada-pass.csv
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/ssh-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/telnet-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/telnet-phenoelit.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/tomcat-betterdefaultpasslist_base64encoded.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/tomcat-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/vnc-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/windows-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/0ALL-USERNAMES-AND-PASSWORDS.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/100fio-networks_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/100fio-networks_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/1net1_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/1net1_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/2wire_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/2wire_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/3bb_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/3bb_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/3com_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/3com_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/acorp_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/acorp_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/actiontec_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/actiontec_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/adb_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/adb_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/addon_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/addon_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/adtran_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/adtran_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/airlink-101_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/airlink-101_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/airlive_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/airlive_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/airnet_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/airnet_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/airrouter_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/airrouter_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/airties_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/airties_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/alcatel_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/alcatel_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/alcatel-lucent_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/alcatel-lucent_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/a-link_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/a-link_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/allied-data_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/allied-data_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/alvarion_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/alvarion_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ambit_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ambit_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/amped-wireless_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/amped-wireless_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/aolynk_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/aolynk_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/arcadyan_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/arcadyan_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/arris_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/arris_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/artnet_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/artnet_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/askey_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/askey_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/asmax_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/asmax_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/asus_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/asus_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/atlantis-land_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/atlantis-land_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/awb-networks_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/awb-networks_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/axesstel_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/axesstel_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/aztech_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/aztech_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/bandluxe_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/bandluxe_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/baudtec_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/baudtec_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/baytec_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/baytec_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/bec-technologies_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/bec-technologies_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/beetel_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/beetel_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/belgacom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/belgacom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/belkin_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/belkin_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/bell_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/bell_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/benq_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/benq_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/billion_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/billion_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/binatone_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/binatone_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/blitzz_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/blitzz_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/bt_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/bt_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/buffalo_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/buffalo_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/calix_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/calix_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/canyon_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/canyon_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/cbn_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/cbn_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/cd-r-king_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/cd-r-king_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/cisco_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/cisco_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/cisco-linksys_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/cisco-linksys_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/cnet_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/cnet_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/comtrend_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/comtrend_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/conceptronic_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/conceptronic_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/conexant_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/conexant_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/creative_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/creative_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/crypto_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/crypto_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dasan_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dasan_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/davolink_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/davolink_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dell_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dell_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dick-smith-elec_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dick-smith-elec_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/digicom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/digicom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/digisol_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/digisol_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/digitus_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/digitus_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/d-link_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/d-link_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dovado_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dovado_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/draytek_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/draytek_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dslink_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dslink_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dynalink_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dynalink_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dynamode_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dynamode_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dynex_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/dynex_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/eci_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/eci_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/edimax_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/edimax_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/efficient-siemens_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/efficient-siemens_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/eltex_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/eltex_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/eminent_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/eminent_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/encore_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/encore_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/engenius_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/engenius_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ericsson_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ericsson_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/etec_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/etec_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/e-tech_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/e-tech_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/eusso_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/eusso_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/fiber-home_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/fiber-home_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/franklin-wireless_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/franklin-wireless_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/fritz-box_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/fritz-box_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/gateway_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/gateway_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/geek-adsl_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/geek-adsl_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/genexis_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/genexis_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/gigabyte_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/gigabyte_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/great-speed_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/great-speed_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/green-packet_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/green-packet_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/hama_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/hama_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/hamlet_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/hamlet_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/hawking_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/hawking_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/hitron-technologies_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/hitron-technologies_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/hot_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/hot_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/huawei_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/huawei_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/humax_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/humax_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/iball_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/iball_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ice.net_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ice.net_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/icotera_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/icotera_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/inca_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/inca_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/inexq_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/inexq_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/intelbras_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/intelbras_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/intellinet_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/intellinet_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/inteno_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/inteno_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/intracom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/intracom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/inventel_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/inventel_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/iskratel_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/iskratel_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/jaht_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/jaht_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/jensen-scandinavia_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/jensen-scandinavia_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/justec_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/justec_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/kaiomy_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/kaiomy_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/kaon-media_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/kaon-media_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/kasda_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/kasda_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/kingtype_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/kingtype_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/kozumi_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/kozumi_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/kraun_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/kraun_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/lectron_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/lectron_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/legrand_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/legrand_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/level-one_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/level-one_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/lg_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/lg_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/linksys_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/linksys_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/loopcomm_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/loopcomm_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/luxul_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/luxul_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/marconi_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/marconi_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/medialink_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/medialink_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/microcom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/microcom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/micronet_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/micronet_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/mitrastar_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/mitrastar_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/mobily_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/mobily_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/motorola_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/motorola_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/msi_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/msi_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/mymax_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/mymax_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/netcomm_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/netcomm_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/netcoretek_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/netcoretek_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/netgate_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/netgate_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/netgear_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/netgear_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/netis_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/netis_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/net-lynx_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/net-lynx_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/netopia_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/netopia_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/noganet_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/noganet_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/nokia_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/nokia_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/nucom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/nucom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/olitec_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/olitec_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/open-networks_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/open-networks_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ovislink_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ovislink_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pace-plc_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pace-plc_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/paradigm_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/paradigm_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/paradyne_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/paradyne_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pci_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pci_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pentagram_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pentagram_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pikatel_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pikatel_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ping-communication_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ping-communication_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pirelli_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pirelli_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/planet_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/planet_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/planex_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/planex_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pluscom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pluscom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/prolink_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/prolink_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pronets_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pronets_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pti_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/pti_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/q-tec_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/q-tec_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/quicktel_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/quicktel_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/readynet_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/readynet_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/repotec_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/repotec_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/riger_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/riger_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/rosewill_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/rosewill_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/safecom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/safecom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sagemcom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sagemcom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sagem_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sagem_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/samsung_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/samsung_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/scientific-atlanta_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/scientific-atlanta_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sercomm_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sercomm_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/siemens_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/siemens_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sierra-wireless_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sierra-wireless_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sitecom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sitecom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sky_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sky_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/smartrg_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/smartrg_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/smc_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/smc_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/soho_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/soho_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/solwise_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/solwise_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sonicwall_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sonicwall_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sparkcom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sparkcom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/spectrum_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/spectrum_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/speedcom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/speedcom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/starbridge_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/starbridge_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/surecom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/surecom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sweex_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/sweex_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tactio_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tactio_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/technicolor_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/technicolor_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tecom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tecom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/telewell_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/telewell_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/telindus_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/telindus_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/telkom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/telkom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/telsey_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/telsey_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/telstra_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/telstra_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/teltonika_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/teltonika_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/telus_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/telus_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tenda_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tenda_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/teracom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/teracom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/thomson-alcatel_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/thomson-alcatel_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tilgin_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tilgin_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/topcom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/topcom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tornado_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tornado_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tot_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tot_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/totolink_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/totolink_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tp-link_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/tp-link_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/trendchip_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/trendchip_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/trendnet_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/trendnet_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/trust_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/trust_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ubee_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ubee_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ubiquiti_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/ubiquiti_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/utstarcom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/utstarcom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/verizon_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/verizon_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/visionnet_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/visionnet_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/v-link_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/v-link_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/vodafone_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/vodafone_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/vonage_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/vonage_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/vtech_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/vtech_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/web-excel_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/web-excel_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/westell_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/westell_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/western-digital_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/western-digital_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/xavi_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/xavi_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/x-micro_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/x-micro_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/zhone_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/zhone_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/zioncom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/zioncom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/zonet_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/zonet_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/zoom_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/zoom_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/zte_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/zte_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/zyxel_default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/Routers/zyxel_default-users.txt
+    - /usr/share/wordlists/seclists/Passwords/WiFi-WPA/probable-v2-wpa-top447.txt
+    - /usr/share/wordlists/seclists/Passwords/WiFi-WPA/probable-v2-wpa-top4800.txt
+    - /usr/share/wordlists/seclists/Passwords/WiFi-WPA/probable-v2-wpa-top62.txt
+    - /usr/share/metasploit-framework/data/wordlists/adobe_top100_pass.txt
+    - /usr/share/metasploit-framework/data/wordlists/av_hips_executables.txt
+    - /usr/share/metasploit-framework/data/wordlists/av-update-urls.txt
+    - /usr/share/metasploit-framework/data/wordlists/burnett_top_1024.txt
+    - /usr/share/metasploit-framework/data/wordlists/burnett_top_500.txt
+    - /usr/share/metasploit-framework/data/wordlists/can_flood_frames.txt
+    - /usr/share/metasploit-framework/data/wordlists/cms400net_default_userpass.txt
+    - /usr/share/metasploit-framework/data/wordlists/common_roots.txt
+    - /usr/share/metasploit-framework/data/wordlists/dangerzone_a.txt
+    - /usr/share/metasploit-framework/data/wordlists/dangerzone_b.txt
+    - /usr/share/metasploit-framework/data/wordlists/db2_default_pass.txt
+    - /usr/share/metasploit-framework/data/wordlists/db2_default_userpass.txt
+    - /usr/share/metasploit-framework/data/wordlists/db2_default_user.txt
+    - /usr/share/metasploit-framework/data/wordlists/default_pass_for_services_unhash.txt
+    - /usr/share/metasploit-framework/data/wordlists/default_userpass_for_services_unhash.txt
+    - /usr/share/metasploit-framework/data/wordlists/default_users_for_services_unhash.txt
+    - /usr/share/metasploit-framework/data/wordlists/dlink_telnet_backdoor_userpass.txt
+    - /usr/share/metasploit-framework/data/wordlists/flask_secret_keys.txt
+    - /usr/share/metasploit-framework/data/wordlists/grafana_plugins.txt
+    - /usr/share/metasploit-framework/data/wordlists/hci_oracle_passwords.csv
+    - /usr/share/metasploit-framework/data/wordlists/http_default_pass.txt
+    - /usr/share/metasploit-framework/data/wordlists/http_default_userpass.txt
+    - /usr/share/metasploit-framework/data/wordlists/http_default_users.txt
+    - /usr/share/metasploit-framework/data/wordlists/http_owa_common.txt
+    - /usr/share/metasploit-framework/data/wordlists/idrac_default_pass.txt
+    - /usr/share/metasploit-framework/data/wordlists/idrac_default_user.txt
+    - /usr/share/metasploit-framework/data/wordlists/ipmi_passwords.txt
+    - /usr/share/metasploit-framework/data/wordlists/ipmi_users.txt
+    - /usr/share/metasploit-framework/data/wordlists/joomla.txt
+    - /usr/share/metasploit-framework/data/wordlists/keyboard-patterns.txt
+    - /usr/share/metasploit-framework/data/wordlists/lync_subdomains.txt
+    - /usr/share/metasploit-framework/data/wordlists/malicious_urls.txt
+    - /usr/share/metasploit-framework/data/wordlists/mirai_pass.txt
+    - /usr/share/metasploit-framework/data/wordlists/mirai_user_pass.txt
+    - /usr/share/metasploit-framework/data/wordlists/mirai_user.txt
+    - /usr/share/metasploit-framework/data/wordlists/multi_vendor_cctv_dvr_pass.txt
+    - /usr/share/metasploit-framework/data/wordlists/multi_vendor_cctv_dvr_users.txt
+    - /usr/share/metasploit-framework/data/wordlists/named_pipes.txt
+    - /usr/share/metasploit-framework/data/wordlists/namelist.txt
+    - /usr/share/metasploit-framework/data/wordlists/oracle_default_hashes.txt
+    - /usr/share/metasploit-framework/data/wordlists/oracle_default_passwords.csv
+    - /usr/share/metasploit-framework/data/wordlists/oracle_default_userpass.txt
+    - /usr/share/metasploit-framework/data/wordlists/password.lst
+    - /usr/share/metasploit-framework/data/wordlists/piata_ssh_userpass.txt
+    - /usr/share/metasploit-framework/data/wordlists/postgres_default_pass.txt
+    - /usr/share/metasploit-framework/data/wordlists/postgres_default_userpass.txt
+    - /usr/share/metasploit-framework/data/wordlists/postgres_default_user.txt
+    - /usr/share/metasploit-framework/data/wordlists/root_userpass.txt
+    - /usr/share/metasploit-framework/data/wordlists/routers_userpass.txt
+    - /usr/share/metasploit-framework/data/wordlists/rpc_names.txt
+    - /usr/share/metasploit-framework/data/wordlists/rservices_from_users.txt
+    - /usr/share/metasploit-framework/data/wordlists/sap_common.txt
+    - /usr/share/metasploit-framework/data/wordlists/sap_default.txt
+    - /usr/share/metasploit-framework/data/wordlists/sap_icm_paths.txt
+    - /usr/share/metasploit-framework/data/wordlists/scada_default_userpass.txt
+    - /usr/share/metasploit-framework/data/wordlists/sensitive_files.txt
+    - /usr/share/metasploit-framework/data/wordlists/sensitive_files_win.txt
+    - /usr/share/metasploit-framework/data/wordlists/sid.txt
+    - /usr/share/metasploit-framework/data/wordlists/snmp_default_pass.txt
+    - /usr/share/metasploit-framework/data/wordlists/superset_secret_keys.txt
+    - /usr/share/metasploit-framework/data/wordlists/telerik_ui_asp_net_ajax_versions.txt
+    - /usr/share/metasploit-framework/data/wordlists/telnet_cdata_ftth_backdoor_userpass.txt
+    - /usr/share/metasploit-framework/data/wordlists/tftp.txt
+    - /usr/share/metasploit-framework/data/wordlists/tomcat_mgr_default_pass.txt
+    - /usr/share/metasploit-framework/data/wordlists/tomcat_mgr_default_userpass.txt
+    - /usr/share/metasploit-framework/data/wordlists/tomcat_mgr_default_users.txt
+    - /usr/share/metasploit-framework/data/wordlists/unix_passwords.txt
+    - /usr/share/metasploit-framework/data/wordlists/unix_users.txt
+    - /usr/share/metasploit-framework/data/wordlists/vnc_passwords.txt
+    - /usr/share/metasploit-framework/data/wordlists/vxworks_collide_20.txt
+    - /usr/share/metasploit-framework/data/wordlists/vxworks_common_20.txt
+    - /usr/share/metasploit-framework/data/wordlists/wp-exploitable-plugins.txt
+    - /usr/share/metasploit-framework/data/wordlists/wp-exploitable-themes.txt
+    - /usr/share/metasploit-framework/data/wordlists/wp-plugins.txt
+    - /usr/share/metasploit-framework/data/wordlists/wp-themes.txt
+    - /usr/share/wordlists/wfuzz/general/common.txt
+
+  # ── USERNAME LISTS ─────────────────────────
+  usernames:
+    - /usr/share/wordlists/seclists/Usernames/cirt-default-usernames.txt
+    - /usr/share/wordlists/seclists/Usernames/CommonAdminBase64.txt
+    - /usr/share/wordlists/seclists/Usernames/mssql-usernames-nansh0u-guardicore.txt
+    - /usr/share/wordlists/seclists/Usernames/README.md
+    - /usr/share/wordlists/seclists/Usernames/sap-default-usernames.txt
+    - /usr/share/wordlists/seclists/Usernames/top-usernames-shortlist.txt
+    - /usr/share/wordlists/seclists/Usernames/xato-net-10-million-usernames-dup.txt
+    - /usr/share/wordlists/seclists/Usernames/xato-net-10-million-usernames.txt
+    - /usr/share/wordlists/seclists/Usernames/Names/familynames-usa-top1000.txt
+    - /usr/share/wordlists/seclists/Usernames/Names/femalenames-usa-top1000.txt
+    - /usr/share/wordlists/seclists/Usernames/Names/forenames-india-top1000.txt
+    - /usr/share/wordlists/seclists/Usernames/Names/malenames-usa-top1000.txt
+    - /usr/share/wordlists/seclists/Usernames/Names/names.txt
+    - /usr/share/metasploit-framework/data/wordlists/unix_users.txt
+    - /usr/share/metasploit-framework/data/wordlists/default_users_for_services_unhash.txt
+    - /usr/share/metasploit-framework/data/wordlists/namelist.txt
+    - /usr/share/wordlists/wfuzz/general/common.txt
+
+  # ── WEB FUZZING / DIRECTORY LISTS ──────────
+  web_dirs:
+    - /usr/share/wordlists/dirb/common.txt
+    - /usr/share/wordlists/dirb/big.txt
+    - /usr/share/wordlists/dirb/small.txt
+    - /usr/share/wordlists/dirb/vulns/apache.txt
+    - /usr/share/wordlists/dirb/vulns/axis.txt
+    - /usr/share/wordlists/dirb/vulns/cgis.txt
+    - /usr/share/wordlists/dirb/vulns/coldfusion.txt
+    - /usr/share/wordlists/dirb/vulns/domino.txt
+    - /usr/share/wordlists/dirb/vulns/fatwire_pagenames.txt
+    - /usr/share/wordlists/dirb/vulns/fatwire.txt
+    - /usr/share/wordlists/dirb/vulns/frontpage.txt
+    - /usr/share/wordlists/dirb/vulns/hpsmh.txt
+    - /usr/share/wordlists/dirb/vulns/hyperion.txt
+    - /usr/share/wordlists/dirb/vulns/iis.txt
+    - /usr/share/wordlists/dirb/vulns/iplanet.txt
+    - /usr/share/wordlists/dirb/vulns/jboss.txt
+    - /usr/share/wordlists/dirb/vulns/jersey.txt
+    - /usr/share/wordlists/dirb/vulns/jrun.txt
+    - /usr/share/wordlists/dirb/vulns/netware.txt
+    - /usr/share/wordlists/dirb/vulns/oracle.txt
+    - /usr/share/wordlists/dirb/vulns/ror.txt
+    - /usr/share/wordlists/dirb/vulns/sap.txt
+    - /usr/share/wordlists/dirb/vulns/sharepoint.txt
+    - /usr/share/wordlists/dirb/vulns/sunas.txt
+    - /usr/share/wordlists/dirb/vulns/tests.txt
+    - /usr/share/wordlists/dirb/vulns/tomcat.txt
+    - /usr/share/wordlists/dirb/vulns/vignette.txt
+    - /usr/share/wordlists/dirb/vulns/weblogic.txt
+    - /usr/share/wordlists/dirb/vulns/websphere.txt
+    - /usr/share/wordlists/dirbuster/apache-user-enum-1.0.txt
+    - /usr/share/wordlists/dirbuster/apache-user-enum-2.0.txt
+    - /usr/share/wordlists/dirbuster/directory-list-1.0.txt
+    - /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt
+    - /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
+    - /usr/share/wordlists/dirbuster/directory-list-lowercase-2.3-medium.txt
+    - /usr/share/wordlists/dirbuster/directory-list-lowercase-2.3-small.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/ActiveDirectory-small.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/AdobeXML.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/big.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/burp-parameter-names.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/coldfusion.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/combined_directories.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/combined_words.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/common-api-endpoints-mazen160.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Common-DB-Backups.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/common_directories.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/common.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/default-web-root-directory-linux.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/default-web-root-directory-windows.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/DirBuster-2007_directory-list-2.3-big.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/DirBuster-2007_directory-list-2.3-medium.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/DirBuster-2007_directory-list-2.3-small.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/DirBuster-2007_directory-list-lowercase-2.3-big.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/DirBuster-2007_directory-list-lowercase-2.3-medium.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/DirBuster-2007_directory-list-lowercase-2.3-small.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/domino-dirs-coldfusion39.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/domino-endpoints-coldfusion39.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/dsstorewordlist.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/graphql.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/hashicorp-consul-api.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/hashicorp-vault.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/JavaScript-Miners.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/JavaServlets-Common.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/LinuxFileList.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Logins.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/mcp-server.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Microsoft-Frontpage.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/netware.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/ntlm-directories.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/oauth-oidc-scopes.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Oracle9i.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/OracleAppServer.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Passwords.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Proxy-Auto-Configuration-Files.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Public-Source-Repo-Issues.json
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/quickhits.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-large-directories-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-large-directories.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-large-extensions-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-large-extensions.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-large-files-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-large-files.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-large-words-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-large-words.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-directories-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-directories.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-extensions-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-extensions.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-files-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-files.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-words-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-medium-words.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-small-directories-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-small-directories.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-small-extensions-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-small-extensions.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-small-files-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-small-files.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-small-words-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/raft-small-words.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/README.md
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/reverse-proxy-inconsistencies.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Roundcube-123.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/rssfeed-files.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/sap-analytics-cloud.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/SAP-NetWeaver.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/SOAP-functions.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/tftp.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/UnixDotfiles.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/uri-from-top-55-most-popular-apps.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/url-params_from-top-55-most-popular-apps.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/versioning_metafiles.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/vulnerability-scan_j2ee-websites_WEB-INF.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/web-all-content-types.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/web-extensions-big.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/web-extensions.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/web-mutations.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/wso2-enterprise-integrator.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Web-Servers/Apache-Axis.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Web-Servers/Apache-Tomcat.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Web-Servers/Apache.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Web-Servers/Glassfish-Sun-Microsystems.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Web-Servers/IIS-POST.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Web-Servers/IIS-systemweb.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Web-Servers/IIS.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Web-Servers/Java-Servlet-Runner-Adobe-JRun.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Web-Servers/JBoss.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Web-Servers/nginx.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Web-Servers/Oracle-Sun-iPlanet.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/URLs/urls-Drupal-7.20.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/URLs/urls-joomla-3.0.3.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/URLs/urls-SAP.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/URLs/urls-wordpress-3.3.1.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/api/actions-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/api/actions.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/api/actions-uppercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/api/api-endpoints-res.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/api/api-endpoints.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/api/api-seen-in-wild.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/api/ispsystem_billmanager_api.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/api/objects-lowercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/api/objects.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/api/objects-uppercase.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/api/README.md
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/api/salesforce-aura-objects.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Service-Specific/confluence-administration.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Service-Specific/HP-System-Management-Homepage.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Service-Specific/IBM-WebSphere-Application-Server.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Service-Specific/Jenkins-Hudson.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Service-Specific/Keycloak-Identity-Access-Management.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Service-Specific/Microsoft-Forefront-Identity-Manager.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Service-Specific/Oracle-WebLogic.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Service-Specific/PulseSecure-VPN.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Service-Specific/Swagger.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/Adobe-AEM_2021.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/AdobeCQ-AEM_2017.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/caobox-cms.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/cms-configuration-files.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/ColdFusion.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/Django.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/dotnetnuke.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/drupal-themes.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/Drupal.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/flyspray-1.0RC4.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/joomla-plugins.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/joomla-themes.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/kentico-cms-modules-themes.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/liferay_dxp_default_portlets.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/modx-revolution-plugins
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/Oracle-EBS-wordlist.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/php-nuke.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/piwik-3.0.4.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/SAP.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/Sharepoint-Ennumeration.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/Sharepoint.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/shopware.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/sitecore
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/Sitefinity-fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/sitemap-magento.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/SiteMinder.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/symfony-315-demo.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/symphony-267-xslt-cms.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/Umbraco.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/Umbraco.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/wordpress.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/wp-plugins.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/CMS/wp-themes.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/LEGACY-SERVICES/CGIs/CGI-HTTP-POST.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/LEGACY-SERVICES/CGIs/CGI-HTTP-POST-Windows.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/LEGACY-SERVICES/CGIs/CGI-Microsoft.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/LEGACY-SERVICES/CGIs/CGIs.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/LEGACY-SERVICES/CGIs/CGI-XPlatform.fuzz.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Domino-Hunter/Commands-Documents.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Domino-Hunter/Commands-NSF.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Domino-Hunter/Commands-Views.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Domino-Hunter/dh.pl
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/Domino-Hunter/Domino-Files.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/File-Extensions-Universal-SVNDigger-Project/all-dirs.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/File-Extensions-Universal-SVNDigger-Project/all-extensionless.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/File-Extensions-Universal-SVNDigger-Project/all.txt
+    - /usr/share/wordlists/seclists/Discovery/Web-Content/File-Extensions-Universal-SVNDigger-Project/symfony.txt
+    - /usr/share/wordlists/wfuzz/general/common.txt
+    - /usr/share/wordlists/wfuzz/general/big.txt
+    - /usr/share/wordlists/wfuzz/general/medium.txt
+
+  # ── DNS / SUBDOMAIN LISTS ──────────────────
+  dns:
+    - /usr/share/wordlists/seclists/Discovery/DNS/bitquark-subdomains-top100000.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/bug-bounty-program-subdomains-trickest-inventory.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/combined_subdomains.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/deepmagic.com-prefixes-top50000.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/deepmagic.com-prefixes-top500.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/dns-Jhaddix.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/fierce-hostlist.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/FUZZSUBS_CYFARE_1.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/FUZZSUBS_CYFARE_2.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/italian-subdomains.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/n0kovo_subdomains.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/namelist.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/README.md
+    - /usr/share/wordlists/seclists/Discovery/DNS/services-names.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/shubs-stackoverflow.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/shubs-subdomains.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/sortedcombined-knock-dnsrecon-fierce-reconng.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/subdomains-spanish.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/subdomains-top1million-110000.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/subdomains-top1million-20000.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/subdomains-top1million-5000.txt
+    - /usr/share/wordlists/seclists/Discovery/DNS/tlds.txt
+    - /usr/share/wordlists/amass/all.txt
+    - /opt/dnsrecon/dnsrecon/data/namelist.txt
+    - /opt/dnsrecon/dnsrecon/data/snoop.txt
+    - /opt/dnsrecon/dnsrecon/data/subdomains-top1mil-20000.txt
+    - /opt/dnsrecon/dnsrecon/data/subdomains-top1mil-5000.txt
+    - /opt/dnsrecon/dnsrecon/data/subdomains-top1mil.txt
+
+
+  # ── SNMP COMMUNITY STRINGS ─────────────────
+  snmp:
+    - /usr/share/wordlists/seclists/Discovery/SNMP/common-snmp-community-strings-onesixtyone.txt
+    - /usr/share/wordlists/seclists/Discovery/SNMP/common-snmp-community-strings.txt
+    - /usr/share/wordlists/seclists/Discovery/SNMP/snmp-onesixtyone.txt
+    - /usr/share/wordlists/seclists/Discovery/SNMP/snmp.txt
+    - /usr/share/metasploit-framework/data/wordlists/snmp_default_pass.txt
+
+  # ── FTP SPECIFIC ───────────────────────────
+  ftp_passwords:
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/ftp-betterdefaultpasslist.txt
+    - /usr/share/metasploit-framework/data/wordlists/piata_ssh_userpass.txt
+    - /usr/share/wordlists/nmap.lst
+
+  # ── SSH SPECIFIC ───────────────────────────
+  ssh_passwords:
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/ssh-betterdefaultpasslist.txt
+    - /usr/share/metasploit-framework/data/wordlists/piata_ssh_userpass.txt
+    - /usr/share/wordlists/rockyou.txt
+
+  # ── HTTP FORM / DEFAULT CREDS ──────────────
+  http_default_creds:
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/default-passwords.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/tomcat-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/postgres-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/mysql-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/mssql-betterdefaultpasslist.txt
+    - /usr/share/wordlists/seclists/Passwords/Default-Credentials/oracle-betterdefaultpasslist.txt
+    - /usr/share/metasploit-framework/data/wordlists/http_default_pass.txt
+    - /usr/share/metasploit-framework/data/wordlists/http_default_users.txt
+    - /usr/share/metasploit-framework/data/wordlists/default_pass_for_services_unhash.txt
+    - /usr/share/metasploit-framework/data/wordlists/default_users_for_services_unhash.txt
+
+  # ── SQL INJECTION PAYLOADS ─────────────────
+  sqli:
+    - /usr/share/wordlists/seclists/Fuzzing/SQLi/Generic-SQLi.txt
+    - /usr/share/wordlists/seclists/Fuzzing/SQLi/quick-SQLi.txt
+    - /usr/share/wordlists/wfuzz/vulns/sql_inj.txt
+    - /usr/share/wordlists/sqlmap/
+
+  # ── XSS PAYLOADS ───────────────────────────
+  xss:
+    - /usr/share/wordlists/seclists/Fuzzing/XSS/XSS-BruteLogic.txt
+    - /usr/share/wordlists/seclists/Fuzzing/XSS/XSS-Jhaddix.txt
+    - /usr/share/wordlists/seclists/Fuzzing/XSS/xss-payload-list.txt
+    - /usr/share/wordlists/wfuzz/vulns/xss.txt
+
+  # ── LFI / PATH TRAVERSAL ──────────────────
+  lfi:
+    - /usr/share/wordlists/seclists/Fuzzing/LFI/LFI-Jhaddix.txt
+    - /usr/share/wordlists/seclists/Fuzzing/LFI/LFI-gracefulsecurity-linux.txt
+    - /usr/share/wordlists/seclists/Fuzzing/LFI/LFI-gracefulsecurity-windows.txt
+    - /usr/share/wordlists/wfuzz/vulns/dirTraversal-nix.txt
+    - /usr/share/wordlists/wfuzz/vulns/dirTraversal-win.txt
+
+
+# ═══════════════════════════════════════════════
+# DEFAULT USER LIST (for bruteforce when no file)
+# ═══════════════════════════════════════════════
+default_users:
+  - root
+  - admin
+  - administrator
+  - support
+  - user
+  - test
+  - guest
+  - operator
+  - ftp
+  - www
+  - www-data
+  - postmaster
+  - webmaster
+  - mysql
+  - postgres
+  - oracle
+  - tomcat
+  - jenkins
+  - git
+  - svn
+  - nagios
+  - zabbix
+  - pi
+  - ubnt
+  - vagrant
+  - deploy
+  - ansible
+  - backup
+  - service
+
+# ═══════════════════════════════════════════════
+# TOOL SETTINGS
+# ═══════════════════════════════════════════════
+
+tools:
+  nmap:
+    default_flags: ["-sV", "-sC", "-T4", "--open", "-Pn", "-sT"]
+    timeout: 300              # v4.0: MUST be 300+ — nmap was dying at 180s
+    aggressive_flags: ["-A", "-T4", "-p-", "-Pn", "-sT"]
+
+  hydra:
+    threads: 16
+    timeout: 600
+    flags: ["-V"]          # verbose by default
+
+  ffuf:
+    threads: 50
+    timeout: 120
+    match_codes: "200,204,301,302,307,401,403"
+    flags: ["-c"]          # colorized output
+
+  nikto:
+    timeout: 300
+    flags: ["-nointeractive"]
+
+  sqlmap:
+    level: 1
+    risk: 1
+    timeout: 180
+    flags: ["--batch", "--crawl=1"]
+
+  wpscan:
+    timeout: 180
+    flags: ["--no-update", "--random-user-agent"]
+
+  enum4linux:
+    timeout: 150
+    flags: ["-a"]
+
+  sslscan:
+    timeout: 120
+    flags: ["--no-colour"]
+
+  smbclient:
+    timeout: 45
+    flags: ["-N"]          # null session
+
+  curl:
+    timeout: 20
+    flags: ["-sI", "--max-time", "10", "--location"]
+
+  dig:
+    timeout: 15
+    record_types: ["A", "MX", "NS", "TXT", "AAAA", "CNAME"]
+
+  whois:
+    timeout: 30
+
+  whatweb:
+    timeout: 90
+    aggression: 3          # -a 3
+
+  searchsploit:
+    timeout: 30
+    max_results: 20        # truncate output after N lines
+
+  msfconsole:
+    timeout: 300
+
+  gobuster:
+    threads: 50
+    timeout: 180
+
+  dirb:
+    timeout: 180
