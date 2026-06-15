@@ -43,6 +43,7 @@ from core.tools.post_tools import (
     _run_shodan_vulns, _run_shodan_range,
     _run_crack_hashes,
     _run_cpanel_exploit, _run_shardbrowser_osint,
+    run_default_recon,
 )
 
 # ─────────────────────────────────────────────

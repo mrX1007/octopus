@@ -229,6 +229,19 @@ def load_config() -> dict:
             if isinstance(val, str):
                 cfg["paths"][key] = os.path.expanduser(val)
 
+    # ── ENV VAR OVERRIDES (highest priority: .env / os.environ → config) ──
+    # Database
+    cfg["db"]["host"]     = os.environ.get("OCTOPUS_DB_HOST", cfg["db"]["host"])
+    cfg["db"]["user"]     = os.environ.get("OCTOPUS_DB_USER", cfg["db"]["user"])
+    cfg["db"]["password"] = os.environ.get("OCTOPUS_DB_PASS", cfg["db"]["password"])
+    cfg["db"]["database"] = os.environ.get("OCTOPUS_DB_NAME", cfg["db"]["database"])
+
+    # Ollama (already handled via DEFAULTS, but allow explicit override)
+    if os.environ.get("OCTOPUS_OLLAMA_URL"):
+        cfg["ollama"]["url"] = os.environ["OCTOPUS_OLLAMA_URL"]
+    if os.environ.get("OCTOPUS_OLLAMA_MODEL"):
+        cfg["ollama"]["model"] = os.environ["OCTOPUS_OLLAMA_MODEL"]
+
     return cfg
 
 

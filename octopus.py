@@ -248,19 +248,19 @@ def preflight_checks() -> bool:
     else:
         warn(".env: not found — copy .env.example to .env and add API keys")
 
-    # 1. MariaDB (non-critical on macOS dev)
+    # 1. MariaDB (non-critical — tool works without DB, results just won't persist)
     try:
         conn = get_connection()
         conn.close()
         success("MariaDB: connected")
     except Exception as e:
+        warn(f"MariaDB: {e}")
         if is_macos:
-            warn(f"MariaDB: not available (macOS dev mode — OK)")
-            warn("  Results will not be saved to DB. Install: brew install mariadb")
+            warn("  macOS dev mode — DB not required. Install: brew install mariadb")
         else:
-            error(f"MariaDB: {e}")
-            error("Fix: sudo systemctl start mariadb")
-            all_ok = False
+            warn("  Fix: sudo systemctl start mariadb")
+            warn("  Or check credentials in .env / config.yaml (OCTOPUS_DB_USER / OCTOPUS_DB_PASS / OCTOPUS_DB_NAME)")
+        warn("  Results will not be saved to DB until connection is fixed.")
 
     # 2. Ollama
     ollama_url = CFG.get("ollama", {}).get("url", "http://localhost:11434/api/generate")
