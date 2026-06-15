@@ -28,7 +28,7 @@ OCTOPUS is an advanced, autonomous penetration testing framework driven by AI. I
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/yourusername/octopus.git
+   git clone https://github.com/mrX1007/octopus.git
    cd octopus
    ```
 
@@ -87,3 +87,16 @@ OCTOPUS is built around a robust AI pipeline (`core/ai/pipeline.py`):
 ## Disclaimer
 
 **OCTOPUS is designed for authorized penetration testing and educational purposes ONLY.** Do not use this tool against systems you do not own or have explicit permission to test. The authors are not responsible for any misuse or damage caused by this software.
+
+---
+
+## Project Status & Background
+
+### Development Chronology
+Active development of this project initiated in **May 2026**. The original architectural inspiration stemmed from the [METATRON](https://github.com/sooryathejas/METATRON) framework. However, initial evaluation demonstrated that the reference implementation possessed functional limitations and lacked the depth required for advanced operational scenarios. Consequently, this repository represents an extended, independent R&D pipeline focused on refining autonomous agent loops, command-and-control (C2) resilience, and dynamic evasion mechanics.
+
+### Maintenance & Release Policy
+* **Development Continuity:** This project remains an active internal research vector. It is **not** abandoned.
+* **Public Release Commitment:** There is no commitment, implicit or explicit, to maintain continuous public releases, upstream syncs, or stable open-source distributions. Future iterations, core modules, and tactical components may be restricted to private repositories or internal infrastructure without prior notice.
+
+---
