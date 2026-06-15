@@ -26,13 +26,84 @@ def get_connection():
 
 # v4.2: Auto-migration — runs on import, idempotent
 def init_db():
-    """Auto-migrate schema: add missing columns and tables.
-    Safe to call multiple times — checks before altering."""
+    """Auto-migrate schema: create base tables and add missing columns.
+    Safe to call multiple times — uses CREATE IF NOT EXISTS and checks before altering."""
     try:
         conn = get_connection()
         c = conn.cursor()
 
-        # ── Add 'confidence' to vulnerabilities if missing ────────
+        # ── BASE TABLES (created from scratch if DB is empty) ─────
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS history (
+                sl_no INT AUTO_INCREMENT PRIMARY KEY,
+                target VARCHAR(255),
+                scan_date DATETIME,
+                status VARCHAR(20) DEFAULT 'active'
+            )
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS vulnerabilities (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                sl_no INT,
+                vuln_name VARCHAR(100),
+                severity VARCHAR(20),
+                port VARCHAR(20),
+                service VARCHAR(50),
+                description VARCHAR(500),
+                confidence VARCHAR(20) DEFAULT 'UNCONFIRMED',
+                evidence_source VARCHAR(100) DEFAULT '',
+                raw_evidence TEXT DEFAULT NULL,
+                repro_cmd TEXT DEFAULT NULL,
+                cvss_score FLOAT DEFAULT NULL,
+                FOREIGN KEY (sl_no) REFERENCES history(sl_no)
+                    ON DELETE CASCADE
+            )
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS fixes (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                sl_no INT,
+                vuln_id INT,
+                fix_text TEXT,
+                source VARCHAR(50) DEFAULT 'ai',
+                FOREIGN KEY (sl_no) REFERENCES history(sl_no)
+                    ON DELETE CASCADE,
+                FOREIGN KEY (vuln_id) REFERENCES vulnerabilities(id)
+                    ON DELETE CASCADE
+            )
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS exploits_attempted (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                sl_no INT,
+                exploit_name VARCHAR(100),
+                tool_used VARCHAR(50),
+                payload VARCHAR(100),
+                result VARCHAR(100),
+                notes VARCHAR(200),
+                FOREIGN KEY (sl_no) REFERENCES history(sl_no)
+                    ON DELETE CASCADE
+            )
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS summary (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                sl_no INT,
+                raw_scan MEDIUMTEXT,
+                ai_analysis MEDIUMTEXT,
+                risk_level VARCHAR(20),
+                generated_at DATETIME,
+                FOREIGN KEY (sl_no) REFERENCES history(sl_no)
+                    ON DELETE CASCADE
+            )
+        """)
+
+        # ── MIGRATION: Add columns if missing ─────────────────────
         c.execute("""
             SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_SCHEMA = DATABASE()
