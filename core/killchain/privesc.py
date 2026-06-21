@@ -20,18 +20,41 @@ except ImportError:
     def find_wordlist(cat): return ""
     def find_all_wordlists(cat): return []
 
+import logging
+import secrets
+import string
+
 from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
 from core.killchain.exploitation import _PRIVESC_CHECKS, _EXPLOITABLE_SUIDS, _SUID_SKIP, _LINPEAS_URL
 
-# ANSI Colors
-C_GREEN  = "\033[92m"
-C_YELLOW = "\033[93m"
-C_RED    = "\033[91m"
-C_CYAN   = "\033[96m"
-C_GREY   = "\033[90m"
-C_BLUE   = "\033[94m"
-C_MAGENTA = "\033[95m"
-C_RESET  = "\033[0m"
+# Use unified colors
+try:
+    from core.colors import C
+    C_GREEN, C_YELLOW, C_RED, C_CYAN = C.GREEN, C.YELLOW, C.RED, C.CYAN
+    C_GREY, C_BLUE, C_MAGENTA, C_RESET = C.GRAY, C.BLUE, C.MAGENTA, C.RESET
+except ImportError:
+    C_GREEN  = "\033[92m"
+    C_YELLOW = "\033[93m"
+    C_RED    = "\033[91m"
+    C_CYAN   = "\033[96m"
+    C_GREY   = "\033[90m"
+    C_BLUE   = "\033[94m"
+    C_MAGENTA = "\033[95m"
+    C_RESET  = "\033[0m"
+
+logger = logging.getLogger("octopus.killchain.privesc")
+
+# ── Configurable backdoor password (generated per-run for OPSEC) ──
+# This is the password SET on targets during exploits like DirtyCow,
+# writable /etc/shadow, etc. Randomized to avoid static IOCs.
+def _gen_backdoor_pass() -> str:
+    """Generate a random 12-char backdoor password."""
+    alphabet = string.ascii_letters + string.digits + "!@#$"
+    return "".join(secrets.choice(alphabet) for _ in range(12))
+
+BACKDOOR_PASSWORD = CFG.get("killchain", {}).get("backdoor_password", _gen_backdoor_pass())
+BACKDOOR_USER = "firefart"  # DirtyCow default username
+BACKDOOR_SALT = "octopus"
 
 
 # ═══════════════════════════════════════════════

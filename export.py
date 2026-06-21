@@ -418,8 +418,10 @@ def export_menu(data: dict):
     print(f"\n\033[33m{'─'*20} EXPORT SL#{sl} — {tgt} {'─'*20}\033[0m")
     print("  [1] PDF report")
     print("  [2] HTML report")
-    print("  [3] Both")
-    print("  [4] Back")
+    print("  [3] JSON (machine-readable)")
+    print("  [4] CSV (spreadsheet)")
+    print("  [5] All formats")
+    print("  [0] Back")
     print(f"\033[90m{'─'*60}\033[0m")
 
     choice     = input("\033[36mExport format: \033[0m").strip()
@@ -433,14 +435,160 @@ def export_menu(data: dict):
         p = export_html(data, output_dir)
         print(f"\033[92m[+] HTML saved: {p}\033[0m")
     elif choice == "3":
+        p = export_json(data, output_dir)
+        print(f"\033[92m[+] JSON saved: {p}\033[0m")
+    elif choice == "4":
+        p = export_csv(data, output_dir)
+        print(f"\033[92m[+] CSV saved: {p}\033[0m")
+    elif choice == "5":
         p1 = export_pdf(data, output_dir)
         p2 = export_html(data, output_dir)
+        p3 = export_json(data, output_dir)
+        p4 = export_csv(data, output_dir)
         print(f"\033[92m[+] PDF  : {p1}\033[0m")
         print(f"\033[92m[+] HTML : {p2}\033[0m")
-    elif choice == "4":
+        print(f"\033[92m[+] JSON : {p3}\033[0m")
+        print(f"\033[92m[+] CSV  : {p4}\033[0m")
+    elif choice == "0":
         return
     else:
         print("\033[93m[!] Invalid choice.\033[0m")
+
+
+# ─────────────────────────────────────────────
+# JSON EXPORT
+# ─────────────────────────────────────────────
+
+def export_json(data: dict, output_dir: str = ".") -> str:
+    """Export scan results as structured JSON.
+
+    Includes all data: history, vulnerabilities (with CVSS),
+    fixes, exploits, summary, and metadata.
+    """
+    import json
+
+    h = data["history"]
+    sl_no = h[0]
+    target = h[1]
+    scan_date = str(h[2]) if h[2] else ""
+    status = h[3] if len(h) > 3 else "unknown"
+
+    vulns = data.get("vulnerabilities", [])
+    fixes = data.get("fixes", [])
+    exploits = data.get("exploits", [])
+    summary = data.get("summary")
+
+    # Build structured output
+    report = {
+        "metadata": {
+            "tool": "OCTOPUS",
+            "version": "10.0",
+            "export_date": datetime.datetime.now().isoformat(),
+            "format_version": "1.0",
+        },
+        "scan": {
+            "sl_no": sl_no,
+            "target": target,
+            "scan_date": scan_date,
+            "status": status,
+        },
+        "summary": {
+            "risk_level": summary[4] if summary and len(summary) > 4 else "UNKNOWN",
+            "ai_analysis": summary[3] if summary and len(summary) > 3 else "",
+            "generated_at": str(summary[5]) if summary and len(summary) > 5 else "",
+        },
+        "statistics": {
+            "total_vulnerabilities": len(vulns),
+            "critical": sum(1 for v in vulns if _sev(v) == "critical"),
+            "high": sum(1 for v in vulns if _sev(v) == "high"),
+            "medium": sum(1 for v in vulns if _sev(v) == "medium"),
+            "low": sum(1 for v in vulns if _sev(v) == "low"),
+            "exploits_attempted": len(exploits),
+            "cvss_max": max((_cvss_from_severity(_sev(v)) for v in vulns), default=0.0),
+        },
+        "vulnerabilities": [
+            {
+                "id": v[0],
+                "name": v[2] if len(v) > 2 else "",
+                "severity": v[3] if len(v) > 3 else "",
+                "port": v[4] if len(v) > 4 else "",
+                "service": v[5] if len(v) > 5 else "",
+                "description": v[6] if len(v) > 6 else "",
+                "confidence": v[7] if len(v) > 7 else "",
+                "cvss_score": _cvss_from_severity(v[3] if len(v) > 3 else ""),
+            }
+            for v in vulns
+        ],
+        "fixes": [
+            {
+                "id": f[0],
+                "vuln_id": f[2] if len(f) > 2 else "",
+                "fix_text": f[3] if len(f) > 3 else "",
+                "source": f[4] if len(f) > 4 else "",
+            }
+            for f in fixes
+        ],
+        "exploits_attempted": [
+            {
+                "id": e[0],
+                "name": e[2] if len(e) > 2 else "",
+                "tool_used": e[3] if len(e) > 3 else "",
+                "payload": e[4] if len(e) > 4 else "",
+                "result": e[5] if len(e) > 5 else "",
+                "notes": e[6] if len(e) > 6 else "",
+            }
+            for e in exploits
+        ],
+    }
+
+    filename = os.path.join(output_dir, f"octopus_SL{sl_no}_{target.replace('.', '_')}.json")
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False, default=str)
+
+    return filename
+
+
+def _sev(v) -> str:
+    """Extract severity string from vulnerability tuple, lowercase."""
+    return (v[3] if len(v) > 3 else "unknown").lower().strip()
+
+
+# ─────────────────────────────────────────────
+# CSV EXPORT
+# ─────────────────────────────────────────────
+
+def export_csv(data: dict, output_dir: str = ".") -> str:
+    """Export vulnerabilities as CSV for spreadsheet analysis."""
+    import csv
+
+    h = data["history"]
+    sl_no = h[0]
+    target = h[1]
+    vulns = data.get("vulnerabilities", [])
+
+    filename = os.path.join(output_dir, f"octopus_SL{sl_no}_{target.replace('.', '_')}.csv")
+
+    with open(filename, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "ID", "SL#", "Target", "Vulnerability", "Severity",
+            "CVSS", "Port", "Service", "Description", "Confidence",
+        ])
+        for v in vulns:
+            writer.writerow([
+                v[0],
+                sl_no,
+                target,
+                v[2] if len(v) > 2 else "",
+                v[3] if len(v) > 3 else "",
+                _cvss_from_severity(v[3] if len(v) > 3 else ""),
+                v[4] if len(v) > 4 else "",
+                v[5] if len(v) > 5 else "",
+                v[6] if len(v) > 6 else "",
+                v[7] if len(v) > 7 else "",
+            ])
+
+    return filename
 
 
 if __name__ == "__main__":

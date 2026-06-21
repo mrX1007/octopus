@@ -417,7 +417,9 @@ def run_tool_by_command(command_str: str) -> str:
                 result = sniper.create_apitoken(target, name=name)
             # Change password
             elif cmd_lower == "cpanel_passwd":
-                pw = parts[2] if len(parts) >= 3 else "M3tatr0n!2026"
+                if len(parts) < 3:
+                    return "[!] Usage: cpanel_passwd <target> <new_password>"
+                pw = parts[2]
                 result = sniper.change_root_passwd(target, pw)
             # Generic: cpanel_exploit IP [action] [args]
             else:

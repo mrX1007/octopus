@@ -1,27 +1,86 @@
 #!/usr/bin/env python3
 
+import logging
 import mysql.connector
+from mysql.connector.pooling import MySQLConnectionPool
+from contextlib import contextmanager
 from datetime import datetime
 
+logger = logging.getLogger("octopus.db")
+
 
 # ─────────────────────────────────────────────
-# CONNECTION
+# CONNECTION POOL
 # ─────────────────────────────────────────────
 
-def get_connection():
-    """Returns a MariaDB connection. Credentials from config.yaml."""
+_pool = None
+
+
+def _get_db_config() -> dict:
+    """Load DB config from config.yaml / env vars. No hardcoded fallbacks."""
     try:
         from config import CFG
-        db_cfg = CFG["db"]
+        return CFG["db"]
+    except Exception as e:
+        logger.warning(f"Could not load DB config: {e}")
+        raise RuntimeError(
+            "Database configuration not available. "
+            "Check config.yaml or set OCTOPUS_DB_* environment variables."
+        ) from e
+
+
+def get_connection():
+    """Returns a MariaDB connection from the pool.
+
+    Uses connection pooling for thread-safe concurrent access
+    (important for Shodan parallel scans with ThreadPoolExecutor).
+    Falls back to direct connection if pooling fails.
+    """
+    global _pool
+    if _pool is None:
+        db_cfg = _get_db_config()
+        try:
+            _pool = MySQLConnectionPool(
+                pool_name="octopus",
+                pool_size=5,
+                pool_reset_session=True,
+                host=db_cfg["host"],
+                user=db_cfg["user"],
+                password=db_cfg["password"],
+                database=db_cfg["database"],
+            )
+        except mysql.connector.Error:
+            # Fallback to direct connection if pooling unavailable
+            logger.debug("Connection pool creation failed, using direct connection")
+            return mysql.connector.connect(
+                host=db_cfg["host"],
+                user=db_cfg["user"],
+                password=db_cfg["password"],
+                database=db_cfg["database"],
+            )
+    return _pool.get_connection()
+
+
+@contextmanager
+def transaction():
+    """Context manager for atomic database operations.
+
+    Usage:
+        with transaction() as conn:
+            c = conn.cursor()
+            c.execute("INSERT INTO ...")
+            c.execute("INSERT INTO ...")
+        # Auto-commits on success, rolls back on exception.
+    """
+    conn = get_connection()
+    try:
+        yield conn
+        conn.commit()
     except Exception:
-        db_cfg = {"host": "localhost", "user": "octopus",
-                  "password": "123", "database": "octopus"}
-    return mysql.connector.connect(
-        host=db_cfg["host"],
-        user=db_cfg["user"],
-        password=db_cfg["password"],
-        database=db_cfg["database"]
-    )
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 # v4.2: Auto-migration — runs on import, idempotent
@@ -238,10 +297,28 @@ def init_db():
             )
         """)
 
+        # ── v9.0: Performance indices ─────────────────────────────
+        _index_stmts = [
+            "CREATE INDEX IF NOT EXISTS idx_vuln_slno ON vulnerabilities(sl_no)",
+            "CREATE INDEX IF NOT EXISTS idx_fix_slno ON fixes(sl_no)",
+            "CREATE INDEX IF NOT EXISTS idx_exploit_slno ON exploits_attempted(sl_no)",
+            "CREATE INDEX IF NOT EXISTS idx_summary_slno ON summary(sl_no)",
+            "CREATE INDEX IF NOT EXISTS idx_tool_results_slno ON tool_results(sl_no)",
+            "CREATE INDEX IF NOT EXISTS idx_history_target ON history(target)",
+            "CREATE INDEX IF NOT EXISTS idx_history_status ON history(status)",
+            "CREATE INDEX IF NOT EXISTS idx_creds_target ON credentials(target_ip)",
+        ]
+        for stmt in _index_stmts:
+            try:
+                c.execute(stmt)
+            except mysql.connector.Error:
+                pass  # Index may already exist on older MariaDB without IF NOT EXISTS
+
         conn.commit()
         conn.close()
     except Exception as e:
         # Don't crash on migration failure — just warn
+        logger.warning(f"DB migration warning: {e}")
         print(f"[!] DB migration warning: {e}")
 
 
