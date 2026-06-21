@@ -4,6 +4,7 @@ Kill chain orchestrator: runs all stages.
 """
 
 import os
+import logging
 import re
 import time
 import socket
@@ -106,8 +107,8 @@ def run_full_killchain(target: str, user: str = None, password: str = None,
                         re_authed = True
                         print(f"  {C_GREEN}[+] RE-AUTHENTICATED as root via SSH key{C_RESET}")
                         full_output += f"\n[+] Re-authenticated as root via SSH key for stages 4-9\n"
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in orchestrator.py: {_exc}")
 
             if not re_authed:
                 print(f"  {C_YELLOW}[!] Root re-auth failed — continuing as {user} (rootbash may be available){C_RESET}")

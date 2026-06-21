@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os
+import logging
 import re
 import time
 import socket
@@ -58,8 +59,8 @@ def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: i
                 )
                 try:
                     _ssh_exec(client, "unset HISTFILE; export HISTFILE=/dev/null; export HISTSIZE=0", timeout=5)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in ssh_helpers.py: {_exc}")
                 return client, None
             except Exception as e:
                 return None, f"Key auth failed: {user}@{host}: {e}"
@@ -75,8 +76,8 @@ def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: i
         # Disable history immediately
         try:
             _ssh_exec(client, "unset HISTFILE; export HISTFILE=/dev/null; export HISTSIZE=0", timeout=5)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in ssh_helpers.py: {_exc}")
         return client, None
     except paramiko.AuthenticationException:
         # v8.1: Auto-fallback to key auth for root
@@ -94,12 +95,12 @@ def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: i
                     )
                     try:
                         _ssh_exec(client2, "unset HISTFILE; export HISTFILE=/dev/null; export HISTSIZE=0", timeout=5)
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logging.debug(f"Suppressed in ssh_helpers.py: {_exc}")
                     print(f"  {C_GREEN}[+] Password auth failed but SSH key auth succeeded for root{C_RESET}")
                     return client2, None
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in ssh_helpers.py: {_exc}")
         return None, f"Auth failed: {user}:{password}@{host}"
     except Exception as e:
         return None, str(e)
@@ -181,7 +182,7 @@ def _is_port_open(host: str, port: int, timeout: int = 5) -> bool:
     sock.settimeout(timeout)
     try:
         return sock.connect_ex((host, port)) == 0
-    except Exception:
+    except Exception as e:
         return False
     finally:
         sock.close()

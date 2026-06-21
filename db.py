@@ -76,7 +76,7 @@ def transaction():
     try:
         yield conn
         conn.commit()
-    except Exception:
+    except Exception as e:
         conn.rollback()
         raise
     finally:
@@ -325,7 +325,7 @@ def init_db():
 # Run migration on import
 try:
     init_db()
-except Exception:
+except Exception as e:
     pass
 
 

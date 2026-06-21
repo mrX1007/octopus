@@ -88,7 +88,7 @@ class ShodanRecon:
             )
             self._ensure_table()
             return self._db_conn
-        except Exception:
+        except Exception as e:
             return None
 
     def _ensure_table(self):

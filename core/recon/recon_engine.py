@@ -10,6 +10,7 @@ Features:
 """
 
 import os
+import logging
 import ssl
 import json
 import time
@@ -143,7 +144,7 @@ class ReconEngine:
                     self.results[target]["banners"] = ""
                 self.results[target]["banners"] += f"[Port {port} | {svc}] {banner[:100]}...\n"
                 
-        except Exception:
+        except Exception as e:
             pass # Silent fail on timeouts
 
     def _heuristic_service_detect(self, port: int, banner: str) -> str:
@@ -204,8 +205,8 @@ class ReconEngine:
                 self.results[target]["http_enum"] = ""
             self.results[target]["http_enum"] += f"URL: {url} | Server: {server} | Title: {title}\n"
             
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in recon_engine.py: {_exc}")
 
     async def _run_enum4linux(self, target: str):
         print(f"  {C_CYAN}[*] Running async enum4linux on {target}...{C_RESET}")

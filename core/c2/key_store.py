@@ -183,7 +183,7 @@ class KeyStore:
         try:
             aesgcm = AESGCM(kek)
             priv_bytes = aesgcm.decrypt(nonce, ciphertext, None)
-        except Exception:
+        except Exception as e:
             return False
         finally:
             kek_mut = bytearray(kek)
@@ -213,7 +213,7 @@ class KeyStore:
         try:
             self._ed25519_public.verify(signature, data)
             return True
-        except Exception:
+        except Exception as e:
             return False
 
     def create_session(self, client_x25519_pub_bytes: bytes) -> dict:

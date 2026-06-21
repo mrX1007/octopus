@@ -547,8 +547,8 @@ def create_ssh_chain(
             # Disable history on the hop
             try:
                 _ssh_exec(client, "unset HISTFILE; export HISTFILE=/dev/null", timeout=5)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in pivot.py: {_exc}")
 
             whoami = _ssh_exec(client, "id; hostname", timeout=5)
             output += f"  [+] {hop_label} — connected\n"
@@ -566,8 +566,8 @@ def create_ssh_chain(
             for c in clients:
                 try:
                     c.close()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in pivot.py: {_exc}")
             return None, output
 
     output += f"\n[+] SSH chain established ({len(clients)} hops)\n"
@@ -627,7 +627,7 @@ def scan_through_proxy(
                 s.close()
                 open_ports.append(port)
                 output += f"    {C_GREEN}{port}/tcp  OPEN{C_RESET}\n"
-            except Exception:
+            except Exception as e:
                 closed_count += 1
     else:
         # Fall back to proxychains + nmap
@@ -686,7 +686,7 @@ def scan_through_proxy(
                     else:
                         closed_count += 1
                     s.close()
-                except Exception:
+                except Exception as e:
                     closed_count += 1
 
     output += f"\n{'═' * 60}\n"

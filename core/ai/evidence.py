@@ -165,8 +165,8 @@ class StructuredParser:
                 data = json.loads(raw_strip)
                 if "cve" in data:
                     facts.append({"type": "vulnerability", "value": data["cve"], "confidence": 100, "session_id": session_id})
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in evidence.py: {_exc}")
         return facts
 
 

@@ -123,8 +123,8 @@ class Subsystem:
             if self.stop_fn:
                 try:
                     self.stop_fn()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in supervisor.py: {_exc}")
 
             if self.start_fn:
                 self.start_fn()
@@ -208,8 +208,8 @@ class Supervisor:
             try:
                 fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
                 os.close(self._lock_fd)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in supervisor.py: {_exc}")
             self._lock_fd = None
         try:
             os.remove(LOCK_FILE)
@@ -503,7 +503,7 @@ class Supervisor:
             if os.path.exists(os.path.dirname(db_path)):
                 es = EventStore(db_path=db_path)
                 es.append("supervisor", str(self._pid), event_type, data)
-        except Exception:
+        except Exception as e:
             pass  # Event store is optional
 
     # ─── Class Methods ─────────────────────────────────
@@ -564,7 +564,7 @@ def _check_ollama() -> bool:
         req = urllib.request.Request(f"{url}/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status == 200
-    except Exception:
+    except Exception as e:
         return False
 
 
@@ -576,7 +576,7 @@ def _check_database() -> bool:
         conn.execute("SELECT 1")
         conn.close()
         return True
-    except Exception:
+    except Exception as e:
         return False
 
 
@@ -591,7 +591,7 @@ def _check_event_store() -> bool:
         # Verify we can read from the stream (count() doesn't exist)
         es.read_stream(limit=1)
         return True
-    except Exception:
+    except Exception as e:
         return False
 
 
@@ -652,7 +652,7 @@ def cli():
                     crashes = sub.get("crash_count", 0)
                     marker = "✅" if status == "running" else "❌"
                     print(f"  {marker} {name}: {status} (crashes: {crashes})")
-            except Exception:
+            except Exception as e:
                 print(f"OCTOPUS running (PID {pid}), no state file")
         else:
             print("Status: STOPPED")
@@ -680,7 +680,7 @@ def cli():
                 marker = "✅" if status == "running" else "❌"
                 print(f"  {marker} {name}: {status}")
             sys.exit(0 if all_ok else 1)
-        except Exception:
+        except Exception as e:
             print("No health data available")
             sys.exit(1)
 

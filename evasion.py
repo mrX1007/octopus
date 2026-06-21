@@ -24,6 +24,7 @@ Web Evasion Strategy:
 """
 
 import os
+import logging
 import re
 import sys
 import time
@@ -114,7 +115,7 @@ def _check_tor_running() -> bool:
         result = s.connect_ex(("127.0.0.1", 9050))
         s.close()
         return result == 0
-    except Exception:
+    except Exception as e:
         return False
 
 
@@ -131,8 +132,8 @@ def _get_tor_new_identity():
             s.recv(256)
         s.close()
         time.sleep(1)
-    except Exception:
-        pass
+    except Exception as _exc:
+        logging.debug(f"Suppressed in evasion.py: {_exc}")
 
 
 def _create_proxy_socket(host, port, proxy_type="socks5", proxy_host="127.0.0.1", proxy_port=9050):
@@ -235,7 +236,7 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
                             pwd_list.append(word)
                             if len(pwd_list) >= max_passwords:
                                 break
-            except Exception:
+            except Exception as e:
                 continue
             if len(pwd_list) >= max_passwords:
                 break
@@ -373,7 +374,7 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
                     # Transport died mid-auth — this attempt was NOT evaluated
                     conn_had_error = True
                     break
-                except Exception:
+                except Exception as e:
                     conn_had_error = True
                     break
 
@@ -433,8 +434,8 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
                     print(f"  {C_GREEN}[+] Port {port} reachable again! Resuming...{C_RESET}")
                     time.sleep(2 + random.uniform(0, 3))  # Extra small random wait
                     break
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in evasion.py: {_exc}")
                 time.sleep(min(30, remaining))
                 if remaining > 30:
                     print(f"  {C_GREY}    ... {remaining - 30}s remaining{C_RESET}")
@@ -456,8 +457,8 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
             try:
                 if transport:
                     transport.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in evasion.py: {_exc}")
 
         # ── Small random delay between connections ───────────
         conn_delay = random.uniform(1.0, 3.0)
@@ -728,8 +729,8 @@ class WebEvasionSession:
                         result["waf_detected"] = True
                         result["details"].append(
                             f"Blocked payload (HTTP {tresp.status_code}): {payload.split('?')[1][:50]}")
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in evasion.py: {_exc}")
 
         except Exception as e:
             result["details"].append(f"Error: {e}")
@@ -778,7 +779,7 @@ def web_bruteforce_stealth(url: str, users: list = None, passwords: list = None,
                             passwords.append(word)
                             if len(passwords) >= 5000:
                                 break
-            except Exception:
+            except Exception as e:
                 continue
 
     # ── Detect login form ────────────────────────────────────
@@ -872,8 +873,8 @@ def web_bruteforce_stealth(url: str, users: list = None, passwords: list = None,
                                 hval = hidden.get("value", "")
                                 if hname:
                                     post_data[hname] = hval
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logging.debug(f"Suppressed in evasion.py: {_exc}")
 
                 resp = session.post(action, data=post_data)
 
@@ -1017,8 +1018,8 @@ def credential_spray(targets: list, creds: list, service: str = "ssh", delay: fl
                 try:
                     if 'transport' in locals() and transport:
                         transport.close()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in evasion.py: {_exc}")
 
             # Jittered delay between hosts
             actual_delay = delay + random.uniform(0.1, 1.0)

@@ -49,7 +49,7 @@ def _get_our_ip() -> str:
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except Exception:
+    except Exception as e:
         return ""
 
 

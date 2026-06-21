@@ -123,7 +123,7 @@ def _ldap_search_impacket(
             item: Dict[str, Any] = {}
             try:
                 item["dn"] = str(entry["objectName"])
-            except Exception:
+            except Exception as e:
                 item["dn"] = ""
             for attr in entry["attributes"]:
                 attr_type = str(attr["type"])

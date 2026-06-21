@@ -17,7 +17,18 @@ import signal
 import subprocess
 import atexit
 import logging
+import readline
 from datetime import datetime
+
+# ─── Import CLI primitives from core/cli ───
+try:
+    from core.cli import (
+        console, RICH_AVAILABLE as _RICH,
+        run_with_spinner, print_rich_table,
+    )
+except ImportError:
+    _RICH = False
+    console = None
 
 from db import (
     get_connection,
@@ -98,8 +109,8 @@ def _sigint_handler(signum, frame):
     if _supervisor:
         try:
             _supervisor.stop()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in octopus.py: {_exc}")
 
     print("\033[91m[*] Shutting down Octopus.\033[0m\n")
     # Use os._exit to avoid threading atexit crash — sys.exit(130) conflicts
@@ -169,6 +180,116 @@ def info(text):
 def confirm(question: str) -> bool:
     ans = prompt(f"{question} [y/N]: ").lower()
     return ans == "y"
+
+
+# ─────────────────────────────────────────────
+# READLINE TAB COMPLETION + HISTORY
+# ─────────────────────────────────────────────
+
+_HISTORY_FILE = os.path.expanduser("~/.octopus_history")
+
+# Menu commands for tab completion
+_COMPLETIONS = [
+    "1", "2", "3", "4", "5",
+    "new", "scan", "history", "resume", "c2", "exit", "quit",
+    "nmap", "whois", "whatweb", "curl", "dig", "sslscan", "ffuf",
+    "enum4linux", "smbclient", "wpscan", "sqlmap", "nikto",
+    "scrapling", "jmx2rce", "bruteforce", "ssh_session", "ssh_exec",
+    "killchain", "shodan", "crack_hashes", "cpanel",
+    "ad_enum", "asrep_roast", "kerberoast", "dcsync", "psexec", "wmiexec",
+    "socks_proxy", "port_forward", "network_recon",
+    "build_go_implant", "build_python_implant", "build_ps_stager",
+    "all", "default", "help", "back",
+]
+
+
+class _OctopusCompleter:
+    """Tab completer for OCTOPUS CLI."""
+
+    def __init__(self, options=None):
+        self.options = sorted(options or _COMPLETIONS)
+
+    def complete(self, text, state):
+        if state == 0:
+            if text:
+                self.matches = [o for o in self.options if o.startswith(text.lower())]
+            else:
+                self.matches = self.options[:]
+        try:
+            return self.matches[state]
+        except IndexError:
+            return None
+
+
+def _setup_readline():
+    """Initialize readline with tab completion and persistent history."""
+    readline.set_completer(_OctopusCompleter().complete)
+    readline.parse_and_bind("tab: complete")
+    readline.set_completer_delims(" \t\n;")
+
+    # Load history
+    try:
+        readline.read_history_file(_HISTORY_FILE)
+        readline.set_history_length(500)
+    except FileNotFoundError:
+        pass
+
+    # Save history on exit
+    atexit.register(readline.write_history_file, _HISTORY_FILE)
+
+
+# ─────────────────────────────────────────────
+# RICH PROGRESS HELPERS
+# ─────────────────────────────────────────────
+
+def run_with_spinner(description: str, func, *args, **kwargs):
+    """Run a function with a Rich spinner. Falls back to plain output.
+
+    Args:
+        description: What's being done (shown next to spinner).
+        func: The function to run.
+        *args, **kwargs: Passed to func.
+
+    Returns:
+        Whatever func returns.
+    """
+    if _RICH:
+        with Progress(
+            SpinnerColumn("dots"),
+            TextColumn("[cyan]{task.description}"),
+            TimeElapsedColumn(),
+            console=console,
+            transient=True,
+        ) as progress:
+            progress.add_task(description, total=None)
+            return func(*args, **kwargs)
+    else:
+        print(f"\033[90m[*] {description}...\033[0m")
+        return func(*args, **kwargs)
+
+
+def print_rich_table(title: str, columns: list, rows: list):
+    """Print a Rich-styled table, or plain ASCII if Rich unavailable.
+
+    Args:
+        title: Table title.
+        columns: List of (name, style) tuples.
+        rows: List of row tuples.
+    """
+    if _RICH:
+        table = RichTable(title=title, border_style="dim", header_style="bold cyan")
+        for name, style in columns:
+            table.add_column(name, style=style)
+        for row in rows:
+            table.add_row(*[str(c) for c in row])
+        console.print(table)
+    else:
+        # Plain ASCII fallback
+        header = "  " + "".join(f"{name:<{max(15, len(name)+2)}}" for name, _ in columns)
+        print(f"\033[96m{header}\033[0m")
+        print(f"  {'─' * (len(columns) * 15)}")
+        for row in rows:
+            print("  " + "".join(f"{str(c):<15}" for c in row))
 
 
 def print_results_table(result: dict):
@@ -856,7 +977,7 @@ def resume_scan():
             with open(path) as f:
                 data = json.load(f)
             parsed.append((path, data))
-        except Exception:
+        except Exception as e:
             continue
 
     if not parsed:
@@ -942,8 +1063,8 @@ def resume_scan():
     try:
         os.remove(path)
         success(f"Checkpoint file removed: {path}")
-    except Exception:
-        pass
+    except Exception as _exc:
+        logging.debug(f"Suppressed in octopus.py: {_exc}")
 
 
 def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
@@ -1499,8 +1620,8 @@ def _start_c2_daemon():
                 print(f"  \033[91m─── Daemon log ({log_path}) ───\033[0m")
                 for line in log_content.splitlines()[-15:]:
                     print(f"  \033[90m{line}\033[0m")
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in octopus.py: {_exc}")
 
 def c2_management_menu():
     """Interact with the C2 Server via Unix Socket (Thin Client)."""
@@ -1655,6 +1776,7 @@ if __name__ == "__main__":
         sys.exit(0)
 
     log_file = _setup_logging()
+    _setup_readline()
 
 
     # ── Supervisor: PID management + health monitoring ──

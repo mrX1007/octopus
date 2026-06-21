@@ -80,7 +80,7 @@ def _get_report_dir() -> str:
     try:
         from config import CFG
         return CFG["paths"]["reports"]
-    except Exception:
+    except Exception as e:
         return os.path.expanduser("~/OCTOPUS/reports")
 
 

@@ -7,6 +7,7 @@ Extracted from llm.py lines 1463-1846 and 2260-2392.
 """
 
 import re
+import logging
 import os
 import sys
 import time
@@ -135,7 +136,7 @@ def _save_tool_result_bg(command: str, output, duration: float):
             from db import save_tool_result
             save_tool_result(_active_sl_no, command, _stdout,
                              stderr=_stderr, exit_code=_exit_code, duration=_duration)
-        except Exception:
+        except Exception as e:
             pass  # Never crash on DB save failure
     threading.Thread(target=_save, daemon=True).start()
 
@@ -469,8 +470,8 @@ def load_checkpoint(sl_no: int) -> dict:
         try:
             with open(path) as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in agent_loop.py: {_exc}")
     return {}
 
 
@@ -485,8 +486,8 @@ def clear_checkpoint(sl_no: int):
     path = os.path.join(ck_dir, f"octopus_checkpoint_{sl_no}.json")
     try:
         os.remove(path)
-    except Exception:
-        pass
+    except Exception as _exc:
+        logging.debug(f"Suppressed in agent_loop.py: {_exc}")
 
 
 # ─────────────────────────────────────────────

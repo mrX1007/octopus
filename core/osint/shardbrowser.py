@@ -124,7 +124,7 @@ class ShardBrowser:
         try:
             sdk = self._ensure_sdk()
             return sdk.runtime.is_installed() if hasattr(sdk.runtime, 'is_installed') else True
-        except Exception:
+        except Exception as e:
             return False
 
     # ═══════════════════════════════════════════════
@@ -193,8 +193,8 @@ class ShardBrowser:
         for sid, sess in list(self._sessions.items()):
             try:
                 sess.stop()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in shardbrowser.py: {_exc}")
         self._sessions.clear()
 
     # ═══════════════════════════════════════════════
@@ -321,8 +321,8 @@ class ShardBrowser:
                 if session:
                     try:
                         session.stop()
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logging.debug(f"Suppressed in shardbrowser.py: {_exc}")
 
         return results
 
@@ -384,8 +384,8 @@ class ShardBrowser:
                 if session:
                     try:
                         session.stop()
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logging.debug(f"Suppressed in shardbrowser.py: {_exc}")
 
         return results
 
@@ -567,8 +567,8 @@ class ShardBrowser:
         finally:
             try:
                 session.stop()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in shardbrowser.py: {_exc}")
 
     # ═══════════════════════════════════════════════
     # STATUS

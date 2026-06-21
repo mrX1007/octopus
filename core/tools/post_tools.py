@@ -5,6 +5,7 @@ Extracted from tools.py.
 """
 
 import os
+import logging
 import re
 import concurrent.futures
 
@@ -244,7 +245,7 @@ def run_default_recon(target: str) -> dict:
             shodan_data = run_shodan_host(target)
             if shodan_data and "[!]" not in shodan_data[:10]:
                 results["shodan"] = shodan_data
-    except Exception:
+    except Exception as e:
         pass  # Shodan not available — that's fine
 
     print("─" * 50)
@@ -637,8 +638,8 @@ def _run_shardbrowser_osint(target: str) -> str:
             if session:
                 try:
                     session.stop()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in post_tools.py: {_exc}")
     else:
         # ── OSINT search mode ──
         query = input(f"  Search query [{target}]: ").strip() or target

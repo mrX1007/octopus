@@ -3,6 +3,7 @@
 """
 
 import re
+import logging
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -254,7 +255,7 @@ def _fetch_with_scrapling(url: str, max_chars: int = 3000) -> str:
             return None
     except ImportError:
         return None
-    except Exception:
+    except Exception as e:
         return None
 
 
@@ -313,8 +314,8 @@ def handle_search_dispatch(query: str) -> str:
                 res = subprocess.run(["searchsploit", "--cve", cve_id], capture_output=True, text=True, timeout=10)
                 if "No Results" not in res.stdout and len(res.stdout) > 50:
                     return f"[SEARCHSPLOIT LOCAL CVE MATCH]\n{res.stdout}\n\n[CVE DB INFO]\n{search_cve(cve_id)}"
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in search.py: {_exc}")
         return search_cve(cve_id)
 
     # 2. Explicit searchsploit request
@@ -331,8 +332,8 @@ def handle_search_dispatch(query: str) -> str:
                 res = subprocess.run(["searchsploit", query], capture_output=True, text=True, timeout=10)
                 if "No Results" not in res.stdout and len(res.stdout) > 50:
                     return f"[SEARCHSPLOIT LOCAL MATCH for '{query}']\n{res.stdout}"
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in search.py: {_exc}")
 
     # 4. Exploit / PoC keywords — target github and recent years
     if any(word in query.lower() for word in ["exploit", "poc", "payload", "rce", "lfi", "sqli"]):

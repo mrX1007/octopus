@@ -80,7 +80,7 @@ def plant_persistence(host: str, user: str, password: str, port: int = 22) -> st
                     ["ssh-keygen", "-t", "ed25519", "-f", key_path, "-N", "", "-q", "-C", "octopus"],
                     check=True, timeout=10
                 )
-            except Exception:
+            except Exception as e:
                 # Fallback: generate via paramiko
                 if paramiko:
                     key = paramiko.Ed25519Key.generate()

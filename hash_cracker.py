@@ -5,6 +5,7 @@ Optimized for: Intel i9-14900 / RTX 4080 / 64GB RAM.
 
 Usage:
     from hash_cracker import HashCracker
+import logging
     hc = HashCracker()
     result = hc.smart_crack(shadow_content)
     for user, pwd in hc.get_cracked_pairs():
@@ -93,8 +94,8 @@ class HashCracker:
                 )
                 if "CUDA" in r.stdout or "OpenCL" in r.stdout or "HIP" in r.stdout:
                     self.has_gpu = True
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in hash_cracker.py: {_exc}")
 
         if self.hashcat:
             gpu_tag = f"{C_GREEN}GPU (CUDA){C_RESET}" if self.has_gpu else f"{C_YELLOW}CPU only{C_RESET}"
@@ -221,8 +222,8 @@ class HashCracker:
                         if ":" in line:
                             h, p = line.split(":", 1)
                             cracked[h] = p
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in hash_cracker.py: {_exc}")
 
         self.cracked.update(cracked)
         return {"cracked": cracked, "cracked_count": len(cracked), "elapsed": round(elapsed, 1)}
@@ -251,8 +252,8 @@ class HashCracker:
                     parts = line.split(":")
                     if len(parts) >= 2 and parts[1] not in ("*", "!", ""):
                         cracked[parts[0]] = parts[1]
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in hash_cracker.py: {_exc}")
         self.cracked.update(cracked)
         return {"cracked": cracked, "cracked_count": len(cracked), "elapsed": round(elapsed, 1)}
 
@@ -349,8 +350,8 @@ class HashCracker:
                             mask_cmd.extend(["-D", "1,2", "--force"])
                         mask_cmd.extend([hash_file, mask])
                         subprocess.run(mask_cmd, capture_output=True, text=True, timeout=60)
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logging.debug(f"Suppressed in hash_cracker.py: {_exc}")
                 # Re-read cracked
                 outfile = os.path.join(self._workdir, "cracked.txt")
                 if os.path.isfile(outfile):
@@ -361,8 +362,8 @@ class HashCracker:
                                 if ":" in line:
                                     h, p = line.split(":", 1)
                                     self.cracked[h] = p
-                    except Exception:
-                        pass
+                    except Exception as _exc:
+                        logging.debug(f"Suppressed in hash_cracker.py: {_exc}")
                 self._map_cracked_to_users(data["entries"])
                 output += f"  Mask phase complete\n"
 
@@ -413,8 +414,8 @@ class HashCracker:
         try:
             import shutil as _shutil
             _shutil.rmtree(self._workdir, ignore_errors=True)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in hash_cracker.py: {_exc}")
 
 
 # ---- STANDALONE FUNCTIONS ----

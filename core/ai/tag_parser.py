@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import re
+import logging
 
 # ANSI Colors
 C_GREY   = "[90m"
@@ -371,8 +372,8 @@ def _fix_hydra_args(cmd: str) -> str:
                     f.write("\n".join(u.strip() for u in users) + "\n")
                 cmd = cmd.replace(f"-L {val}", f"-L {users_file}")
                 print(f"  {C_YELLOW}[FIX] Created user file from inline values: {users_file}{C_RESET}")
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in tag_parser.py: {_exc}")
 
     # Fix -P with comma-separated values (not a file path)
     match_P = re.search(r'-P\s+(\S+)', cmd)
@@ -387,8 +388,8 @@ def _fix_hydra_args(cmd: str) -> str:
                     f.write("\n".join(p.strip() for p in passwords) + "\n")
                 cmd = cmd.replace(f"-P {val}", f"-P {pass_file}")
                 print(f"  {C_YELLOW}[FIX] Created password file from inline values: {pass_file}{C_RESET}")
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in tag_parser.py: {_exc}")
 
     # Fix -s flag without proper port (hydra -s expects a port number)
     # Remove bare -s flags that aren't followed by a number

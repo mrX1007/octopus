@@ -167,8 +167,8 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
                 error_text = ""
                 try:
                     error_text = resp.text[:500]
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in ollama_client.py: {_exc}")
                 if attempt < OLLAMA_RETRIES:
                     print(f"\n{C_RED}[!] Ollama 500 error (attempt {attempt}/{OLLAMA_RETRIES}).{C_RESET}")
                     if error_text:
@@ -275,3 +275,124 @@ def _extract_json(text: str) -> str:
     result = s[start_idx:end_idx + 1]
     logger.debug(f"Extracted JSON ({len(result)} chars)")
     return result
+
+
+# ─────────────────────────────────────────────
+# STRUCTURED JSON MODE (v9.0)
+# ─────────────────────────────────────────────
+
+def ask_ollama_structured(prompt: str, schema: dict, max_retries: int = 2) -> dict:
+    """Ask Ollama and validate response against a JSON schema.
+
+    Args:
+        prompt: The prompt to send.
+        schema: Dict describing expected structure:
+            {"field_name": "description", ...}
+            Values are descriptions used in the prompt.
+        max_retries: Number of retries on invalid JSON.
+
+    Returns:
+        Parsed dict matching the schema, or {"error": "..."} on failure.
+
+    Example:
+        result = ask_ollama_structured(
+            "Analyze this nmap output: ...",
+            schema={
+                "risk_level": "CRITICAL/HIGH/MEDIUM/LOW",
+                "vulnerabilities": "list of {name, severity, port, service}",
+                "recommended_tools": "list of tool names to run next",
+            }
+        )
+    """
+    schema_text = json.dumps(schema, indent=2)
+    full_prompt = (
+        f"{prompt}\n\n"
+        f"RESPOND WITH VALID JSON ONLY. Use this exact schema:\n"
+        f"```json\n{schema_text}\n```\n"
+        f"Return ONLY the JSON object, no markdown, no explanation."
+    )
+
+    for attempt in range(1, max_retries + 1):
+        response = ask_ollama(full_prompt, json_mode=True)
+
+        if response.startswith("[!]"):
+            logger.warning(f"Structured query attempt {attempt} failed: {response}")
+            if attempt < max_retries:
+                continue
+            return {"error": response}
+
+        try:
+            data = json.loads(response)
+            # Validate required fields
+            missing = [k for k in schema if k not in data]
+            if missing:
+                logger.warning(f"Missing fields in structured response: {missing}")
+                # Don't fail — partial data is still useful
+            return data
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON parse error attempt {attempt}: {e}")
+            if attempt < max_retries:
+                continue
+            return {"error": f"Invalid JSON after {max_retries} retries: {e}",
+                    "raw_response": response[:500]}
+
+    return {"error": "Structured query exhausted all retries"}
+
+
+def ask_ollama_stream(prompt: str) -> "Generator[str, None, None]":
+    """Generator that yields tokens as they arrive from Ollama.
+
+    Useful for real-time display in Rich panels or custom UI.
+    Does NOT print to stdout (unlike ask_ollama).
+
+    Yields:
+        Individual text chunks/tokens from the model.
+
+    Example:
+        for token in ask_ollama_stream("Analyze this scan..."):
+            sys.stdout.write(token)
+            sys.stdout.flush()
+    """
+    options = {
+        "num_predict": MAX_TOKENS,
+        "temperature": 0.4,
+        "top_p": 0.9,
+        "top_k": 10,
+        "repeat_penalty": 1.15,
+        "num_thread": 16,
+    }
+
+    payload = {
+        "model": MODEL_NAME,
+        "prompt": prompt,
+        "stream": True,
+        "options": options,
+    }
+
+    try:
+        resp = requests.post(
+            OLLAMA_URL, json=payload,
+            stream=True, timeout=OLLAMA_TIMEOUT,
+        )
+        resp.raise_for_status()
+
+        for line in resp.iter_lines():
+            if line:
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                chunk = data.get("response", "")
+                if chunk:
+                    yield chunk
+                if data.get("done"):
+                    break
+                if data.get("error"):
+                    logger.error(f"Ollama stream error: {data['error']}")
+                    yield f"\n[!] Error: {data['error']}"
+                    break
+
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Ollama stream request failed: {e}")
+        yield f"[!] Connection failed: {e}"
+

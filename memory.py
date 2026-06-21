@@ -96,7 +96,7 @@ class VectorMemory:
                     results["distances"][0][0] < _DEDUP_THRESHOLD):
                 return True
             return False
-        except Exception:
+        except Exception as e:
             return False
 
     def recall(self, query: str, n_results: int = 5, category: str = None,
@@ -168,7 +168,7 @@ class VectorMemory:
             if count == 0:
                 return "Memory is empty."
             return f"Memory contains {count} stored context items."
-        except Exception:
+        except Exception as e:
             return "Memory status unavailable."
 
     def clear_session(self):

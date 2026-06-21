@@ -9,6 +9,7 @@ Single source of truth that synchronizes:
 
 Usage:
     from core.credentials import CredentialStore
+import logging
 
     creds = CredentialStore.instance()   # singleton
     creds.add("ssh", "10.0.0.1", "root", "toor", source="bruteforce")
@@ -72,14 +73,14 @@ class CredentialStore:
                     self._cache[key].append(entry)
             conn.close()
             self._db_available = True
-        except Exception:
+        except Exception as e:
             pass  # MariaDB not available — cache-only mode
 
         try:
             from core.knowledge import KnowledgeGraph
             self._kg_available = True
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in credentials.py: {_exc}")
 
     # ─── Write API ───────────────────────────────────────────
 
@@ -141,8 +142,8 @@ class CredentialStore:
             """, (target, service, user, password))
             conn.commit()
             conn.close()
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in credentials.py: {_exc}")
 
     def _sync_to_kg(self, service, target, user, password, source, verified, port):
         """Add to Knowledge Graph as Credential → Asset edge."""
@@ -160,8 +161,8 @@ class CredentialStore:
             from core.knowledge.models import EdgeType
             kg.link(cred.node_id, f"asset:{target}", EdgeType.CAN_ACCESS,
                     method=service, port=port)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in credentials.py: {_exc}")
 
     def _sync_to_legacy(self, service, target, user, password):
         """Sync to the old _KNOWN_CREDS dict in exploit_tools.py."""
@@ -172,8 +173,8 @@ class CredentialStore:
                 _KNOWN_CREDS[key] = []
             if (user, password) not in _KNOWN_CREDS[key]:
                 _KNOWN_CREDS[key].append((user, password))
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in credentials.py: {_exc}")
 
     # ─── Read API ────────────────────────────────────────────
 
@@ -226,8 +227,8 @@ class CredentialStore:
             for (svc, tgt), cred_list in _KNOWN_CREDS.items():
                 for user, pwd in cred_list:
                     self.add(svc, tgt, user, pwd, quiet=True)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in credentials.py: {_exc}")
 
     def export_summary(self) -> str:
         """Formatted summary for AI context or display."""

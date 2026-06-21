@@ -195,7 +195,7 @@ class PluginManager:
             if instance and hasattr(instance, method_name):
                 try:
                     getattr(instance, method_name)(data)
-                except Exception:
+                except Exception as e:
                     pass  # Never crash on event dispatch
 
     def resolve_dependencies(self, target_plugins: List[str]) -> List[str]:

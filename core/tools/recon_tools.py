@@ -5,6 +5,7 @@ Extracted from tools.py.
 """
 
 import os
+import logging
 import re
 import shutil
 
@@ -85,8 +86,8 @@ def run_nmap(target: str, extra_flags: list = None) -> str:
         try:
             with open(cache_file, "w") as f:
                 f.write(final_output)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in recon_tools.py: {_exc}")
             
         return final_output
 
@@ -360,7 +361,7 @@ def run_scrapling_fetch(url: str) -> str:
                     print(f"  {C_GREEN}[+] Alt port {alt_port} responded!{C_RESET}")
                     return _extract_page_data(html_str=resp.text, status_code=resp.status_code,
                                            source=f"requests+bs4 (port {alt_port})")
-            except Exception:
+            except Exception as e:
                 continue
         return f"[!] All scrapling/requests attempts failed for {url}. Target web service may be down."
 
@@ -403,7 +404,7 @@ def run_scrapling_crawl(url: str, max_pages: int = 10) -> str:
                             href = f"{url.rstrip('/')}{href}"
                         if base_domain in href and href not in visited:
                             to_visit.append(href)
-            except Exception:
+            except Exception as e:
                 results.append(f"  [ERR] {current_url}")
                 continue
 
@@ -444,7 +445,7 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
     try:
         if sock.connect_ex((target, port)) != 0:
             return f"[!] SSH port {port} is not open on {target}"
-    except Exception:
+    except Exception as e:
         return f"[!] Cannot connect to {target}:{port}"
     finally:
         sock.close()
@@ -481,15 +482,15 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
                     return False
                 transport.close()
                 return True
-            except Exception:
+            except Exception as e:
                 return False
             finally:
                 try:
                     transport.close()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in recon_tools.py: {_exc}")
             return False
-        except Exception:
+        except Exception as e:
             return False
 
     # ── PHASE 1: CANARY TEST (5 users) ────────────────────────────
@@ -511,8 +512,8 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
                     print(f"      [+] VALID USER: {username}")
                 else:
                     print(f"      [-] invalid: {username}")
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in recon_tools.py: {_exc}")
 
     # If ALL canary users (including obviously fake ones) are "valid" → PATCHED
     if canary_total > 0 and canary_valid == canary_total:
@@ -554,7 +555,7 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
                     print(f"      [+] VALID USER: {username}")
                 else:
                     invalid_count += 1
-            except Exception:
+            except Exception as e:
                 error_count += 1
 
     total_tested = len(valid_users) + invalid_count + canary_total

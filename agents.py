@@ -700,8 +700,8 @@ What is your next step? If you have enough data, output [CONCLUSION]."""
         evidence_vulns = []
         try:
             evidence_vulns = build_vulns_from_facts(facts)
-        except Exception:
-            pass
+        except Exception as _exc:
+            logging.debug(f"Suppressed in agents.py: {_exc}")
 
         # LLM-parsed vulns
         llm_vulns = parse_vulnerabilities(response, facts)

@@ -3,6 +3,7 @@
 """
 
 import re
+import logging
 import subprocess
 import shutil
 
@@ -244,8 +245,8 @@ def run_msf_module(module: str, options_str: str, timeout: int = None) -> str:
                 # Close stdout pipe to unblock reader thread
                 try:
                     proc.stdout.close()
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    logging.debug(f"Suppressed in msf.py: {_exc}")
                 lines.append(f"[!] MSF timed out after {msf_timeout}s")
                 print(f"      [TIMEOUT] MSF killed after {msf_timeout}s")
                 break
@@ -259,12 +260,12 @@ def run_msf_module(module: str, options_str: str, timeout: int = None) -> str:
             proc.kill()
             try:
                 proc.stdout.close()
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in msf.py: {_exc}")
             try:
                 proc.wait(timeout=5)
-            except Exception:
-                pass
+            except Exception as _exc:
+                logging.debug(f"Suppressed in msf.py: {_exc}")
 
         # Filter MSF noise
         filtered = [l for l in lines
