@@ -58,8 +58,28 @@ class ToolResult:
     def __len__(self):
         return len(self.stdout)
 
+    def __bool__(self):
+        return bool(self.stdout.strip())
+
+    def __iter__(self):
+        return iter(self.stdout)
+
+    def __getitem__(self, key):
+        return self.stdout[key]
+
+    def __add__(self, other):
+        return self.stdout + str(other)
+
+    def __radd__(self, other):
+        return str(other) + self.stdout
+
     def lower(self):
         return self.stdout.lower()
+
+    def __getattr__(self, name):
+        if not name.startswith("_"):
+            return getattr(self.stdout, name)
+        raise AttributeError(name)
 
 
 # ─────────────────────────────────────────────

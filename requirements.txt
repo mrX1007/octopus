@@ -57,6 +57,7 @@ mdurl>=0.1.0
 
 # ── OSINT ──
 shodan>=1.31.0
+patchright>=1.49.0
 
 # ── Testing (dev) ──
 # pytest>=8.0.0

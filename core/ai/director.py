@@ -18,6 +18,7 @@ KILL_CHAIN = [
     "credential_harvesting",
     "privilege_escalation",
     "persistence",
+    "internal_reconnaissance",
     "data_exfiltration",
     "cleanup",
     "conclude",
@@ -31,11 +32,11 @@ You DO NOT select tools. You DO NOT execute commands.
 You MUST output your response in STRICT JSON format matching this schema:
 {
   "thought": "Brief explanation of why this is the next logical step",
-  "goal": "The high-level goal, e.g. service_discovery, vulnerability_assessment, credential_harvesting, privilege_escalation, persistence, data_exfiltration, cleanup, or conclude"
+  "goal": "The high-level goal, e.g. service_discovery, vulnerability_assessment, credential_harvesting, privilege_escalation, persistence, internal_reconnaissance, data_exfiltration, cleanup, or conclude"
 }
 
 RULES:
-1. If root_access_confirmed is true, your goal should advance to persistence, then data_exfiltration, then cleanup, then conclude.
+1. If root_access_confirmed is true, your goal should advance to persistence, then internal_reconnaissance, then data_exfiltration, then cleanup, then conclude.
 2. If recon is incomplete, your goal is service_discovery.
 3. If recon IS complete but vulnerabilities are unknown, your goal is vulnerability_assessment.
 4. If no new facts have been discovered for several loops, or the goal is repeating, your goal MUST be 'conclude'.
@@ -91,6 +92,37 @@ Based on the context, output the next goal in JSON format."""
         if goal == "service_discovery" and state != "initial_recon":
             return self._fallback_logic(context, goal_history).get("goal", "conclude")
 
+        if goal == "data_exfiltration" and "internal_network_recon_pending" in context.get("open_questions", []):
+            return "internal_reconnaissance"
+
+        completed_by_state = {
+            "recon_completed": {"service_discovery"},
+            "vulnerabilities_found": {"service_discovery", "vulnerability_assessment"},
+            "credentials_found": {"service_discovery", "vulnerability_assessment", "credential_harvesting"},
+            "root_access_confirmed": {
+                "service_discovery", "vulnerability_assessment",
+                "credential_harvesting", "privilege_escalation",
+            },
+            "persistence_established": {
+                "service_discovery", "vulnerability_assessment", "credential_harvesting",
+                "privilege_escalation", "persistence",
+            },
+            "internal_recon_completed": {
+                "service_discovery", "vulnerability_assessment", "credential_harvesting",
+                "privilege_escalation", "persistence", "internal_reconnaissance",
+            },
+            "exfiltration_completed": {
+                "service_discovery", "vulnerability_assessment", "credential_harvesting",
+                "privilege_escalation", "persistence", "internal_reconnaissance", "data_exfiltration",
+            },
+            "cleanup_completed": {
+                "service_discovery", "vulnerability_assessment", "credential_harvesting",
+                "privilege_escalation", "persistence", "internal_reconnaissance", "data_exfiltration", "cleanup",
+            },
+        }
+        if goal in completed_by_state.get(state, set()):
+            return self._fallback_logic(context, goal_history).get("goal", "conclude")
+
         # Don't repeat goals that already ran
         if goal in goal_history and goal not in ("conclude",):
             return self._next_in_chain(goal, goal_history)
@@ -140,6 +172,20 @@ Based on the context, output the next goal in JSON format."""
 
         if state == "root_access_confirmed":
             return self._pick("persistence", goal_history, "root confirmed, post-exploit")
+
+        if state == "persistence_established":
+            if "internal_network_recon_pending" in open_questions:
+                return self._pick("internal_reconnaissance", goal_history, "persistence established, mapping internal network")
+            return self._pick("data_exfiltration", goal_history, "persistence established, collect target data")
+
+        if state == "internal_recon_completed":
+            return self._pick("data_exfiltration", goal_history, "internal network mapped, collect target data")
+
+        if state == "exfiltration_completed":
+            return self._pick("cleanup", goal_history, "data exfiltration complete, cleanup artifacts")
+
+        if state == "cleanup_completed":
+            return self._pick("conclude", goal_history, "cleanup complete")
 
         return {"thought": "fallback: unknown state, concluding", "goal": "conclude"}
 

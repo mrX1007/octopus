@@ -4,7 +4,7 @@ import os
 import time
 import sqlite3
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 
 class FactStore:
     def __init__(self, db_path: str = "data/facts.db"):
@@ -50,10 +50,37 @@ class FactStore:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_type ON facts (type)')
             conn.commit()
 
-    def add_fact(self, scan_id: str, host: str, fact_type: str, value: str, source: str, 
-                 confidence: int = 100, session_id: str = 'none', 
+    def add_fact(self, scan_id: str, host: str, fact_type: str, value: str, source: str,
+                 confidence: int = 100, session_id: str = 'none',
                  derived_from: List[int] = None, evidence_hash: str = "") -> int:
-        """Add a new fact to the facts table. Returns existing ID if duplicate, else new ID."""
+        """Add a fact and return its row id.
+
+        For backward compatibility this returns the existing id when the fact is
+        already present. New callers that need to distinguish inserts from
+        duplicates should use add_fact_with_status().
+        """
+        fact_id, _created = self.add_fact_with_status(
+            scan_id=scan_id,
+            host=host,
+            fact_type=fact_type,
+            value=value,
+            source=source,
+            confidence=confidence,
+            session_id=session_id,
+            derived_from=derived_from,
+            evidence_hash=evidence_hash,
+        )
+        return fact_id
+
+    def add_fact_with_status(self, scan_id: str, host: str, fact_type: str, value: str, source: str,
+                             confidence: int = 100, session_id: str = 'none',
+                             derived_from: List[int] = None, evidence_hash: str = "") -> Tuple[int, bool]:
+        """Add a fact and return (row_id, created).
+
+        The AI pipeline uses the created flag for anti-loop accounting. Without
+        it, duplicates look like new facts because add_fact() returns an id for
+        both new and existing rows.
+        """
         if derived_from is None: derived_from = []
         derived_json = json.dumps(derived_from)
 
@@ -62,7 +89,7 @@ class FactStore:
         existing = self.get_facts(scan_id, host, fact_type=fact_type)
         for f in existing:
             if f['value'] == value:
-                return f['id']  # Already exists, return existing ID
+                return f['id'], False  # Already exists, return existing ID
 
         with self._get_conn() as conn:
             cursor = conn.cursor()
@@ -71,7 +98,7 @@ class FactStore:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (scan_id, host, fact_type, value, confidence, source, session_id, derived_json, evidence_hash, time.time()))
             conn.commit()
-            return cursor.lastrowid
+            return cursor.lastrowid, True
             
     def add_hypothesis(self, scan_id: str, host: str, claim: str, required_evidence: List[str], source: str) -> int:
         """Add a hypothesis to the hypotheses table."""

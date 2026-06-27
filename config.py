@@ -60,7 +60,9 @@ DEFAULTS = {
         "url": os.environ.get("OCTOPUS_OLLAMA_URL", "http://localhost:11434/api/generate"),
         "model": os.environ.get("OCTOPUS_OLLAMA_MODEL", "octopus-qwen"),
         "max_tokens": 4096,
+        "json_max_tokens": 1536,
         "temperature": 0.4,       # v7.0: lowered for deterministic tool selection
+        "json_temperature": 0.15,
         "top_p": 0.9,
         "timeout": 1200,
         "retries": 3,
@@ -68,7 +70,7 @@ DEFAULTS = {
         "max_tool_loops": 25,
         "summarize_threshold": 8000,
         "concurrent_tools": 8,
-        "num_gpu": 28,
+        "num_gpu": 999,
         "num_threads": 16,
         "num_ctx": 16384,
         "num_batch": 512,

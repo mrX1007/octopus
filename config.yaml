@@ -14,7 +14,9 @@ ollama:
   url: "http://localhost:11434/api/generate"
   model: "octopus-qwen"
   max_tokens: 4096           # match Modelfile num_predict (12GB VRAM safe)
+  json_max_tokens: 1536      # Director/Planner/Extractor JSON should be short
   temperature: 0.4           # v7.0: lowered for deterministic tool selection
+  json_temperature: 0.15     # lower variance for strict JSON roles
   top_p: 0.9
   timeout: 1200              # seconds — max wait for one generation
   retries: 3                 # how many times to retry on timeout
@@ -22,7 +24,7 @@ ollama:
   max_tool_loops: 25         # max iterations for full kill chain
   summarize_threshold: 8000  # v7.0: increased for 16K context window
   concurrent_tools: 8        # parallel tool execution workers
-  num_gpu: 28                # 12GB VRAM → 28 of ~40 layers on GPU
+  num_gpu: 999               # RTX 4080 Laptop 12GB: offload all 9B layers when possible
   num_threads: 16            # i9 CPU threads for offloaded layers
   num_ctx: 16384             # v7.0: doubled from 8192 for better reasoning
   num_batch: 512             # v7.0: batch size for faster inference

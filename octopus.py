@@ -1078,6 +1078,10 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
 
     vulns = []
     exploits = []
+    has_exploit_success = any(f['type'] == 'exploit_success' for f in facts)
+    has_confirmed_vuln = any(f['type'] == 'vulnerability' for f in facts)
+    has_potential_vuln = any(f['type'] == 'potential_vulnerability' for f in facts)
+    suppress_potential_vulns = bool(state.get("root_access_confirmed") or has_exploit_success or has_confirmed_vuln)
 
     for f in facts:
         ftype = f['type']
@@ -1119,6 +1123,8 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
             })
 
         elif ftype == 'potential_vulnerability':
+            if suppress_potential_vulns:
+                continue
             vulns.append({
                 "vuln_id": f.get("id", ""),
                 "vuln_name": fval,
@@ -1140,30 +1146,34 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
                 "notes": f"From tool output (confidence: {fconf}%)"
             })
 
-    # Unverified hypotheses
-    for h in hypotheses:
-        vulns.append({
-            "vuln_id": h.get("id", ""),
-            "vuln_name": "[HYPOTHESIS] " + h["claim"],
-            "cvss": 0.0,
-            "severity": "LOW",
-            "port": "unknown",
-            "service": "unknown",
-            "description": "Unverified AI Hypothesis",
-            "confidence": "UNCONFIRMED",
-            "evidence_tool": "AnalysisAgent",
-        })
-
     # Risk level from state
     risk = "LOW"
     if state.get("root_access_confirmed"): risk = "CRITICAL"
-    elif any(f['type'] == 'exploit_success' for f in facts): risk = "CRITICAL"
-    elif state.get("vulnerabilities_found"): risk = "HIGH"
-    elif state.get("credentials_found"): risk = "MEDIUM"
+    elif has_exploit_success: risk = "CRITICAL"
+    elif has_confirmed_vuln: risk = "HIGH"
+    elif state.get("credentials_found") or has_potential_vuln: risk = "MEDIUM"
 
     # Build summary text
-    confirmed_facts = [f"{f['type']}: {f['value']} (Confidence: {f['confidence']})" for f in facts]
-    summary_text = f"AI Pipeline Scan completed.\nTarget: {target}\nState: {state}\nFacts: {len(facts)}\nExploits: {len(exploits)}\nVulns: {len(vulns)}"
+    confirmed_facts = []
+    potential_values = []
+    for f in facts:
+        if f['type'] == 'potential_vulnerability':
+            potential_values.append(str(f['value']))
+            if suppress_potential_vulns:
+                continue
+        confirmed_facts.append(f"{f['type']}: {f['value']} (Confidence: {f['confidence']})")
+
+    if potential_values and suppress_potential_vulns:
+        examples = ", ".join(potential_values[:8])
+        suffix = f", +{len(potential_values) - 8} more" if len(potential_values) > 8 else ""
+        confirmed_facts.append(
+            f"potential_vulnerability: {len(potential_values)} candidates observed ({examples}{suffix})"
+        )
+    summary_text = (
+        f"AI Pipeline Scan completed.\nTarget: {target}\nState: {state}\n"
+        f"Facts: {len(facts)}\nHypotheses: {len(hypotheses)}\n"
+        f"Exploits: {len(exploits)}\nVulns: {len(vulns)}"
+    )
 
     return {
         "vulnerabilities": vulns,
@@ -1822,9 +1832,20 @@ if __name__ == "__main__":
     # Auto-start C2 daemon (v10: uses core/c2/daemon.py, not c2_server.py)
     _start_c2_daemon()
 
+    # Discover dynamically loaded plugins and modules
+    try:
+        from core.tools.registry import discover_plugins, print_registry_stats
+        _base = os.path.dirname(os.path.abspath(__file__))
+        loaded_plugins = discover_plugins(os.path.join(_base, "plugins"))
+        loaded_modules = discover_plugins(os.path.join(_base, "modules"))
+        if loaded_plugins or loaded_modules:
+            info(f"Dynamically loaded {loaded_plugins} plugins and {loaded_modules} modules.")
+            print_registry_stats()
+    except Exception as e:
+        warn(f"Error during plugin discovery: {e}")
+
     try:
         main_menu()
     finally:
         if _supervisor:
             _supervisor.stop()
-

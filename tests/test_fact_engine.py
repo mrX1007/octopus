@@ -13,14 +13,14 @@ class TestExtractOpenPorts:
 
     def test_extracts_standard_ports(self, sample_nmap_output):
         from core.ai.fact_engine import extract_facts_from_output
-        facts = extract_facts_from_output(sample_nmap_output, "nmap")
+        facts = extract_facts_from_output("nmap", sample_nmap_output)
 
         port_facts = [f for f in facts if f[0] and "22" in f[0]]
         assert len(port_facts) > 0, "Should extract SSH port 22"
 
     def test_extracts_service_versions(self, sample_nmap_output):
         from core.ai.fact_engine import extract_facts_from_output
-        facts = extract_facts_from_output(sample_nmap_output, "nmap")
+        facts = extract_facts_from_output("nmap", sample_nmap_output)
 
         # Should find Apache version
         all_text = " ".join(f[0] for f in facts if f[0])
@@ -28,7 +28,7 @@ class TestExtractOpenPorts:
 
     def test_extracts_mysql_port(self, sample_nmap_output):
         from core.ai.fact_engine import extract_facts_from_output
-        facts = extract_facts_from_output(sample_nmap_output, "nmap")
+        facts = extract_facts_from_output("nmap", sample_nmap_output)
 
         all_text = " ".join(f[0] for f in facts if f[0])
         assert "3306" in all_text or "mysql" in all_text.lower()
@@ -43,7 +43,7 @@ class TestExtractCredentials:
 [22][ssh] host: 192.168.1.100   login: admin   password: admin123
 [22][ssh] host: 192.168.1.100   login: root   password: toor
 """
-        facts = extract_facts_from_output(hydra_output, "bruteforce")
+        facts = extract_facts_from_output("bruteforce", hydra_output)
         all_text = " ".join(f[0] for f in facts if f[0])
         assert "admin" in all_text
 
@@ -53,7 +53,7 @@ class TestExtractCredentials:
 [+] Found valid credentials: admin:password123
 [+] Login successful at http://target/admin
 """
-        facts = extract_facts_from_output(output, "web_bruteforce")
+        facts = extract_facts_from_output("web_bruteforce", output)
         all_text = " ".join(f[0] for f in facts if f[0])
         assert "admin" in all_text or "password" in all_text.lower()
 
@@ -63,7 +63,7 @@ class TestExtractWebApps:
 
     def test_detects_tomcat(self, sample_nmap_output):
         from core.ai.fact_engine import extract_facts_from_output
-        facts = extract_facts_from_output(sample_nmap_output, "nmap")
+        facts = extract_facts_from_output("nmap", sample_nmap_output)
 
         all_text = " ".join(f[0] for f in facts if f[0]).lower()
         assert "tomcat" in all_text or "8080" in all_text
@@ -74,7 +74,7 @@ class TestExtractVulnerabilities:
 
     def test_extracts_cve_from_nmap_scripts(self, sample_nmap_vuln_output):
         from core.ai.fact_engine import extract_facts_from_output
-        facts = extract_facts_from_output(sample_nmap_vuln_output, "nmap")
+        facts = extract_facts_from_output("nmap", sample_nmap_vuln_output)
 
         all_text = " ".join(f[0] for f in facts if f[0])
         assert "CVE" in all_text or "vuln" in all_text.lower()
@@ -85,12 +85,12 @@ class TestNoFalsePositives:
 
     def test_empty_input_returns_empty(self):
         from core.ai.fact_engine import extract_facts_from_output
-        facts = extract_facts_from_output("", "nmap")
+        facts = extract_facts_from_output("nmap", "")
         assert isinstance(facts, list)
 
     def test_garbage_input_returns_minimal(self):
         from core.ai.fact_engine import extract_facts_from_output
-        facts = extract_facts_from_output("random garbage text xyz 12345", "nmap")
+        facts = extract_facts_from_output("nmap", "random garbage text xyz 12345")
         # Should not extract any meaningful facts from noise
         assert len(facts) <= 2  # May extract the text itself as a raw fact
 
@@ -105,7 +105,7 @@ class TestDuplicateDedup:
 22/tcp   open  ssh   OpenSSH 8.9p1
 22/tcp   open  ssh   OpenSSH 8.9p1
 """
-        facts = extract_facts_from_output(output, "nmap")
+        facts = extract_facts_from_output("nmap", output)
         port_22_facts = [f for f in facts if f[0] and "22" in f[0]]
         # Should have at most 2 (fact + version)
         assert len(port_22_facts) <= 3

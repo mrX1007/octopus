@@ -33,7 +33,8 @@ You MUST output your response in STRICT JSON format matching this schema:
 RULES:
 1. Do NOT specify exact tools like 'nmap' or 'whatweb'. Use high-level conceptual tasks.
 2. Keep the plan focused. A maximum of 3 steps per plan.
-3. Always include an AnalysisAgent step to process findings.
+3. Include an AnalysisAgent step for discovery/vulnerability goals. Do NOT add AnalysisAgent for persistence, data_exfiltration, or cleanup goals.
+4. VALID TASKS ONLY: service_discovery, vulnerability_assessment, web_application_mapping, browser_surface_analysis, web_content_discovery, transport_security_assessment, firewall_detection, external_intelligence, browser_osint, windows_enumeration, ssh_user_enumeration, credential_harvesting, test_credentials, find_privesc_vectors, exploit_privesc, establish_persistence, internal_network_recon, lateral_movement, exfiltrate_data, stealth_cleanup.
 """
 
     def create_plan(self, goal: str, context: Dict[str, Any], task_history: List[str]) -> Dict[str, Any]:
@@ -72,6 +73,7 @@ Output your plan in JSON format."""
         elif goal == "vulnerability_assessment":
             return {"thought": "fallback: vuln scan then analyze", "plan": [
                 {"agent": "DiscoveryAgent", "task": "vulnerability_assessment"},
+                {"agent": "DiscoveryAgent", "task": "web_application_mapping"},
                 {"agent": "AnalysisAgent", "task": "analyze_vulnerabilities"}
             ]}
         elif goal == "credential_harvesting":
@@ -87,6 +89,10 @@ Output your plan in JSON format."""
         elif goal == "persistence":
             return {"thought": "fallback: establish persistence", "plan": [
                 {"agent": "VerificationAgent", "task": "establish_persistence"}
+            ]}
+        elif goal == "internal_reconnaissance":
+            return {"thought": "fallback: map internal network from established access", "plan": [
+                {"agent": "VerificationAgent", "task": "internal_network_recon"}
             ]}
         elif goal == "data_exfiltration":
             return {"thought": "fallback: exfiltrate data", "plan": [

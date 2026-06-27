@@ -166,6 +166,7 @@ def _parse_markdown_parameters(text: str) -> list:
         "dirb": "CMD", "dirb_fuzz": "TOOL", "bruteforce": "TOOL",
         "scrapling": "TOOL", "searchsploit": "SEARCHSPLOIT",
         "ssh_user_enum": "TOOL", "ssh-user-enum": "TOOL", "sshenum": "TOOL",
+        "ssh_exec": "TOOL", "ssh-exec": "TOOL",
         "jmx2rce": "CMD", "nxc": "CMD", "crackmapexec": "CMD",
         "whatweb": "CMD", "sslscan": "CMD", "enum4linux": "CMD",
         "dig": "CMD", "whois": "CMD",
@@ -173,7 +174,7 @@ def _parse_markdown_parameters(text: str) -> list:
 
     # Pattern 1: Section header with tool name + Parameters line
     # "1. NMAP (description)" ... "Parameters: -sC -sV ..."
-    sections = re.split(r'\n\s*\d+\.\s+', clean)
+    sections = re.split(r'(?:^|\n)\s*\d+\.\s+', clean)
     for section in sections:
         # Extract tool name from section header
         header_match = re.match(r'(\w+)', section.strip())
@@ -235,6 +236,7 @@ def _parse_xml_tool_requests(text: str) -> list:
         "dirb_fuzz": "TOOL", "bruteforce": "TOOL",
         "scrapling": "TOOL", "searchsploit": "SEARCHSPLOIT",
         "ssh_user_enum": "TOOL", "ssh-user-enum": "TOOL", "sshenum": "TOOL",
+        "ssh_exec": "TOOL", "ssh-exec": "TOOL",
     }
 
     for match in re.finditer(
@@ -301,6 +303,7 @@ def _fallback_extract_commands(text: str) -> list:
         (r'(?:^|\s)(jmx2rce\s+\w+\s+(?:-\S+\s+)*\S+)', "CMD"),
         (r'(?:^|\s)(nuclei\s+(?:-\S+\s+)*\S+)', "CMD"),
         (r'(?:^|\s)(ssh_user_enum\s+\S+)', "TOOL"),
+        (r'(?:^|\s)(ssh_exec\s+\S+\s+\S+\s+\S+\s+[^\n]{1,180})', "TOOL"),
         (r'(?:^|\s)(bruteforce\s+\w+\s+\S+)', "TOOL"),
     ]
 
@@ -310,6 +313,13 @@ def _fallback_extract_commands(text: str) -> list:
             # Clean up: remove trailing | and markdown noise
             cmd = re.sub(r'\s*\|.*$', '', cmd)
             cmd = cmd.rstrip('|').strip()
+            if cmd.lower().startswith("ssh_exec "):
+                cmd = re.sub(r'\s+(?:next|now|then|please|afterwards)\.?$', '', cmd, flags=re.IGNORECASE)
+                key = cmd.lower()[:50]
+                if key not in seen:
+                    seen.add(key)
+                    calls.append(("TOOL", cmd))
+                continue
             # Remove trailing prose words (not flags, IPs, or paths)
             # Keep: -flag, IP addresses, /paths, protocol://
             parts = cmd.split()

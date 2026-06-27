@@ -47,10 +47,14 @@ class ContextBuilder:
         
         # Determine highest level conceptual state
         primary_state = "initial_recon"
-        if state.get("root_access_confirmed"):
-            primary_state = "root_access_confirmed"
+        if state.get("cleanup_completed"):
+            primary_state = "cleanup_completed"
+        elif state.get("exfiltration_completed"):
+            primary_state = "exfiltration_completed"
         elif state.get("persistence_established"):
-            primary_state = "persistence_established"
+            primary_state = "internal_recon_completed" if state.get("internal_recon_completed") else "persistence_established"
+        elif state.get("root_access_confirmed"):
+            primary_state = "root_access_confirmed"
         elif state.get("credentials_found"):
             primary_state = "credentials_found"
         elif state.get("vulnerabilities_found"):
@@ -86,7 +90,24 @@ class ContextBuilder:
         
         if primary_state in ("initial_recon",):
             return ["service_discovery_needed"]
-        
+
+        if primary_state == "root_access_confirmed":
+            return ["persistence_needed"] if not state.get("persistence_established") else []
+
+        if primary_state == "persistence_established":
+            if not state.get("internal_recon_completed"):
+                return ["internal_network_recon_pending"]
+            return ["data_exfiltration_pending"] if not state.get("exfiltration_completed") else []
+
+        if primary_state == "internal_recon_completed":
+            return ["data_exfiltration_pending"] if not state.get("exfiltration_completed") else []
+
+        if primary_state == "exfiltration_completed":
+            return ["cleanup_needed"] if not state.get("cleanup_completed") else []
+
+        if primary_state == "cleanup_completed":
+            return []
+
         if not state.get("vulnerabilities_found"):
             if "http" in services or "https" in services:
                 questions.append("web_vulnerabilities_unknown")

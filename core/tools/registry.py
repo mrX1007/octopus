@@ -44,8 +44,7 @@ import logging
 import importlib
 import importlib.util
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Any
-
+from typing import Callable, Optional, Any, List, Dict
 logger = logging.getLogger("octopus.registry")
 
 # ─── Tool Definition ────────────────────────────────────
@@ -67,6 +66,19 @@ class ToolDef:
     def is_available(self) -> bool:
         """Check if all required system binaries are installed."""
         for dep in self.requires:
+            if dep == "octopus:shardbrowser":
+                try:
+                    from core.osint.shardbrowser import ShardBrowser
+                    status = ShardBrowser().get_status()
+                    if not status.get("installed"):
+                        return False
+                except Exception:
+                    return False
+                continue
+            if dep.startswith("python:"):
+                if importlib.util.find_spec(dep.split(":", 1)[1]) is None:
+                    return False
+                continue
             if shutil.which(dep) is None:
                 return False
         return True
@@ -89,10 +101,10 @@ _REGISTRY: dict[str, ToolDef] = {}
 def tool(
     name: str,
     *,
-    aliases: list[str] | None = None,
+    aliases: Optional[List[str]] = None,
     category: str = "recon",
     description: str = "",
-    requires: list[str] | None = None,
+    requires: Optional[List[str]] = None,
     needs_target: bool = True,
     menu_group: str = "",
 ):
@@ -162,7 +174,7 @@ def get_tool(name: str) -> Optional[ToolDef]:
     return None
 
 
-def list_tools(category: str | None = None, available_only: bool = False) -> list[ToolDef]:
+def list_tools(category: Optional[str] = None, available_only: bool = False) -> List[ToolDef]:
     """List all registered tools, optionally filtered.
 
     Args:
@@ -187,7 +199,7 @@ def list_tools(category: str | None = None, available_only: bool = False) -> lis
     return sorted(tools, key=lambda t: (t.category, t.name))
 
 
-def build_menu(category: str | None = None) -> dict[int, ToolDef]:
+def build_menu(category: Optional[str] = None) -> Dict[int, ToolDef]:
     """Build numbered menu dict for interactive tool selection.
 
     Args:
@@ -213,7 +225,7 @@ def get_all_names() -> list[str]:
 
 # ─── Plugin Discovery ───────────────────────────────────
 
-def discover_plugins(plugin_dir: str | None = None) -> int:
+def discover_plugins(plugin_dir: Optional[str] = None) -> int:
     """Scan plugins/ directory and import all Python modules.
 
     Each module is expected to use @tool() decorators which
@@ -237,23 +249,28 @@ def discover_plugins(plugin_dir: str | None = None) -> int:
         return 0
 
     loaded = 0
-    for filename in sorted(os.listdir(plugin_dir)):
-        if not filename.endswith(".py") or filename.startswith("_"):
-            continue
+    base_dir_name = os.path.basename(plugin_dir)
+    for root, dirs, files in os.walk(plugin_dir):
+        for filename in sorted(files):
+            if not filename.endswith(".py") or filename.startswith("_"):
+                continue
 
-        filepath = os.path.join(plugin_dir, filename)
-        module_name = f"plugins.{filename[:-3]}"
+            filepath = os.path.join(root, filename)
+            
+            # Construct a dynamic module name based on path
+            rel_path = os.path.relpath(filepath, plugin_dir)
+            module_name = f"{base_dir_name}." + rel_path[:-3].replace(os.sep, ".")
 
-        try:
-            spec = importlib.util.spec_from_file_location(module_name, filepath)
-            if spec and spec.loader:
-                mod = importlib.util.module_from_spec(spec)
-                sys.modules[module_name] = mod
-                spec.loader.exec_module(mod)
-                loaded += 1
-                logger.info(f"Loaded plugin: {filename}")
-        except Exception as e:
-            logger.warning(f"Failed to load plugin {filename}: {e}")
+            try:
+                spec = importlib.util.spec_from_file_location(module_name, filepath)
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    sys.modules[module_name] = mod
+                    spec.loader.exec_module(mod)
+                    loaded += 1
+                    logger.info(f"Loaded plugin: {rel_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load plugin {rel_path}: {e}")
 
     return loaded
 

@@ -13,6 +13,7 @@ from core.tools.base import (
     run_tool, is_tool_available, get_tool_config, _fmt_elapsed,
     C_GREY, C_RESET, C_CYAN, C_GREEN, C_YELLOW, C_RED, C_BLUE, C_MAGENTA,
 )
+from core.tools.registry import tool
 
 # Config helpers
 try:
@@ -32,6 +33,7 @@ except ImportError:
 
 
 
+@tool(name="nmap", aliases=["nmap_scan"], category="recon", description="Run Nmap with smart caching and two-phase scanning.", requires=["nmap"])
 def run_nmap(target: str, extra_flags: list = None) -> str:
     """nmap with config-driven flags and timeout.
     v7.0: Smart Nmap caching and aggressive 2-phase scanning.
@@ -95,6 +97,7 @@ def run_nmap(target: str, extra_flags: list = None) -> str:
     return run_tool(["nmap"] + flags + [target], timeout=timeout)
 
 
+@tool(name="whois", aliases=[], category="recon", description="Run whois against target.", requires=["whois"])
 def run_whois(target: str) -> str:
     """whois"""
     tc = get_tool_config("whois")
@@ -102,6 +105,7 @@ def run_whois(target: str) -> str:
     return run_tool(["whois", target], timeout=tc.get("timeout", 30))
 
 
+@tool(name="whatweb", aliases=[], category="recon", description="Run whatweb with configurable aggression.", requires=["whatweb"])
 def run_whatweb(target: str) -> str:
     """whatweb with configurable aggression."""
     tc = get_tool_config("whatweb")
@@ -110,6 +114,7 @@ def run_whatweb(target: str) -> str:
     return run_tool(["whatweb", "-a", aggr, target], timeout=tc.get("timeout", 90))
 
 
+@tool(name="curl_headers", aliases=["curl"], category="recon", description="Run curl -sI for HTTP(S) headers.", requires=["curl"])
 def run_curl_headers(target: str) -> str:
     """curl -sI http and https"""
     tc = get_tool_config("curl")
@@ -126,6 +131,7 @@ def run_curl_headers(target: str) -> str:
     return f"[HTTP Headers]\n{output}\n\n[HTTPS Headers]\n{https_output}"
 
 
+@tool(name="dig", aliases=[], category="recon", description="Run dig for DNS records.", requires=["dig"])
 def run_dig(target: str) -> str:
     """dig with configurable record types."""
     tc = get_tool_config("dig")
@@ -141,6 +147,7 @@ def run_dig(target: str) -> str:
     return "\n\n".join(parts)
 
 
+@tool(name="sslscan", aliases=[], category="recon", description="Run sslscan to check for TLS/SSL vulnerabilities.", requires=["sslscan"])
 def run_sslscan(target: str) -> str:
     """sslscan to check for TLS/SSL vulnerabilities"""
     tc = get_tool_config("sslscan")
@@ -149,6 +156,7 @@ def run_sslscan(target: str) -> str:
     return run_tool(["sslscan"] + flags + [target], timeout=tc.get("timeout", 120))
 
 
+@tool(name="ffuf", aliases=["dirb", "dirbuster", "dirb_fuzz"], category="recon", description="Run ffuf for fast directory discovery.", requires=["ffuf"])
 def run_ffuf(target: str) -> str:
     """ffuf for fast directory discovery using config-driven wordlists."""
     print(f"  [*] ffuf http(s)://{target}")
@@ -159,6 +167,27 @@ def run_ffuf(target: str) -> str:
     threads = str(tc.get("threads", 50))
     match_codes = tc.get("match_codes", "200,204,301,302,307,401,403")
     timeout = tc.get("timeout", 120)
+    maxtime = str(tc.get("maxtime", min(timeout, 60)))
+    request_timeout = str(tc.get("request_timeout", 5))
+
+    base_url = f"http://{target}"
+    try:
+        import requests
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        reachable = ""
+        for candidate in (f"http://{target}", f"https://{target}"):
+            try:
+                requests.get(candidate, timeout=(3, 5), verify=False, allow_redirects=True)
+                reachable = candidate
+                break
+            except requests.RequestException:
+                continue
+        if not reachable:
+            return "[!] ffuf skipped: no HTTP(S) response during preflight."
+        base_url = reachable
+    except Exception as _exc:
+        logging.debug(f"Suppressed in recon_tools.py: {_exc}")
 
     # Find first available web directory wordlist from config
     wordlist = find_wordlist("web_dirs")
@@ -167,11 +196,13 @@ def run_ffuf(target: str) -> str:
 
     print(f"  [*] Using wordlist: {os.path.basename(wordlist)}")
     return run_tool([
-        "ffuf", "-w", wordlist, "-u", f"http://{target}/FUZZ",
-        "-t", threads, "-mc", match_codes, "-c"
+        "ffuf", "-w", wordlist, "-u", f"{base_url}/FUZZ",
+        "-t", threads, "-mc", match_codes, "-c",
+        "-timeout", request_timeout, "-maxtime", maxtime,
     ], timeout=timeout)
 
 
+@tool(name="enum4linux", aliases=[], category="recon", description="Run enum4linux for SMB and Windows enumeration.", requires=["enum4linux"])
 def run_enum4linux(target: str) -> str:
     """enum4linux for SMB and Windows enumeration"""
     tc = get_tool_config("enum4linux")
@@ -180,6 +211,7 @@ def run_enum4linux(target: str) -> str:
     return run_tool(["enum4linux"] + flags + [target], timeout=tc.get("timeout", 150))
 
 
+@tool(name="smbclient", aliases=[], category="recon", description="Run smbclient -L to list shares anonymously.", requires=["smbclient"])
 def run_smbclient(target: str) -> str:
     """smbclient -L to list shares anonymously"""
     tc = get_tool_config("smbclient")
@@ -188,6 +220,7 @@ def run_smbclient(target: str) -> str:
     return run_tool(["smbclient", "-L", target] + flags, timeout=tc.get("timeout", 45))
 
 
+@tool(name="wpscan", aliases=[], category="recon", description="Run wpscan for wordpress targets.", requires=["wpscan"])
 def run_wpscan(target: str) -> str:
     """wpscan for wordpress targets"""
     tc = get_tool_config("wpscan")
@@ -196,6 +229,7 @@ def run_wpscan(target: str) -> str:
     return run_tool(["wpscan", "--url", f"http://{target}"] + flags, timeout=tc.get("timeout", 180))
 
 
+@tool(name="sqlmap", aliases=[], category="recon", description="Run sqlmap basic crawl detection.", requires=["sqlmap"])
 def run_sqlmap(target: str) -> str:
     """sqlmap basic crawl detection with configurable level/risk."""
     tc = get_tool_config("sqlmap")
@@ -209,6 +243,7 @@ def run_sqlmap(target: str) -> str:
     )
 
 
+@tool(name="nikto", aliases=["nikto_scan"], category="recon", description="Run nikto -h.", requires=["nikto"])
 def run_nikto(target: str) -> str:
     """nikto -h"""
     tc = get_tool_config("nikto")
@@ -221,6 +256,7 @@ def run_nikto(target: str) -> str:
 # SCRAPLING INTEGRATION (NEW v3.0)
 # ─────────────────────────────────────────────
 
+@tool(name="scrapling", aliases=["scrapling_fetch"], category="recon", description="Fetch a URL using scrapling's StealthyFetcher.")
 def run_scrapling_fetch(url: str) -> str:
     """
     Fetch a URL using scrapling's StealthyFetcher for JS-rendered pages and anti-bot bypass.
@@ -366,6 +402,7 @@ def run_scrapling_fetch(url: str) -> str:
         return f"[!] All scrapling/requests attempts failed for {url}. Target web service may be down."
 
 
+@tool(name="scrapling_crawl", aliases=["crawl"], category="recon", description="Deep crawl a website using scrapling for link discovery and content extraction.", requires=["python:scrapling"])
 def run_scrapling_crawl(url: str, max_pages: int = 10) -> str:
     """
     Deep crawl a website using scrapling for link discovery and content extraction.
@@ -423,6 +460,7 @@ def run_scrapling_crawl(url: str, max_pages: int = 10) -> str:
 # SSH USER ENUMERATION (CVE-2018-15473)
 # ─────────────────────────────────────────────
 
+@tool(name="ssh_user_enum", aliases=["ssh-user-enum", "sshenum"], category="recon", description="Enumerate valid SSH usernames via CVE-2018-15473.", requires=["python:paramiko"])
 def run_ssh_user_enum(target: str, port: int = 22) -> str:
     """
     Enumerate valid SSH usernames via CVE-2018-15473 (OpenSSH ≤ 7.7).
@@ -586,4 +624,3 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
 # ─────────────────────────────────────────────
 # BRUTEFORCE (v3.7 — LEAN 2-TIER, NO TIMEOUT CAP)
 # ─────────────────────────────────────────────
-

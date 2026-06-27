@@ -116,6 +116,10 @@ def extract_facts_from_output(tool_name: str, output: str) -> list:
     if re.search(r'All \d+ scanned ports? .*(filtered|no-response)', output, re.IGNORECASE):
         _add("ALL SCANNED PORTS ARE FILTERED — host is heavily firewalled")
 
+    # Vulnerability extraction (CVEs)
+    for match in re.finditer(r'(CVE-\d{4}-\d{4,7})', output, re.IGNORECASE):
+        _add(f"VULNERABILITY DETECTED: {match.group(1).upper()}")
+
     # Nmap host status
     if "host is up" in out_lower:
         latency_match = re.search(r'Host is up \(([^)]+)\)', output, re.IGNORECASE)
@@ -275,7 +279,7 @@ def extract_facts_from_output(tool_name: str, output: str) -> list:
             _add(f"AI: Credentials found! IMMEDIATELY use [TOOL: ssh_session TARGET {user} {pwd}]")
 
     # Catch stealth bruteforce output: [+] VALID CREDENTIALS: user:pass
-    for match in re.finditer(r'\[\+\]\s*(?:VALID\s+)?CREDENTIALS?\s*(?:FOUND)?:?\s*(\S+?):(\S+)', output, re.IGNORECASE):
+    for match in re.finditer(r'\[\+\]\s*(?:FOUND\s+)?(?:VALID\s+)?CREDENTIALS?\s*(?:FOUND)?:?\s*(\S+?):(\S+)', output, re.IGNORECASE):
         user, pwd = match.groups()
         user = user.strip('\'".,;:()[]')
         pwd = pwd.strip('\'".,;:()[]')
