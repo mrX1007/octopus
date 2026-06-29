@@ -127,8 +127,8 @@ class TestExecutiveSummary:
     """Test executive summary generation."""
 
     def test_summary_generation(self, sample_session_data):
-        from export import _executive_summary
-        summary = _executive_summary(sample_session_data)
+        from export import _generate_executive_summary
+        summary = _generate_executive_summary(sample_session_data)
 
         assert isinstance(summary, str)
         assert len(summary) > 0

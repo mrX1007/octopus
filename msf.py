@@ -9,7 +9,7 @@ import shutil
 
 # Load config
 try:
-    from config import get_tool_config
+    from core.tools.base import get_tool_config
 except ImportError:
     def get_tool_config(name): return {}
 
@@ -47,7 +47,7 @@ def _parse_msf_options(options_str: str) -> dict:
     return opts
 
 
-def run_msf_module(module: str, options_str: str, timeout: int = None) -> str:
+def run_msf_module(module: str, options_str: str, timeout: int = None, mode: str = "run") -> str:
     """
     Runs msfconsole with a specific module and options.
     v3.0: Robust option parsing, handles various AI output formats.
@@ -56,9 +56,10 @@ def run_msf_module(module: str, options_str: str, timeout: int = None) -> str:
         module: MSF module path, e.g. "exploit/unix/ftp/vsftpd_234_backdoor"
         options_str: Options string, e.g. "RHOSTS=192.168.1.5, RPORT=80"
         timeout: Execution timeout in seconds
+        mode: "check" for exploit check/auxiliary run, "run" for active execution
     """
     if not shutil.which("msfconsole"):
-        return "[!] msfconsole is not installed on this system. AI: do NOT use [MSF:] tags anymore! Use [CMD:] or [SEARCH:] for exploits instead."
+        return "[!] msfconsole is not installed or not in PATH. Use exploit_select/searchsploit for planning, or install Metasploit to enable msf_check."
 
     # Resolve timeout from config if not passed explicitly
     if timeout is None:
@@ -185,9 +186,16 @@ def run_msf_module(module: str, options_str: str, timeout: int = None) -> str:
             if not opts.get("LPORT"):
                 script += "set LPORT 4444; "
     
-    # Use 'run' instead of 'exploit' for auxiliary modules
+    mode = (mode or "run").strip().lower()
+    if mode not in {"check", "run"}:
+        return f"[!] Invalid MSF mode: {mode}. Expected 'check' or 'run'."
+
+    # Use 'run' instead of 'exploit' for auxiliary modules. In check mode,
+    # exploit modules use Metasploit's check action when available.
     if module.startswith("auxiliary/"):
         script += "run; exit"
+    elif mode == "check":
+        script += "check; exit"
     else:
         script += "exploit -z; exit"
 
@@ -201,7 +209,7 @@ def run_msf_module(module: str, options_str: str, timeout: int = None) -> str:
         lines = []
         start = time.time()
         # Reduce timeout for auxiliary (scan) modules — they shouldn't take long
-        if module.startswith("auxiliary/"):
+        if module.startswith("auxiliary/") or mode == "check":
             msf_timeout = min(timeout, 60)
         else:
             msf_timeout = min(timeout, 120)

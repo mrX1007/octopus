@@ -17,7 +17,9 @@ KILL_CHAIN = [
     "vulnerability_assessment",
     "credential_harvesting",
     "privilege_escalation",
+    "post_access_inventory",
     "persistence",
+    "internal_reconnaissance",
     "data_exfiltration",
     "cleanup",
     "conclude",
@@ -31,11 +33,11 @@ You DO NOT select tools. You DO NOT execute commands.
 You MUST output your response in STRICT JSON format matching this schema:
 {
   "thought": "Brief explanation of why this is the next logical step",
-  "goal": "The high-level goal, e.g. service_discovery, vulnerability_assessment, credential_harvesting, privilege_escalation, persistence, data_exfiltration, cleanup, or conclude"
+  "goal": "The high-level goal, e.g. service_discovery, vulnerability_assessment, credential_harvesting, privilege_escalation, post_access_inventory, persistence, internal_reconnaissance, data_exfiltration, cleanup, or conclude"
 }
 
 RULES:
-1. If root_access_confirmed is true, your goal should advance to persistence, then data_exfiltration, then cleanup, then conclude.
+1. If root_access_confirmed is true, your goal should advance to post_access_inventory, then persistence, then internal_reconnaissance, then data_exfiltration, then cleanup, then conclude.
 2. If recon is incomplete, your goal is service_discovery.
 3. If recon IS complete but vulnerabilities are unknown, your goal is vulnerability_assessment.
 4. If no new facts have been discovered for several loops, or the goal is repeating, your goal MUST be 'conclude'.
@@ -87,15 +89,91 @@ Based on the context, output the next goal in JSON format."""
         """Prevent the LLM from suggesting already-completed goals."""
         state = context.get("state", "initial_recon")
 
+        if not self._goal_allowed_for_state(goal, state):
+            return self._fallback_logic(context, goal_history).get("goal", "conclude")
+
         # Don't re-run service_discovery if recon is already done
         if goal == "service_discovery" and state != "initial_recon":
             return self._fallback_logic(context, goal_history).get("goal", "conclude")
 
+        if goal == "data_exfiltration" and "internal_network_recon_pending" in context.get("open_questions", []):
+            return "internal_reconnaissance"
+
+        if "post_access_inventory_needed" in context.get("open_questions", []):
+            return "post_access_inventory"
+        if goal == "post_access_inventory":
+            return self._fallback_logic(context, goal_history).get("goal", "conclude")
+
+        completed_by_state = {
+            "recon_completed": {"service_discovery"},
+            "vulnerabilities_found": {"service_discovery", "vulnerability_assessment"},
+            "credentials_found": {"service_discovery", "vulnerability_assessment", "credential_harvesting"},
+            "root_access_confirmed": {
+                "service_discovery", "vulnerability_assessment",
+                "credential_harvesting", "privilege_escalation",
+            },
+            "persistence_established": {
+                "service_discovery", "vulnerability_assessment", "credential_harvesting",
+                "privilege_escalation", "post_access_inventory", "persistence",
+            },
+            "internal_recon_completed": {
+                "service_discovery", "vulnerability_assessment", "credential_harvesting",
+                "privilege_escalation", "post_access_inventory", "persistence", "internal_reconnaissance",
+            },
+            "exfiltration_completed": {
+                "service_discovery", "vulnerability_assessment", "credential_harvesting",
+                "privilege_escalation", "post_access_inventory", "persistence", "internal_reconnaissance", "data_exfiltration",
+            },
+            "cleanup_completed": {
+                "service_discovery", "vulnerability_assessment", "credential_harvesting",
+                "privilege_escalation", "post_access_inventory", "persistence", "internal_reconnaissance", "data_exfiltration", "cleanup",
+            },
+        }
+        if goal in completed_by_state.get(state, set()):
+            return self._fallback_logic(context, goal_history).get("goal", "conclude")
+
         # Don't repeat goals that already ran
         if goal in goal_history and goal not in ("conclude",):
-            return self._next_in_chain(goal, goal_history)
+            next_goal = self._next_in_chain(goal, goal_history)
+            if self._goal_allowed_for_state(next_goal, state):
+                return next_goal
+            return "conclude"
 
         return goal
+
+    def _goal_allowed_for_state(self, goal: str, state: str) -> bool:
+        """Prevent kill-chain drift when the state has not actually advanced."""
+        allowed = {
+            "initial_recon": {"service_discovery", "conclude"},
+            "recon_completed": {
+                "vulnerability_assessment", "credential_harvesting",
+                "service_discovery", "conclude",
+            },
+            "vulnerabilities_found": {
+                "service_discovery",
+                "credential_harvesting", "privilege_escalation",
+                "vulnerability_assessment", "conclude",
+            },
+            "credentials_found": {
+                "service_discovery", "vulnerability_assessment",
+                "credential_harvesting", "privilege_escalation",
+                "conclude",
+            },
+            "root_access_confirmed": {
+                "post_access_inventory", "persistence", "internal_reconnaissance",
+                "data_exfiltration", "cleanup", "conclude",
+            },
+            "persistence_established": {
+                "post_access_inventory", "internal_reconnaissance", "data_exfiltration",
+                "cleanup", "conclude",
+            },
+            "internal_recon_completed": {
+                "post_access_inventory", "data_exfiltration", "cleanup", "conclude",
+            },
+            "exfiltration_completed": {"cleanup", "conclude"},
+            "cleanup_completed": {"conclude"},
+        }
+        return goal in allowed.get(state, {"conclude"})
 
     def _next_in_chain(self, current_goal: str, goal_history: List[str]) -> str:
         """Find the next goal in the kill chain that hasn't been tried yet."""
@@ -133,13 +211,41 @@ Based on the context, output the next goal in JSON format."""
             return {"thought": "fallback: recon done, no services", "goal": "conclude"}
 
         if state == "vulnerabilities_found":
+            if "service_discovery_needed" in open_questions:
+                return self._pick("service_discovery", goal_history, "vulns exist but service recon is incomplete")
+            if any("verification" in q or "vulnerabilit" in q for q in open_questions):
+                return self._pick("vulnerability_assessment", goal_history, "potential vulns need verification")
             return self._pick("credential_harvesting", goal_history, "vulns found, trying creds")
 
         if state == "credentials_found":
-            return self._pick("privilege_escalation", goal_history, "creds found, escalating")
+            if "service_discovery_needed" in open_questions:
+                return self._pick("service_discovery", goal_history, "credentials exist but service recon is incomplete")
+            if any("vulnerabilit" in q or "cpanel" in q for q in open_questions):
+                return self._pick("vulnerability_assessment", goal_history, "application credentials need scoped verification")
+            if "privilege_escalation" in goal_history:
+                return {"thought": "fallback: privilege escalation already tried without confirmed root", "goal": "conclude"}
+            if "privilege_escalation_path_unknown" in open_questions:
+                return self._pick("privilege_escalation", goal_history, "SSH creds found, escalating")
+            return self._pick("vulnerability_assessment", goal_history, "credentials found, verifying scope")
 
         if state == "root_access_confirmed":
+            if "post_access_inventory_needed" in open_questions:
+                return self._pick("post_access_inventory", goal_history, "root confirmed, collecting controlled post-access inventory")
             return self._pick("persistence", goal_history, "root confirmed, post-exploit")
+
+        if state == "persistence_established":
+            if "internal_network_recon_pending" in open_questions:
+                return self._pick("internal_reconnaissance", goal_history, "persistence established, mapping internal network")
+            return self._pick("data_exfiltration", goal_history, "persistence established, collect target data")
+
+        if state == "internal_recon_completed":
+            return self._pick("data_exfiltration", goal_history, "internal network mapped, collect target data")
+
+        if state == "exfiltration_completed":
+            return self._pick("cleanup", goal_history, "data exfiltration complete, cleanup artifacts")
+
+        if state == "cleanup_completed":
+            return self._pick("conclude", goal_history, "cleanup complete")
 
         return {"thought": "fallback: unknown state, concluding", "goal": "conclude"}
 

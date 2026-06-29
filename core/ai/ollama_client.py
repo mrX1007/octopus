@@ -21,6 +21,16 @@ OLLAMA_RETRIES = 2          #
 CONTEXT_WINDOW = 6
 SUMMARIZE_THRESHOLD = 8000
 CONCURRENT_TOOLS = 8
+TEMPERATURE = 0.4
+JSON_TEMPERATURE = 0.15
+TOP_P = 0.9
+TOP_K = 10
+REPEAT_PENALTY = 1.15
+NUM_THREAD = 16
+NUM_CTX = 16384
+NUM_BATCH = 512
+NUM_GPU = None
+JSON_MAX_TOKENS = 1536
 
 # Load from config.yaml if available
 try:
@@ -35,6 +45,16 @@ try:
     CONTEXT_WINDOW = _oc.get("context_window", CONTEXT_WINDOW)
     SUMMARIZE_THRESHOLD = _oc.get("summarize_threshold", SUMMARIZE_THRESHOLD)
     CONCURRENT_TOOLS = _oc.get("concurrent_tools", CONCURRENT_TOOLS)
+    TEMPERATURE = _oc.get("temperature", TEMPERATURE)
+    JSON_TEMPERATURE = _oc.get("json_temperature", JSON_TEMPERATURE)
+    TOP_P = _oc.get("top_p", TOP_P)
+    TOP_K = _oc.get("top_k", TOP_K)
+    REPEAT_PENALTY = _oc.get("repeat_penalty", REPEAT_PENALTY)
+    NUM_THREAD = _oc.get("num_threads", _oc.get("num_thread", NUM_THREAD))
+    NUM_CTX = _oc.get("num_ctx", NUM_CTX)
+    NUM_BATCH = _oc.get("num_batch", NUM_BATCH)
+    NUM_GPU = _oc.get("num_gpu", NUM_GPU)
+    JSON_MAX_TOKENS = _oc.get("json_max_tokens", JSON_MAX_TOKENS)
 except ImportError:
     pass
 
@@ -71,17 +91,27 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
     """
 
     def _build_options(minimal: bool = False) -> dict:
-        """Build options dict. v12: removed num_gpu/num_batch — Modelfile handles GPU."""
+        """Build Ollama options from config.yaml with a lean JSON mode."""
+        predict_tokens = JSON_MAX_TOKENS if json_mode else MAX_TOKENS
         opts = {
-            "num_predict": MAX_TOKENS,
-            "temperature": 0.4,
-            "top_p": 0.9,
-            "top_k": 10,
-            "repeat_penalty": 1.15,
+            "num_predict": predict_tokens,
+            "temperature": JSON_TEMPERATURE if json_mode else TEMPERATURE,
+            "top_p": TOP_P,
+            "top_k": TOP_K,
+            "repeat_penalty": REPEAT_PENALTY,
             "stop": ["[TOOL RESULTS]", "[TOOL RESULT:", "[CMD RESULT:", "[CMD RESULTS]"],
         }
+        if NUM_CTX:
+            opts["num_ctx"] = NUM_CTX
         if not minimal:
-            opts["num_thread"] = 16
+            if NUM_THREAD:
+                opts["num_thread"] = NUM_THREAD
+            if NUM_BATCH:
+                opts["num_batch"] = NUM_BATCH
+            if NUM_GPU is not None:
+                opts["num_gpu"] = NUM_GPU
+        elif NUM_BATCH:
+            opts["num_batch"] = min(int(NUM_BATCH), 128)
         return opts
 
     def _stream_response(resp) -> str:
@@ -99,12 +129,14 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
                 full_response += chunk
                 token_count += 1
 
-                # Live Color Logic: grey inside <thought>, normal outside
-                if "<thought>" in chunk:
-                    sys.stdout.write(chunk.replace("<thought>", f"{C_GREY}<thought>"))
+                # Live Color Logic: grey inside <thought> or <think>, normal outside
+                if "<thought>" in chunk or "<think>" in chunk:
+                    chunk = chunk.replace("<thought>", f"{C_GREY}<thought>").replace("<think>", f"{C_GREY}<think>")
+                    sys.stdout.write(chunk)
                     in_thought = True
-                elif "</thought>" in chunk:
-                    sys.stdout.write(chunk.replace("</thought>", f"</thought>{C_RESET}"))
+                elif "</thought>" in chunk or "</think>" in chunk:
+                    chunk = chunk.replace("</thought>", f"</thought>{C_RESET}").replace("</think>", f"</think>{C_RESET}")
+                    sys.stdout.write(chunk)
                     in_thought = False
                 else:
                     if in_thought:
@@ -125,8 +157,8 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
         if len(full_response) < 500:
             logger.debug(f"RAW response: {repr(full_response)}")
 
-        # ── Strip <thought> tags ──
-        clean = re.sub(r'<thought>.*?</thought>', '', full_response, flags=re.DOTALL).strip()
+        # ── Strip <thought> and <think> tags (even if unclosed) ──
+        clean = re.sub(r'<(?:thought|think)>[\s\S]*?(?:</(?:thought|think)>|$)', '', full_response).strip()
 
         logger.debug(f"CLEAN response length={len(clean)}")
         if len(clean) < 500:
@@ -147,14 +179,25 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
         use_minimal = (attempt > 1)
         options = _build_options(minimal=use_minimal)
 
+        effective_prompt = prompt
+        if json_mode:
+            effective_prompt = (
+                "Return exactly one valid JSON object or array. "
+                "Do not use markdown, prose, comments, <think>, or <thought> tags.\n\n"
+                + prompt
+            )
+
         payload = {
             "model": MODEL_NAME,
-            "prompt": prompt,
+            "prompt": effective_prompt,
             "stream": True,
             "options": options
         }
-        if json_mode:
-            payload["format"] = "json"
+
+        # v13: Removed `payload["format"] = "json"` for json_mode.
+        # Strict JSON mode blocks reasoning models (like Qwen) from outputting
+        # their mandatory <think> tags, resulting in empty responses.
+        # We rely on _extract_json() below to parse the output instead.
 
         try:
             label = f" (minimal mode)" if use_minimal else ""
@@ -183,7 +226,12 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
                 return f"[!] Model '{MODEL_NAME}' not found in Ollama."
 
             resp.raise_for_status()
-            return _stream_response(resp)
+            result = _stream_response(resp)
+            if result.startswith("[!] LLM returned empty response") and attempt < OLLAMA_RETRIES:
+                print(f"  {C_YELLOW}Retrying empty LLM response in minimal mode...{C_RESET}")
+                time.sleep(2)
+                continue
+            return result
 
         except requests.exceptions.Timeout:
             if attempt < OLLAMA_RETRIES:
@@ -355,12 +403,19 @@ def ask_ollama_stream(prompt: str) -> "Generator[str, None, None]":
     """
     options = {
         "num_predict": MAX_TOKENS,
-        "temperature": 0.4,
-        "top_p": 0.9,
-        "top_k": 10,
-        "repeat_penalty": 1.15,
-        "num_thread": 16,
+        "temperature": TEMPERATURE,
+        "top_p": TOP_P,
+        "top_k": TOP_K,
+        "repeat_penalty": REPEAT_PENALTY,
     }
+    if NUM_CTX:
+        options["num_ctx"] = NUM_CTX
+    if NUM_THREAD:
+        options["num_thread"] = NUM_THREAD
+    if NUM_BATCH:
+        options["num_batch"] = NUM_BATCH
+    if NUM_GPU is not None:
+        options["num_gpu"] = NUM_GPU
 
     payload = {
         "model": MODEL_NAME,
@@ -395,4 +450,3 @@ def ask_ollama_stream(prompt: str) -> "Generator[str, None, None]":
     except requests.exceptions.RequestException as e:
         logger.error(f"Ollama stream request failed: {e}")
         yield f"[!] Connection failed: {e}"
-

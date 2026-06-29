@@ -84,7 +84,7 @@ def run_full_killchain(target: str, user: str = None, password: str = None,
             try:
                 from tools import get_best_creds_for_target
                 root_creds = get_best_creds_for_target(target, "ssh")
-                root_pass = root_creds.get("password", password) if root_creds else password
+                root_pass = root_creds[1] if root_creds and root_creds[1] else password
                 test_client, test_err = _ssh_connect(target, "root", root_pass, port)
                 if test_client:
                     test_client.close()
@@ -280,4 +280,3 @@ if __name__ == "__main__":
     else:
         print(vuln_assess(target))
         print(auto_exploit(target))
-

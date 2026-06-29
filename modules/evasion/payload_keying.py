@@ -20,6 +20,13 @@ import hashlib
 import base64
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from core.plugins.base import (
+    KillChainStage,
+    OctopusPlugin,
+    PluginResult,
+    PluginType,
+)
+
 # ---- ANSI ----
 C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
@@ -214,6 +221,51 @@ if __name__ == "__main__":
         else:
             print(f"  {C_YELLOW}[!] No target info for keying -- payload will be unkeyed{C_RESET}")
             return payload, ""
+
+
+class PayloadKeyingPlugin(OctopusPlugin):
+    """PluginManager adapter for environmental payload keying."""
+
+    name = "payload_keying"
+    version = "1.0.0"
+    description = "Encrypt payload bytes so they decrypt only in a matching target environment."
+    plugin_type = PluginType.EVASION
+    kill_chain_stage = KillChainStage.EXPLOITATION
+    python_deps = ["cryptography"]
+    capabilities = {"crypto"}
+
+    def run(self, **kwargs) -> PluginResult:
+        payload = kwargs.get("payload")
+        if payload is None:
+            return PluginResult(success=False, error="payload bytes or string are required")
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8")
+
+        target_info = kwargs.get("target_info", {})
+        if not isinstance(target_info, dict):
+            return PluginResult(success=False, error="target_info must be a dict")
+
+        keyed_payload, loader = PayloadKeying().key_payload_for_target(payload, target_info)
+        data = {
+            "payload_len": len(payload),
+            "keyed_payload_len": len(keyed_payload),
+            "loader_len": len(loader),
+            "keyed_payload_b64": base64.b64encode(keyed_payload).decode("ascii"),
+        }
+
+        artifacts = []
+        output_path = kwargs.get("output_path")
+        if output_path:
+            with open(output_path, "w", encoding="utf-8") as fh:
+                fh.write(loader)
+            artifacts.append(output_path)
+
+        return PluginResult(
+            success=True,
+            data=data,
+            output=loader,
+            artifacts=artifacts,
+        )
 
 
 # ---- SELF-TEST ----

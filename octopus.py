@@ -328,6 +328,12 @@ def print_results_table(result: dict):
     else:
         print(f"  \033[92m[ No vulnerabilities parsed — check full AI response above ]\033[0m")
 
+    outcome = result.get("outcome_summary") or []
+    if outcome:
+        print(f"\n  \033[95m[ FINAL OUTCOME ]\033[0m")
+        for line in outcome:
+            print(f"  \033[95m  •\033[0m {str(line)[:300]}")
+
     if facts:
         print(f"\n  \033[96m[ CONFIRMED INTELLIGENCE (from real tool output) ]\033[0m")
         for f in facts:
@@ -1078,6 +1084,10 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
 
     vulns = []
     exploits = []
+    has_exploit_success = any(f['type'] == 'exploit_success' for f in facts)
+    has_confirmed_vuln = any(f['type'] == 'vulnerability' for f in facts)
+    has_potential_vuln = any(f['type'] == 'potential_vulnerability' for f in facts)
+    suppress_potential_vulns = bool(state.get("root_access_confirmed") or has_exploit_success or has_confirmed_vuln)
 
     for f in facts:
         ftype = f['type']
@@ -1085,40 +1095,43 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
         fconf = f.get('confidence', 0)
 
         if ftype == 'vulnerability':
+            meta = _vulnerability_metadata(f, facts, state)
             vulns.append({
                 "vuln_id": f.get("id", ""),
                 "vuln_name": fval,
                 "cvss": 0.0,
-                "severity": "HIGH",
-                "port": "unknown",
-                "service": "unknown",
-                "description": "Confirmed vulnerability",
+                "severity": meta["severity"],
+                "port": meta["port"],
+                "service": meta["service"],
+                "description": meta["description"],
                 "confidence": "CONFIRMED",
                 "evidence_tool": f.get("source", ""),
             })
 
         elif ftype == 'exploit_success':
-            # Confirmed successful exploit
+            meta = _exploit_success_metadata(f, facts, state)
             vulns.append({
                 "vuln_id": f.get("id", ""),
                 "vuln_name": fval,
-                "cvss": 9.8,
-                "severity": "CRITICAL",
-                "port": "2087",
-                "service": "cPanel/WHM",
-                "description": "Exploit confirmed: authenticated session obtained",
+                "cvss": meta["cvss"],
+                "severity": meta["severity"],
+                "port": meta["port"],
+                "service": meta["service"],
+                "description": meta["description"],
                 "confidence": "CONFIRMED",
-                "evidence_tool": f.get("source", "cpanel_sniper"),
+                "evidence_tool": meta["evidence_tool"],
             })
             exploits.append({
                 "exploit_name": fval,
-                "tool_used": "cpanel_sniper",
-                "payload": "auth_bypass",
-                "result": "Success — session obtained",
+                "tool_used": meta["tool_used"],
+                "payload": meta["payload"],
+                "result": meta["result"],
                 "notes": f"Confidence: {fconf}%"
             })
 
         elif ftype == 'potential_vulnerability':
+            if suppress_potential_vulns:
+                continue
             vulns.append({
                 "vuln_id": f.get("id", ""),
                 "vuln_name": fval,
@@ -1140,30 +1153,37 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
                 "notes": f"From tool output (confidence: {fconf}%)"
             })
 
-    # Unverified hypotheses
-    for h in hypotheses:
-        vulns.append({
-            "vuln_id": h.get("id", ""),
-            "vuln_name": "[HYPOTHESIS] " + h["claim"],
-            "cvss": 0.0,
-            "severity": "LOW",
-            "port": "unknown",
-            "service": "unknown",
-            "description": "Unverified AI Hypothesis",
-            "confidence": "UNCONFIRMED",
-            "evidence_tool": "AnalysisAgent",
-        })
-
     # Risk level from state
     risk = "LOW"
     if state.get("root_access_confirmed"): risk = "CRITICAL"
-    elif any(f['type'] == 'exploit_success' for f in facts): risk = "CRITICAL"
-    elif state.get("vulnerabilities_found"): risk = "HIGH"
-    elif state.get("credentials_found"): risk = "MEDIUM"
+    elif has_exploit_success: risk = "CRITICAL"
+    elif has_confirmed_vuln: risk = "HIGH"
+    elif state.get("credentials_found") or has_potential_vuln: risk = "MEDIUM"
 
     # Build summary text
-    confirmed_facts = [f"{f['type']}: {f['value']} (Confidence: {f['confidence']})" for f in facts]
-    summary_text = f"AI Pipeline Scan completed.\nTarget: {target}\nState: {state}\nFacts: {len(facts)}\nExploits: {len(exploits)}\nVulns: {len(vulns)}"
+    confirmed_facts = []
+    potential_values = []
+    for f in facts:
+        if f['type'] == 'potential_vulnerability':
+            potential_values.append(str(f['value']))
+            if suppress_potential_vulns:
+                continue
+        confirmed_facts.append(f"{f['type']}: {f['value']} (Confidence: {f['confidence']})")
+
+    if potential_values and suppress_potential_vulns:
+        examples = ", ".join(potential_values[:8])
+        suffix = f", +{len(potential_values) - 8} more" if len(potential_values) > 8 else ""
+        confirmed_facts.append(
+            f"potential_vulnerability: {len(potential_values)} candidates observed ({examples}{suffix})"
+        )
+    outcome_summary = _build_outcome_summary(facts, state)
+    summary_text = (
+        f"AI Pipeline Scan completed.\nTarget: {target}\nState: {state}\n"
+        f"Facts: {len(facts)}\nHypotheses: {len(hypotheses)}\n"
+        f"Exploits: {len(exploits)}\nVulns: {len(vulns)}"
+    )
+    if outcome_summary:
+        summary_text += "\n\nOUTCOME SUMMARY:\n" + "\n".join(f"- {line}" for line in outcome_summary)
 
     return {
         "vulnerabilities": vulns,
@@ -1172,7 +1192,194 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
         "summary": summary_text,
         "raw_scan": raw_scan,
         "full_response": summary_text,  # v12: required by save_summary
-        "confirmed_facts": confirmed_facts
+        "confirmed_facts": confirmed_facts,
+        "outcome_summary": outcome_summary,
+    }
+
+
+def _mask_secret_value(value: str) -> str:
+    text = str(value or "")
+    text = _re.sub(
+        r'((?:whm|cpanel)_session:)(:?)([A-Za-z0-9_-]{4})[A-Za-z0-9_-]+',
+        r'\1\2\3***',
+        text,
+    )
+    text = _re.sub(
+        r'\b([^:\s]{1,40}):([^:\s]{3,})(\s+\(cached\))',
+        lambda m: f"{m.group(1)}:{m.group(2)[:2]}***{m.group(3)}",
+        text,
+    )
+    text = _re.sub(
+        r'((?:ssh|ftp|postgres|mysql|ldap)_credential:[^@\s]+@)',
+        r'\1',
+        text,
+    )
+    return text
+
+
+def _unique_fact_values(facts, fact_types, limit=8):
+    values = []
+    wanted = set(fact_types)
+    for fact in facts:
+        if fact.get("type") not in wanted:
+            continue
+        value = _mask_secret_value(fact.get("value", ""))
+        if value and value not in values:
+            values.append(value)
+        if len(values) >= limit:
+            break
+    return values
+
+
+def _build_outcome_summary(facts, state) -> list:
+    """Human-readable final outcome assembled from concrete facts."""
+    lines = []
+    gates = []
+    for label, key in (
+        ("recon", "recon_completed"),
+        ("credentials", "credentials_found"),
+        ("root", "root_access_confirmed"),
+        ("post-access", "post_access_inventory_completed"),
+        ("persistence", "persistence_established"),
+        ("internal recon", "internal_recon_completed"),
+        ("exfiltration", "exfiltration_completed"),
+        ("cleanup", "cleanup_completed"),
+    ):
+        gates.append(f"{label}={'yes' if state.get(key) else 'no'}")
+    lines.append("Stage gates: " + ", ".join(gates))
+
+    credentials = _unique_fact_values(facts, {"credential"}, limit=10)
+    if credentials:
+        lines.append("Credentials/access material: " + "; ".join(credentials))
+
+    access = _unique_fact_values(
+        facts,
+        {"application_access", "system_access", "post_exploit_stage", "service_status"},
+        limit=10,
+    )
+    if access:
+        lines.append("Access/status: " + "; ".join(access))
+
+    ports = _unique_fact_values(facts, {"port_open"}, limit=12)
+    if ports:
+        lines.append("Open services: " + "; ".join(ports))
+
+    web = _unique_fact_values(
+        facts,
+        {"web_surface", "web_title", "web_path", "web_server", "web_redirect", "web_powered_by"},
+        limit=12,
+    )
+    if web:
+        lines.append("Web surface: " + "; ".join(web))
+
+    internal = _unique_fact_values(
+        facts,
+        {"internal_host", "internal_subnet", "local_listening_port", "app_stack", "web_root", "app_manifest"},
+        limit=12,
+    )
+    if internal:
+        lines.append("Internal/post-access findings: " + "; ".join(internal))
+
+    blocked = [
+        fact.get("value")
+        for fact in facts
+        if fact.get("type") == "stage_status" and "blocked" in str(fact.get("value", ""))
+    ]
+    if blocked:
+        lines.append("Blocked stages: " + "; ".join(dict.fromkeys(map(str, blocked))))
+    return lines
+
+
+def _fact_text(facts) -> str:
+    return "\n".join(
+        f"{f.get('type', '')}:{f.get('value', '')}:{f.get('source', '')}"
+        for f in facts
+    ).lower()
+
+
+def _is_cpanel_evidence(f, facts) -> bool:
+    text = _fact_text([f] + list(facts))
+    source = str(f.get("source", "")).lower()
+    value = str(f.get("value", "")).lower()
+    return (
+        "cpanel_sniper" in source
+        or "cpanel_exploit" in source
+        or "cve-2026-41940" in value
+        or "cpanel/whm" in value
+        or "cpanel_auth_bypass_session" in text
+        or "whm_session:" in text
+        or "service_version:cpanel" in text
+    )
+
+
+def _is_pwnkit_evidence(f, facts) -> bool:
+    text = _fact_text([f] + list(facts))
+    value = str(f.get("value", "")).lower()
+    return (
+        "pwnkit" in value
+        or "cve-2021-4034" in value
+        or "privesc_vector:suid_pkexec" in text
+    )
+
+
+def _vulnerability_metadata(f, facts, state) -> dict:
+    if _is_cpanel_evidence(f, facts):
+        return {
+            "severity": "CRITICAL",
+            "port": "2087",
+            "service": "cPanel/WHM",
+            "description": "Confirmed cPanel/WHM vulnerability",
+        }
+    if _is_pwnkit_evidence(f, facts):
+        return {
+            "severity": "HIGH",
+            "port": "local",
+            "service": "Linux local privilege escalation",
+            "description": "Confirmed local privilege escalation vulnerability",
+        }
+    return {
+        "severity": "HIGH",
+        "port": "unknown",
+        "service": "unknown",
+        "description": "Confirmed vulnerability",
+    }
+
+
+def _exploit_success_metadata(f, facts, state) -> dict:
+    if _is_cpanel_evidence(f, facts):
+        return {
+            "cvss": 9.8,
+            "severity": "CRITICAL",
+            "port": "2087",
+            "service": "cPanel/WHM",
+            "description": "Exploit confirmed: cPanel/WHM authenticated session obtained",
+            "evidence_tool": f.get("source") or "cpanel_sniper",
+            "tool_used": "cpanel_sniper",
+            "payload": "auth_bypass",
+            "result": "Success — session obtained",
+        }
+    if _is_pwnkit_evidence(f, facts):
+        return {
+            "cvss": 7.8,
+            "severity": "CRITICAL" if state.get("root_access_confirmed") else "HIGH",
+            "port": "local",
+            "service": "Linux local privilege escalation",
+            "description": "Exploit confirmed: local privilege escalation to root",
+            "evidence_tool": f.get("source") or "killchain_privesc",
+            "tool_used": "pwnkit",
+            "payload": "suid_pkexec",
+            "result": "Success — root access confirmed",
+        }
+    return {
+        "cvss": 8.0,
+        "severity": "CRITICAL" if state.get("root_access_confirmed") else "HIGH",
+        "port": "unknown",
+        "service": "unknown",
+        "description": "Exploit confirmed by tool output",
+        "evidence_tool": f.get("source") or "tool_output",
+        "tool_used": f.get("source") or "auto_exploit",
+        "payload": "confirmed",
+        "result": "Success",
     }
 
 # ─────────────────────────────────────────────
@@ -1822,9 +2029,20 @@ if __name__ == "__main__":
     # Auto-start C2 daemon (v10: uses core/c2/daemon.py, not c2_server.py)
     _start_c2_daemon()
 
+    # Discover dynamically loaded plugins and modules
+    try:
+        from core.tools.registry import discover_plugins, print_registry_stats
+        _base = os.path.dirname(os.path.abspath(__file__))
+        loaded_plugins = discover_plugins(os.path.join(_base, "plugins"))
+        loaded_modules = discover_plugins(os.path.join(_base, "modules"))
+        if loaded_plugins or loaded_modules:
+            info(f"Dynamically loaded {loaded_plugins} plugins and {loaded_modules} modules.")
+            print_registry_stats()
+    except Exception as e:
+        warn(f"Error during plugin discovery: {e}")
+
     try:
         main_menu()
     finally:
         if _supervisor:
             _supervisor.stop()
-

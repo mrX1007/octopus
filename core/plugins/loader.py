@@ -117,6 +117,19 @@ class PluginManager:
 
         return errors
 
+    def validate_all(self) -> Dict[str, List[str]]:
+        """Validate every discovered plugin.
+
+        Returns only plugins that have errors; an empty dict means all plugins
+        are currently loadable with the installed dependencies.
+        """
+        invalid = {}
+        for plugin_name in sorted(self.plugins):
+            errors = self.validate(plugin_name)
+            if errors:
+                invalid[plugin_name] = errors
+        return invalid
+
     def execute(self, plugin_name: str, context: PluginContext = None,
                 timeout: int = 120, **kwargs) -> PluginResult:
         """
@@ -151,6 +164,7 @@ class PluginManager:
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 future = executor.submit(instance.run, **kwargs)
                 result = future.result(timeout=timeout)
+                result = self._normalize_result(result)
 
                 # Propagate credential events
                 if result.credentials:
@@ -197,6 +211,26 @@ class PluginManager:
                     getattr(instance, method_name)(data)
                 except Exception as e:
                     pass  # Never crash on event dispatch
+
+    def _normalize_result(self, result: Any) -> PluginResult:
+        """Normalize legacy plugin return values to PluginResult."""
+        if isinstance(result, PluginResult):
+            return result
+        if isinstance(result, dict):
+            success = bool(result.get("success")) or result.get("status") == "success"
+            data = result.get("data", {})
+            if not isinstance(data, dict):
+                data = {"value": data}
+            return PluginResult(
+                success=success,
+                data=data,
+                output=str(result.get("output", "")),
+                artifacts=list(result.get("artifacts", []) or []),
+                credentials=list(result.get("credentials", []) or []),
+                sessions=list(result.get("sessions", []) or []),
+                error=str(result.get("error", "")),
+            )
+        return PluginResult(success=bool(result), output=str(result))
 
     def resolve_dependencies(self, target_plugins: List[str]) -> List[str]:
         """Resolve dependency graph and return ordered execution list."""

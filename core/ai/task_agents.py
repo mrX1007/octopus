@@ -23,7 +23,8 @@ class AnalysisAgent:
         self.context_builder = context_builder
         self.system_prompt = """You are the ANALYSIS AGENT of OCTOPUS.
 Your job is to read the current context and build hypotheses (claims) about vulnerabilities or next steps.
-You MUST output your response in STRICT JSON format:
+You MUST output your response in STRICT JSON format WITHOUT ANY trailing commas, extra braces, or comments.
+Ensure the format matches EXACTLY:
 {
   "hypotheses": [
     {

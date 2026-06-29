@@ -23,7 +23,7 @@ from core.tools.recon_tools import (
     run_dig, run_sslscan, run_ffuf, run_enum4linux,
     run_smbclient, run_wpscan, run_sqlmap, run_nikto,
     run_scrapling_fetch, run_scrapling_crawl,
-    run_ssh_user_enum,
+    run_ssh_user_enum, run_ftp_anonymous_check, run_smtp_probe,
 )
 
 # Post-exploitation + recon pipeline
