@@ -24,6 +24,7 @@ import logging
 import secrets
 import string
 
+from core.killchain.exploits import get_privesc_exploits
 from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
 from core.killchain.exploitation import _PRIVESC_CHECKS, _EXPLOITABLE_SUIDS, _SUID_SKIP, _LINPEAS_URL
 
@@ -1004,7 +1005,14 @@ void gconv_init() {
             output += f"  [SEARCH: CVE-2021-4034 pkexec PwnKit exploit]\n"
 
             # ── PHASE 3: Auto kernel exploits ────────────────────
-            for exploit in exploits:
+            kernel_exploit_adapters = get_privesc_exploits()
+            if not kernel_exploit_adapters:
+                output += "  [!] Kernel exploit adapters are not enabled in this build.\n"
+                output += "      Manual verification is required before running kernel exploit modules.\n"
+            else:
+                names = ", ".join(f"{exploit.name}({exploit.cve})" for exploit in kernel_exploit_adapters)
+                output += f"  Loaded kernel exploit adapters: {names}\n"
+            for exploit in kernel_exploit_adapters:
                 if got_root:
                     break
                 check_result = exploit.normalize_check_result(exploit.check_vulnerable(client))

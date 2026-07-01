@@ -9,7 +9,6 @@ Single source of truth that synchronizes:
 
 Usage:
     from core.credentials import CredentialStore
-import logging
 
     creds = CredentialStore.instance()   # singleton
     creds.add("ssh", "10.0.0.1", "root", "toor", source="bruteforce")
@@ -18,8 +17,7 @@ import logging
     creds.get_all("10.0.0.1")            # → {"ssh": [("root", "toor")]}
 """
 
-import os
-import time
+import logging
 import threading
 from typing import List, Tuple, Dict, Optional
 

@@ -7,7 +7,11 @@ Run with: python octopus.py
 
 __version__ = "1.0.0"
 
-from export import export_menu
+try:
+    from export import export_menu
+except ImportError as _export_import_error:
+    def export_menu(*_args, _err=_export_import_error, **_kwargs):
+        print(f"[!] Export module unavailable: {_err}")
 import os
 import re as _re
 import sys
@@ -30,32 +34,50 @@ except ImportError:
     _RICH = False
     console = None
 
-from db import (
-    get_connection,
-    create_session,
-    update_session_status,
-    save_vulnerability,
-    save_fix,
-    save_exploit,
-    save_summary,
-    get_all_history,
-    get_session,
-    get_vulnerabilities,
-    get_fixes,
-    get_exploits,
-    edit_vulnerability,
-    edit_fix,
-    edit_exploit,
-    edit_summary_risk,
-    delete_vulnerability,
-    delete_exploit,
-    delete_fix,
-    delete_full_session,
-    print_history,
-    print_session
-)
+try:
+    from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+    from rich.table import Table as RichTable
+except ImportError:
+    Progress = SpinnerColumn = TextColumn = TimeElapsedColumn = RichTable = None
+
+try:
+    from db import (
+        get_connection,
+        create_session,
+        update_session_status,
+        save_vulnerability,
+        save_fix,
+        save_exploit,
+        save_summary,
+        get_all_history,
+        get_session,
+        get_vulnerabilities,
+        get_fixes,
+        get_exploits,
+        edit_vulnerability,
+        edit_fix,
+        edit_exploit,
+        edit_summary_risk,
+        delete_vulnerability,
+        delete_exploit,
+        delete_fix,
+        delete_full_session,
+        print_history,
+        print_session
+    )
+except ImportError as _db_import_error:
+    def _db_unavailable(*_args, _err=_db_import_error, **_kwargs):
+        raise RuntimeError(f"Database module unavailable: {_err}")
+    get_connection = create_session = update_session_status = _db_unavailable
+    save_vulnerability = save_fix = save_exploit = save_summary = _db_unavailable
+    get_all_history = get_session = get_vulnerabilities = get_fixes = get_exploits = _db_unavailable
+    edit_vulnerability = edit_fix = edit_exploit = edit_summary_risk = _db_unavailable
+    delete_vulnerability = delete_exploit = delete_fix = delete_full_session = _db_unavailable
+    print_history = print_session = _db_unavailable
 from tools import interactive_tool_run, format_recon_for_llm, run_default_recon
 from core.ai.pipeline import AIPipeline
+from core.ai.trace_report import TraceReporter
+from core.ai.fact_store import FactStore
 
 # Load config
 try:
@@ -175,6 +197,36 @@ def error(text):
 def info(text):
     print(f"\033[94m[*] {text}\033[0m")
     logging.info(text)
+
+
+def _save_trace_report(pipeline: AIPipeline, scan_id: str, target: str) -> None:
+    try:
+        log_dir = os.path.expanduser(CFG.get("paths", {}).get("logs", "~/OCTOPUS/logs"))
+        os.makedirs(log_dir, exist_ok=True)
+        report = pipeline.trace_report(scan_id, target)
+        base = os.path.join(log_dir, f"trace_{scan_id}")
+        with open(base + ".json", "w", encoding="utf-8") as fh:
+            fh.write(pipeline.trace_reporter.to_json(report))
+        with open(base + ".txt", "w", encoding="utf-8") as fh:
+            fh.write(pipeline.trace_reporter.to_text(report))
+        info(f"Trace report saved: {base}.txt")
+    except Exception as exc:
+        warn(f"Trace report save failed: {str(exc)[:160]}")
+
+
+def _print_trace_report_cli(scan_id: str, target: str, fmt: str = "text") -> None:
+    store = FactStore()
+    reporter = TraceReporter(store)
+    try:
+        pipeline = AIPipeline()
+        context = pipeline.context_builder.build_context(scan_id, target)
+    except Exception:
+        context = {}
+    report = reporter.build(scan_id, target, context=context)
+    if fmt == "json":
+        print(reporter.to_json(report))
+    else:
+        print(reporter.to_text(report))
 
 
 def confirm(question: str) -> bool:
@@ -358,12 +410,10 @@ def print_results_table(result: dict):
 
 def preflight_checks() -> bool:
     """Verify critical dependencies before starting.
-    v8.0: Shodan, hashcat, john checks. MariaDB non-critical on macOS."""
+    v8.0: Shodan, hashcat, john checks."""
     import shutil
     import requests
-    import platform
     all_ok = True
-    is_macos = platform.system() == "Darwin"
 
     divider("PRE-FLIGHT CHECKS")
 
@@ -382,11 +432,8 @@ def preflight_checks() -> bool:
         success("MariaDB: connected")
     except Exception as e:
         warn(f"MariaDB: {e}")
-        if is_macos:
-            warn("  macOS dev mode — DB not required. Install: brew install mariadb")
-        else:
-            warn("  Fix: sudo systemctl start mariadb")
-            warn("  Or check credentials in .env / config.yaml (OCTOPUS_DB_USER / OCTOPUS_DB_PASS / OCTOPUS_DB_NAME)")
+        warn("  Fix: sudo systemctl start mariadb")
+        warn("  Or check credentials in .env / config.yaml (OCTOPUS_DB_USER / OCTOPUS_DB_PASS / OCTOPUS_DB_NAME)")
         warn("  Results will not be saved to DB until connection is fixed.")
 
     # 2. Ollama
@@ -418,8 +465,7 @@ def preflight_checks() -> bool:
         if shutil.which(tool):
             success(f"{tool}: found")
         else:
-            pkg_mgr = "brew install" if is_macos else "sudo pacman -S"
-            warn(f"{tool}: NOT found (install with: {pkg_mgr} {tool})")
+            warn(f"{tool}: NOT found (install with: sudo pacman -S {tool})")
 
     # 4. Wordlists
     try:
@@ -542,6 +588,7 @@ def _new_scan_direct():
     divider("AI ANALYSIS")
     pipeline = AIPipeline()
     state = pipeline.run_scan(str(sl_no), target, raw_scan=raw_scan)
+    _save_trace_report(pipeline, str(sl_no), target)
     result = _adapt_state_to_result(state, pipeline.fact_store, str(sl_no), target, raw_scan)
 
     # Calculate duration
@@ -842,6 +889,7 @@ def _new_scan_shodan():
 
                 pipeline = AIPipeline()
                 state = pipeline.run_scan(str(sl_no), target_ip, raw_scan=raw_scan)
+                _save_trace_report(pipeline, str(sl_no), target_ip)
                 result = _adapt_state_to_result(state, pipeline.fact_store, str(sl_no), target_ip, raw_scan)
                 duration = datetime.now() - scan_start
                 duration_str = str(duration).split('.')[0]
@@ -1055,6 +1103,7 @@ def resume_scan():
     divider("AI ANALYSIS (RESUMED)")
     pipeline = AIPipeline()
     state = pipeline.run_scan(str(sl_no), target, raw_scan=raw_scan)
+    _save_trace_report(pipeline, str(sl_no), target)
     result = _adapt_state_to_result(state, pipeline.fact_store, str(sl_no), target, raw_scan)
 
     duration = datetime.now() - scan_start
@@ -1322,6 +1371,56 @@ def _is_pwnkit_evidence(f, facts) -> bool:
     )
 
 
+def _service_for_port(facts, port: str) -> str:
+    if not port:
+        return "unknown"
+    for fact in facts:
+        if fact.get("type") != "port_open":
+            continue
+        value = str(fact.get("value", ""))
+        match = _re.match(rf"{_re.escape(str(port))}/(?:tcp|udp)\s+\(([^)]+)\)", value, _re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return "unknown"
+
+
+def _endpoint_metadata_for_vulnerability(f, facts) -> dict:
+    value = str(f.get("value", ""))
+    if value.startswith("msf_check_positive:"):
+        module = value.split(":", 1)[1]
+        for fact in facts:
+            endpoint = str(fact.get("value", ""))
+            if fact.get("type") != "vulnerability_endpoint":
+                continue
+            prefix = f"msf_check_positive:{module}:"
+            if endpoint.startswith(prefix):
+                port = endpoint.rsplit(":", 1)[-1]
+                return {
+                    "port": port,
+                    "service": _service_for_port(facts, port),
+                    "description": f"Confirmed Metasploit check positive for {module} on port {port}",
+                }
+
+    if value == "tomcat_jmx_proxy_exposed":
+        for fact in facts:
+            endpoint = str(fact.get("value", ""))
+            if fact.get("type") != "vulnerability_endpoint":
+                continue
+            if not endpoint.startswith("tomcat_jmx_proxy_exposed:"):
+                continue
+            target = endpoint.split(":", 1)[1]
+            port = "443" if target.startswith("https://") else "80"
+            port_match = _re.search(r":(\d{2,5})(?:/|$)", target)
+            if port_match:
+                port = port_match.group(1)
+            return {
+                "port": port,
+                "service": _service_for_port(facts, port) if port else "http",
+                "description": f"Confirmed Tomcat JMX proxy exposure at {target}",
+            }
+    return {}
+
+
 def _vulnerability_metadata(f, facts, state) -> dict:
     if _is_cpanel_evidence(f, facts):
         return {
@@ -1336,6 +1435,14 @@ def _vulnerability_metadata(f, facts, state) -> dict:
             "port": "local",
             "service": "Linux local privilege escalation",
             "description": "Confirmed local privilege escalation vulnerability",
+        }
+    endpoint_meta = _endpoint_metadata_for_vulnerability(f, facts)
+    if endpoint_meta:
+        return {
+            "severity": "HIGH",
+            "port": endpoint_meta.get("port", "unknown"),
+            "service": endpoint_meta.get("service", "unknown"),
+            "description": endpoint_meta.get("description", "Confirmed vulnerability"),
         }
     return {
         "severity": "HIGH",
@@ -1971,6 +2078,13 @@ def c2_management_menu():
 # ─────────────────────────────────────────────
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "trace":
+        if len(sys.argv) < 4:
+            print("Usage: python3 octopus.py trace SCAN_ID TARGET [text|json]")
+            sys.exit(2)
+        _print_trace_report_cli(sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else "text")
+        sys.exit(0)
+
     # ── CLI sub-commands: status, stop, health, pid ──
     if len(sys.argv) > 1 and sys.argv[1] in ("status", "stop", "health", "pid"):
         try:

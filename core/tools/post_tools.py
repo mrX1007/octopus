@@ -10,10 +10,10 @@ import re
 import concurrent.futures
 import fnmatch
 import ipaddress
+import shutil
 
 from core.tools.base import (
-    run_tool, is_tool_available, get_tool_config,
-    C_GREY, C_RESET, C_CYAN, C_GREEN, C_YELLOW, C_RED,
+    run_tool,
 )
 from core.tools.exploit_tools import (
     register_credential, get_best_creds_for_target,
@@ -22,8 +22,8 @@ from core.tools.exploit_tools import (
 from core.tools.recon_tools import (
     run_nmap, run_whois, run_whatweb, run_curl_headers,
     run_dig, run_sslscan, run_ffuf, run_enum4linux,
-    run_smbclient, run_wpscan, run_sqlmap, run_nikto,
-    run_scrapling_fetch, run_ssh_user_enum,
+    run_smbclient,
+    run_scrapling_fetch,
 )
 
 _PIVOT_SSH_CLIENTS = []
@@ -55,6 +55,7 @@ _CONTROLLED_SSH_INVENTORY_CHECKS = [
     ("Process snapshot", "ps -eo user,pid,ppid,comm,args --sort=comm 2>/dev/null | head -100", 10),
     ("Running services", "systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null | head -100", 10),
     ("Runtime stack markers", "command -v nginx apache2 httpd php php-fpm python3 node npm go java docker podman psql mysql redis-server mongod 2>/dev/null || true", 8),
+    ("Software versions", "(nginx -v 2>&1 || true); (apache2 -v 2>&1 || httpd -v 2>&1 || true); (php -v 2>/dev/null | head -1 || true); (python3 --version 2>&1 || true); (node --version 2>&1 || true); (docker --version 2>&1 || true); (podman --version 2>&1 || true); (psql --version 2>&1 || true); (mysql --version 2>&1 || true); (redis-server --version 2>&1 || true); (mongod --version 2>&1 || true)", 12),
     ("Container runtime", "docker ps --format '{{.Names}} {{.Image}} {{.Ports}}' 2>/dev/null | head -60; podman ps --format '{{.Names}} {{.Image}} {{.Ports}}' 2>/dev/null | head -60", 10),
     ("Web roots", "find /var/www /srv /opt /home -maxdepth 3 -type d \\( -name public -o -name html -o -name www -o -name app -o -name current \\) 2>/dev/null | head -100", 12),
     ("App manifests", "find /var/www /srv /opt /home -maxdepth 5 -type f \\( -name package.json -o -name composer.json -o -name requirements.txt -o -name pyproject.toml -o -name go.mod -o -name Gemfile -o -name pom.xml \\) 2>/dev/null | head -140", 14),
@@ -1253,9 +1254,21 @@ def ai_shodan_smart(query: str) -> str:
     except ImportError:
         return "[!] shodan_module.py not found."
 
-@tool(name="browser_surface_analysis", aliases=["browser_analyze", "browser_surface", "shardbrowser_browse"], category="recon", description="Render and summarize a target page with ShardBrowser.", requires=["octopus:shardbrowser"])
+@tool(name="browser_surface_analysis", aliases=["browser_analyze", "browser_surface", "shardbrowser_browse"], category="recon", description="Render and summarize a target page with ShardBrowser, with HTTP fallback.")
 def ai_browser_surface_analysis(target: str, proto: str = "https", port: str = "", wait: float = 5) -> str:
-    return _run_shardbrowser_direct(target, proto=proto, port=port, wait=wait, headless=True)
+    url = _build_browser_url(target, proto=proto, port=port)
+    rendered = _run_shardbrowser_direct(url, proto=proto, port=port, wait=wait, headless=True)
+    if not str(rendered).startswith("[!]"):
+        return rendered
+
+    fallback = run_scrapling_fetch(url)
+    return (
+        f"[Browser Surface Fallback - {url}]\n"
+        f"URL: {url}\n"
+        f"ShardBrowser status: {rendered}\n"
+        f"Fallback: scrapling/requests\n\n"
+        f"{fallback}"
+    )
 
 @tool(name="shardbrowser_osint", aliases=["browser_osint", "shard_osint", "shardbrowser"], category="recon", description="Run isolated ShardBrowser OSINT searches.", requires=["octopus:shardbrowser"])
 def ai_shardbrowser_osint(query: str, engines: str = "", proxy: str = "") -> str:
@@ -1533,6 +1546,41 @@ def ai_ad_enum(target_ip: str, user: str = None, pwd: str = None, domain: str = 
     from core.killchain.ad.enumeration import run_ad_enum
     creds = _resolve_ad_creds(target_ip, user, pwd, domain)
     return run_ad_enum(target_ip, creds=creds if creds.get("user") or creds.get("domain") else None)
+
+@tool(name="bloodhound_ingest", aliases=["bloodhound", "sharphound_ingest"], category="post", description="Collect BloodHound relationship data with known domain credentials", requires=["any:python:bloodhound,bloodhound-python,bloodhound.py"])
+def ai_bloodhound_ingest(target_ip: str, user: str = None, pwd: str = None, domain: str = "") -> str:
+    from core.killchain.ad.enumeration import bloodhound_ingest
+    creds = _resolve_ad_creds(target_ip, user, pwd, domain)
+    if not creds.get("user") or not creds.get("domain"):
+        return "[BLOODHOUND INGEST]\n  [!] BloodHound requires domain credentials (user, password, domain)."
+    return bloodhound_ingest(target_ip, creds)
+
+@tool(name="gpo_review", aliases=["gpo"], category="post", description="Review Group Policy Objects through LDAP with known domain context", requires=["any:python:impacket.ldap,python:ldap3,ldapsearch"])
+def ai_gpo_review(target_ip: str, user: str = None, pwd: str = None, domain: str = "") -> str:
+    from core.killchain.ad.enumeration import enumerate_gpo
+    creds = _resolve_ad_creds(target_ip, user, pwd, domain)
+    if not creds.get("domain"):
+        return "[AD SECURITY REVIEW]\n  [!] GPO review requires a domain value."
+    return "[AD SECURITY REVIEW]\n" + enumerate_gpo(target_ip, creds)
+
+@tool(name="adcs_review", aliases=["adcs", "certipy_find"], category="post", description="Read-only ADCS template review with Certipy find", requires=["any:certipy,certipy-ad"])
+def ai_adcs_review(target_ip: str, user: str = None, pwd: str = None, domain: str = "") -> str:
+    certipy_bin = shutil.which("certipy") or shutil.which("certipy-ad")
+    if not certipy_bin:
+        return "[AD SECURITY REVIEW]\n[ADCS] certipy/certipy-ad is not installed."
+    creds = _resolve_ad_creds(target_ip, user, pwd, domain)
+    if not creds.get("user") or not creds.get("domain"):
+        return "[AD SECURITY REVIEW]\n[ADCS] Certipy find requires domain credentials."
+    user_at_domain = f"{creds['user']}@{creds['domain']}"
+    cmd = [
+        certipy_bin, "find",
+        "-u", user_at_domain,
+        "-p", creds.get("password", ""),
+        "-dc-ip", target_ip,
+        "-stdout",
+        "-enabled",
+    ]
+    return "[AD SECURITY REVIEW]\n[ADCS REVIEW]\n" + run_tool(cmd, timeout=240)
 
 @tool(name="asrep_roast", aliases=["asrep"], category="post", description="AS-REP roasting", requires=["any:python:impacket.examples.GetNPUsers,GetNPUsers.py,impacket-GetNPUsers"])
 def ai_asrep_roast(target_ip: str, user: str = None, pwd: str = None, domain: str = "") -> str:

@@ -44,7 +44,7 @@ import logging
 import importlib
 import importlib.util
 from dataclasses import dataclass, field
-from typing import Callable, Optional, Any, List, Dict
+from typing import Callable, Optional, List, Dict
 logger = logging.getLogger("octopus.registry")
 
 # ─── Tool Definition ────────────────────────────────────

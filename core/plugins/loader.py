@@ -34,14 +34,15 @@ class PluginManager:
     """
 
     def __init__(self, modules_dir: str = "modules/",
-                 event_bus: PluginEventBus = None):
+                 event_bus: Optional[PluginEventBus] = None):
         self.modules_dir = modules_dir
         self.plugins: Dict[str, Type[OctopusPlugin]] = {}
+        self.skipped_plugins: Dict[str, str] = {}
         self.event_bus = event_bus or PluginEventBus()
         self._instances: Dict[str, OctopusPlugin] = {}
         self.discover()
 
-    def discover(self, dirs: List[str] = None):
+    def discover(self, dirs: Optional[List[str]] = None):
         """Scan directories for plugins. Defaults to self.modules_dir."""
         search_dirs = dirs or [self.modules_dir]
         for search_dir in search_dirs:
@@ -70,6 +71,9 @@ class PluginManager:
                         hasattr(obj, 'name') and obj.name != "base_plugin"):
                     self.plugins[obj.name] = obj
                     logging.debug(f"Plugin discovered: {obj.name} v{obj.version} ({path})")
+        except ImportError as e:
+            self.skipped_plugins[module_name] = str(e)
+            logging.debug(f"Skipped optional plugin from {path}: {e}")
         except Exception as e:
             logging.warning(f"Failed to load plugin from {path}: {e}")
 
@@ -129,6 +133,13 @@ class PluginManager:
             if errors:
                 invalid[plugin_name] = errors
         return invalid
+
+    def list_skipped_plugins(self) -> List[Dict[str, str]]:
+        """List plugin modules skipped during discovery due to optional imports."""
+        return [
+            {"module": module, "reason": reason}
+            for module, reason in sorted(self.skipped_plugins.items())
+        ]
 
     def execute(self, plugin_name: str, context: PluginContext = None,
                 timeout: int = 120, **kwargs) -> PluginResult:

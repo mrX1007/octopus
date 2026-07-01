@@ -9,10 +9,7 @@ Extracted from llm.py lines 1463-1846 and 2260-2392.
 import re
 import logging
 import os
-import sys
-import time
 import json
-import hashlib
 import concurrent.futures
 
 # Lazy imports — these modules have heavy external dependencies
@@ -23,17 +20,16 @@ import concurrent.futures
 
 from .ollama_client import (
     ask_ollama, SUMMARIZE_THRESHOLD, CONCURRENT_TOOLS,
-    MAX_TOOL_LOOPS, CONTEXT_WINDOW,
-    C_GREY, C_RESET, C_CYAN, C_GREEN, C_YELLOW, C_RED, C_BLUE, C_MAGENTA
+    MAX_TOOL_LOOPS,
+    C_RESET, C_CYAN, C_GREEN, C_YELLOW, C_RED, C_BLUE
 )
-from .tag_parser import extract_tags, validate_and_fix_cmd
+from .tag_parser import validate_and_fix_cmd
 from .fact_engine import (
     extract_facts_from_output, _normalize_for_dedup,
-    _extract_open_ports, _extract_filtered_ports,
-    _is_all_filtered, _port_is_accessible
+    _port_is_accessible
 )
 from .vuln_builder import (
-    build_vulns_from_facts, parse_vulnerabilities,
+    parse_vulnerabilities,
     parse_exploits, parse_risk_level, parse_summary
 )
 
@@ -501,7 +497,7 @@ def analyse_target(target: str, raw_scan: str, sl_no: int = 0) -> dict:
     Falls back to single-agent mode if the multi-agent system fails.
     """
     from memory import init_memory
-    from agents import DirectorAgent
+    from core.ai.legacy_agents import DirectorAgent
 
     print(f"\n\033[96m[*] Initializing Multi-Agent System v9.0 for {target}...\033[0m")
 

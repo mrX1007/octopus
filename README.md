@@ -29,7 +29,17 @@ you are operating inside a controlled, authorized environment.
 OCTOPUS is intended for:
 
 - External service discovery and fingerprinting.
+- Asset inventory and attack surface management for domains, IPs,
+  subdomains, live HTTP services, TLS metadata and historical URLs.
 - Web surface mapping and vulnerability assessment.
+- Deeper web application assessment: rendered page analysis, crawling,
+  security headers, CORS, JWT metadata, JavaScript route extraction and
+  Burp/ZAP report imports.
+- API surface mapping from OpenAPI/Swagger, GraphQL checks and discovered
+  JavaScript/API routes.
+- Safe template-based verification with Nuclei.
+- Secrets, dependency, container/IaC and cloud posture assessment when the
+  matching external tools are installed.
 - Evidence-driven vulnerability verification.
 - Credential tracking across scans.
 - Post-access host inventory after confirmed authentication.
@@ -79,7 +89,8 @@ Tool Registry and Plugin Manager
 Evidence / RAG / Memory Layer
   |
   +--> OutputParser extracts facts from raw output
-  +--> FactStore stores scan facts in SQLite
+  +--> FactStore stores facts and observations in SQLite
+  +--> TargetModel normalizes host, service, endpoint, API, AD, cloud and secret state
   +--> CredentialStore syncs credentials across cache, MariaDB and graph
   +--> KnowledgeGraph stores typed relationships
   +--> VectorMemory stores optional ChromaDB semantic memory
@@ -128,8 +139,44 @@ The pipeline loop works as follows:
 7. Run tools through the registry.
 8. Parse new output into facts.
 9. Run deterministic fact-driven follow-up actions.
-10. Repeat until the Director concludes, budgets are hit, or no new facts are
-    being produced.
+10. Record command trace and goal trace for observability.
+11. Repeat until the Director concludes or no new facts are being produced.
+
+Runtime scan limits can be configured, but `0` / `unlimited` means no local
+pipeline budget. The deterministic scheduler still deduplicates commands and
+skips work that is already confirmed absent.
+
+### Fact Bus And Target Model
+
+The live pipeline uses normalized facts as its internal bus. A fact can have
+multiple observations, so the same endpoint or service discovered by Nmap,
+curl, Scrapling, browser analysis or Nuclei keeps provenance instead of being
+overwritten.
+
+Important fact groups:
+
+- assets: domains, IPs, URLs, DNS records/CNAME/SANs, technologies and exposed
+  services
+- services: host, port, protocol, service name and banner
+- endpoints: scheme, host, port, path, status, title and source
+- API: OpenAPI paths, GraphQL checks and route-derived endpoints
+- web app notes: headers, cookies, CORS, JWT, proxy findings and JS routes
+- credentials and access: SSH/app sessions, hashes and credential material
+- internal graph: internal hosts, subnets and discovered relationships
+- Active Directory: domains, users/groups/computers/GPO counts, BloodHound
+  data, attack paths, delegation, ADCS, ACL and password policy findings
+- security findings: Nuclei, secrets, code/dependency/IaC and cloud findings
+- negative facts: no HTTP response, auth failed, tool unavailable, no wordlist,
+  not vulnerable and invalid tool options
+
+`core/ai/target_model.py` converts stored facts into a dynamic target object:
+
+```text
+host -> services -> endpoints -> credentials -> access -> internal graph
+     -> API/web app -> AD/cloud/secrets/code findings -> unknowns
+```
+
+Planning should reason over this object rather than static port numbers.
 
 ### Fact-Driven Actions
 
@@ -138,11 +185,18 @@ when concrete facts appear. Examples:
 
 - known cached SSH credential -> `ssh_session` verification path
 - confirmed SSH auth -> controlled `ssh_inventory`
+- discovered port, service banner, web stack, local listener, manifest or config
+  candidate -> `exploit_select` and targeted `searchsploit`
+- discovered web surface -> `browser_surface_analysis` and `scrapling_crawl`
+- discovered web endpoint -> `security_headers_check`, `cors_check`,
+  `nuclei_safe` and `katana_crawl` when available
 - cPanel or WHM surface -> cPanel assessment plugin
-- discovered interesting web path -> `curl_headers` and `scrapling`
+- discovered interesting web path -> `curl_headers`, `scrapling`,
+  `openapi_import`, `graphql_check` or `js_route_extract`
 - FTP service -> `ftp_anonymous_check`
 - SMTP service -> `smtp_probe`
 - PostgreSQL/MySQL service with known creds -> read-only `db_inventory`
+- AD/LDAP/Kerberos surface -> AD enumeration and review tasks when available
 - positive `msf_check` inside authorized scope -> eligible `msf_run`
 
 This is the main mechanism that makes modules work together instead of acting
@@ -170,6 +224,8 @@ Primary evidence-first RAG:
   - cleanup complete
 - `ContextBuilder` retrieves relevant facts and builds compact context for the
   Director and Planner.
+- `TargetModel` exposes structured assets, services, endpoints, API, web app,
+  AD, cloud, secrets, code and internal graph state.
 - `EvidenceVerifier` checks whether a claim is supported by facts.
 - `CredentialStore` retrieves known credentials so scans can reuse confirmed
   access instead of rediscovering it.
@@ -207,7 +263,7 @@ Current registry coverage is expected to be complete. At the time of this
 README, the project reports:
 
 ```text
-registry coverage: 61/61
+registry coverage: 92/92
 unknown: []
 ```
 
@@ -427,6 +483,13 @@ External security tools:
 - Go toolchain
 - garble
 - optional impacket / ldap3 for AD modules
+- optional BloodHound / bloodhound-python and Certipy for AD relationship and
+  ADCS review
+- optional ProjectDiscovery tools for ASM and template verification:
+  subfinder, dnsx, httpx, naabu, tlsx, nuclei, katana
+- optional passive URL tools: waybackurls, gau
+- optional secrets/code/cloud tools: gitleaks, trufflehog, semgrep, trivy,
+  checkov, prowler and ScoutSuite
 
 ## Repository Layout
 
@@ -473,43 +536,69 @@ External security tools:
 
 ### 1. System Packages
 
-Install the external tools you plan to use. On macOS, many can be installed
-with Homebrew. On Linux, use the package manager for your distribution.
+OCTOPUS is intended to run as a full runtime on Athena OS.
 
-Common baseline:
+Install the external commands you plan to use through the distribution package
+manager. Package names can differ between Athena repositories and upstream
+releases, but the runtime expects these command names to be available when the
+matching registry tools are used.
+
+Common baseline commands:
 
 ```bash
-brew install nmap whois curl go
+sudo pacman -Syu
+sudo pacman -S nmap whois curl go
 ```
 
 Recommended security tools, depending on your environment:
 
 ```bash
-brew install ffuf nikto sqlmap hashcat john
+sudo pacman -S ffuf nikto sqlmap hashcat john metasploit exploitdb
+```
+
+ASM, API and web application tooling:
+
+```bash
+sudo pacman -S subfinder dnsx httpx naabu tlsx nuclei katana \
+  gitleaks trivy checkov
+```
+
+Some tools may be distributed under different repository names or through
+upstream releases:
+
+```text
+amass, waybackurls, gau, trufflehog, semgrep, prowler, ScoutSuite,
+bloodhound-python, certipy/certipy-ad
 ```
 
 Metasploit, enum4linux, smbclient, wpscan, sslscan, rustscan, searchsploit,
-impacket and garble may require separate installation depending on the OS.
+impacket and garble may require separate installation depending on the Athena
+repository state.
 
 ### 2. Python Environment
 
 ```bash
-cd /Users/admin/Downloads/Octopus2
+cd /path/to/Octopus
 python3 -m venv venv
 source venv/bin/activate
+python -m pip install --upgrade pip wheel
 pip install -r requirements.txt
 ```
 
-Optional development test dependencies:
-
-```bash
-pip install pytest pytest-mock pytest-cov
-```
+The same requirements file includes runtime dependencies and the local
+test/static-analysis tools used by CI.
 
 Optional AD/Kerberos support:
 
 ```bash
-pip install impacket ldap3
+pip install impacket ldap3 bloodhound
+```
+
+Optional cloud/code/security scanner CLIs are installed separately. Python
+packages can be installed when a CLI is distributed through pip:
+
+```bash
+pip install semgrep checkov prowler scoutsuite
 ```
 
 ### 3. MariaDB / MySQL
@@ -614,11 +703,17 @@ Recommended default posture:
 
 ```yaml
 strategy:
+  auto_post_access_inventory: true
+  auto_ssh_inventory: true
+  auto_internal_recon: true
+  auto_payload_generation: false
+  auto_persistence: false
+  auto_data_exfil: false
+  auto_cleanup: false
   allow_active_msf: false
   active_authorized: false
   authorized_targets: []
   max_active_msf_runs_per_scan: 1
-  auto_ssh_inventory: true
   allow_arbitrary_ssh_exec: false
 ```
 
@@ -676,6 +771,16 @@ The direct scan path:
 5. Runs deterministic follow-up actions.
 6. Saves final findings and summary.
 
+Interactive tool selector shortcuts:
+
+```text
+[a] Run all standard fast/concurrent recon.
+[n] Run standard + smart extended coverage based on detected SSH/Web/FTP.
+[x] Run EVERYTHING applicable: standard recon plus available safe/deep ASM, web, API,
+    template, protocol, and AD checks. Offensive/post-exploitation actions remain
+    gated and are listed in the mode plan instead of being launched blindly.
+```
+
 ## Registered Tools
 
 ### Recon
@@ -703,6 +808,35 @@ The direct scan path:
 - `shodan`: Shodan search/host/vulnerability lookups.
 - `waf_detect`: WAF/firewall detection.
 - `searchsploit`: exploit-db search.
+- `subfinder`: passive subdomain discovery.
+- `amass_enum`: passive Amass enumeration.
+- `dnsx`: DNS resolution and metadata.
+- `httpx_probe`: HTTP probing with status/title/technology detection.
+- `naabu`: fast safe TCP port discovery.
+- `tlsx`: TLS certificate and SAN/CN discovery.
+- `wayback_urls`: historical URLs from waybackurls.
+- `gau_urls`: historical URLs from gau.
+- `nuclei_safe`: safe Nuclei template verification with intrusive tags
+  excluded.
+- `katana_crawl`: crawl and JavaScript route discovery.
+- `openapi_import`: OpenAPI/Swagger endpoint map import.
+- `graphql_check`: GraphQL endpoint and introspection check.
+- `api_auth_check`: GET-only API auth/missing-auth comparison.
+- `session_profile_import`: import local JSON headers/cookies session profile.
+- `authenticated_crawl`: read-only crawl using an imported session profile.
+- `security_headers_check`: HTTP security header and cookie review.
+- `cors_check`: read-only CORS preflight check.
+- `jwt_analyze`: JWT header/payload metadata decoding.
+- `js_route_extract`: JavaScript route and API path extraction.
+- `burp_import`: Burp Suite export import.
+- `zap_import`: OWASP ZAP report import.
+- `gitleaks_scan`: repository/filesystem secret scanning.
+- `trufflehog_scan`: filesystem secret scanning.
+- `semgrep_scan`: source-code static analysis.
+- `trivy_scan`: filesystem, dependency, secret and IaC scanning.
+- `checkov_scan`: IaC/cloud configuration scanning.
+- `prowler_scan`: AWS/Azure/GCP/Kubernetes/M365 posture review.
+- `scoutsuite_scan`: ScoutSuite cloud posture review.
 
 ### Exploit Selection And Verification
 
@@ -738,6 +872,10 @@ The direct scan path:
 ### Active Directory / Kerberos
 
 - `ad_enum`: Active Directory enumeration.
+- `bloodhound_ingest`: BloodHound relationship data collection with known
+  domain credentials.
+- `gpo_review`: Group Policy Object review through LDAP.
+- `adcs_review`: ADCS template review through Certipy find.
 - `asrep_roast`: AS-REP roasting.
 - `kerberoast`: Kerberoasting.
 - `dcsync`: DCSync with domain credentials.
@@ -768,9 +906,14 @@ Follow-up examples:
 - A positive `msf_check` can promote a matching `msf_run` only when active MSF
   is enabled and the target is inside `authorized_targets`.
 - Confirmed SSH auth can trigger `ssh_inventory`.
-- `ffuf` paths can trigger `curl_headers` and `scrapling`.
+- Web endpoints can trigger browser analysis, Scrapling crawl, security header
+  checks, CORS checks, safe Nuclei and Katana when available.
+- Web links can trigger `curl_headers`, `scrapling`, `openapi_import`,
+  `graphql_check` or `js_route_extract`.
 - DB ports trigger `db_inventory` only when service credentials are already
   known.
+- AD surface can trigger enumeration/review, while credential extraction and
+  remote execution remain separate gated categories.
 
 Manual or gated examples:
 
@@ -812,7 +955,7 @@ SQLite/local files:
 Compile all Python files:
 
 ```bash
-env PYTHONPYCACHEPREFIX=/private/tmp/octopus_pycache \
+env PYTHONPYCACHEPREFIX=/tmp/octopus_pycache \
   python3 -m compileall -q core modules tests octopus.py tools.py
 ```
 
@@ -843,8 +986,76 @@ print(report["unknown"])'
 Expected healthy result:
 
 ```text
-61 / 61
+92 / 92
 []
+```
+
+### Replayable Pipeline
+
+Saved raw outputs can be replayed through the parser and pipeline without
+rerunning external tools. This is useful for debugging loops, parser loss and
+regressions from real logs:
+
+```python
+from core.ai.pipeline import AIPipeline
+
+pipeline = AIPipeline("data/facts.db")
+result = pipeline.replay_outputs("scan-replay", "10.0.0.5", [
+    {"tool": "nmap", "output": raw_nmap_text},
+    {"tool": "scrapling https://10.0.0.5/", "output": raw_scrapling_text},
+])
+print(result["context"]["target_model"])
+print(result["snapshot_actions"])
+```
+
+Regression tests should include saved output fixtures and assertions for both
+facts and expected next actions.
+
+For file-based replay assertions, use `ReplaySnapshot` specs under
+`tests/fixtures/`. A spec can define raw outputs plus expected facts, fact
+prefixes, deterministic next actions and surface states:
+
+```python
+from core.ai.replay_snapshot import ReplaySnapshot
+
+ReplaySnapshot("/tmp/octopus_snapshot.db").assert_file_ok(
+    "tests/fixtures/replay_snapshot_web_api.json"
+)
+```
+
+### Observability
+
+The pipeline records why work was executed or skipped:
+
+- Director goal trace: chosen goal, state gates and validation reason.
+- Command trace: command key, execute/skip decision, skip reason and new fact
+  count.
+- Scheduler decisions: duplicate command, confirmed absent surface, tool
+  unavailable or executed.
+- Fact provenance: each fact keeps observations and sources.
+- Command result fingerprints: output hash, duplicate output detection,
+  parsed fact count and new fact count.
+- Replay snapshots: expected fact/action/surface-state assertions for saved
+  raw outputs.
+
+Every completed scan writes trace artifacts under the configured logs path:
+
+```text
+~/OCTOPUS/logs/trace_<scan_id>.json
+~/OCTOPUS/logs/trace_<scan_id>.txt
+```
+
+Persisted trace data can also be inspected later:
+
+```bash
+python3 octopus.py trace SCAN_ID TARGET
+python3 octopus.py trace SCAN_ID TARGET json
+```
+
+This gives the chain:
+
+```text
+fact -> action -> new fact -> next action
 ```
 
 ## Troubleshooting
@@ -903,8 +1114,8 @@ tools or Python modules, then restart the console.
 Common examples:
 
 ```bash
-brew install nmap ffuf nikto sqlmap hashcat john
-pip install scrapling shodan paramiko
+sudo pacman -S nmap ffuf nikto sqlmap hashcat john
+pip install -r requirements.txt
 ```
 
 ### Shodan is disabled
@@ -921,7 +1132,7 @@ export SHODAN_API_KEY=...
 Install Python dependencies:
 
 ```bash
-pip install "httpx[socks]" patchright
+pip install -r requirements.txt
 ```
 
 ShardX engine assets are managed by the vendor SDK under
@@ -932,7 +1143,7 @@ ShardX engine assets are managed by the vendor SDK under
 Install development dependencies:
 
 ```bash
-pip install pytest pytest-mock pytest-cov
+pip install -r requirements.txt
 ```
 
 ## Development Notes

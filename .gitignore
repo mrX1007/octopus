@@ -9,7 +9,8 @@ reports/
 exports/
 venv/
 __pycache__/
-*.pyc# Byte-compiled / optimized / DLL files
+
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
@@ -222,10 +223,14 @@ venv/
 __pycache__/
 *.pyc
 
-
+# Runtime SQLite state. Keep fixtures and service files explicit instead.
 data/*.db
 data/*.db-shm
 data/*.db-wal
+data/*.db-journal
+data/*.sqlite
+data/*.sqlite3
+data/*.sqlite-*
 
 
 data/default_admin.key

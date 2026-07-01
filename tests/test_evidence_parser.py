@@ -81,6 +81,15 @@ $ command -v nginx apache2 httpd php php-fpm python3 node npm go java docker pod
 /usr/bin/docker
 /usr/bin/psql
 
+[+] Software versions
+$ (nginx -v 2>&1 || true); (apache2 -v 2>&1 || true); (php -v 2>/dev/null | head -1 || true); (python3 --version 2>&1 || true); (node --version 2>&1 || true); (psql --version 2>&1 || true)
+nginx version: nginx/1.14.0
+Server version: Apache/2.4.29 (Ubuntu)
+PHP 7.2.24-0ubuntu0.18.04.17 (cli)
+Python 3.8.10
+v16.20.2
+psql (PostgreSQL) 14.11
+
 [+] Container runtime
 $ docker ps --format '{{.Names}} {{.Image}} {{.Ports}}' 2>/dev/null | head -60
 web nginx:latest 0.0.0.0:8080->80/tcp
@@ -122,6 +131,12 @@ $ find /etc/cron* /var/spool/cron -maxdepth 2 -type f
     assert ("app_stack", "nodejs") in pairs
     assert ("app_stack", "docker") in pairs
     assert ("app_stack", "postgresql") in pairs
+    assert ("service_version", "nginx:local:nginx/1.14.0") in pairs
+    assert ("service_version", "apache:local:Apache/2.4.29 (Ubuntu)") in pairs
+    assert ("service_version", "php:local:PHP 7.2.24-0ubuntu0.18.04.17 (cli)") in pairs
+    assert ("service_version", "python:local:Python 3.8.10") in pairs
+    assert ("service_version", "nodejs:local:v16.20.2") in pairs
+    assert ("service_version", "postgresql:local:psql (PostgreSQL) 14.11") in pairs
     assert ("web_root", "/var/www/app/public") in pairs
     assert ("web_root", "/srv/api/current") in pairs
     assert ("app_manifest", "/var/www/app/package.json") in pairs
@@ -215,6 +230,68 @@ Total data: 1,200 bytes
     assert ("loot_artifact", "target_report_saved") in pairs
 
 
+def test_exfil_stage_output_indexes_loot_manifest_artifacts():
+    from core.ai.evidence import OutputParser
+
+    output = """
+[KILL CHAIN — DATA EXFILTRATION — root@10.0.0.5:22]
+[+] EXFIL: /var/www/app/.env -> /loot/env_var_www_app_.env (123 bytes)
+[+] EXFIL: /root/.ssh/authorized_keys -> /loot/root_authorized_keys (2048 bytes)
+    ← CREDENTIALS in file
+Files exfiltrated: 2
+Exfil directory: /loot/10_0_0_5
+Total data: 2,171 bytes
+"""
+
+    facts = OutputParser().parse_tool_output("killchain_exfil 10.0.0.5", output)
+    pairs = {(fact["type"], fact["value"]) for fact in facts}
+
+    assert ("loot_artifact", "file:/var/www/app/.env") in pairs
+    assert ("loot_artifact", "local_copy:/loot/env_var_www_app_.env") in pairs
+    assert ("config_candidate", "/var/www/app/.env") in pairs
+    assert ("credential_material", "ssh_material:/root/.ssh/authorized_keys") in pairs
+    assert ("credential_material", "sensitive_material_observed_in_loot") in pairs
+    assert ("loot_artifact", "total_bytes:2171") in pairs
+
+
+def test_manual_recon_web_ports_detected_becomes_open_port_fact():
+    from core.ai.evidence import OutputParser
+
+    output = """
+[+] Recon complete.
+  [*] Web ports detected ['80'] — running extended web tools...
+  [*] Scrapling: http://10.0.0.5
+Title: Welcome to nginx!
+"""
+
+    facts = OutputParser().parse_tool_output("manual_recon", output)
+    pairs = {(fact["type"], fact["value"]) for fact in facts}
+
+    assert ("port_open", "80/tcp (http)") in pairs
+    assert ("web_title", "Welcome to nginx!") in pairs
+
+
+def test_timestamped_nmap_output_becomes_ports_and_versions():
+    from core.ai.evidence import OutputParser
+
+    output = """
+[144s] 22/tcp    open  ssh         OpenSSH 7.6p1 Ubuntu 4ubuntu0.6
+[144s] 80/tcp    open  http        nginx 1.14.0 (Ubuntu)
+[144s] 443/tcp   open  ssl/http    nginx 1.14.0 (Ubuntu)
+[144s] 5432/tcp  open  postgresql  PostgreSQL DB 14.1 - 14.6
+[144s] 3000/tcp  filtered ppp
+"""
+
+    facts = OutputParser().parse_tool_output("manual_recon", output)
+    pairs = {(fact["type"], fact["value"]) for fact in facts}
+
+    assert ("port_open", "22/tcp (ssh) [OpenSSH 7.6p1 Ubuntu 4ubuntu0.6]") in pairs
+    assert ("service_version", "ssh:22:OpenSSH 7.6p1 Ubuntu 4ubuntu0.6") in pairs
+    assert ("port_open", "80/tcp (http) [nginx 1.14.0 (Ubuntu)]") in pairs
+    assert ("port_open", "5432/tcp (postgresql) [PostgreSQL DB 14.1 - 14.6]") in pairs
+    assert ("port_filtered", "3000/tcp (ppp)") in pairs
+
+
 def test_shardbrowser_surface_output_becomes_web_facts():
     from core.ai.evidence import OutputParser
 
@@ -241,6 +318,26 @@ Input fields: 2
     assert ("web_surface", "login_form_detected") in pairs
     assert ("web_input", "password:password") in pairs
     assert ("web_link", "/admin") in pairs
+
+
+def test_failed_browser_surface_does_not_mark_rendered():
+    from core.ai.evidence import OutputParser
+
+    output = """
+[Browser Surface Fallback - http://77.105.177.122]
+URL: http://77.105.177.122
+ShardBrowser status: [!] ShardBrowser not ready: missing engine
+Fallback: scrapling/requests
+
+[!] Requests fallback failed: HTTPConnectionPool(host='77.105.177.122', port=80)
+[!] All scrapling/requests attempts failed for http://77.105.177.122.
+"""
+
+    facts = OutputParser().parse_tool_output("browser_surface_analysis", output)
+    pairs = {(fact["type"], fact["value"]) for fact in facts}
+
+    assert ("browser_rendered", "http://77.105.177.122") not in pairs
+    assert ("service_status", "web_fetch_failed:http://77.105.177.122") in pairs
 
 
 def test_ffuf_and_http_headers_become_web_surface_facts():
@@ -291,6 +388,31 @@ Internal hosts discovered: 2
     assert ("internal_host", "10.10.0.1") in pairs
     assert ("internal_host", "10.10.0.23") in pairs
     assert ("internal_network", "hosts_discovered:2") in pairs
+
+
+def test_web_endpoint_parser_normalizes_url_tool_output():
+    import json
+    from core.ai.evidence import OutputParser
+
+    output = """
+[REQUESTS+BS4 RESULT - https://10.0.0.5:43117/login?next=admin]
+Status: 200
+Title: Login
+"""
+
+    facts = OutputParser().parse_tool_output("scrapling https://10.0.0.5:43117/login?next=admin", output)
+    endpoints = [json.loads(fact["value"]) for fact in facts if fact["type"] == "web_endpoint"]
+
+    assert {
+        "url": "https://10.0.0.5:43117/login?next=admin",
+        "scheme": "https",
+        "host": "10.0.0.5",
+        "port": "43117",
+        "path": "/login",
+        "service": "",
+        "status": "",
+        "title": "",
+    } in endpoints
 
 
 def test_failed_killchain_banner_does_not_create_root_login_fact():
@@ -393,6 +515,7 @@ def test_msf_check_output_becomes_verification_fact():
 
     assert ("vulnerability", "msf_check_positive:exploit/multi/http/apache_normalize_path_rce") in pairs
     assert ("msf_module", "exploit/multi/http/apache_normalize_path_rce") in pairs
+    assert ("vulnerability_endpoint", "msf_check_positive:exploit/multi/http/apache_normalize_path_rce:80") in pairs
 
 
 def test_manual_recon_nmap_table_becomes_ports_and_versions():
@@ -498,13 +621,14 @@ Parameter: id (GET)
 Apache Tomcat JMX Proxy is accessible without authentication - vulnerable
 """
 
-    facts = OutputParser().parse_tool_output("wpscan sqlmap jmx2rce_scan", output)
+    facts = OutputParser().parse_tool_output("wpscan sqlmap jmx2rce_scan http://10.0.0.5", output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("service_version", "WordPress 6.2") in pairs
     assert ("potential_vulnerability", "wordpress_wpscan_findings") in pairs
     assert ("vulnerability", "sql_injection:id") in pairs
     assert ("vulnerability", "tomcat_jmx_proxy_exposed") in pairs
+    assert ("vulnerability_endpoint", "tomcat_jmx_proxy_exposed:http://10.0.0.5") in pairs
 
 
 def test_plugin_json_and_payload_artifacts_become_facts():
@@ -654,6 +778,49 @@ AI: AD enumeration complete.
     assert ("ad_high_value_object", "privileged_group_or_admincount_present") in pairs
 
 
+def test_active_directory_review_outputs_become_structured_security_facts():
+    from core.ai.evidence import OutputParser
+
+    output = """
+[AD SECURITY REVIEW]
+Domain Name: CORP.LOCAL
+BloodHound data collected -> /loot/corp/bloodhound
+Shortest paths to Domain Admins: 3
+Local Admin Paths: 4
+High Value Targets: 6
+User: CORP\\svc-web
+Minimum password length: 8
+Password history length: 24
+Lockout threshold: 0
+Unconstrained delegation: WEB01$
+Resource-Based Constrained Delegation: APP01 -> WEB01
+ESC1: vulnerable template UserAuth allows enrollee supplies subject
+GPO issue: local admins configured through legacy policy
+GenericAll -> CORP\\Helpdesk
+WriteDacl on CORP\\Domain Admins
+"""
+
+    facts = OutputParser().parse_tool_output("ad_security_review 10.10.10.5", output)
+    pairs = {(fact["type"], fact["value"]) for fact in facts}
+
+    assert ("ad_domain", "CORP.LOCAL") in pairs
+    assert ("ad_graph_data", "/loot/corp/bloodhound") in pairs
+    assert ("ad_attack_path", "domain_admin_paths:3") in pairs
+    assert ("ad_local_admin_path", "count:4") in pairs
+    assert ("ad_high_value_object", "count:6") in pairs
+    assert ("ad_object", "CORP\\svc-web") in pairs
+    assert ("ad_password_policy", "min_length:8") in pairs
+    assert ("ad_password_policy", "lockout_threshold:0") in pairs
+    assert ("ad_gpo_issue", "weak_password_min_length:8") in pairs
+    assert ("ad_gpo_issue", "account_lockout_disabled") in pairs
+    assert ("ad_delegation", "WEB01$") in pairs
+    assert ("ad_delegation", "unconstrained_delegation_present") in pairs
+    assert any(ftype == "ad_adcs_issue" and value.startswith("ESC1:") for ftype, value in pairs)
+    assert ("ad_gpo_issue", "local admins configured through legacy policy") in pairs
+    assert ("ad_acl_issue", "GenericAll:CORP\\Helpdesk") in pairs
+    assert any(ftype == "ad_acl_issue" and value.startswith("WriteDacl:") for ftype, value in pairs)
+
+
 def test_kerberos_and_dcsync_outputs_become_credential_material_facts():
     from core.ai.evidence import OutputParser
 
@@ -724,3 +891,187 @@ def test_low_value_failed_structured_facts_are_sanitized():
     assert ("connection_status", "Failed") not in pairs
     assert ("scan_status", "skipped") not in pairs
     assert ("port_open", "22/tcp") in pairs
+
+
+def test_web_endpoint_parser_rejects_trailing_json_context_garbage():
+    from core.ai.evidence import OutputParser
+
+    context = 'web_endpoint -> {"url": "https://83.166.242.55:9003/"}'
+
+    facts = OutputParser().parse_tool_output("exploit_select 83.166.242.55 " + context, "")
+    endpoints = [fact["value"] for fact in facts if fact["type"] == "web_endpoint"]
+
+    assert endpoints == []
+
+
+def test_browser_surface_partial_fallback_is_rendered_not_fetch_failed():
+    from core.ai.evidence import OutputParser
+
+    output = """
+URL: https://67.215.12.67:2087
+  [!] Requests fallback failed: HTTPConnectionPool(host='67.215.12.67', port=42084)
+Page title: WHM Login
+Forms: 3
+  link: ?locale=en
+"""
+
+    facts = OutputParser().parse_tool_output("browser_surface_analysis https://67.215.12.67:2087", output)
+    pairs = {(fact["type"], fact["value"]) for fact in facts}
+
+    assert ("browser_rendered", "https://67.215.12.67:2087") in pairs
+    assert ("service_status", "web_fetch_failed:https://67.215.12.67:2087") not in pairs
+    assert any(ftype == "web_endpoint" and "https://67.215.12.67:2087/" in value for ftype, value in pairs)
+
+
+def test_network_recon_pivot_output_marks_network_recon_completed():
+    from core.ai.evidence import OutputParser
+
+    output = """
+[PIVOT] Discovering internal networks...
+Subnets: 172.17.0.0/16, 192.168.48.0/20
+  -> 172.17.0.2
+  -> 172.17.0.3
+"""
+
+    facts = OutputParser().parse_tool_output("network_recon 83.166.242.55", output)
+    pairs = {(fact["type"], fact["value"]) for fact in facts}
+
+    assert ("internal_subnet", "172.17.0.0/16") in pairs
+    assert ("internal_host", "172.17.0.2") in pairs
+    assert ("service_status", "network_recon_completed") in pairs
+
+
+def test_asm_and_nuclei_outputs_become_normalized_facts():
+    from core.ai.evidence import OutputParser
+
+    output = """
+[ASM HTTPX - example.com]
+https://app.example.com [200] [Admin Panel] [nginx,React]
+203.0.113.10:8443
+[NUCLEI SAFE - https://app.example.com]
+{"template-id":"exposed-panel","info":{"name":"Panel","severity":"medium"},"matched-at":"https://app.example.com/admin"}
+"""
+
+    facts = OutputParser().parse_tool_output("httpx_probe example.com nuclei_safe https://app.example.com", output)
+    pairs = {(fact["type"], fact["value"]) for fact in facts}
+
+    assert ("asset_domain", "app.example.com") in pairs
+    assert ("asset_ip", "203.0.113.10") in pairs
+    assert ("asset_service", "203.0.113.10:8443/tcp") in pairs
+    assert ("asset_url", "https://app.example.com") in pairs
+    assert any(ftype == "technology" and "React" in value for ftype, value in pairs)
+    assert any(ftype == "nuclei_finding" and "medium:exposed-panel" in value for ftype, value in pairs)
+
+
+def test_api_secret_code_and_cloud_outputs_become_normalized_facts():
+    from core.ai.evidence import OutputParser
+
+    output = """
+[OPENAPI IMPORT - openapi.json]
+GET /users auth=unknown_or_none
+POST /admin auth=required
+[GRAPHQL CHECK - https://api.example.com/graphql]
+{"data":{"__schema":{"queryType":{"name":"Query"}}}}
+[GITLEAKS SCAN - .]
+{"RuleID":"generic-api-key","File":"app/.env","Verified":false}
+[SEMGREP SCAN - .]
+{"results":[{"check_id":"python.lang.security.audit","path":"app.py","extra":{"severity":"WARNING"}}]}
+[TRIVY SCAN - .]
+{"Results":[{"Target":"requirements.txt","Vulnerabilities":[{"VulnerabilityID":"CVE-2024-0001","Severity":"HIGH"}],"Secrets":[{"RuleID":"aws-access-key"}]}]}
+[PROWLER SCAN - aws]
+{"Status":"FAIL","Severity":"high","CheckID":"s3_bucket_public_access","ResourceId":"bucket-1"}
+"""
+
+    facts = OutputParser().parse_tool_output(
+        "openapi_import openapi.json graphql_check https://api.example.com/graphql gitleaks_scan . semgrep_scan . trivy_scan . prowler_scan aws",
+        output,
+    )
+    pairs = {(fact["type"], fact["value"]) for fact in facts}
+
+    assert ("api_endpoint", "GET:/users:auth=unknown_or_none") in pairs
+    assert ("api_security_note", "auth_unknown_or_none:GET:/users") in pairs
+    assert ("api_security_note", "graphql_introspection_enabled") in pairs
+    assert any(ftype == "secret_finding" and "generic-api-key:app/.env" in value for ftype, value in pairs)
+    assert any(ftype == "secret_finding" and "aws-access-key:requirements.txt" in value for ftype, value in pairs)
+    assert any(ftype == "code_finding" and "python.lang.security.audit:app.py" in value for ftype, value in pairs)
+    assert any(ftype == "code_finding" and "CVE-2024-0001:requirements.txt" in value for ftype, value in pairs)
+    assert any(ftype == "cloud_finding" and "s3_bucket_public_access:bucket-1" in value for ftype, value in pairs)
+
+
+def test_web_security_headers_cors_jwt_js_and_proxy_import_facts():
+    from core.ai.evidence import OutputParser
+
+    output = """
+[SECURITY HEADERS - https://app.example.com]
+HTTP/2 200
+Server: nginx
+Set-Cookie: sid=abc123; Path=/
+Content-Security-Policy: default-src * 'unsafe-inline'
+[CORS CHECK - https://app.example.com]
+Origin: https://octopus.invalid
+Access-Control-Allow-Origin: https://octopus.invalid
+Access-Control-Allow-Credentials: true
+[JWT ANALYZE]
+alg: none
+typ: JWT
+kid: ../../etc/passwd
+claims: sub, role, exp
+[JS ROUTE EXTRACT - https://app.example.com/app.js]
+Routes: 3
+/api/users/{id}
+/graphql
+/admin/settings
+[BURP IMPORT - burp.xml]
+URL https://app.example.com/admin
+ISSUE Cross-origin resource sharing arbitrary origin trusted
+[ZAP IMPORT - zap.json]
+URL https://app.example.com/account?id=123
+ALERT Medium Cookie No HttpOnly Flag
+"""
+
+    facts = OutputParser().parse_tool_output(
+        "security_headers_check https://app.example.com cors_check https://app.example.com jwt_analyze token js_route_extract https://app.example.com/app.js burp_import burp.xml zap_import zap.json",
+        output,
+    )
+    pairs = {(fact["type"], fact["value"]) for fact in facts}
+
+    assert ("web_security_note", "missing_hsts") in pairs
+    assert ("web_security_note", "weak_csp_policy") in pairs
+    assert ("web_security_note", "cookie_missing_httponly:sid") in pairs
+    assert ("web_security_note", "cors_reflective_or_wildcard_origin") in pairs
+    assert ("web_security_note", "cors_credentials_allowed") in pairs
+    assert not any(
+        ftype == "web_endpoint" and "octopus.invalid" in value
+        for ftype, value in pairs
+    )
+    assert ("jwt_metadata", "alg:none") in pairs
+    assert ("web_security_note", "jwt_review_required_alg:none") in pairs
+    assert ("js_route", "/api/users/{id}") in pairs
+    assert ("api_endpoint", "UNKNOWN:/graphql:source=js") in pairs
+    assert any(ftype == "api_security_note" and value.startswith("idor_candidate:UNKNOWN:/api/users") for ftype, value in pairs)
+    assert ("asset_url", "https://app.example.com/admin") in pairs
+    assert any(ftype == "proxy_finding" and "Cookie No HttpOnly" in value for ftype, value in pairs)
+
+
+def test_cors_check_without_allowed_origin_does_not_fall_back_to_llm():
+    from core.ai.evidence import OutputParser
+
+    parser = OutputParser()
+
+    def fail_llm(*_args, **_kwargs):
+        raise AssertionError("family-owned CORS output must not use LLM fallback")
+
+    parser.llm_extractor.parse = fail_llm
+    output = """
+[CORS CHECK - http://10.0.0.5]
+Origin: https://octopus.invalid
+HTTP/1.1 405 Method Not Allowed
+Server: nginx
+Allow: GET, HEAD
+"""
+
+    facts = parser.parse_tool_output("cors_check http://10.0.0.5", output)
+    pairs = {(fact["type"], fact["value"]) for fact in facts}
+
+    assert ("origin", "https://octopus.invalid") not in pairs
+    assert not any(fact["type"] == "web_endpoint" and "octopus.invalid" in fact["value"] for fact in facts)

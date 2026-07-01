@@ -5,7 +5,7 @@ import json
 import time
 import sqlite3
 import logging
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Optional, Tuple
 from collections import deque
 
 from .models import (

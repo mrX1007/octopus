@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
 import re
-import os
 import sys
 import time
 import json
 import logging
 import requests
+from typing import Generator
 
 # ─────────────────────────────────────────────
 # CONFIG CONSTANTS

@@ -3,6 +3,7 @@
 import json
 import logging
 from typing import Dict, Any, List
+from core.ai.policy import DeterministicPolicy
 
 try:
     from core.ai.ollama_client import ask_ollama
@@ -27,6 +28,7 @@ KILL_CHAIN = [
 
 class DirectorLLM:
     def __init__(self):
+        self.policy = DeterministicPolicy()
         self.system_prompt = """You are the DIRECTOR of OCTOPUS, an autonomous penetration testing system.
 YOUR ONLY JOB is to decide the NEXT HIGH-LEVEL GOAL based on the current state.
 You DO NOT select tools. You DO NOT execute commands.
@@ -37,11 +39,12 @@ You MUST output your response in STRICT JSON format matching this schema:
 }
 
 RULES:
-1. If root_access_confirmed is true, your goal should advance to post_access_inventory, then persistence, then internal_reconnaissance, then data_exfiltration, then cleanup, then conclude.
+1. If root_access_confirmed is true, run post_access_inventory first when needed, then use open_questions and automation_policy to decide internal_reconnaissance, persistence, data_exfiltration, cleanup, or conclude.
 2. If recon is incomplete, your goal is service_discovery.
 3. If recon IS complete but vulnerabilities are unknown, your goal is vulnerability_assessment.
 4. If no new facts have been discovered for several loops, or the goal is repeating, your goal MUST be 'conclude'.
 5. NEVER repeat a goal that has already been successfully completed.
+6. NEVER select persistence, data_exfiltration, cleanup, or active exploitation unless the matching automation_policy flag and open_question allow it.
 """
 
     def decide_goal(self, context: Dict[str, Any], goal_history: List[str]) -> Dict[str, str]:
@@ -74,6 +77,12 @@ Based on the context, output the next goal in JSON format."""
             goal = result.get("goal", "conclude")
 
             # Validate goal against context to prevent nonsensical LLM output
+            policy_decision = self.policy.validate_goal(goal, context, goal_history)
+            if policy_decision["goal"] != goal:
+                result["thought"] = f"LLM suggested '{goal}' but policy forced '{policy_decision['goal']}' ({policy_decision['reason']})"
+                result["goal"] = policy_decision["goal"]
+                return result
+
             validated = self._validate_goal(goal, context, goal_history)
             if validated != goal:
                 result["thought"] = f"LLM suggested '{goal}' but overridden to '{validated}'"
@@ -86,10 +95,22 @@ Based on the context, output the next goal in JSON format."""
             return self._fallback_logic(context, goal_history)
 
     def _validate_goal(self, goal: str, context: Dict[str, Any], goal_history: List[str]) -> str:
-        """Prevent the LLM from suggesting already-completed goals."""
+        """Validate the LLM suggestion against deterministic state gates."""
         state = context.get("state", "initial_recon")
+        required = context.get("next_required_capability", "conclude")
+
+        if required and required != "conclude":
+            if (
+                self._goal_allowed_for_state(required, state)
+                and self._goal_allowed_by_policy(required, context)
+            ):
+                if goal != required:
+                    return required
 
         if not self._goal_allowed_for_state(goal, state):
+            return self._fallback_logic(context, goal_history).get("goal", "conclude")
+
+        if not self._goal_allowed_by_policy(goal, context):
             return self._fallback_logic(context, goal_history).get("goal", "conclude")
 
         # Don't re-run service_discovery if recon is already done
@@ -101,6 +122,15 @@ Based on the context, output the next goal in JSON format."""
 
         if "post_access_inventory_needed" in context.get("open_questions", []):
             return "post_access_inventory"
+        if goal in {"persistence", "internal_reconnaissance", "data_exfiltration", "cleanup"}:
+            required = {
+                "persistence": "persistence_needed",
+                "internal_reconnaissance": "internal_network_recon_pending",
+                "data_exfiltration": "data_exfiltration_pending",
+                "cleanup": "cleanup_needed",
+            }
+            if required[goal] not in context.get("open_questions", []):
+                return self._fallback_logic(context, goal_history).get("goal", "conclude")
         if goal == "post_access_inventory":
             return self._fallback_logic(context, goal_history).get("goal", "conclude")
 
@@ -134,12 +164,21 @@ Based on the context, output the next goal in JSON format."""
 
         # Don't repeat goals that already ran
         if goal in goal_history and goal not in ("conclude",):
-            next_goal = self._next_in_chain(goal, goal_history)
-            if self._goal_allowed_for_state(next_goal, state):
-                return next_goal
             return "conclude"
 
         return goal
+
+    def _goal_allowed_by_policy(self, goal: str, context: Dict[str, Any]) -> bool:
+        policy = context.get("automation_policy") or {}
+        if goal == "persistence":
+            return bool(policy.get("auto_persistence", False))
+        if goal == "internal_reconnaissance":
+            return bool(policy.get("auto_internal_recon", True))
+        if goal == "data_exfiltration":
+            return bool(policy.get("auto_data_exfil", False))
+        if goal == "cleanup":
+            return bool(policy.get("auto_cleanup", False))
+        return True
 
     def _goal_allowed_for_state(self, goal: str, state: str) -> bool:
         """Prevent kill-chain drift when the state has not actually advanced."""
@@ -151,7 +190,7 @@ Based on the context, output the next goal in JSON format."""
             },
             "vulnerabilities_found": {
                 "service_discovery",
-                "credential_harvesting", "privilege_escalation",
+                "credential_harvesting",
                 "vulnerability_assessment", "conclude",
             },
             "credentials_found": {
@@ -231,18 +270,30 @@ Based on the context, output the next goal in JSON format."""
         if state == "root_access_confirmed":
             if "post_access_inventory_needed" in open_questions:
                 return self._pick("post_access_inventory", goal_history, "root confirmed, collecting controlled post-access inventory")
-            return self._pick("persistence", goal_history, "root confirmed, post-exploit")
+            if "persistence_needed" in open_questions:
+                return self._pick("persistence", goal_history, "root confirmed and persistence automation is enabled")
+            if "internal_network_recon_pending" in open_questions:
+                return self._pick("internal_reconnaissance", goal_history, "root confirmed, mapping internal network")
+            return {"thought": "fallback: root confirmed and required controlled inventory is complete", "goal": "conclude"}
 
         if state == "persistence_established":
             if "internal_network_recon_pending" in open_questions:
                 return self._pick("internal_reconnaissance", goal_history, "persistence established, mapping internal network")
-            return self._pick("data_exfiltration", goal_history, "persistence established, collect target data")
+            if "data_exfiltration_pending" in open_questions:
+                return self._pick("data_exfiltration", goal_history, "persistence established and data collection automation is enabled")
+            return {"thought": "fallback: persistence established, no further automated stage enabled", "goal": "conclude"}
 
         if state == "internal_recon_completed":
-            return self._pick("data_exfiltration", goal_history, "internal network mapped, collect target data")
+            if "data_exfiltration_pending" in open_questions:
+                return self._pick("data_exfiltration", goal_history, "internal network mapped and data collection automation is enabled")
+            if "persistence_needed" in open_questions:
+                return self._pick("persistence", goal_history, "internal network mapped and persistence automation is enabled")
+            return {"thought": "fallback: internal inventory complete, no further automated stage enabled", "goal": "conclude"}
 
         if state == "exfiltration_completed":
-            return self._pick("cleanup", goal_history, "data exfiltration complete, cleanup artifacts")
+            if "cleanup_needed" in open_questions:
+                return self._pick("cleanup", goal_history, "data collection complete and cleanup automation is enabled")
+            return {"thought": "fallback: data collection complete, cleanup automation disabled", "goal": "conclude"}
 
         if state == "cleanup_completed":
             return self._pick("conclude", goal_history, "cleanup complete")
@@ -253,6 +304,4 @@ Based on the context, output the next goal in JSON format."""
         """Pick the preferred goal, or the next untried one in the kill chain."""
         if preferred not in goal_history:
             return {"thought": f"fallback: {reason}", "goal": preferred}
-        # Already tried this goal — advance in the kill chain
-        next_goal = self._next_in_chain(preferred, goal_history)
-        return {"thought": f"fallback: '{preferred}' already tried, advancing to '{next_goal}'", "goal": next_goal}
+        return {"thought": f"fallback: '{preferred}' already tried and state did not advance", "goal": "conclude"}

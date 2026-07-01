@@ -4,8 +4,7 @@ import time
 import json
 import sqlite3
 import os
-import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from dataclasses import dataclass, field
 
 

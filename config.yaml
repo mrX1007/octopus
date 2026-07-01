@@ -86,13 +86,29 @@ strategy:
   prefer_stealth: true       # use evasion by default
   max_bruteforce_time: 600   # max seconds for bruteforce attempts
   auto_killchain: true       # auto-run kill chain when creds found
-  auto_cleanup: true         # auto-run Stage 9 cleanup after assessment
+  auto_post_access_inventory: true  # auto-run controlled read-only SSH inventory
+  auto_ssh_inventory: true   # backwards-compatible name for controlled inventory
+  auto_internal_recon: true  # allow read-only internal network inventory
+  auto_payload_generation: false # do not build payloads unless explicitly enabled
+  auto_persistence: false    # active persistence is opt-in
+  auto_data_exfil: false     # data collection/exfil stage is opt-in
+  auto_cleanup: false        # stealth cleanup is opt-in
   allow_active_msf: false    # msf_run is opt-in; msf_check remains available
   active_authorized: false   # set true only for owned/lab targets
   authorized_targets: []     # exact IP/domain, wildcard, or CIDR for active msf_run
   max_active_msf_runs_per_scan: 1
-  auto_ssh_inventory: true   # run controlled post-access inventory after confirmed SSH auth
   allow_arbitrary_ssh_exec: false  # ssh_exec defaults to inventory allowlist only
+  fact_action_max_depth: 0   # 0/unlimited = recurse until no new deduped facts remain
+  fact_action_max_commands: 0 # 0/unlimited = do not truncate fact-driven follow-up commands
+  fact_action_batch_commands: 0 # 0/unlimited = emit all commands from one fact batch
+  verification_followup_commands: 0 # 0/unlimited = run all safe verification commands emitted by facts
+  searchsploit_followup_queries: 0 # 0/unlimited = run all exploit-db enrichment queries
+  web_surface_endpoint_limit: 0 # 0/unlimited = render/crawl all discovered HTTP endpoints
+  web_surface_followup_commands: 0 # 0/unlimited = do not truncate browser/crawl commands
+  web_path_followup_commands: 0 # 0/unlimited = follow all interesting discovered paths
+  web_link_followup_commands: 0 # 0/unlimited = follow all normalized discovered links
+  web_link_url_limit: 0 # 0/unlimited = normalize links across all discovered endpoints
+  exploit_select_context_facts: 0 # 0/unlimited = attach all recon facts to exploit_select
   parallel_tools: 8          # max concurrent tool executions
   max_director_loops: 10     # max Director AI loops
 

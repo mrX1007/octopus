@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
 import os
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
-from core.transport.base import GoTLSTransport, PythonTransport, TrafficPolicy, Transport
+from core.transport.base import GoTLSTransport, PythonTransport, Transport
 from core.transport.profiles import get_profile
 
 

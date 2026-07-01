@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 
 import fnmatch
+import hashlib
 import ipaddress
+import json
 import logging
 import re
 import time
 from typing import Dict, Any, List
+from urllib.parse import urljoin, urlparse, urlunparse
 
 from core.ai.fact_store import FactStore
 from core.ai.state_resolver import StateResolver
 from core.ai.context_builder import ContextBuilder
 from core.ai.director import DirectorLLM
+from core.ai.command_scheduler import CommandScheduler
+from core.ai.policy import DeterministicPolicy
+from core.ai.trace_report import TraceReporter
 from core.ai.planner import MissionPlanner
 from core.ai.tool_registry import ToolRegistry
 from core.ai.evidence import OutputParser, EvidenceVerifier
@@ -31,10 +37,13 @@ class AIPipeline:
         self.state_resolver = StateResolver(self.fact_store)
         self.context_builder = ContextBuilder(self.fact_store, self.state_resolver)
         self.director = DirectorLLM()
+        self.command_scheduler = CommandScheduler()
+        self.policy = DeterministicPolicy()
         self.planner = MissionPlanner()
         self.tool_registry = ToolRegistry()
         self.output_parser = OutputParser()
         self.evidence_verifier = EvidenceVerifier(self.fact_store)
+        self.trace_reporter = TraceReporter(self.fact_store)
 
         self.discovery_agent = DiscoveryAgent(self.tool_registry)
         self.analysis_agent = AnalysisAgent(self.fact_store, self.context_builder)
@@ -63,13 +72,20 @@ class AIPipeline:
         self.executed_active_commands = set()
         self.executed_post_access_commands = set()
         self.executed_fact_action_commands = set()
+        self.executed_command_keys = set()
+        self.service_intelligence_evidence_seen = set()
+        self.command_trace = []
+        self.goal_trace = []
 
         # LLM health tracking
         self.consecutive_llm_failures = 0
 
-    def run_scan(self, scan_id: str, target: str, max_iterations: int = 20, max_tools: int = 50, max_time_minutes: int = 15, raw_scan: str = ""):
+    def run_scan(self, scan_id: str, target: str, max_iterations: int = 0, max_tools: int = 0, max_time_minutes: int = 0, raw_scan: str = ""):
         print(f"\n[*] Starting AI Pipeline for target: {target} (Scan ID: {scan_id})")
         self._reset_runtime_state()
+        max_iterations = self._runtime_limit(max_iterations)
+        max_tools = self._runtime_limit(max_tools)
+        max_time_minutes = self._runtime_limit(max_time_minutes)
 
         # Parse initial raw scan if provided
         if raw_scan:
@@ -77,14 +93,10 @@ class AIPipeline:
             facts = self.output_parser.parse_tool_output("manual_recon", raw_scan)
             seeded = 0
             for f in facts:
-                _fid, created = self.fact_store.add_fact_with_status(
-                    scan_id, target, f['type'], f['value'], "manual_run",
-                    confidence=f.get('confidence', 100),
-                    session_id=f.get('session_id', 'none')
-                )
-                if created:
+                stored = self._store_fact(scan_id, target, f, "manual_run")
+                if stored["created"]:
                     seeded += 1
-                    self.total_new_facts += 1
+                    self.total_new_facts += stored["new_facts"]
                     print(f"    [+] Seeded: {f['type']} -> {f['value']} (conf={f.get('confidence', 100)})")
             self._sync_runtime_credentials_from_facts(target, facts)
             print(f"[*] Seeded {seeded} facts from manual tool output.")
@@ -130,13 +142,14 @@ class AIPipeline:
                 f"{startup_actions['new_facts']} new fact(s)."
             )
 
-        for loop in range(1, max_iterations + 1):
+        loop = 1
+        while max_iterations is None or loop <= max_iterations:
             # Budget Checks
             elapsed_minutes = (time.time() - self.scan_start_time) / 60
-            if elapsed_minutes >= max_time_minutes:
+            if max_time_minutes is not None and elapsed_minutes >= max_time_minutes:
                 print(f"[!] BUDGET EXCEEDED: Max time reached ({max_time_minutes} mins). Terminating.")
                 break
-            if self.tools_run_count >= max_tools:
+            if max_tools is not None and self.tools_run_count >= max_tools:
                 print(f"[!] BUDGET EXCEEDED: Max tools run ({max_tools}). Terminating.")
                 break
 
@@ -145,7 +158,8 @@ class AIPipeline:
                 print(f"\n[!] LLM DEAD: {self.consecutive_llm_failures} consecutive failures. Running on fallback only.")
                 print(f"    Check: ollama ps / ollama logs / ollama restart")
 
-            print(f"\n{'='*50}\n[LOOP {loop}/{max_iterations}]")
+            loop_label = str(max_iterations) if max_iterations is not None else "unlimited"
+            print(f"\n{'='*50}\n[LOOP {loop}/{loop_label}]")
 
             # 1. State Resolution & Context Building
             state = self.state_resolver.resolve_state(scan_id, target)
@@ -157,6 +171,7 @@ class AIPipeline:
             director_res = self.director.decide_goal(context, self.goal_history)
             goal = director_res.get("goal", "conclude")
             thought = director_res.get("thought", "")
+            self._record_goal_trace(loop, context, director_res)
 
             print(f"[*] Director Goal: {goal}")
             print(f"    Thought: {thought}")
@@ -192,6 +207,7 @@ class AIPipeline:
             if all_skipped:
                 print(f"[!] All tasks in plan already completed/blocked. Goal '{goal}' exhausted.")
                 # Don't break — let the Director pick the next goal
+                loop += 1
                 continue
 
             # 4. Agent Execution
@@ -308,12 +324,78 @@ class AIPipeline:
             # If this loop produced zero new facts, note it
             if new_facts_this_loop == 0:
                 print(f"[*] Loop {loop} produced 0 new facts.")
+            loop += 1
 
         elapsed = time.time() - self.scan_start_time
         print(f"\n[*] Pipeline finished for {target}. ({self.tools_run_count} tools run, {elapsed:.0f}s elapsed)")
         print(f"[*] LLM failures: {self.consecutive_llm_failures} consecutive, completed tasks: {sorted(self.completed_tasks)}")
         self._print_efficiency_report(scan_id, target, elapsed)
         return self.state_resolver.resolve_state(scan_id, target)
+
+    def replay_outputs(self, scan_id: str, target: str, outputs: List[Dict[str, str]]) -> Dict[str, Any]:
+        """Replay saved raw tool outputs through the parser and fact bus.
+
+        Each entry is {"tool": "...", "output": "..."} or
+        {"command": "...", "raw_output": "..."}.
+        """
+        stored = 0
+        parsed = 0
+        for entry in outputs or []:
+            tool = entry.get("tool") or entry.get("command") or "replay"
+            raw_output = entry.get("output") or entry.get("raw_output") or ""
+            facts = self.output_parser.parse_tool_output(tool, raw_output)
+            parsed += len(facts)
+            for fact in facts:
+                result = self._store_fact(scan_id, target, fact, f"replay:{tool}")
+                stored += result["new_facts"]
+        context = self.context_builder.build_context(scan_id, target)
+        return {
+            "parsed_facts": parsed,
+            "new_facts": stored,
+            "context": context,
+            "snapshot_actions": self.snapshot_actions(scan_id, target),
+        }
+
+    def snapshot_actions(self, scan_id: str, target: str) -> List[Dict[str, str]]:
+        """Return the deterministic next actions without executing them."""
+        facts = self.fact_store.get_facts(scan_id, target)
+        executed_fact_actions = set(self.executed_fact_action_commands)
+        service_evidence_seen = set(self.service_intelligence_evidence_seen)
+        try:
+            commands = self._fact_driven_action_commands(scan_id, target, facts)
+        finally:
+            self.executed_fact_action_commands = executed_fact_actions
+            self.service_intelligence_evidence_seen = service_evidence_seen
+        decisions = []
+        all_facts = self.fact_store.get_facts(scan_id, target)
+        for command in commands:
+            decision = self.command_scheduler.decide(command, all_facts, self.executed_command_keys)
+            decisions.append(decision.to_dict())
+        return decisions
+
+    def trace_report(self, scan_id: str, target: str) -> Dict[str, Any]:
+        context = self.context_builder.build_context(scan_id, target)
+        return self.trace_reporter.build(
+            scan_id,
+            target,
+            goal_trace=self.goal_trace,
+            command_trace=self.command_trace,
+            context=context,
+        )
+
+    def trace_report_text(self, scan_id: str, target: str) -> str:
+        return self.trace_reporter.to_text(self.trace_report(scan_id, target))
+
+    def _runtime_limit(self, value):
+        if value is None:
+            return None
+        if isinstance(value, str) and value.strip().lower() in {"", "0", "-1", "none", "unlimited", "false"}:
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return None
+        return None if parsed <= 0 else parsed
 
     def _normalize_plan(self, plan, goal: str = ""):
         """Normalize LLM task names before execution and history tracking."""
@@ -372,20 +454,30 @@ class AIPipeline:
 
         return self._enrich_plan(optimized, goal, context)
 
+
     def _post_exploit_plan(self, goal: str, state: str):
         post_states = {"root_access_confirmed", "persistence_established", "internal_recon_completed", "exfiltration_completed"}
         if goal == "post_access_inventory" and state in post_states:
             return [{"agent": "VerificationAgent", "task": "post_access_inventory"}]
         if goal == "persistence" and state in post_states:
-            return [
-                {"agent": "VerificationAgent", "task": "payload_generation"},
-                {"agent": "VerificationAgent", "task": "establish_persistence"},
-            ]
+            if not self._strategy_enabled("auto_persistence", False):
+                return []
+            plan = []
+            if self._strategy_enabled("auto_payload_generation", False):
+                plan.append({"agent": "VerificationAgent", "task": "payload_generation"})
+            plan.append({"agent": "VerificationAgent", "task": "establish_persistence"})
+            return plan
         if goal == "internal_reconnaissance" and state in post_states:
+            if not self._strategy_enabled("auto_internal_recon", True):
+                return []
             return [{"agent": "VerificationAgent", "task": "internal_network_recon"}]
         if goal == "data_exfiltration" and state in post_states:
+            if not self._strategy_enabled("auto_data_exfil", False):
+                return []
             return [{"agent": "VerificationAgent", "task": "exfiltrate_data"}]
         if goal == "cleanup" and state in post_states:
+            if not self._strategy_enabled("auto_cleanup", False):
+                return []
             return [{"agent": "VerificationAgent", "task": "stealth_cleanup"}]
         return None
 
@@ -397,24 +489,39 @@ class AIPipeline:
         """Add one high-value context-specific task when the plan has room."""
         services = set(context.get("services") or [])
         open_questions = set(context.get("open_questions") or [])
+        target_model = context.get("target_model") or {}
+        surface_states = target_model.get("surface_states") or context.get("surface_states") or {}
+        assets = target_model.get("assets") or {}
         candidates = []
         critical_candidates = set()
         if goal == "vulnerability_assessment":
+            if surface_states.get("asm") != "confirmed_present" and self._target_looks_domain(context.get("host", "")):
+                candidates.append("asm_discovery")
             if "cpanel_auth_bypass_unknown" in open_questions:
                 candidates.append("cpanel_assessment")
                 critical_candidates.add("cpanel_assessment")
             if services.intersection({"http", "https"}):
                 candidates.append("web_application_mapping")
+                candidates.append("web_app_deep_testing")
+                candidates.append("template_verification")
                 candidates.append("web_vulnerability_testing")
+                if surface_states.get("api") != "confirmed_absent":
+                    candidates.append("api_security_testing")
             if "https" in services:
                 candidates.append("transport_security_assessment")
             if "smb" in services:
                 candidates.append("windows_enumeration")
             if services.intersection({"ldap", "kerberos", "winrm", "rdp"}):
                 candidates.append("active_directory_enumeration")
+                candidates.append("ad_security_review")
+            if assets.get("urls") and surface_states.get("web") == "confirmed_present":
+                candidates.append("template_verification")
+            if surface_states.get("cloud") == "unknown" and assets.get("domains"):
+                candidates.append("cloud_security_assessment")
         elif goal == "credential_harvesting":
             if services.intersection({"ldap", "kerberos", "winrm", "rdp", "smb"}):
                 candidates.append("active_directory_enumeration")
+                candidates.append("kerberos_assessment")
             if "web_credentials_unknown" in context.get("open_questions", []):
                 candidates.append("web_credential_testing")
             if "ssh" in services:
@@ -427,10 +534,22 @@ class AIPipeline:
 
         present = {step.get("task") for step in plan}
         enriched = list(plan)
+        short_specialized_vuln_plan = (
+            goal == "vulnerability_assessment"
+            and len(plan) <= 3
+            and "cpanel_assessment" in candidates
+        )
         for task in candidates:
             task = self.tool_registry.canonical_task(task)
+            if short_specialized_vuln_plan and "cpanel_assessment" in present and task in {
+                "web_vulnerability_testing",
+                "web_app_deep_testing",
+                "template_verification",
+                "api_security_testing",
+            }:
+                continue
             is_critical = task in critical_candidates
-            if len(enriched) >= 3 and not is_critical:
+            if len(enriched) >= self._plan_enrichment_limit() and not is_critical:
                 break
             if task in present or self._task_exhausted(task):
                 continue
@@ -443,10 +562,28 @@ class AIPipeline:
             enriched.insert(insert_at, {"agent": "DiscoveryAgent", "task": task})
             present.add(task)
             print(f"[*] Plan enriched with {task} from context services={sorted(services)}")
-            if len(enriched) > 3:
+            if short_specialized_vuln_plan and task == "cpanel_assessment":
+                self._trim_low_priority_enrichment(enriched, protected={task})
+            elif len(enriched) > self._plan_enrichment_limit():
                 self._trim_low_priority_enrichment(enriched, protected={task})
 
-        return enriched
+        return self.policy.validate_plan(enriched, context)
+
+    def _plan_enrichment_limit(self) -> int:
+        try:
+            from config import CFG
+        except ImportError:
+            CFG = {}
+        raw = (CFG.get("strategy") or {}).get("plan_enrichment_limit", 8)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return 8
+        return max(3, value)
+
+    def _target_looks_domain(self, target: str) -> bool:
+        host = (target or "").strip().split("://")[-1].split("/", 1)[0].split(":", 1)[0]
+        return bool(re.search(r"[A-Za-z]", host) and "." in host)
 
     def _trim_low_priority_enrichment(self, plan: List[Dict[str, Any]], protected: set) -> None:
         """Keep plans short while preserving critical context-specific checks."""
@@ -540,49 +677,292 @@ class AIPipeline:
 
     def _execute_pipeline_command(self, scan_id: str, target: str, cmd: str,
                                   fact_label: str, prefix: str) -> Dict[str, Any]:
+        decision = self.command_scheduler.decide(
+            cmd,
+            self.fact_store.get_facts(scan_id, target),
+            self.executed_command_keys,
+        )
+        if decision.action == "skip":
+            print(f"     [Skipped] {cmd} ({decision.reason})")
+            self._record_command_trace(decision.to_dict(), None)
+            return self._skipped_command_result(cmd, decision.reason)
+
+        self.executed_command_keys.add(decision.key)
         print(f"     {prefix} {cmd}")
         output = run_arbitrary_cmd(cmd)
         self.tools_run_count += 1
         if cmd.startswith("ssh_inventory "):
             self.executed_post_access_commands.add(cmd)
         output_str = self._output_text(output)
+        output_hash = self._output_fingerprint(output_str)
         failed = self._command_failed(output, output_str)
         facts = self.output_parser.parse_tool_output(cmd, output_str)
+        stored_facts = list(facts)
         command_new_facts = 0
 
         for f in facts:
-            _fact_id, created = self.fact_store.add_fact_with_status(
-                scan_id, target, f['type'], f['value'], cmd,
-                confidence=f.get('confidence', 100),
-                session_id=f.get('session_id', 'none')
-            )
-            if created:
+            stored = self._store_fact(scan_id, target, f, cmd)
+            stored_facts.extend(stored["derived_facts"])
+            if stored["created"]:
                 print(f"     [+] {fact_label}: {f['type']} -> {f['value']}")
-                command_new_facts += 1
+            command_new_facts += stored["new_facts"]
         self._sync_runtime_credentials_from_facts(target, facts)
+        _result_id, unique_output = self.fact_store.add_command_result(
+            scan_id=scan_id,
+            host=target,
+            command_key=decision.key,
+            command=cmd,
+            output_hash=output_hash,
+            output_bytes=len(output_str.encode("utf-8", "ignore")),
+            parsed_facts=len(facts),
+            new_facts=command_new_facts,
+            failed=failed,
+        )
 
-        return {
-            "facts": facts,
+        result = {
+            "facts": stored_facts,
             "new_facts": command_new_facts,
             "parsed_facts": len(facts),
             "command_result": {
                 "command": cmd,
                 "failed": failed,
+                "output_hash": output_hash,
+                "duplicate_output": not unique_output,
                 "parsed_facts": len(facts),
                 "new_facts": command_new_facts,
                 "fact_pairs": [(fact.get("type"), fact.get("value")) for fact in facts],
             },
         }
+        self._record_command_trace(decision.to_dict(), result["command_result"])
+        return result
+
+    def _skipped_command_result(self, cmd: str, reason: str) -> Dict[str, Any]:
+        return {
+            "facts": [],
+            "new_facts": 0,
+            "parsed_facts": 0,
+            "command_result": {
+                "command": cmd,
+                "failed": False,
+                "skipped": True,
+                "skip_reason": reason,
+                "parsed_facts": 0,
+                "new_facts": 0,
+                "fact_pairs": [],
+            },
+        }
+
+    def _output_fingerprint(self, output: str) -> str:
+        normalized = re.sub(r"\s+", " ", output or "").strip()
+        return hashlib.sha256(normalized.encode("utf-8", "ignore")).hexdigest()
+
+    def _store_fact(self, scan_id: str, target: str, fact: Dict[str, Any], source: str) -> Dict[str, Any]:
+        """Store a parsed fact plus normalized derived facts.
+
+        The canonical fact remains deduplicated; repeated sightings are kept by
+        FactStore as observations. Derived facts give later stages stable
+        endpoint and graph objects instead of reparsing free-form strings.
+        """
+        fact = self._scope_normalized_fact(target, fact)
+        _fact_id, created = self.fact_store.add_fact_with_status(
+            scan_id, target, fact["type"], fact["value"], source,
+            confidence=fact.get("confidence", 100),
+            session_id=fact.get("session_id", "none"),
+        )
+        new_facts = 1 if created else 0
+        derived_facts = self._derived_facts_from_fact(target, fact, source)
+        for derived in derived_facts:
+            _derived_id, derived_created = self.fact_store.add_fact_with_status(
+                scan_id, target, derived["type"], derived["value"], f"derived:{source}",
+                confidence=derived.get("confidence", fact.get("confidence", 80)),
+                session_id=fact.get("session_id", "none"),
+                derived_from=[_fact_id],
+            )
+            if derived_created:
+                new_facts += 1
+        return {
+            "created": created,
+            "new_facts": new_facts,
+            "derived_facts": derived_facts,
+        }
+
+    def _scope_normalized_fact(self, target: str, fact: Dict[str, Any]) -> Dict[str, Any]:
+        """Prevent external links from becoming in-scope web endpoints.
+
+        Browser/crawler outputs often include vendor/documentation links. They
+        are useful context, but they must not enter the target endpoint graph or
+        drive follow-up tools unless they are the target host or a subdomain of
+        the target domain.
+        """
+        ftype = str(fact.get("type", "")).strip().lower()
+        if ftype not in {"web_endpoint", "web_link", "web_redirect", "browser_rendered"}:
+            return fact
+        endpoint = self._endpoint_url_from_value(str(fact.get("value", "")))
+        if not endpoint or self._endpoint_in_target_scope(endpoint, target):
+            return fact
+        normalized = dict(fact)
+        normalized["type"] = "external_url"
+        normalized["value"] = endpoint
+        normalized["confidence"] = min(int(normalized.get("confidence", 60) or 60), 70)
+        return normalized
+
+    def _derived_facts_from_fact(self, target: str, fact: Dict[str, Any], source: str) -> List[Dict[str, Any]]:
+        ftype = str(fact.get("type", "")).lower()
+        value = str(fact.get("value", "")).strip()
+        derived = []
+
+        endpoint = ""
+        if ftype == "port_open":
+            endpoint = self._endpoint_from_port_fact(target, value)
+        elif ftype == "browser_rendered":
+            endpoint = self._canonical_endpoint_value(value)
+        elif ftype in {
+            "web_title", "web_server", "web_surface", "web_link",
+            "web_redirect", "web_powered_by", "web_input",
+        }:
+            endpoint = self._endpoint_from_command_source(source)
+        if endpoint:
+            derived.append({"type": "web_endpoint", "value": endpoint, "confidence": 90})
+
+        graph_facts = self._network_graph_facts(target, ftype, value)
+        derived.extend(graph_facts)
+        return derived
+
+    def _endpoint_from_port_fact(self, target: str, value: str) -> str:
+        match = re.match(r"(\d+)/(?:tcp|udp)\s+\(([^)]*)\)(?:\s+\[(.*?)\])?", value.lower())
+        if not match:
+            return ""
+        port, service, banner = match.groups()
+        text = f"{service or ''} {banner or ''}"
+        if not self._service_fact_looks_web(service, text):
+            return ""
+        scheme = "https" if self._service_fact_looks_tls(text) else "http"
+        host = self._target_host(target)
+        if not host:
+            return ""
+        if (scheme == "http" and port == "80") or (scheme == "https" and port == "443"):
+            url = f"{scheme}://{host}/"
+        else:
+            url = f"{scheme}://{host}:{port}/"
+        return self._canonical_endpoint_value(url, service=service, port=port)
+
+    def _endpoint_from_command_source(self, source: str) -> str:
+        match = re.search(r'\bhttps?://[^\s]+', source or "", re.IGNORECASE)
+        if not match:
+            return ""
+        return self._canonical_endpoint_value(match.group(0))
+
+    def _canonical_endpoint_value(self, url: str, service: str = "", port: str = "") -> str:
+        raw = (url or "").strip()
+        if not raw:
+            return ""
+        if not re.match(r"^https?://", raw, re.IGNORECASE):
+            raw = f"http://{raw}"
+        parsed = urlparse(raw)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return ""
+        parsed_port = parsed.port
+        if parsed_port is None:
+            parsed_port = 443 if parsed.scheme.lower() == "https" else 80
+        path = parsed.path or "/"
+        netloc = parsed.hostname.lower()
+        if not ((parsed.scheme.lower() == "http" and parsed_port == 80)
+                or (parsed.scheme.lower() == "https" and parsed_port == 443)):
+            netloc = f"{netloc}:{parsed_port}"
+        canonical_url = urlunparse((
+            parsed.scheme.lower(), netloc, path, "", parsed.query, "",
+        ))
+        return json.dumps({
+            "url": canonical_url,
+            "scheme": parsed.scheme.lower(),
+            "host": parsed.hostname.lower(),
+            "port": str(port or parsed_port),
+            "path": path,
+            "service": service or "",
+            "status": "",
+            "title": "",
+        }, sort_keys=True)
+
+    def _network_graph_facts(self, target: str, ftype: str, value: str) -> List[Dict[str, Any]]:
+        host = self._target_host(target)
+        if not host:
+            return []
+        facts = []
+        if ftype == "internal_host":
+            facts.append({
+                "type": "network_node",
+                "value": json.dumps({"kind": "host", "id": value}, sort_keys=True),
+                "confidence": 85,
+            })
+            facts.append({
+                "type": "network_edge",
+                "value": json.dumps({
+                    "from": host, "to": value, "type": "observed_internal_host",
+                }, sort_keys=True),
+                "confidence": 85,
+            })
+        elif ftype == "internal_subnet":
+            subnet_ip = value.split("/", 1)[0]
+            interface_id = f"{host}:iface:{subnet_ip}"
+            facts.append({
+                "type": "network_node",
+                "value": json.dumps({"kind": "interface", "id": interface_id, "host": host, "address": subnet_ip, "subnet": value}, sort_keys=True),
+                "confidence": 85,
+            })
+            facts.append({
+                "type": "network_node",
+                "value": json.dumps({"kind": "subnet", "id": value}, sort_keys=True),
+                "confidence": 85,
+            })
+            facts.append({
+                "type": "network_edge",
+                "value": json.dumps({
+                    "from": host, "to": interface_id, "type": "has_interface",
+                }, sort_keys=True),
+                "confidence": 85,
+            })
+            facts.append({
+                "type": "network_edge",
+                "value": json.dumps({
+                    "from": interface_id, "to": value, "type": "attached_to_subnet",
+                }, sort_keys=True),
+                "confidence": 85,
+            })
+            facts.append({
+                "type": "network_edge",
+                "value": json.dumps({
+                    "from": host, "to": value, "type": "attached_subnet",
+                }, sort_keys=True),
+                "confidence": 85,
+            })
+        elif ftype == "port_open":
+            match = re.match(r"(\d+)/(tcp|udp)\s+\(([^)]*)\)", value.lower())
+            if match:
+                port, proto, service = match.groups()
+                facts.append({
+                    "type": "network_node",
+                    "value": json.dumps({"kind": "service", "host": host, "port": port, "proto": proto, "service": service}, sort_keys=True),
+                    "confidence": 85,
+                })
+                facts.append({
+                    "type": "network_edge",
+                    "value": json.dumps({"from": host, "to": f"{host}:{port}/{proto}", "type": "listens_on"}, sort_keys=True),
+                    "confidence": 85,
+                })
+        return facts
 
     def _followup_commands_from_facts(self, facts: List[Dict[str, Any]]) -> List[str]:
         """Run safe verification commands emitted by earlier tools once."""
         commands = []
         allowed_prefixes = ("msf_check ", "searchsploit ", "plugin ")
+        limit = self._strategy_limit("verification_followup_commands", None)
         for fact in facts:
             if fact.get("type") != "verification_command":
                 continue
             cmd = str(fact.get("value", "")).strip()
             if not cmd or not cmd.startswith(allowed_prefixes):
+                continue
+            if cmd.startswith("msf_check ") and not self.tool_registry._is_tool_available("msf_check"):
                 continue
             if cmd.startswith("plugin ") and not any(token in cmd for token in (" scan", " check", " list")):
                 continue
@@ -590,34 +970,137 @@ class AIPipeline:
                 continue
             self.executed_followup_commands.add(cmd)
             commands.append(cmd)
-            if len(commands) >= 3:
+            if limit is not None and len(commands) >= limit:
                 break
         return commands
 
     def _run_fact_driven_actions(
         self, scan_id: str, target: str, facts: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
-        """Run deterministic next actions implied by concrete facts."""
+        """Run deterministic next actions implied by concrete facts.
+
+        New facts are fed back into the selector for a bounded number of layers
+        so crawl, inventory, and verification outputs can naturally drive the
+        next concrete step without waiting for another Director loop.
+        """
         parsed_facts = 0
         new_facts = 0
         command_results = []
-        for cmd in self._fact_driven_action_commands(scan_id, target, facts):
-            result = self._execute_pipeline_command(
-                scan_id, target, cmd, "Action Fact", "[Running Action]"
-            )
-            parsed_facts += result["parsed_facts"]
-            new_facts += result["new_facts"]
-            command_results.append(result["command_result"])
 
-            post_result = self._run_controlled_post_access_followups(scan_id, target, result["facts"])
-            parsed_facts += post_result["parsed_facts"]
-            new_facts += post_result["new_facts"]
-            command_results.extend(post_result["commands"])
+        max_depth = self._fact_action_max_depth()
+        max_commands = self._fact_action_max_commands()
+        commands_started = 0
+        pending_batches = [(0, facts or [])]
+
+        def enqueue_result(result: Dict[str, Any], depth: int) -> None:
+            if max_depth is not None and depth >= max_depth:
+                return
+            if result.get("new_facts", 0) <= 0:
+                return
+            result_facts = result.get("facts") or []
+            if result_facts:
+                pending_batches.append((depth + 1, result_facts))
+
+        while pending_batches and (max_commands is None or commands_started < max_commands):
+            depth, batch_facts = pending_batches.pop(0)
+            if (max_depth is not None and depth > max_depth) or not batch_facts:
+                continue
+
+            for cmd in self._fact_driven_action_commands(scan_id, target, batch_facts):
+                if max_commands is not None and commands_started >= max_commands:
+                    break
+                result = self._execute_pipeline_command(
+                    scan_id, target, cmd, "Action Fact", "[Running Action]"
+                )
+                commands_started += 1
+                parsed_facts += result["parsed_facts"]
+                new_facts += result["new_facts"]
+                command_results.append(result["command_result"])
+                enqueue_result(result, depth)
+                active_candidates = self._active_commands_from_facts(result["facts"])
+
+                post_result = self._run_controlled_post_access_followups(scan_id, target, result["facts"])
+                parsed_facts += post_result["parsed_facts"]
+                new_facts += post_result["new_facts"]
+                command_results.extend(post_result["commands"])
+                if post_result.get("commands"):
+                    commands_started += len(post_result["commands"])
+                enqueue_result(post_result, depth)
+
+                for followup_cmd in self._followup_commands_from_facts(result["facts"]):
+                    if max_commands is not None and commands_started >= max_commands:
+                        break
+                    follow_result = self._execute_pipeline_command(
+                        scan_id, target, followup_cmd, "Verified Fact", "[Running Follow-up]"
+                    )
+                    commands_started += 1
+                    parsed_facts += follow_result["parsed_facts"]
+                    new_facts += follow_result["new_facts"]
+                    command_results.append(follow_result["command_result"])
+                    enqueue_result(follow_result, depth)
+
+                    post_result = self._run_controlled_post_access_followups(scan_id, target, follow_result["facts"])
+                    parsed_facts += post_result["parsed_facts"]
+                    new_facts += post_result["new_facts"]
+                    command_results.extend(post_result["commands"])
+                    if post_result.get("commands"):
+                        commands_started += len(post_result["commands"])
+                    enqueue_result(post_result, depth)
+
+                    for active_cmd in self._active_followups_after_verification(
+                        target, active_candidates, follow_result["facts"]
+                    ):
+                        if max_commands is not None and commands_started >= max_commands:
+                            break
+                        active_result = self._execute_pipeline_command(
+                            scan_id, target, active_cmd, "Active Fact", "[Running Active]"
+                        )
+                        commands_started += 1
+                        parsed_facts += active_result["parsed_facts"]
+                        new_facts += active_result["new_facts"]
+                        command_results.append(active_result["command_result"])
+                        enqueue_result(active_result, depth)
+
+                        post_result = self._run_controlled_post_access_followups(scan_id, target, active_result["facts"])
+                        parsed_facts += post_result["parsed_facts"]
+                        new_facts += post_result["new_facts"]
+                        command_results.extend(post_result["commands"])
+                        if post_result.get("commands"):
+                            commands_started += len(post_result["commands"])
+                        enqueue_result(post_result, depth)
         return {
             "parsed_facts": parsed_facts,
             "new_facts": new_facts,
             "commands": command_results,
         }
+
+    def _fact_action_max_depth(self):
+        try:
+            from config import CFG
+        except ImportError:
+            CFG = {}
+        raw = CFG.get("strategy", {}).get("fact_action_max_depth", 0)
+        if str(raw).strip().lower() in {"", "0", "-1", "none", "unlimited", "false"}:
+            return None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return None if value <= 0 else max(1, value)
+
+    def _fact_action_max_commands(self):
+        try:
+            from config import CFG
+        except ImportError:
+            CFG = {}
+        raw = CFG.get("strategy", {}).get("fact_action_max_commands", 0)
+        if str(raw).strip().lower() in {"", "0", "-1", "none", "unlimited", "false"}:
+            return None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return None if value <= 0 else max(1, value)
 
     def _fact_driven_action_commands(
         self, scan_id: str, target: str, facts: List[Dict[str, Any]]
@@ -630,14 +1113,23 @@ class AIPipeline:
             for fact in all_facts
         }
 
-        if self._facts_include_cached_ssh_credential(facts) and not self._facts_confirm_ssh_access(all_facts):
-            commands.append(f"ssh_session {target}")
+        inventory_seen = self._post_access_inventory_seen(all_pairs)
+        ssh_creds_available = self._facts_include_cached_ssh_credential(facts)
+        ssh_access_confirmed = (
+            self._facts_confirm_ssh_access(facts)
+            or self._facts_confirm_ssh_access(all_facts)
+        )
+        if self._auto_ssh_inventory_enabled() and not inventory_seen and (ssh_creds_available or ssh_access_confirmed):
+            commands.append(f"ssh_inventory {target}")
 
         if self._facts_indicate_cpanel_surface(facts) and not self._cpanel_already_verified(all_pairs):
             commands.append(f"plugin cpanel_auth_bypass {target} scan")
 
+        commands.extend(self._service_intelligence_commands(scan_id, target, facts, all_pairs))
         commands.extend(self._service_action_commands(target, facts, all_pairs))
         commands.extend(self._web_path_action_commands(scan_id, target, facts))
+        commands.extend(self._web_link_action_commands(scan_id, target, facts))
+        commands.extend(self._web_surface_action_commands(scan_id, target, facts, all_pairs))
 
         deduped = []
         for cmd in commands:
@@ -646,7 +1138,8 @@ class AIPipeline:
                 continue
             self.executed_fact_action_commands.add(cmd)
             deduped.append(cmd)
-            if len(deduped) >= 10:
+            batch_limit = self._strategy_limit("fact_action_batch_commands", None)
+            if batch_limit is not None and len(deduped) >= batch_limit:
                 break
         return deduped
 
@@ -657,7 +1150,170 @@ class AIPipeline:
             value = str(fact.get("value", "")).strip()
             if value.startswith("ssh_key_available:"):
                 return True
+            if value.startswith("ssh_login_success:"):
+                return True
             if re.match(r"[^:\s]+:[^\s]+\s+\(cached\)", value):
+                return True
+        return False
+
+    def _service_intelligence_commands(
+        self, scan_id: str, target: str, facts: List[Dict[str, Any]], all_pairs: set
+    ) -> List[str]:
+        """Run version-to-exploit intelligence for newly observed services."""
+        evidence_keys = [
+            key for key in (
+                self._service_intelligence_evidence_key(fact)
+                for fact in facts
+            )
+            if key
+        ]
+        new_evidence = [
+            key for key in evidence_keys
+            if key not in self.service_intelligence_evidence_seen
+        ]
+        if not new_evidence:
+            return []
+        self.service_intelligence_evidence_seen.update(new_evidence)
+
+        commands = []
+        commands.append(f"exploit_select {target}")
+
+        for query in self._searchsploit_queries_from_facts(facts):
+            if self._searchsploit_query_seen(all_pairs, query):
+                continue
+            if not self.tool_registry._is_tool_available("searchsploit"):
+                continue
+            commands.append(f"searchsploit {query}")
+            query_limit = self._strategy_limit("searchsploit_followup_queries", None)
+            if query_limit is not None and len(commands) >= query_limit:
+                break
+
+        return commands
+
+    def _service_intelligence_evidence_key(self, fact: Dict[str, Any]) -> str:
+        ftype = str(fact.get("type", "")).lower()
+        value = str(fact.get("value", "")).strip().lower()
+        service_types = {
+            "port_open", "service_version", "web_server", "web_powered_by",
+            "app_stack", "browser_rendered", "local_listening_port",
+            "web_title", "web_surface", "web_input", "web_link",
+            "web_endpoint", "web_root", "app_manifest", "config_candidate",
+        }
+        if ftype not in service_types or not value:
+            return ""
+        if ftype == "web_link" and not self._web_link_looks_interesting(value):
+            return ""
+        return f"{ftype}:{value[:220]}"
+
+    def _facts_include_service_evidence(self, facts: List[Dict[str, Any]]) -> bool:
+        service_types = {
+            "port_open", "service_version", "web_server", "web_powered_by",
+            "app_stack", "browser_rendered", "local_listening_port",
+            "web_title", "web_surface", "web_input", "web_link",
+            "web_endpoint", "web_root", "app_manifest", "config_candidate",
+        }
+        return any(str(fact.get("type", "")).lower() in service_types for fact in facts)
+
+    def _searchsploit_query_seen(self, fact_pairs: set, query: str) -> bool:
+        normalized = self._normalize_query_token(query)
+        return any(
+            ftype == "service_status" and value == f"searchsploit_queried:{normalized}"
+            for ftype, value in fact_pairs
+        )
+
+    def _searchsploit_queries_from_facts(self, facts: List[Dict[str, Any]]) -> List[str]:
+        queries = []
+        for fact in facts:
+            ftype = str(fact.get("type", "")).lower()
+            value = str(fact.get("value", "")).strip()
+            query = ""
+            if ftype == "service_version":
+                parts = value.split(":", 2)
+                if len(parts) == 3:
+                    service, _port, version = parts
+                    query = f"{service} {version}"
+                else:
+                    query = value
+            elif ftype == "port_open":
+                match = re.match(r"\d+/(?:tcp|udp)\s+\(([^)]*)\)(?:\s+\[(.*?)\])?", value, re.IGNORECASE)
+                if match:
+                    service, version = match.groups()
+                    query = f"{service} {version or ''}".strip()
+            elif ftype == "web_server":
+                query = value
+            elif ftype == "app_stack":
+                query = value
+            elif ftype == "local_listening_port":
+                query = self._service_name_for_common_port(value)
+            elif ftype == "web_title":
+                lowered = value.lower()
+                if "nginx" in lowered:
+                    query = "nginx"
+                elif "apache" in lowered:
+                    query = "apache"
+                elif "wordpress" in lowered:
+                    query = "wordpress"
+            elif ftype == "app_manifest":
+                query = self._query_from_manifest_path(value)
+            elif ftype == "config_candidate":
+                query = self._query_from_config_path(value)
+            query = self._sanitize_searchsploit_query(query)
+            if query and query not in queries:
+                queries.append(query)
+        return queries
+
+    def _service_name_for_common_port(self, port: str) -> str:
+        mapping = {
+            "21": "ftp", "22": "openssh", "25": "smtp", "53": "dns",
+            "80": "http", "110": "pop3", "143": "imap", "443": "https",
+            "445": "smb", "587": "smtp", "993": "imap", "995": "pop3",
+            "3000": "node express", "3306": "mysql", "5432": "postgresql",
+            "6379": "redis", "8000": "http", "8080": "http",
+            "8443": "https", "9000": "http", "9200": "elasticsearch",
+            "27017": "mongodb",
+        }
+        return mapping.get(str(port).strip(), "")
+
+    def _query_from_manifest_path(self, path: str) -> str:
+        name = (path or "").rsplit("/", 1)[-1].lower()
+        mapping = {
+            "package.json": "nodejs",
+            "composer.json": "php",
+            "requirements.txt": "python",
+            "pyproject.toml": "python",
+            "go.mod": "golang",
+            "gemfile": "ruby",
+            "pom.xml": "java",
+        }
+        return mapping.get(name, "")
+
+    def _query_from_config_path(self, path: str) -> str:
+        name = (path or "").rsplit("/", 1)[-1].lower()
+        mapping = {
+            ".env": "environment file disclosure",
+            "wp-config.php": "wordpress",
+            "config.php": "php",
+            "settings.py": "django",
+            "database.yml": "rails",
+            "application.yml": "spring",
+        }
+        return mapping.get(name, "")
+
+    def _sanitize_searchsploit_query(self, query: str) -> str:
+        query = re.sub(r"[^A-Za-z0-9._:+ /-]+", " ", query or "")
+        query = re.sub(r"\s+", " ", query).strip()
+        stopwords = {"unknown", "tcpwrapped"}
+        parts = [part for part in query.split() if part.lower() not in stopwords]
+        return " ".join(parts[:6])
+
+    def _normalize_query_token(self, query: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "_", (query or "").lower()).strip("_")[:120]
+
+    def _post_access_inventory_seen(self, fact_pairs: set) -> bool:
+        for ftype, value in fact_pairs:
+            if ftype == "post_exploit_stage" and value == "post_access_inventory_completed":
+                return True
+            if ftype == "service_status" and value == "ssh_inventory_completed":
                 return True
         return False
 
@@ -768,10 +1424,6 @@ class AIPipeline:
             endpoints = [f"http://{host}"]
         base = endpoints[0].rstrip("/")
         commands = []
-        interesting_words = (
-            "admin", "login", "report", "_reports", "api", "dashboard",
-            "cpanel", "whm", "wp-admin", "phpmyadmin", "grafana",
-        )
         for fact in facts:
             if fact.get("type") != "web_path":
                 continue
@@ -782,16 +1434,244 @@ class AIPipeline:
                 continue
             is_interesting = (
                 status in {"200", "301", "302", "401", "403"}
-                or any(word in path.lower() for word in interesting_words)
+                or any(word in path.lower() for word in self._interesting_web_words())
             )
             if not is_interesting:
                 continue
             url = f"{base}{path}"
             commands.append(f"curl_headers {url}")
             commands.append(f"scrapling {url}")
-            if len(commands) >= 4:
+            path_limit = self._strategy_limit("web_path_followup_commands", None)
+            if path_limit is not None and len(commands) >= path_limit:
                 break
         return commands
+
+    def _web_link_action_commands(self, scan_id: str, target: str, facts: List[Dict[str, Any]]) -> List[str]:
+        urls = self._normalized_web_link_urls(scan_id, target, facts)
+        commands = []
+        limit = self._web_link_followup_command_limit()
+        for url in urls:
+            if self._url_looks_javascript_asset(url):
+                commands.append(f"js_route_extract {url}")
+                if limit is not None and len(commands) >= limit:
+                    break
+                continue
+            commands.append(f"curl_headers {url}")
+            if limit is not None and len(commands) >= limit:
+                break
+            commands.append(f"scrapling {url}")
+            if limit is not None and len(commands) >= limit:
+                break
+            if self._url_looks_openapi_spec(url):
+                commands.append(f"openapi_import {url}")
+                if limit is not None and len(commands) >= limit:
+                    break
+            if self._url_looks_graphql_endpoint(url):
+                commands.append(f"graphql_check {url}")
+                if limit is not None and len(commands) >= limit:
+                    break
+        return commands
+
+    def _normalized_web_link_urls(self, scan_id: str, target: str, facts: List[Dict[str, Any]]) -> List[str]:
+        endpoints = self._web_endpoints_from_facts(scan_id, target)
+        if not endpoints:
+            host = self._target_host(target)
+            endpoints = [f"http://{host}"] if host else []
+        if not endpoints:
+            return []
+
+        allowed_hosts = {
+            parsed.hostname.lower()
+            for parsed in (urlparse(endpoint) for endpoint in endpoints)
+            if parsed.hostname
+        }
+        target_host = self._target_host(target)
+        if target_host:
+            allowed_hosts.add(target_host.lower())
+
+        urls = []
+        seen = set()
+        for fact in facts:
+            if str(fact.get("type", "")).lower() != "web_link":
+                continue
+            raw_link = str(fact.get("value", "")).strip()
+            if not self._web_link_looks_interesting(raw_link):
+                continue
+            candidate_urls = []
+            if re.match(r"^https?://", raw_link, re.IGNORECASE) or raw_link.startswith("//"):
+                candidate_urls.append(self._normalize_web_link_url(raw_link, endpoints[0], allowed_hosts))
+            else:
+                for endpoint in endpoints:
+                    candidate_urls.append(self._normalize_web_link_url(raw_link, endpoint, allowed_hosts))
+
+            for url in candidate_urls:
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                urls.append(url)
+                url_limit = self._strategy_limit("web_link_url_limit", None)
+                if url_limit is not None and len(urls) >= url_limit:
+                    return urls
+        return urls
+
+    def _normalize_web_link_url(self, raw_link: str, base: str, allowed_hosts: set) -> str:
+        link = (raw_link or "").strip().strip("\"'<>")
+        link = re.sub(r"[\s)\],;]+$", "", link)
+        if not link:
+            return ""
+        if link.startswith("#"):
+            return ""
+        if re.match(r"^(?:javascript|mailto|tel|data):", link, re.IGNORECASE):
+            return ""
+
+        base_url = base.rstrip("/") + "/"
+        if link.startswith("//"):
+            base_scheme = urlparse(base_url).scheme or "http"
+            url = f"{base_scheme}:{link}"
+        elif re.match(r"^https?://", link, re.IGNORECASE):
+            url = link
+        else:
+            url = urljoin(base_url, link)
+
+        parsed = urlparse(url)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return ""
+        if parsed.hostname.lower() not in allowed_hosts:
+            return ""
+
+        path = parsed.path or "/"
+        if path == "/" and not parsed.query:
+            return ""
+        if self._web_path_is_static(path) and not path.lower().endswith((".js", ".mjs")):
+            return ""
+
+        return urlunparse((
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            path,
+            "",
+            parsed.query,
+            "",
+        ))
+
+    def _web_link_looks_interesting(self, raw_link: str) -> bool:
+        link = (raw_link or "").strip().strip("\"'<>").lower()
+        if not link or link.startswith("#"):
+            return False
+        if re.match(r"^(?:javascript|mailto|tel|data):", link):
+            return False
+        path = urlparse(link).path if re.match(r"^https?://", link) else link.split("?", 1)[0].split("#", 1)[0]
+        if path.lower().endswith((".js", ".mjs")):
+            return True
+        if self._web_path_is_static(path):
+            return False
+        if any(word in link for word in self._interesting_web_words()):
+            return True
+        return path not in {"", "/", "./", "../"}
+
+    def _web_path_is_static(self, path: str) -> bool:
+        return (path or "").lower().endswith((
+            ".css", ".js", ".mjs", ".map", ".png", ".jpg", ".jpeg",
+            ".gif", ".svg", ".ico", ".webp", ".woff", ".woff2",
+            ".ttf", ".eot", ".mp4", ".mp3", ".avi", ".mov",
+        ))
+
+    def _interesting_web_words(self) -> tuple:
+        return (
+            "admin", "login", "signin", "auth", "account", "report",
+            "_reports", "api", "dashboard", "cpanel", "whm", "wp-admin",
+            "phpmyadmin", "grafana", "metrics", "health", "status",
+            "config", "setup", "install",
+            "swagger", "openapi", "api-docs", "graphql",
+        )
+
+    def _url_looks_openapi_spec(self, url: str) -> bool:
+        path = (urlparse(url or "").path or "").lower()
+        return any(marker in path for marker in (
+            "swagger.json", "openapi.json", "openapi.yaml", "openapi.yml",
+            "api-docs", "swagger/v1", "swagger/v2", "swagger/v3",
+        ))
+
+    def _url_looks_graphql_endpoint(self, url: str) -> bool:
+        return (urlparse(url or "").path or "").lower().rstrip("/") == "/graphql"
+
+    def _url_looks_javascript_asset(self, url: str) -> bool:
+        return (urlparse(url or "").path or "").lower().endswith((".js", ".mjs"))
+
+    def _web_link_followup_command_limit(self):
+        return self._strategy_limit("web_link_followup_commands", None)
+
+    def _target_host(self, target: str) -> str:
+        return (target or "").strip().split("://")[-1].split("/")[0].split(":")[0]
+
+    def _web_surface_action_commands(
+        self, scan_id: str, target: str, facts: List[Dict[str, Any]], all_pairs: set
+    ) -> List[str]:
+        """Render/crawl discovered web surfaces once, using ShardBrowser fallback when needed."""
+        if not self._facts_include_web_surface(facts):
+            return []
+        endpoints = self._web_endpoints_from_facts(scan_id, target)
+        if not endpoints:
+            host = (target or "").strip().split("://")[-1].split("/")[0].split(":")[0]
+            endpoints = [f"http://{host}"]
+        commands = []
+        endpoint_limit = self._strategy_limit("web_surface_endpoint_limit", None)
+        command_limit = self._strategy_limit("web_surface_followup_commands", None)
+        selected_endpoints = endpoints if endpoint_limit is None else endpoints[:endpoint_limit]
+        for endpoint in selected_endpoints:
+            if not self._browser_render_seen(all_pairs, endpoint):
+                commands.append(f"browser_surface_analysis {endpoint}")
+                if command_limit is not None and len(commands) >= command_limit:
+                    break
+            if self.tool_registry._is_tool_available("security_headers_check"):
+                commands.append(f"security_headers_check {endpoint}")
+                if command_limit is not None and len(commands) >= command_limit:
+                    break
+            if self.tool_registry._is_tool_available("cors_check"):
+                commands.append(f"cors_check {endpoint}")
+                if command_limit is not None and len(commands) >= command_limit:
+                    break
+            if not self._crawl_seen(all_pairs, endpoint):
+                commands.append(f"scrapling_crawl {endpoint}")
+                if command_limit is not None and len(commands) >= command_limit:
+                    break
+            if self.tool_registry._is_tool_available("nuclei_safe"):
+                commands.append(f"nuclei_safe {endpoint}")
+                if command_limit is not None and len(commands) >= command_limit:
+                    break
+            if self.tool_registry._is_tool_available("katana_crawl"):
+                commands.append(f"katana_crawl {endpoint}")
+            if command_limit is not None and len(commands) >= command_limit:
+                break
+        return commands
+
+    def _facts_include_web_surface(self, facts: List[Dict[str, Any]]) -> bool:
+        return any(
+            str(fact.get("type", "")).lower() in {
+                "port_open", "web_server", "web_title", "web_surface",
+                "web_endpoint", "web_link", "web_input", "web_redirect", "browser_rendered",
+                "asset_url", "technology", "nuclei_finding",
+            }
+            and any(marker in str(fact.get("value", "")).lower() for marker in (
+                "http", "nginx", "apache", "wordpress", "login", "form", "80", "443",
+                "8080", "8443", "3000", "9000",
+            ))
+            for fact in facts
+        )
+
+    def _browser_render_seen(self, fact_pairs: set, endpoint: str) -> bool:
+        endpoint_l = endpoint.lower().rstrip("/")
+        return any(
+            ftype == "browser_rendered" and value.rstrip("/") == endpoint_l
+            for ftype, value in fact_pairs
+        )
+
+    def _crawl_seen(self, fact_pairs: set, endpoint: str) -> bool:
+        endpoint_l = endpoint.lower().rstrip("/")
+        return any(
+            ftype == "service_status" and value == f"web_crawl_completed:{endpoint_l}"
+            for ftype, value in fact_pairs
+        )
 
     def _sync_runtime_credentials_from_facts(self, target: str, facts: List[Dict[str, Any]]) -> None:
         """Mirror concrete SSH credentials from parsed facts into the tool cache."""
@@ -862,6 +1742,7 @@ class AIPipeline:
         parsed_facts = 0
         new_facts = 0
         command_results = []
+        result_facts = []
         for cmd in self._controlled_post_access_commands_from_facts(target, facts):
             result = self._execute_pipeline_command(
                 scan_id, target, cmd, "Post-Access Fact", "[Running Controlled Post-Access]"
@@ -869,10 +1750,12 @@ class AIPipeline:
             parsed_facts += result["parsed_facts"]
             new_facts += result["new_facts"]
             command_results.append(result["command_result"])
+            result_facts.extend(result["facts"])
         return {
             "parsed_facts": parsed_facts,
             "new_facts": new_facts,
             "commands": command_results,
+            "facts": result_facts,
         }
 
     def _controlled_post_access_commands_from_facts(
@@ -904,7 +1787,34 @@ class AIPipeline:
             from config import CFG
         except ImportError:
             CFG = {}
-        return bool(CFG.get("strategy", {}).get("auto_ssh_inventory", True))
+        strategy = CFG.get("strategy", {})
+        return bool(strategy.get(
+            "auto_post_access_inventory",
+            strategy.get("auto_ssh_inventory", True),
+        ))
+
+    def _strategy_enabled(self, key: str, default: bool = False) -> bool:
+        try:
+            from config import CFG
+        except ImportError:
+            CFG = {}
+        return bool(CFG.get("strategy", {}).get(key, default))
+
+    def _strategy_limit(self, key: str, default=None):
+        try:
+            from config import CFG
+        except ImportError:
+            CFG = {}
+        raw = CFG.get("strategy", {}).get(key, default)
+        if raw is None:
+            return None
+        if str(raw).strip().lower() in {"", "0", "-1", "none", "unlimited", "false"}:
+            return None
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return None if value <= 0 else max(1, value)
 
     def _active_commands_from_facts(self, facts: List[Dict[str, Any]]) -> List[str]:
         """Collect gated active commands for later execution after verification."""
@@ -1000,13 +1910,8 @@ class AIPipeline:
             return [cmd]
 
         web_mapping_tools = {
-            "whatweb": 8,
-            "curl_headers": 8,
-            "scrapling": 6,
-            "browser_surface_analysis": 4,
-            "ffuf": 3,
-            "nikto": 3,
-            "jmx2rce_scan": 4,
+            "whatweb", "curl_headers", "scrapling", "browser_surface_analysis",
+            "scrapling_crawl", "ffuf", "nikto", "jmx2rce_scan", "wpscan", "sqlmap",
         }
         if tool not in web_mapping_tools:
             return [cmd]
@@ -1014,20 +1919,35 @@ class AIPipeline:
         endpoints = self._web_endpoints_from_facts(scan_id, target)
         if not endpoints:
             return [cmd]
-        limit = web_mapping_tools[tool]
-        return [f"{tool} {endpoint}" for endpoint in endpoints[:limit]]
+        limit = self._strategy_limit(f"{tool}_endpoint_limit", None)
+        selected = endpoints if limit is None else endpoints[:limit]
+        return [f"{tool} {endpoint}" for endpoint in selected]
 
     def _web_endpoints_from_facts(self, scan_id: str, target: str) -> List[str]:
         host = (target or "").strip().split("://")[-1].split("/")[0].split(":")[0]
         endpoints = []
-        default_ports = {"80", "443"}
-        https_ports = {"443", "8443", "2083", "2087", "2096", "9443"}
-        web_ports = {
-            "80", "443", "8000", "8080", "8081", "8082", "8443",
-            "3000", "3030", "5000", "5601", "8008", "8888", "9000",
-            "9090", "2082", "2083", "2086", "2087", "2095", "2096",
-        }
+        endpoint_keys = set()
+        default_ports = {"80", "443"}  # URL formatting only, not discovery logic.
+        def add_endpoint(endpoint: str) -> None:
+            endpoint = self._display_endpoint_url(endpoint)
+            if not endpoint:
+                return
+            if not self._endpoint_in_target_scope(endpoint, target):
+                return
+            key = endpoint.rstrip("/")
+            if key in endpoint_keys:
+                return
+            endpoint_keys.add(key)
+            endpoints.append(endpoint)
+
         for fact in self.fact_store.get_facts(scan_id, target):
+            if fact.get("type") == "web_endpoint":
+                endpoint = self._endpoint_url_from_value(str(fact.get("value", "")))
+                add_endpoint(endpoint)
+                continue
+            if fact.get("type") in {"web_title", "web_server", "web_surface", "web_link", "web_redirect"}:
+                add_endpoint(f"http://{host}")
+                continue
             if fact.get("type") != "port_open":
                 continue
             value = str(fact.get("value", "")).lower()
@@ -1035,22 +1955,67 @@ class AIPipeline:
             if not match:
                 continue
             port, service = match.groups()
-            is_web = (
-                port in web_ports
-                or "http" in service
-                or "cpanel" in value
-                or "whm" in value
-                or "node.js" in value
-                or "golang net/http" in value
-                or "php" in value
-            )
-            if not is_web:
+            if not self._service_fact_looks_web(service, value):
                 continue
-            scheme = "https" if port in https_ports or "ssl/http" in value else "http"
+            scheme = "https" if self._service_fact_looks_tls(value) else "http"
             endpoint = f"{scheme}://{host}" if port in default_ports else f"{scheme}://{host}:{port}"
-            if endpoint not in endpoints:
-                endpoints.append(endpoint)
+            add_endpoint(endpoint)
         return endpoints
+
+    def _endpoint_in_target_scope(self, endpoint: str, target: str) -> bool:
+        parsed = urlparse(endpoint or "")
+        endpoint_host = (parsed.hostname or "").lower()
+        target_host = self._target_host(target).lower()
+        if not endpoint_host or not target_host:
+            return False
+        if endpoint_host == target_host:
+            return True
+        try:
+            target_ip = ipaddress.ip_address(target_host)
+            ipaddress.ip_address(endpoint_host)
+            return False
+        except ValueError:
+            pass
+        return endpoint_host.endswith(f".{target_host}")
+
+    def _endpoint_url_from_value(self, value: str) -> str:
+        try:
+            parsed = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return value if re.match(r"^https?://", value or "", re.IGNORECASE) else ""
+        url = str(parsed.get("url", "")).strip()
+        return url if re.match(r"^https?://", url, re.IGNORECASE) else ""
+
+    def _display_endpoint_url(self, endpoint: str) -> str:
+        parsed = urlparse(endpoint or "")
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return ""
+        if (parsed.path or "") in {"", "/"} and not parsed.query:
+            netloc = parsed.netloc.lower()
+            return f"{parsed.scheme.lower()}://{netloc}"
+        return urlunparse((
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            parsed.path or "/",
+            "",
+            parsed.query,
+            "",
+        ))
+
+    def _service_fact_looks_web(self, service: str, value: str = "") -> bool:
+        text = f"{service or ''} {value or ''}".lower()
+        web_markers = (
+            "http", "httpd", "web server", "nginx", "apache", "cowboy",
+            "golang net/http", "node.js", "express", "php", "wordpress",
+            "tomcat", "jetty", "gunicorn", "uwsgi", "werkzeug", "flask",
+            "django", "rails", "sinatra", "grafana", "kibana", "prometheus",
+            "cpanel", "whm",
+        )
+        return any(marker in text for marker in web_markers)
+
+    def _service_fact_looks_tls(self, value: str = "") -> bool:
+        text = (value or "").lower()
+        return any(marker in text for marker in ("ssl/http", "https", "tls", "ssl ", "cpanel", "whm"))
 
     def _augment_command_with_context(self, cmd: str, scan_id: str, target: str) -> str:
         """Attach known recon evidence to tools that can consume it."""
@@ -1066,20 +2031,49 @@ class AIPipeline:
             "service_version",
             "potential_vulnerability",
             "vulnerability",
+            "web_server",
+            "web_powered_by",
             "web_title",
             "web_surface",
+            "web_endpoint",
+            "web_link",
+            "web_input",
+            "browser_rendered",
+            "local_listening_port",
+            "app_stack",
+            "web_root",
+            "app_manifest",
+            "config_candidate",
         }
         recon_bits = []
         for fact in facts:
             if fact.get("type") not in useful_types:
                 continue
             value = str(fact.get("value", "")).replace("\n", " ").replace("\r", " ").strip()
+            if fact.get("type") in {"web_endpoint", "web_link", "browser_rendered"}:
+                if not self._web_fact_in_target_scope(value, target):
+                    continue
             if value:
                 recon_bits.append(f"{fact['type']} -> {value}")
 
         if not recon_bits:
             return cmd
-        return f"{cmd} {' | '.join(recon_bits[:30])}"
+        fact_limit = self._strategy_limit("exploit_select_context_facts", None)
+        selected_bits = recon_bits if fact_limit is None else recon_bits[:fact_limit]
+        return f"{cmd} {' | '.join(selected_bits)}"
+
+    def _web_fact_in_target_scope(self, value: str, target: str) -> bool:
+        value = (value or "").strip()
+        if not value:
+            return False
+        endpoint = self._endpoint_url_from_value(value)
+        if endpoint:
+            return self._endpoint_in_target_scope(endpoint, target)
+        if value.startswith("/"):
+            return True
+        if re.match(r"^https?://", value, re.IGNORECASE):
+            return self._endpoint_in_target_scope(value, target)
+        return True
 
     def _augment_cpanel_command(self, cmd: str, scan_id: str, target: str) -> str:
         """Use the discovered WHM/cPanel port instead of blindly defaulting to 2087."""
@@ -1201,6 +2195,36 @@ class AIPipeline:
         elif status == "no_new_facts":
             self.no_fact_tasks.append(task)
 
+    def _record_goal_trace(self, loop: int, context: Dict[str, Any], decision: Dict[str, Any]) -> None:
+        self.goal_trace.append({
+            "loop": loop,
+            "goal": decision.get("goal", "conclude"),
+            "thought": decision.get("thought", ""),
+            "state": context.get("state"),
+            "next_required_capability": context.get("next_required_capability"),
+            "stage_gates": context.get("stage_gates") or {},
+            "open_questions": context.get("open_questions") or [],
+        })
+
+    def _record_command_trace(self, decision: Dict[str, Any], result: Dict[str, Any] = None) -> None:
+        item = {
+            "command": decision.get("command"),
+            "key": decision.get("key"),
+            "action": decision.get("action"),
+            "reason": decision.get("reason"),
+            "prerequisite": decision.get("prerequisite", ""),
+        }
+        if result:
+            item.update({
+                "failed": result.get("failed", False),
+                "output_hash": result.get("output_hash", ""),
+                "duplicate_output": result.get("duplicate_output", False),
+                "parsed_facts": result.get("parsed_facts", 0),
+                "new_facts": result.get("new_facts", 0),
+                "facts": result.get("fact_pairs", []),
+            })
+        self.command_trace.append(item)
+
     def _print_stage_gates(self, context: Dict[str, Any]):
         gates = context.get("stage_gates") or {}
         if not gates:
@@ -1234,6 +2258,15 @@ class AIPipeline:
         if no_fact:
             preview = ", ".join(o["task"] for o in no_fact[:5])
             print(f"    No-fact tasks: {preview}")
+        if self.goal_trace:
+            last = self.goal_trace[-1]
+            print(
+                f"    Last goal trace: goal={last['goal']} state={last['state']} "
+                f"next={last['next_required_capability']}"
+            )
+        if self.command_trace:
+            skipped = [t for t in self.command_trace if t.get("action") == "skip"]
+            print(f"    Command trace: decisions={len(self.command_trace)}, skipped={len(skipped)}")
 
 # For testing
 if __name__ == "__main__":

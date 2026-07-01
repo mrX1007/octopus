@@ -9,20 +9,31 @@ import logging
 import re
 import shutil
 import socket
+import json
+import base64
+from urllib.parse import urljoin
 
 from core.tools.base import (
-    run_tool, is_tool_available, get_tool_config, _fmt_elapsed,
-    C_GREY, C_RESET, C_CYAN, C_GREEN, C_YELLOW, C_RED, C_BLUE, C_MAGENTA,
+    run_tool, get_tool_config,
+    C_RESET, C_GREEN, C_YELLOW,
 )
 from core.tools.registry import tool
+from core.tools.targeting import (
+    as_url as _as_url,
+    coerce_port as _coerce_port,
+    ensure_url as _ensure_url,
+    split_host_port as _split_host_port,
+    target_host as _target_host,
+    target_looks_domain as _is_probably_domain,
+    url_candidates as _url_candidates,
+)
 
 # Config helpers
 try:
-    from config import CFG, find_wordlist, find_all_wordlists
+    from config import CFG, find_wordlist
 except ImportError:
     CFG = {}
     def find_wordlist(cat): return ""
-    def find_all_wordlists(cat): return []
 
 # Scrapling availability
 try:
@@ -33,40 +44,30 @@ except ImportError:
     _SCRAPLING_OK = False
 
 
-def _ensure_url(target: str, scheme: str = "http") -> str:
-    target = (target or "").strip().rstrip("/")
-    if target.startswith(("http://", "https://")):
-        return target
-    return f"{scheme}://{target}"
+def _path_or_target(target: str) -> str:
+    return (target or ".").strip() or "."
 
 
-def _url_candidates(target: str) -> list:
-    target = (target or "").strip().rstrip("/")
-    if target.startswith(("http://", "https://")):
-        return [target]
-    return [f"http://{target}", f"https://{target}"]
-
-
-def _split_host_port(target: str, default_port: int) -> tuple[str, int]:
-    """Parse host[:port] without treating URL paths as part of the host."""
-    raw = (target or "").strip()
-    raw = raw.replace("http://", "").replace("https://", "")
-    raw = raw.split("/", 1)[0]
-    host = raw
-    port = default_port
-    if raw.count(":") == 1:
-        maybe_host, maybe_port = raw.rsplit(":", 1)
-        if maybe_port.isdigit():
-            host = maybe_host
-            port = int(maybe_port)
-    return host.strip(), int(port)
-
-
-def _coerce_port(port, default_port: int) -> int:
+def _load_session_profile(path: str) -> dict:
+    if not path or not os.path.exists(path):
+        return {"headers": {}, "cookies": {}}
     try:
-        return int(port)
-    except (TypeError, ValueError):
-        return int(default_port)
+        data = json.loads(open(path, "r", encoding="utf-8", errors="ignore").read())
+    except Exception:
+        return {"headers": {}, "cookies": {}}
+    return {
+        "headers": data.get("headers") or {},
+        "cookies": data.get("cookies") or {},
+    }
+
+
+def _decode_jwt_segment(segment: str) -> dict:
+    padded = segment + "=" * (-len(segment) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        return json.loads(raw.decode("utf-8", "ignore"))
+    except Exception:
+        return {}
 
 
 @tool(name="nmap", aliases=["nmap_scan"], category="recon", description="Run Nmap with smart caching and two-phase scanning.", requires=["nmap"])
@@ -180,6 +181,283 @@ def run_dig(target: str) -> str:
         parts.append(f"[{rtype} Records]\n{result}")
 
     return "\n\n".join(parts)
+
+
+@tool(name="subfinder", aliases=["subdomain_discovery"], category="recon", description="Passive subdomain discovery with subfinder.", requires=["subfinder"])
+def run_subfinder(target: str) -> str:
+    domain = _target_host(target)
+    if not _is_probably_domain(domain):
+        return f"[ASM] subfinder skipped: target is not a domain: {target}"
+    print(f"  [*] subfinder -silent -d {domain}")
+    output = run_tool(["subfinder", "-silent", "-d", domain], timeout=180)
+    return f"[ASM SUBFINDER - {domain}]\n{output}"
+
+
+@tool(name="amass_enum", aliases=["amass", "amass_passive"], category="recon", description="Passive subdomain discovery with amass.", requires=["amass"])
+def run_amass_enum(target: str) -> str:
+    domain = _target_host(target)
+    if not _is_probably_domain(domain):
+        return f"[ASM] amass skipped: target is not a domain: {target}"
+    print(f"  [*] amass enum -passive -d {domain}")
+    output = run_tool(["amass", "enum", "-passive", "-d", domain], timeout=300)
+    return f"[ASM AMASS - {domain}]\n{output}"
+
+
+@tool(name="dnsx", aliases=["dns_resolve"], category="recon", description="Resolve domains/subdomains with dnsx.", requires=["dnsx"])
+def run_dnsx(target: str) -> str:
+    host = _target_host(target)
+    print(f"  [*] dnsx -silent -a -aaaa -cname -resp-only {host}")
+    output = run_tool(["dnsx", "-silent", "-a", "-aaaa", "-cname", "-resp-only", "-d", host], timeout=120)
+    return f"[ASM DNSX - {host}]\n{output}"
+
+
+@tool(name="httpx_probe", aliases=["httpx", "http_probe"], category="recon", description="HTTP service probing with projectdiscovery httpx.", requires=["httpx"])
+def run_httpx_probe(target: str) -> str:
+    host = _target_host(target)
+    print(f"  [*] httpx -silent -title -tech-detect -status-code {host}")
+    output = run_tool([
+        "httpx", "-silent", "-title", "-tech-detect", "-status-code",
+        "-follow-redirects", "-u", host,
+    ], timeout=180)
+    return f"[ASM HTTPX - {host}]\n{output}"
+
+
+@tool(name="naabu", aliases=["port_discovery"], category="recon", description="Fast safe TCP port discovery with naabu.", requires=["naabu"])
+def run_naabu(target: str) -> str:
+    host = _target_host(target)
+    print(f"  [*] naabu -silent -host {host} -top-ports 1000")
+    output = run_tool(["naabu", "-silent", "-host", host, "-top-ports", "1000"], timeout=180)
+    return f"[ASM NAABU - {host}]\n{output}"
+
+
+@tool(name="tlsx", aliases=["tls_probe"], category="recon", description="TLS certificate/metadata discovery with tlsx.", requires=["tlsx"])
+def run_tlsx(target: str) -> str:
+    host = _target_host(target)
+    print(f"  [*] tlsx -silent -san -cn -tls-probe {host}")
+    output = run_tool(["tlsx", "-silent", "-san", "-cn", "-tls-probe", "-u", host], timeout=120)
+    return f"[ASM TLSX - {host}]\n{output}"
+
+
+@tool(name="wayback_urls", aliases=["wayback"], category="recon", description="Historical URL discovery with waybackurls.", requires=["waybackurls"])
+def run_wayback_urls(target: str) -> str:
+    domain = _target_host(target)
+    print(f"  [*] waybackurls {domain}")
+    output = run_tool(["waybackurls", domain], timeout=180)
+    return f"[ASM WAYBACK - {domain}]\n{output}"
+
+
+@tool(name="gau_urls", aliases=["gau"], category="recon", description="Historical URL discovery with gau.", requires=["gau"])
+def run_gau_urls(target: str) -> str:
+    domain = _target_host(target)
+    print(f"  [*] gau --subs {domain}")
+    output = run_tool(["gau", "--subs", domain], timeout=180)
+    return f"[ASM GAU - {domain}]\n{output}"
+
+
+@tool(name="nuclei_safe", aliases=["nuclei"], category="recon", description="Safe nuclei template verification.", requires=["nuclei"])
+def run_nuclei_safe(target: str) -> str:
+    scan_target = _as_url(target)
+    print(f"  [*] nuclei -silent -jsonl -severity info,low,medium,high,critical -target {scan_target}")
+    output = run_tool([
+        "nuclei", "-silent", "-jsonl", "-target", scan_target,
+        "-severity", "info,low,medium,high,critical",
+        "-exclude-tags", "dos,fuzz,bruteforce,intrusive,destructive",
+    ], timeout=300)
+    return f"[NUCLEI SAFE - {scan_target}]\n{output}"
+
+
+@tool(name="katana_crawl", aliases=["katana"], category="recon", description="Passive web crawl and JS route discovery with katana.", requires=["katana"])
+def run_katana_crawl(target: str) -> str:
+    scan_target = _as_url(target)
+    print(f"  [*] katana -silent -js-crawl -known-files all -u {scan_target}")
+    output = run_tool(["katana", "-silent", "-js-crawl", "-known-files", "all", "-u", scan_target], timeout=240)
+    return f"[KATANA CRAWL - {scan_target}]\n{output}"
+
+
+@tool(name="openapi_import", aliases=["swagger_import", "openapi"], category="recon", description="Import OpenAPI/Swagger spec and build endpoint map.")
+def run_openapi_import(target: str) -> str:
+    """Read a local or URL OpenAPI document. URL fetch is read-only."""
+    source = (target or "").strip()
+    if not source:
+        return "[API] OpenAPI import skipped: missing source"
+    try:
+        if source.startswith(("http://", "https://")):
+            import requests
+            resp = requests.get(source, timeout=20, verify=False)
+            body = resp.text
+        else:
+            with open(source, "r", encoding="utf-8", errors="ignore") as fh:
+                body = fh.read()
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            import yaml
+            data = yaml.safe_load(body)
+    except Exception as exc:
+        return f"[API] OpenAPI import failed: {str(exc)[:180]}"
+
+    paths = data.get("paths") or {}
+    lines = [f"[OPENAPI IMPORT - {source}]", f"Title: {data.get('info', {}).get('title', '')}", f"Endpoints: {len(paths)}"]
+    for path, methods in list(paths.items())[:300]:
+        if isinstance(methods, dict):
+            for method in sorted(methods):
+                if method.lower() in {"get", "post", "put", "patch", "delete", "head", "options"}:
+                    auth = bool((methods.get(method) or {}).get("security") or data.get("security"))
+                    lines.append(f"{method.upper()} {path} auth={'required' if auth else 'unknown_or_none'}")
+    return "\n".join(lines)
+
+
+@tool(name="graphql_check", aliases=["graphql_introspection"], category="recon", description="GraphQL endpoint presence/introspection safety check.", requires=["curl"])
+def run_graphql_check(target: str) -> str:
+    url = _as_url(target).rstrip("/")
+    if not url.endswith("/graphql"):
+        url = url + "/graphql"
+    query = '{"query":"query { __schema { queryType { name } } }"}'
+    print(f"  [*] GraphQL introspection check {url}")
+    output = run_tool([
+        "curl", "-sk", "--max-time", "15", "-H", "Content-Type: application/json",
+        "-d", query, url,
+    ], timeout=30)
+    return f"[GRAPHQL CHECK - {url}]\n{output}"
+
+
+@tool(name="session_profile_import", aliases=["session_import"], category="recon", description="Import authenticated web session headers/cookies from a local JSON profile.")
+def run_session_profile_import(target: str) -> str:
+    path = _path_or_target(target)
+    profile = _load_session_profile(path)
+    headers = profile.get("headers") or {}
+    cookies = profile.get("cookies") or {}
+    lines = [f"[SESSION PROFILE IMPORT - {path}]", f"Headers: {len(headers)}", f"Cookies: {len(cookies)}"]
+    for name in sorted(headers)[:50]:
+        lines.append(f"HEADER {name}")
+    for name in sorted(cookies)[:50]:
+        lines.append(f"COOKIE {name}")
+    return "\n".join(lines)
+
+
+@tool(name="authenticated_crawl", aliases=["auth_crawl"], category="recon", description="Authenticated read-only crawl using a local session profile.", requires=["python:requests"])
+def run_authenticated_crawl(target: str, session_profile: str = "") -> str:
+    import requests
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    url = _as_url(target)
+    profile = _load_session_profile(session_profile)
+    headers = profile.get("headers") or {}
+    cookies = profile.get("cookies") or {}
+    lines = [f"[AUTHENTICATED CRAWL - {url}]", f"Session profile: {session_profile or 'none'}"]
+    try:
+        resp = requests.get(url, headers=headers, cookies=cookies, timeout=20, verify=False, allow_redirects=True)
+        lines.append(f"Status: {resp.status_code}")
+        lines.append(f"Final URL: {resp.url}")
+        body = resp.text[:500000]
+        title = re.search(r"<title[^>]*>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
+        if title:
+            title_text = re.sub(r"\s+", " ", title.group(1)).strip()[:180]
+            lines.append(f"Title: {title_text}")
+        links = sorted(set(re.findall(r'''href=["']([^"']+)["']''', body, re.IGNORECASE)))[:300]
+        forms = re.findall(r"<form\b", body, re.IGNORECASE)
+        csrf = re.search(r'(?i)(csrf|xsrf|_token|nonce)', body) is not None
+        lines.append(f"Forms: {len(forms)}")
+        lines.append(f"CSRF token observed: {'yes' if csrf else 'no'}")
+        for link in links:
+            lines.append(f"LINK {urljoin(resp.url, link)}")
+    except Exception as exc:
+        lines.append(f"[!] Authenticated crawl failed: {str(exc)[:180]}")
+    return "\n".join(lines)
+
+
+@tool(name="api_auth_check", aliases=["missing_auth_check"], category="recon", description="Read-only API missing-auth probe with GET/HEAD only.", requires=["python:requests"])
+def run_api_auth_check(target: str, session_profile: str = "") -> str:
+    import requests
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    url = _as_url(target)
+    profile = _load_session_profile(session_profile)
+    lines = [f"[API AUTH CHECK - {url}]", f"Session profile: {session_profile or 'none'}"]
+    try:
+        anon = requests.get(url, timeout=15, verify=False, allow_redirects=False)
+        lines.append(f"Anonymous status: {anon.status_code}")
+        if profile.get("headers") or profile.get("cookies"):
+            auth = requests.get(
+                url,
+                headers=profile.get("headers") or {},
+                cookies=profile.get("cookies") or {},
+                timeout=15,
+                verify=False,
+                allow_redirects=False,
+            )
+            lines.append(f"Authenticated status: {auth.status_code}")
+            if anon.status_code < 400 and auth.status_code < 400:
+                lines.append("NOTE possible_missing_auth")
+            elif anon.status_code in {401, 403} and auth.status_code < 400:
+                lines.append("NOTE auth_required")
+        elif anon.status_code < 400:
+            lines.append("NOTE anonymous_accessible")
+    except Exception as exc:
+        lines.append(f"[!] API auth check failed: {str(exc)[:180]}")
+    return "\n".join(lines)
+
+
+@tool(name="gitleaks_scan", aliases=["gitleaks"], category="recon", description="Secret scanning with gitleaks.", requires=["gitleaks"])
+def run_gitleaks_scan(target: str = ".") -> str:
+    path = _path_or_target(target)
+    print(f"  [*] gitleaks detect --no-git --redact --source {path}")
+    output = run_tool(["gitleaks", "detect", "--no-git", "--redact", "--source", path], timeout=240)
+    return f"[GITLEAKS SCAN - {path}]\n{output}"
+
+
+@tool(name="trufflehog_scan", aliases=["trufflehog"], category="recon", description="Secret scanning with TruffleHog.", requires=["trufflehog"])
+def run_trufflehog_scan(target: str = ".") -> str:
+    path = _path_or_target(target)
+    print(f"  [*] trufflehog filesystem --json --no-update {path}")
+    output = run_tool(["trufflehog", "filesystem", "--json", "--no-update", path], timeout=300)
+    return f"[TRUFFLEHOG SCAN - {path}]\n{output}"
+
+
+@tool(name="semgrep_scan", aliases=["semgrep"], category="recon", description="Static analysis with Semgrep.", requires=["semgrep"])
+def run_semgrep_scan(target: str = ".") -> str:
+    path = _path_or_target(target)
+    print(f"  [*] semgrep scan --json --config auto {path}")
+    output = run_tool(["semgrep", "scan", "--json", "--config", "auto", path], timeout=300)
+    return f"[SEMGREP SCAN - {path}]\n{output}"
+
+
+@tool(name="trivy_scan", aliases=["trivy"], category="recon", description="Filesystem/IaC/dependency scanning with Trivy.", requires=["trivy"])
+def run_trivy_scan(target: str = ".") -> str:
+    path = _path_or_target(target)
+    print(f"  [*] trivy fs --format json --scanners vuln,secret,misconfig {path}")
+    output = run_tool(["trivy", "fs", "--format", "json", "--scanners", "vuln,secret,misconfig", path], timeout=420)
+    return f"[TRIVY SCAN - {path}]\n{output}"
+
+
+@tool(name="checkov_scan", aliases=["checkov"], category="recon", description="IaC/cloud misconfiguration scanning with Checkov.", requires=["checkov"])
+def run_checkov_scan(target: str = ".") -> str:
+    path = _path_or_target(target)
+    print(f"  [*] checkov -d {path} -o json")
+    output = run_tool(["checkov", "-d", path, "-o", "json"], timeout=300)
+    return f"[CHECKOV SCAN - {path}]\n{output}"
+
+
+@tool(name="prowler_scan", aliases=["prowler"], category="recon", description="Cloud security posture review with Prowler.", requires=["prowler"])
+def run_prowler_scan(target: str = "aws") -> str:
+    provider = (target or "aws").strip().lower()
+    if provider not in {"aws", "azure", "gcp", "kubernetes", "m365"}:
+        return f"[CLOUD] Prowler skipped: unsupported provider '{provider}'"
+    print(f"  [*] prowler {provider} --output-formats json")
+    output = run_tool(["prowler", provider, "--output-formats", "json"], timeout=900)
+    return f"[PROWLER SCAN - {provider}]\n{output}"
+
+
+@tool(name="scoutsuite_scan", aliases=["scoutsuite"], category="recon", description="Cloud security posture review with ScoutSuite.", requires=["scout"])
+def run_scoutsuite_scan(target: str = "aws") -> str:
+    provider = (target or "aws").strip().lower()
+    if provider not in {"aws", "azure", "gcp"}:
+        return f"[CLOUD] ScoutSuite skipped: unsupported provider '{provider}'"
+    print(f"  [*] scout {provider} --no-browser --report-dir /tmp/octopus_scoutsuite")
+    output = run_tool(["scout", provider, "--no-browser", "--report-dir", "/tmp/octopus_scoutsuite"], timeout=900)
+    return f"[SCOUTSUITE SCAN - {provider}]\n{output}"
 
 
 @tool(name="sslscan", aliases=[], category="recon", description="Run sslscan to check for TLS/SSL vulnerabilities.", requires=["sslscan"])
@@ -398,6 +676,120 @@ def run_nikto(target: str) -> str:
     scan_target = _ensure_url(target)
     print(f"  [*] nikto -h {scan_target}  (this may take a while...)")
     return run_tool(["nikto", "-h", scan_target] + flags, timeout=tc.get("timeout", 300))
+
+
+@tool(name="security_headers_check", aliases=["security_headers"], category="recon", description="Read-only HTTP security headers and cookie review.", requires=["curl"])
+def run_security_headers_check(target: str) -> str:
+    url = _as_url(target)
+    print(f"  [*] Security headers check {url}")
+    output = run_tool(["curl", "-skI", "--max-time", "15", "--location", url], timeout=30)
+    return f"[SECURITY HEADERS - {url}]\n{output}"
+
+
+@tool(name="cors_check", aliases=["cors"], category="recon", description="Read-only CORS preflight check.", requires=["curl"])
+def run_cors_check(target: str) -> str:
+    url = _as_url(target)
+    origin = "https://octopus.invalid"
+    print(f"  [*] CORS check {url}")
+    output = run_tool([
+        "curl", "-skI", "--max-time", "15", "-X", "OPTIONS",
+        "-H", f"Origin: {origin}",
+        "-H", "Access-Control-Request-Method: GET",
+        url,
+    ], timeout=30)
+    return f"[CORS CHECK - {url}]\nOrigin: {origin}\n{output}"
+
+
+@tool(name="jwt_analyze", aliases=["jwt"], category="recon", description="Decode JWT header/payload without verifying or brute forcing.")
+def run_jwt_analyze(target: str) -> str:
+    token = (target or "").strip()
+    if os.path.exists(token):
+        try:
+            token = open(token, "r", encoding="utf-8", errors="ignore").read().strip()
+        except Exception as exc:
+            return f"[JWT ANALYZE] failed to read token file: {str(exc)[:180]}"
+    match = re.search(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*', token)
+    if not match:
+        return "[JWT ANALYZE] no JWT token found"
+    jwt_value = match.group(0)
+    header_b64, payload_b64, _sig = jwt_value.split(".", 2)
+    header = _decode_jwt_segment(header_b64)
+    payload = _decode_jwt_segment(payload_b64)
+    return "\n".join([
+        "[JWT ANALYZE]",
+        f"alg: {header.get('alg', '')}",
+        f"typ: {header.get('typ', '')}",
+        f"kid: {header.get('kid', '')}",
+        f"claims: {', '.join(sorted(str(k) for k in payload.keys()))}",
+        f"issuer: {payload.get('iss', '')}",
+        f"audience: {payload.get('aud', '')}",
+        f"expires: {payload.get('exp', '')}",
+    ])
+
+
+@tool(name="js_route_extract", aliases=["js_routes"], category="recon", description="Fetch JavaScript and extract likely client-side/API routes.", requires=["curl"])
+def run_js_route_extract(target: str) -> str:
+    url = _as_url(target)
+    print(f"  [*] JS route extraction {url}")
+    body = run_tool(["curl", "-skL", "--max-time", "20", url], timeout=35)
+    routes = sorted(set(re.findall(
+        r'["\']((?:/[A-Za-z0-9_./{}:-]+|https?://[^"\'\s]+)(?:\?[^"\'\s]*)?)["\']',
+        body,
+    )))
+    lines = [f"[JS ROUTE EXTRACT - {url}]", f"Routes: {len(routes)}"]
+    for route in routes[:300]:
+        lines.append(route[:300])
+    return "\n".join(lines)
+
+
+@tool(name="burp_import", aliases=["burp"], category="recon", description="Import Burp Suite XML/JSON export into normalized facts.")
+def run_burp_import(target: str) -> str:
+    path = _path_or_target(target)
+    if not os.path.exists(path):
+        return f"[BURP IMPORT] file not found: {path}"
+    try:
+        data = open(path, "r", encoding="utf-8", errors="ignore").read()
+    except Exception as exc:
+        return f"[BURP IMPORT] failed: {str(exc)[:180]}"
+    urls = re.findall(r'<url><!\[CDATA\[(.*?)\]\]></url>|"url"\s*:\s*"([^"]+)"', data, re.IGNORECASE)
+    issues = re.findall(r'<name><!\[CDATA\[(.*?)\]\]></name>|"name"\s*:\s*"([^"]+)"', data, re.IGNORECASE)
+    lines = [f"[BURP IMPORT - {path}]", f"URLs: {len(urls)}", f"Issues: {len(issues)}"]
+    for pair in urls[:500]:
+        url = next((p for p in pair if p), "")
+        if url:
+            lines.append(f"URL {url}")
+    for pair in issues[:500]:
+        issue = next((p for p in pair if p), "")
+        if issue:
+            lines.append(f"ISSUE {issue}")
+    return "\n".join(lines)
+
+
+@tool(name="zap_import", aliases=["zap"], category="recon", description="Import OWASP ZAP JSON/XML report into normalized facts.")
+def run_zap_import(target: str) -> str:
+    path = _path_or_target(target)
+    if not os.path.exists(path):
+        return f"[ZAP IMPORT] file not found: {path}"
+    try:
+        data = open(path, "r", encoding="utf-8", errors="ignore").read()
+    except Exception as exc:
+        return f"[ZAP IMPORT] failed: {str(exc)[:180]}"
+    urls = re.findall(r'"uri"\s*:\s*"([^"]+)"|<uri>(.*?)</uri>', data, re.IGNORECASE)
+    alerts = re.findall(r'"alert"\s*:\s*"([^"]+)"|<alert>(.*?)</alert>', data, re.IGNORECASE)
+    risks = re.findall(r'"riskdesc"\s*:\s*"([^"]+)"|<riskdesc>(.*?)</riskdesc>', data, re.IGNORECASE)
+    lines = [f"[ZAP IMPORT - {path}]", f"URLs: {len(urls)}", f"Alerts: {len(alerts)}"]
+    for pair in urls[:500]:
+        url = next((p for p in pair if p), "")
+        if url:
+            lines.append(f"URL {url}")
+    for idx, pair in enumerate(alerts[:500]):
+        alert = next((p for p in pair if p), "")
+        risk = ""
+        if idx < len(risks):
+            risk = next((p for p in risks[idx] if p), "")
+        if alert:
+            lines.append(f"ALERT {risk} {alert}".strip())
+    return "\n".join(lines)
 
 
 # ─────────────────────────────────────────────
@@ -648,8 +1040,6 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
         "git", "nagios", "zabbix", "pi", "ubnt", "deploy", "ansible",
         "backup", "service"
     ]
-
-    import time
 
     def _check_user(username: str) -> bool:
         """Check if username is valid via SSH auth timing/response."""

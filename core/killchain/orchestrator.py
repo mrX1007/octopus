@@ -33,6 +33,8 @@ from core.killchain.cleanup import stealth_cleanup
 from core.killchain.vuln_assess import vuln_assess
 from core.killchain.exploitation import auto_exploit
 
+logger = logging.getLogger("octopus.killchain.orchestrator")
+
 # ANSI Colors
 C_GREEN  = "\033[92m"
 C_YELLOW = "\033[93m"

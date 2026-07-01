@@ -21,7 +21,6 @@ Architecture:
 """
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger("octopus.ai.context")
 

@@ -14,7 +14,7 @@ Usage:
 
 import time
 import logging
-from typing import Dict, Any, List, Callable, Optional
+from typing import Dict, Any, List, Callable
 from dataclasses import dataclass, field
 
 

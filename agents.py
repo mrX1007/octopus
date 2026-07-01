@@ -1,24 +1,33 @@
 #!/usr/bin/env python3
-"""
+"""Legacy prompt-driven multi-agent layer.
+
+The primary evidence-first implementation is ``core.ai.pipeline``. This module
+is retained for compatibility with older ``analyse_target`` workflows.
 """
 
 import re
-import json
 import time
 import logging
 from enum import IntEnum
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+
+from core.ai.fact_engine import extract_facts_from_output
+from core.ai.ollama_client import ask_ollama
+from core.ai.tag_parser import extract_tags
+from core.ai.vuln_builder import build_vulns_from_facts
+from tools import (
+    get_all_known_creds_for_target,
+    get_best_creds_for_target,
+    get_known_creds,
+    run_arbitrary_cmd,
+    run_tool_by_command,
+)
 
 try:
-    from llm import (ask_ollama, extract_tags, build_vulns_from_facts,
-                     extract_facts_from_output)
-    from tools import (run_tool_by_command, run_arbitrary_cmd,
-                       get_best_creds_for_target, get_all_known_creds_for_target,
-                       get_known_creds)
     from memory import get_memory
 except ImportError:
-    pass
+    def get_memory():
+        return None
 
 # Colors
 C_RESET   = "\033[0m"
@@ -944,4 +953,3 @@ Execute {task_type} (maximum 3 tools). {"Remove ALL forensic traces!" if is_clea
         else:
             sum_prompt = f"Tool outputs:\n{results[:2500]}\n\nSummarize post-exploitation results in 3-5 lines."
         return self.query(sum_prompt)
-

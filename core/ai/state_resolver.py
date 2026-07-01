@@ -51,15 +51,20 @@ class StateResolver:
                     state["web_services_found"] = True
                 if '22' in val or 'ssh' in val:
                     state["ssh_service_found"] = True
-            elif f['type'] in {'browser_rendered', 'web_title', 'web_surface', 'web_input', 'web_link'}:
+            elif f['type'] in {
+                'browser_rendered', 'web_title', 'web_surface', 'web_input',
+                'web_endpoint', 'web_link', 'web_server', 'web_redirect', 'web_powered_by',
+            }:
                 state["recon_completed"] = True
                 state["web_services_found"] = True
+                val = f['value'].lower()
                 if f['type'] == 'browser_rendered':
-                    val = f['value'].lower()
                     if val.startswith("https://") or ":443" in val:
                         state["open_ports"].append("443/tcp (https)")
                     elif val.startswith("http://") or ":80" in val:
                         state["open_ports"].append("80/tcp (http)")
+                elif not any("80/tcp" in port or "443/tcp" in port for port in state["open_ports"]):
+                    state["open_ports"].append("80/tcp (http)")
 
         # Vulnerabilities (including hypotheses)
         if any('vuln' in ft for ft in fact_types) or any('cve' in fv for fv in fact_values) or any('exploit_success' in ft for ft in fact_types):
@@ -105,8 +110,16 @@ class StateResolver:
         if any('persistence' in ft for ft in fact_types) or any('mechanism_planted' in fv for fv in fact_values):
             state["persistence_established"] = True
 
-        # Internal recon / pivot observations
-        if any(ft in ("internal_host", "internal_subnet", "internal_network") for ft in fact_types):
+        # Internal recon / pivot observations. Host/subnet facts can be observed
+        # during SSH inventory, so only explicit network_recon evidence closes
+        # this stage.
+        if any(ft == "internal_network" for ft in fact_types):
+            state["internal_recon_completed"] = True
+        if any(ft == "post_exploit_stage" and fv == "internal_network_recon_completed"
+               for ft, fv in zip(fact_types, fact_values)):
+            state["internal_recon_completed"] = True
+        if any(ft == "service_status" and fv in {"network_recon_completed", "internal_network_recon_completed"}
+               for ft, fv in zip(fact_types, fact_values)):
             state["internal_recon_completed"] = True
 
         # Exfil & Cleanup

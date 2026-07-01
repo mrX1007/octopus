@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
+import json
 import re
 import logging
 import ipaddress
 from typing import Dict, Any, List
+from urllib.parse import urlparse, urlunparse
+from core.ai.parsers import ParserFamilyPipeline
 
 logger = logging.getLogger("octopus.evidence")
 
@@ -38,6 +41,9 @@ class EvidenceVerifier:
         for req in required_evidence:
             req_norm = self._norm(req)
             if req_norm in {"state", "services", "service", "open_questions", "ports_count"}:
+                missing_evidence.append(req)
+                continue
+            if self._workflow_marker_cannot_prove_claim(req_norm, claim):
                 missing_evidence.append(req)
                 continue
             found = any(req_norm == term or req_norm in term or term in req_norm
@@ -81,6 +87,19 @@ class EvidenceVerifier:
     def _norm(self, value: str) -> str:
         return re.sub(r'[^a-z0-9]+', '_', str(value).lower()).strip('_')
 
+    def _workflow_marker_cannot_prove_claim(self, req_norm: str, claim: str) -> bool:
+        workflow_only = any(marker in req_norm for marker in ("unknown", "pending", "needed"))
+        if not workflow_only:
+            return False
+        claim_norm = self._norm(claim)
+        if any(marker in claim_norm for marker in ("pending", "unknown", "needed")):
+            return False
+        positive_claim_markers = (
+            "vulnerable", "exposed", "exposure", "rce", "exploit",
+            "root", "access", "session", "compromised",
+        )
+        return any(marker in claim_norm for marker in positive_claim_markers)
+
     def _build_evidence_terms(self, scan_id: str, host: str, facts: List[Dict[str, Any]]) -> set:
         terms = {self._norm(f"host:{host}"), self._norm(host)}
 
@@ -99,18 +118,34 @@ class EvidenceVerifier:
 
             terms.add(self._norm(f"state:{context.get('state', '')}"))
             terms.add(self._norm(f"state_{context.get('state', '')}"))
+            terms.add(self._norm(f"state_is_{context.get('state', '')}"))
             terms.add(self._norm(f"ports_count:{context.get('ports_count', 0)}"))
             terms.add(self._norm(f"ports_count_{context.get('ports_count', 0)}"))
+            terms.add(self._norm(f"ports_count_equals_{context.get('ports_count', 0)}"))
 
             for service in context.get("services", []):
                 terms.add(self._norm(f"service:{service}"))
                 terms.add(self._norm(f"service_{service}"))
                 terms.add(self._norm(f"services:{service}"))
                 terms.add(self._norm(f"services_{service}"))
+                terms.add(self._norm(f"services_include_{service}"))
+                terms.add(self._norm(f"{service}_service"))
+                terms.add(self._norm(f"{service}_service_active"))
+                terms.add(self._norm(f"{service}_service_running"))
+                terms.add(self._norm(f"services_{service}_active"))
 
             for question in context.get("open_questions", []):
                 terms.add(self._norm(f"open_questions:{question}"))
                 terms.add(self._norm(f"open_questions_{question}"))
+
+            for gate, enabled in (context.get("stage_gates") or {}).items():
+                bool_text = str(bool(enabled)).lower()
+                yes_no = "yes" if enabled else "no"
+                terms.add(self._norm(f"stage_gates.{gate}:{bool_text}"))
+                terms.add(self._norm(f"stage_gates:{gate}:{bool_text}"))
+                terms.add(self._norm(f"stage_gates_{gate}_{bool_text}"))
+                terms.add(self._norm(f"{gate}:{bool_text}"))
+                terms.add(self._norm(f"{gate}:{yes_no}"))
         except Exception as exc:
             logger.debug("Could not build derived evidence terms: %s", exc)
 
@@ -156,22 +191,27 @@ class RegexParser:
         # Manual recon blobs are passed as "manual_recon", so detect the table
         # shape in the output too. Otherwise real nmap ports are lost before
         # StateResolver/ContextBuilder can route web/cPanel/MSF follow-ups.
-        has_port_table = re.search(r'(?m)^\s*\d+/(?:tcp|udp)\s+open\s+', raw_output) is not None
+        port_line_re = re.compile(
+            r'(?m)^\s*(?:\[[^\]\n]+\]\s*)?(\d+)/(tcp|udp)[ \t]+'
+            r'(open|filtered)[ \t]+(\S+)(?:[ \t]+([^\n]+))?'
+        )
+        has_port_table = port_line_re.search(raw_output) is not None
         if "nmap" in tool_lower or "rustscan" in tool_lower or has_port_table:
-            for m in re.finditer(r'(?m)^\s*(\d+)/tcp[ \t]+(open|filtered)[ \t]+(\S+)(?:[ \t]+([^\n]+))?', raw_output):
+            for m in port_line_re.finditer(raw_output):
                 port = m.group(1)
-                state = m.group(2)
-                service = m.group(3)
-                version = m.group(4).strip() if m.group(4) else ""
+                proto = m.group(2)
+                state = m.group(3)
+                service = m.group(4)
+                version = m.group(5).strip() if m.group(5) else ""
                 if state == "filtered":
                     facts.append({
                         "type": "port_filtered",
-                        "value": f"{port}/tcp ({service})",
+                        "value": f"{port}/{proto} ({service})",
                         "confidence": 85,
                         "session_id": session_id,
                     })
                     continue
-                value = f"{port}/tcp ({service})"
+                value = f"{port}/{proto} ({service})"
                 if version:
                     value += f" [{version[:60]}]"
                 facts.append({"type": "port_open", "value": value, "confidence": 100, "session_id": session_id})
@@ -201,6 +241,42 @@ class RegexParser:
                 "confidence": 95,
                 "session_id": session_id,
             })
+
+        for detected in re.finditer(r"Web ports detected\s+\[([^\]]+)\]", raw_output, re.IGNORECASE):
+            for port in re.findall(r"\d{2,5}", detected.group(1)):
+                service = "https" if port in {"443", "8443", "2083", "2087", "2096", "9443"} else "http"
+                facts.append({
+                    "type": "port_open",
+                    "value": f"{port}/tcp ({service})",
+                    "confidence": 90,
+                    "session_id": session_id,
+                })
+
+        if re.search(r'\[(?:TIMEOUT|timeout)\]', raw_output):
+            tool_label = (tool_name or "tool").split()[0]
+            facts.append({
+                "type": "service_status",
+                "value": f"tool_timeout:{tool_label}",
+                "confidence": 80,
+                "session_id": session_id,
+            })
+
+        if "ffuf" in tool_lower or "scrapling_crawl" in tool_lower or "crawl" in tool_lower:
+            if "no http(s) response" in raw_lower:
+                facts.append({
+                    "type": "service_status",
+                    "value": "web_content_discovery_skipped:no_http_response",
+                    "confidence": 90,
+                    "session_id": session_id,
+                })
+        if "ffuf" in tool_lower:
+            if "no common web wordlists found" in raw_lower:
+                facts.append({
+                    "type": "service_status",
+                    "value": "web_content_discovery_skipped:no_wordlist",
+                    "confidence": 90,
+                    "session_id": session_id,
+                })
 
         # ── cPanel/WHM exploit output (cpanel_sniper) ──
         if "VULNERABLE" in raw_output and ("cpsess" in raw_output or "cPanel" in raw_output or "WHM" in raw_output):
@@ -244,6 +320,16 @@ class RegexParser:
                 facts.append({"type": "application_access", "value": "cpanel_whm_authenticated", "confidence": 100, "session_id": session_id})
 
         # ── Exploit selector / Metasploit planning facts ──
+        if "exploit_select" in tool_lower or "exploit selection" in raw_lower:
+            services_analyzed = re.search(r'^Services analyzed:\s*(\d+)', raw_output, re.IGNORECASE | re.MULTILINE)
+            count = services_analyzed.group(1) if services_analyzed else "unknown"
+            facts.append({
+                "type": "service_status",
+                "value": f"exploit_selection_completed:{count}",
+                "confidence": 85,
+                "session_id": session_id,
+            })
+
         for m in re.finditer(
             r'^\[EXPLOIT CANDIDATE\s+\d+\]\s+([^:\s]+):(\d+)\s+(.+?)\s+->\s+(\S+)',
             raw_output,
@@ -271,7 +357,11 @@ class RegexParser:
         for m in re.finditer(r"MSF module '([^']+)' does NOT EXIST", raw_output, re.IGNORECASE):
             facts.append({"type": "service_status", "value": f"msf_module_invalid:{m.group(1)}", "confidence": 95, "session_id": session_id})
 
-        msf_module_match = re.search(r'\b(?:msf_check|msf_run)\s+\S+\s+(\S+)', tool_name, re.IGNORECASE)
+        msf_module_match = (
+            re.search(r'\b(?:msf_check|msf_run)\s+\S+\s+(\S+)', tool_name, re.IGNORECASE)
+            or re.search(r'(?im)^\s*\[\*\]\s*MSF Module:\s*(\S+)\s*$', raw_output)
+            or re.search(r'\b(?:msf_check|msf_run)\s+\S+\s+(\S+)', raw_output, re.IGNORECASE)
+        )
         msf_module = msf_module_match.group(1) if msf_module_match else "unknown"
         msf_negative = (
             "does not appear to be vulnerable" in raw_lower
@@ -285,12 +375,29 @@ class RegexParser:
             or "check appears" in raw_lower
             or re.search(r'\bis vulnerable\b', raw_lower) is not None
         )
-        if "msf_check" in tool_lower or "metasploit_check" in tool_lower:
-            if msf_negative:
+        msf_check_context = (
+            "msf_check" in tool_lower
+            or "metasploit_check" in tool_lower
+            or "dispatching tool: msf_check" in raw_lower
+            or "[running follow-up] msf_check" in raw_lower
+            or "msf::optionvalidateerror" in raw_lower
+        )
+        if msf_check_context:
+            if "optionvalidateerror" in raw_lower or "failed to validate" in raw_lower:
+                facts.append({"type": "service_status", "value": f"msf_check_invalid_options:{msf_module}", "confidence": 95, "session_id": session_id})
+            elif msf_negative:
                 facts.append({"type": "service_status", "value": f"msf_check_not_vulnerable:{msf_module}", "confidence": 90, "session_id": session_id})
             elif msf_positive:
                 facts.append({"type": "vulnerability", "value": f"msf_check_positive:{msf_module}", "confidence": 90, "session_id": session_id})
                 facts.append({"type": "msf_module", "value": msf_module, "confidence": 90, "session_id": session_id})
+                rport_match = re.search(r'\bRPORT(?:S)?=(\d{1,5})\b', tool_name, re.IGNORECASE)
+                if rport_match:
+                    facts.append({
+                        "type": "vulnerability_endpoint",
+                        "value": f"msf_check_positive:{msf_module}:{rport_match.group(1)}",
+                        "confidence": 90,
+                        "session_id": session_id,
+                    })
 
         if re.search(r'(?:meterpreter|command shell) session \d+ opened', raw_output, re.IGNORECASE):
             facts.append({"type": "exploit_success", "value": f"msf_session_opened:{msf_module}", "confidence": 100, "session_id": session_id})
@@ -357,8 +464,27 @@ class RegexParser:
             facts.append({"type": "credential_material", "value": "shadow_file_extracted", "confidence": 100, "session_id": session_id})
 
         files_exfiltrated = re.search(r'Files exfiltrated:\s*(\d+)', raw_output, re.IGNORECASE)
-        if is_exfil_stage and files_exfiltrated:
-            count = files_exfiltrated.group(1)
+        exfil_paths = []
+        if is_exfil_stage:
+            for m in re.finditer(r'^\[\+\]\s+EXFIL:\s*(.*?)\s+(?:→|->)\s+(.+?)\s+\((\d+)\s+bytes\)', raw_output, re.MULTILINE):
+                remote_path, local_path, size = m.groups()
+                remote_path = remote_path.strip()
+                local_path = local_path.strip()
+                exfil_paths.append(remote_path)
+                facts.append({"type": "loot_artifact", "value": f"file:{remote_path[:220]}", "confidence": 85, "session_id": session_id})
+                facts.append({"type": "loot_artifact", "value": f"local_copy:{local_path[:220]}", "confidence": 80, "session_id": session_id})
+                if remote_path.endswith((".env", "wp-config.php", "config.php", "settings.py", "database.yml", "application.yml")):
+                    facts.append({"type": "config_candidate", "value": remote_path[:240], "confidence": 85, "session_id": session_id})
+                if remote_path.endswith(("id_rsa", "id_ed25519", "authorized_keys", "known_hosts")):
+                    facts.append({"type": "credential_material", "value": f"ssh_material:{remote_path[:180]}", "confidence": 85, "session_id": session_id})
+            total_data = re.search(r'Total data:\s*([\d,]+)\s+bytes', raw_output, re.IGNORECASE)
+            if total_data:
+                facts.append({"type": "loot_artifact", "value": f"total_bytes:{total_data.group(1).replace(',', '')}", "confidence": 85, "session_id": session_id})
+            if "credentials in file" in raw_lower or "private key captured" in raw_lower:
+                facts.append({"type": "credential_material", "value": "sensitive_material_observed_in_loot", "confidence": 90, "session_id": session_id})
+
+        if is_exfil_stage and (files_exfiltrated or exfil_paths):
+            count = files_exfiltrated.group(1) if files_exfiltrated else str(len(exfil_paths))
             facts.append({"type": "data_exfiltration", "value": f"files_exfiltrated:{count}", "confidence": 100, "session_id": session_id})
             facts.append({"type": "post_exploit_stage", "value": "data_exfiltration_completed", "confidence": 100, "session_id": session_id})
             if int(count) > 0:
@@ -451,6 +577,30 @@ class RegexParser:
                 if marker in raw_lower:
                     facts.append({"type": "app_stack", "value": stack, "confidence": 75, "session_id": session_id})
 
+            software_patterns = [
+                ("nginx", r'nginx version:\s*(nginx/[^\s]+)'),
+                ("apache", r'Server version:\s*(Apache/[^\n]+)'),
+                ("php", r'(?m)^(PHP\s+\d+(?:\.\d+){1,3}[^\n]*)'),
+                ("python", r'(?m)^(Python\s+\d+(?:\.\d+){1,3}[^\n]*)'),
+                ("nodejs", r'(?m)^(v\d+(?:\.\d+){1,3})$'),
+                ("docker", r'(?m)^(Docker version\s+[^\n]+)'),
+                ("podman", r'(?m)^(podman version\s+[^\n]+)'),
+                ("postgresql", r'(?m)^(psql\s+\(PostgreSQL\)\s+[^\n]+)'),
+                ("mysql", r'(?m)^(mysql\s+Ver\s+[^\n]+)'),
+                ("redis", r'(?m)^(Redis server v=[^\s]+)'),
+                ("mongodb", r'(?m)^(db version v[^\s]+|mongod.*?v\d+(?:\.\d+){1,3}[^\n]*)'),
+            ]
+            for service, pattern in software_patterns:
+                for m in re.finditer(pattern, raw_output, re.IGNORECASE):
+                    version_text = re.sub(r'\s+', ' ', m.group(1)).strip()
+                    if version_text:
+                        facts.append({
+                            "type": "service_version",
+                            "value": f"{service}:local:{version_text[:140]}",
+                            "confidence": 80,
+                            "session_id": session_id,
+                        })
+
             for m in re.finditer(r'(?m)^(/(?:var/www|srv|opt|home)/[^\s]+/(?:public|html|www|app|current))\s*$', raw_output):
                 facts.append({"type": "web_root", "value": m.group(1)[:220], "confidence": 80, "session_id": session_id})
 
@@ -507,6 +657,14 @@ class RegexParser:
             if any(marker in raw_lower for marker in ("unauthenticated jmx", "jmx proxy is accessible", "vulnerable")):
                 if "not vulnerable" not in raw_lower and "not installed" not in raw_lower:
                     facts.append({"type": "vulnerability", "value": "tomcat_jmx_proxy_exposed", "confidence": 90, "session_id": session_id})
+                    target_match = re.search(r'\bjmx2rce_scan\s+(\S+)', tool_name, re.IGNORECASE)
+                    if target_match:
+                        facts.append({
+                            "type": "vulnerability_endpoint",
+                            "value": f"tomcat_jmx_proxy_exposed:{target_match.group(1)}",
+                            "confidence": 85,
+                            "session_id": session_id,
+                        })
             if "not vulnerable" in raw_lower or "not accessible" in raw_lower:
                 facts.append({"type": "service_status", "value": "jmx2rce_not_vulnerable", "confidence": 85, "session_id": session_id})
 
@@ -516,15 +674,41 @@ class RegexParser:
                 clean_path = "/" + path.strip().lstrip("/")
                 facts.append({"type": "web_path", "value": f"{clean_path}:{status}", "confidence": 85, "session_id": session_id})
 
-        if "scrapling" in tool_lower or "scrapling result" in raw_lower or "requests+bs4 result" in raw_lower:
+        if (
+            "scrapling" in tool_lower
+            or "scrapling result" in raw_lower
+            or "requests+bs4 result" in raw_lower
+            or re.search(r'^\s*\[\*\]\s*Scrapling:', raw_output, re.IGNORECASE | re.MULTILINE)
+            or re.search(r'^\s*Title:', raw_output, re.IGNORECASE | re.MULTILINE)
+        ):
+            crawl_failed = any(marker in raw_lower for marker in (
+                "no http(s) response", "connection failed", "timed out",
+                "returned no output", "not installed", "tool not found",
+            ))
+            if ("scrapling_crawl" in tool_lower or "crawl" in tool_lower) and not crawl_failed:
+                endpoint = re.sub(r'^\s*(?:scrapling_crawl|crawl)\s+', '', tool_name, flags=re.IGNORECASE).strip()
+                if endpoint:
+                    facts.append({
+                        "type": "service_status",
+                        "value": f"web_crawl_completed:{endpoint.lower().rstrip('/')}",
+                        "confidence": 85,
+                        "session_id": session_id,
+                    })
             title_match = re.search(r'^Title:\s*(.+)$', raw_output, re.MULTILINE)
             if title_match:
                 facts.append({"type": "web_title", "value": title_match.group(1).strip()[:180], "confidence": 85, "session_id": session_id})
-            forms_match = re.search(r'^Forms\s*\((\d+)\):', raw_output, re.MULTILINE)
+            forms_match = (
+                re.search(r'^Forms\s*\((\d+)\):', raw_output, re.MULTILINE)
+                or re.search(r'^Forms:\s*(\d+)\s*$', raw_output, re.MULTILINE)
+            )
             if forms_match:
                 facts.append({"type": "web_surface", "value": f"forms:{forms_match.group(1)}", "confidence": 85, "session_id": session_id})
-            for m in re.finditer(r'^\s+[^→\n]{0,80}→\s*(\S.+)$', raw_output, re.MULTILINE):
+            for m in re.finditer(r'^\s+[^→\-\n]{0,80}(?:→|->)\s*(\S.+)$', raw_output, re.MULTILINE):
                 facts.append({"type": "web_link", "value": m.group(1).strip()[:220], "confidence": 75, "session_id": session_id})
+            links_section = re.search(r'(?ims)^Links:\s*\n(?P<body>(?:^\s+(?:https?://|/)[^\s<>"\']+\s*$\n?)+)', raw_output)
+            if links_section:
+                for m in re.finditer(r'(?m)^\s*((?:https?://|/)[^\s<>"\']+)\s*$', links_section.group("body")):
+                    facts.append({"type": "web_link", "value": m.group(1).strip()[:220], "confidence": 75, "session_id": session_id})
 
         if "curl_headers" in tool_lower or "headers:" in raw_lower:
             for header, fact_type in (("server", "web_server"), ("location", "web_redirect"), ("x-powered-by", "web_powered_by")):
@@ -617,12 +801,250 @@ class RegexParser:
                     facts.append({"type": "app_stack", "value": value, "confidence": 75, "session_id": session_id})
 
         if "searchsploit" in tool_lower:
+            query = re.sub(r'^\s*searchsploit\s+', '', tool_name, flags=re.IGNORECASE).strip()
+            if query:
+                query_token = re.sub(r'[^a-z0-9]+', '_', query.lower()).strip('_')[:120]
+                facts.append({
+                    "type": "service_status",
+                    "value": f"searchsploit_queried:{query_token}",
+                    "confidence": 85,
+                    "session_id": session_id,
+                })
             for line in raw_output.splitlines():
                 if "|" not in line:
                     continue
                 title, path = [part.strip() for part in line.rsplit("|", 1)]
-                if "exploits/" in path or "shellcodes/" in path:
+                looks_like_exploit_path = (
+                    "exploits/" in path
+                    or "shellcodes/" in path
+                    or bool(re.search(r'^[a-z0-9_/-]+/\d+\.(?:py|rb|txt|c|sh|pl|php)$', path, re.IGNORECASE))
+                )
+                if looks_like_exploit_path:
                     facts.append({"type": "exploit_reference", "value": f"{title[:100]} -> {path}", "confidence": 75, "session_id": session_id})
+
+        # ── ASM / template / API / cloud / code security assessment facts ──
+        if any(marker in tool_lower for marker in (
+            "subfinder", "amass", "dnsx", "httpx", "naabu", "tlsx",
+            "wayback", "gau", "katana",
+        )) or any(marker in raw_lower for marker in (
+            "[asm subfinder", "[asm amass", "[asm dnsx", "[asm httpx",
+            "[asm naabu", "[asm tlsx", "[asm wayback", "[asm gau",
+            "[katana crawl",
+        )):
+            for line in raw_output.splitlines():
+                line = line.strip()
+                if not line or line.startswith("["):
+                    continue
+                for url in re.findall(r'\bhttps?://[^\s"\'<>]+', line):
+                    facts.append({"type": "asset_url", "value": url.rstrip("/"), "confidence": 85, "session_id": session_id})
+                    facts.append({"type": "web_endpoint", "value": url.rstrip("/") + "/", "confidence": 80, "session_id": session_id})
+                for host in re.findall(r'\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b', line):
+                    facts.append({"type": "asset_domain", "value": host.lower().strip("."), "confidence": 85, "session_id": session_id})
+                for ip in re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', line):
+                    facts.append({"type": "asset_ip", "value": ip, "confidence": 85, "session_id": session_id})
+                status_match = re.search(r'\[(\d{3})\]', line)
+                title_match = re.search(r'\[(?!\d{3}\])([^\]]{2,120})\]', line)
+                tech_match = re.search(r'\[([A-Za-z0-9_.+:/, -]{2,160})\]\s*$', line)
+                if status_match and re.search(r'https?://', line):
+                    facts.append({"type": "http_status", "value": f"{status_match.group(1)}:{line[:180]}", "confidence": 80, "session_id": session_id})
+                if title_match and re.search(r'https?://', line):
+                    facts.append({"type": "web_title", "value": title_match.group(1).strip()[:180], "confidence": 75, "session_id": session_id})
+                if tech_match and re.search(r'https?://', line):
+                    tech = tech_match.group(1).strip()
+                    if not tech.isdigit():
+                        facts.append({"type": "technology", "value": tech[:160], "confidence": 75, "session_id": session_id})
+                port_match = re.search(r'((?:\d{1,3}\.){3}\d{1,3}|(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}):(\d{1,5})', line)
+                if port_match:
+                    host, port = port_match.groups()
+                    facts.append({"type": "asset_service", "value": f"{host.lower()}:{port}/tcp", "confidence": 80, "session_id": session_id})
+
+        if "nuclei" in tool_lower or "[nuclei safe" in raw_lower or "[nuclei results]" in raw_lower:
+            for line in raw_output.splitlines():
+                line = line.strip()
+                if not line or line.startswith("[NUCLEI"):
+                    continue
+                if line.startswith("{"):
+                    try:
+                        data = json.loads(line)
+                    except Exception:
+                        data = {}
+                    template = data.get("template-id") or data.get("template") or data.get("id") or "unknown"
+                    severity = str(data.get("info", {}).get("severity") or data.get("severity") or "info").lower()
+                    matched = data.get("matched-at") or data.get("host") or data.get("url") or ""
+                    name = data.get("info", {}).get("name") or template
+                    facts.append({"type": "nuclei_finding", "value": f"{severity}:{template}:{matched}:{name}"[:500], "confidence": 90, "session_id": session_id})
+                    if matched:
+                        facts.append({"type": "asset_url", "value": str(matched).rstrip("/"), "confidence": 85, "session_id": session_id})
+                    continue
+                match = re.match(r'\[([^\]]+)\]\s+\[([^\]]+)\]\s+\[([^\]]+)\]\s+(\S+)', line)
+                if match:
+                    template, _proto, severity, matched = match.groups()
+                    facts.append({"type": "nuclei_finding", "value": f"{severity.lower()}:{template}:{matched}"[:500], "confidence": 85, "session_id": session_id})
+
+        if "openapi_import" in tool_lower or "[openapi import" in raw_lower:
+            for m in re.finditer(r'^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S+)\s+auth=(\S+)', raw_output, re.MULTILINE):
+                method, path, auth = m.groups()
+                facts.append({"type": "api_endpoint", "value": f"{method}:{path}:auth={auth}", "confidence": 90, "session_id": session_id})
+                if auth == "unknown_or_none":
+                    facts.append({"type": "api_security_note", "value": f"auth_unknown_or_none:{method}:{path}", "confidence": 75, "session_id": session_id})
+                if re.search(r'\b(?:id|user|account|tenant|order|invoice|customer)[_-]?(?:id)?\b', path, re.IGNORECASE) or re.search(r'\{[^}]*id[^}]*\}', path, re.IGNORECASE):
+                    facts.append({"type": "api_security_note", "value": f"idor_candidate:{method}:{path}", "confidence": 65, "session_id": session_id})
+                if method in {"PUT", "PATCH", "POST"} and auth == "unknown_or_none":
+                    facts.append({"type": "api_security_note", "value": f"mass_assignment_candidate:{method}:{path}", "confidence": 60, "session_id": session_id})
+
+        if "graphql_check" in tool_lower or "[graphql check" in raw_lower:
+            if "__schema" in raw_output or "queryType" in raw_output:
+                facts.append({"type": "api_endpoint", "value": "POST:/graphql:graphql", "confidence": 85, "session_id": session_id})
+                facts.append({"type": "api_security_note", "value": "graphql_introspection_enabled", "confidence": 85, "session_id": session_id})
+
+        if "security_headers" in tool_lower or "[security headers" in raw_lower or "curl_headers" in tool_lower or "headers:" in raw_lower:
+            header_map = {}
+            for m in re.finditer(r'(?im)^([A-Za-z0-9-]+):\s*(.+)$', raw_output):
+                header_map[m.group(1).lower()] = m.group(2).strip()
+            expected = {
+                "strict-transport-security": "missing_hsts",
+                "content-security-policy": "missing_csp",
+                "x-frame-options": "missing_x_frame_options",
+                "x-content-type-options": "missing_x_content_type_options",
+                "referrer-policy": "missing_referrer_policy",
+            }
+            if header_map:
+                for header, note in expected.items():
+                    if header not in header_map:
+                        facts.append({"type": "web_security_note", "value": note, "confidence": 65, "session_id": session_id})
+                csp = header_map.get("content-security-policy", "")
+                if csp and ("'unsafe-inline'" in csp or "*" in csp):
+                    facts.append({"type": "web_security_note", "value": "weak_csp_policy", "confidence": 70, "session_id": session_id})
+                for cookie in re.findall(r'(?im)^set-cookie:\s*(.+)$', raw_output):
+                    cookie_l = cookie.lower()
+                    cookie_name = cookie.split("=", 1)[0][:80]
+                    if "httponly" not in cookie_l:
+                        facts.append({"type": "web_security_note", "value": f"cookie_missing_httponly:{cookie_name}", "confidence": 75, "session_id": session_id})
+                    if "secure" not in cookie_l:
+                        facts.append({"type": "web_security_note", "value": f"cookie_missing_secure:{cookie_name}", "confidence": 75, "session_id": session_id})
+                    if "samesite" not in cookie_l:
+                        facts.append({"type": "web_security_note", "value": f"cookie_missing_samesite:{cookie_name}", "confidence": 75, "session_id": session_id})
+
+        if "cors_check" in tool_lower or "[cors check" in raw_lower:
+            origin = re.search(r'(?im)^origin:\s*(.+)$', raw_output)
+            acao = re.search(r'(?im)^access-control-allow-origin:\s*(.+)$', raw_output)
+            acac = re.search(r'(?im)^access-control-allow-credentials:\s*(.+)$', raw_output)
+            if acao:
+                allow_origin = acao.group(1).strip()
+                facts.append({"type": "web_security_note", "value": f"cors_allow_origin:{allow_origin[:120]}", "confidence": 75, "session_id": session_id})
+                if allow_origin == "*" or (origin and allow_origin == origin.group(1).strip()):
+                    facts.append({"type": "web_security_note", "value": "cors_reflective_or_wildcard_origin", "confidence": 80, "session_id": session_id})
+            if acac and acac.group(1).strip().lower() == "true":
+                facts.append({"type": "web_security_note", "value": "cors_credentials_allowed", "confidence": 80, "session_id": session_id})
+
+        if "jwt_analyze" in tool_lower or "[jwt analyze" in raw_lower:
+            alg = re.search(r'(?im)^alg:\s*(\S+)', raw_output)
+            kid = re.search(r'(?im)^kid:\s*(\S+)', raw_output)
+            claims = re.search(r'(?im)^claims:\s*(.+)$', raw_output)
+            if alg:
+                value = alg.group(1).strip()
+                facts.append({"type": "jwt_metadata", "value": f"alg:{value}", "confidence": 85, "session_id": session_id})
+                if value.lower() in {"none", "hs256"}:
+                    facts.append({"type": "web_security_note", "value": f"jwt_review_required_alg:{value}", "confidence": 70, "session_id": session_id})
+            if kid and kid.group(1).strip():
+                facts.append({"type": "jwt_metadata", "value": f"kid:{kid.group(1).strip()[:120]}", "confidence": 80, "session_id": session_id})
+            if claims:
+                facts.append({"type": "jwt_metadata", "value": f"claims:{claims.group(1).strip()[:220]}", "confidence": 80, "session_id": session_id})
+
+        if "js_route_extract" in tool_lower or "[js route extract" in raw_lower:
+            for line in raw_output.splitlines():
+                line = line.strip()
+                if not line or line.startswith("[") or line.startswith("Routes:"):
+                    continue
+                if line.startswith(("http://", "https://", "/")):
+                    facts.append({"type": "js_route", "value": line[:300], "confidence": 75, "session_id": session_id})
+                    if any(marker in line.lower() for marker in ("/api/", "/graphql", "/admin", "/user", "/account")):
+                        facts.append({"type": "api_endpoint", "value": f"UNKNOWN:{line}:source=js", "confidence": 65, "session_id": session_id})
+                    if (
+                        re.search(r'(?:^|[/?&])(id|user_id|account_id|tenant_id|order_id)=', line, re.IGNORECASE)
+                        or re.search(r'\{[^}]*id[^}]*\}', line, re.IGNORECASE)
+                    ):
+                        facts.append({"type": "api_security_note", "value": f"idor_candidate:UNKNOWN:{line[:160]}", "confidence": 60, "session_id": session_id})
+
+        if "burp_import" in tool_lower or "zap_import" in tool_lower or "[burp import" in raw_lower or "[zap import" in raw_lower:
+            for m in re.finditer(r'^(?:URL)\s+(https?://\S+)', raw_output, re.MULTILINE):
+                url = m.group(1).rstrip("/")
+                facts.append({"type": "asset_url", "value": url, "confidence": 85, "session_id": session_id})
+                facts.append({"type": "web_endpoint", "value": url + "/", "confidence": 80, "session_id": session_id})
+            for m in re.finditer(r'^(?:ISSUE|ALERT)\s+(.+)$', raw_output, re.MULTILINE):
+                issue = m.group(1).strip()
+                facts.append({"type": "proxy_finding", "value": issue[:300], "confidence": 80, "session_id": session_id})
+                if re.search(r'(?i)(cors|csrf|idor|jwt|cookie|clickjack|x-frame|content security|csp)', issue):
+                    facts.append({"type": "web_security_note", "value": f"proxy:{issue[:220]}", "confidence": 75, "session_id": session_id})
+
+        if any(marker in tool_lower for marker in ("gitleaks", "trufflehog")) or any(marker in raw_lower for marker in ("[gitleaks scan", "[trufflehog scan")):
+            for line in raw_output.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                data = {}
+                if line.startswith("{"):
+                    try:
+                        data = json.loads(line)
+                    except Exception:
+                        data = {}
+                secret_type = data.get("RuleID") or data.get("DetectorName") or data.get("SourceName") or ""
+                location = data.get("File") or data.get("SourceMetadata", {}).get("Data", {}).get("Filesystem", {}).get("file") or data.get("SourceID") or ""
+                verified = data.get("Verified")
+                if secret_type or location:
+                    verified_text = "validated" if verified is True else "unvalidated"
+                    facts.append({"type": "secret_finding", "value": f"{secret_type}:{location}:{verified_text}:rotation_required"[:500], "confidence": 90 if verified else 75, "session_id": session_id})
+                elif re.search(r'(?i)(api[_-]?key|secret|token|private key|password)', line):
+                    facts.append({"type": "secret_finding", "value": f"generic:{line[:220]}:unvalidated:rotation_required", "confidence": 65, "session_id": session_id})
+
+        if any(marker in tool_lower for marker in ("semgrep", "trivy", "checkov")) or any(marker in raw_lower for marker in ("[semgrep scan", "[trivy scan", "[checkov scan")):
+            parsed_objects = []
+            for line in raw_output.splitlines():
+                line = line.strip()
+                if not line.startswith("{"):
+                    continue
+                try:
+                    parsed_objects.append(json.loads(line))
+                except Exception:
+                    continue
+            for data in parsed_objects:
+                for result in data.get("results", [])[:500] if isinstance(data.get("results"), list) else []:
+                    check_id = result.get("check_id") or result.get("rule_id") or "semgrep"
+                    path = result.get("path") or result.get("extra", {}).get("path") or ""
+                    severity = str(result.get("extra", {}).get("severity") or result.get("severity") or "info").lower()
+                    facts.append({"type": "code_finding", "value": f"{severity}:{check_id}:{path}"[:500], "confidence": 85, "session_id": session_id})
+                for result_group in data.get("Results", [])[:50]:
+                    target = result_group.get("Target", "")
+                    for vuln in result_group.get("Vulnerabilities", [])[:500]:
+                        facts.append({"type": "code_finding", "value": f"{str(vuln.get('Severity', 'UNKNOWN')).lower()}:{vuln.get('VulnerabilityID')}:{target}"[:500], "confidence": 85, "session_id": session_id})
+                    for misconf in result_group.get("Misconfigurations", [])[:500]:
+                        facts.append({"type": "code_finding", "value": f"{str(misconf.get('Severity', 'UNKNOWN')).lower()}:{misconf.get('ID')}:{target}"[:500], "confidence": 85, "session_id": session_id})
+                    for secret in result_group.get("Secrets", [])[:500]:
+                        facts.append({"type": "secret_finding", "value": f"{secret.get('RuleID', 'trivy_secret')}:{target}:unvalidated:rotation_required"[:500], "confidence": 80, "session_id": session_id})
+                failed_checks = data.get("results", {}).get("failed_checks", []) if isinstance(data.get("results"), dict) else []
+                for failed in failed_checks[:500]:
+                    check_id = failed.get("check_id") or failed.get("bc_check_id") or "checkov"
+                    file_path = failed.get("file_path") or failed.get("file_abs_path") or ""
+                    severity = str(failed.get("severity") or "info").lower()
+                    facts.append({"type": "code_finding", "value": f"{severity}:{check_id}:{file_path}"[:500], "confidence": 85, "session_id": session_id})
+
+        if "prowler" in tool_lower or "scoutsuite" in tool_lower or "[prowler scan" in raw_lower or "[scoutsuite scan" in raw_lower:
+            for line in raw_output.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                data = {}
+                if line.startswith("{"):
+                    try:
+                        data = json.loads(line)
+                    except Exception:
+                        data = {}
+                status = str(data.get("Status") or data.get("status") or "").lower()
+                severity = str(data.get("Severity") or data.get("severity") or data.get("level") or "info").lower()
+                check_id = data.get("CheckID") or data.get("check_id") or data.get("id") or ""
+                resource = data.get("ResourceId") or data.get("resource_id") or data.get("ServiceName") or data.get("service") or ""
+                if check_id and status in {"fail", "failed", "danger", "warning"}:
+                    facts.append({"type": "cloud_finding", "value": f"{severity}:{check_id}:{resource}"[:500], "confidence": 85, "session_id": session_id})
 
         # ── Generated local payload / C2 artifacts ──
         for label, artifact_type in (
@@ -683,7 +1105,9 @@ class RegexParser:
         # ── Active Directory enumeration / Kerberos / domain credential flow ──
         if ("ad enumeration" in raw_lower or "[ad users]" in raw_lower
                 or "[ad groups]" in raw_lower or "[ad computers]" in raw_lower
-                or "[group policy objects]" in raw_lower):
+                or "[group policy objects]" in raw_lower
+                or "[bloodhound ingest]" in raw_lower
+                or "[ad security review]" in raw_lower):
             facts.append({"type": "ad_enumeration", "value": "completed", "confidence": 90, "session_id": session_id})
 
             for label, fact_type in (
@@ -707,6 +1131,55 @@ class RegexParser:
             bh_match = re.search(r'BloodHound data collected\s*(?:→|->)\s*(\S+)', raw_output, re.IGNORECASE)
             if bh_match:
                 facts.append({"type": "ad_graph_data", "value": bh_match.group(1)[:220], "confidence": 95, "session_id": session_id})
+
+            for m in re.finditer(r'(?im)^(?:BloodHound|SharpHound)\s+(?:file|zip|data):\s*(\S+)', raw_output):
+                facts.append({"type": "ad_graph_data", "value": m.group(1)[:220], "confidence": 90, "session_id": session_id})
+
+            for m in re.finditer(r'(?im)^(?:Shortest paths to Domain Admins|Attack paths):\s*(\d+)', raw_output):
+                facts.append({"type": "ad_attack_path", "value": f"domain_admin_paths:{m.group(1)}", "confidence": 85, "session_id": session_id})
+
+            for m in re.finditer(r'(?im)^Local admin paths?:\s*(\d+)', raw_output):
+                facts.append({"type": "ad_local_admin_path", "value": f"count:{m.group(1)}", "confidence": 85, "session_id": session_id})
+
+            for m in re.finditer(r'(?im)^High value (?:targets|objects):\s*(\d+)', raw_output):
+                facts.append({"type": "ad_high_value_object", "value": f"count:{m.group(1)}", "confidence": 85, "session_id": session_id})
+
+            for m in re.finditer(r'(?im)^(?:User|Group|Computer|OU|GPO):\s*([A-Za-z0-9_.@\\/-]{2,180})', raw_output):
+                facts.append({"type": "ad_object", "value": m.group(1)[:180], "confidence": 75, "session_id": session_id})
+
+            policy_patterns = (
+                ("min_length", r'(?im)^Minimum password length:\s*(\d+)'),
+                ("history_length", r'(?im)^Password history length:\s*(\d+)'),
+                ("max_age_days", r'(?im)^Maximum password age(?: \(days\))?:\s*(\d+)'),
+                ("lockout_threshold", r'(?im)^Lockout threshold:\s*(\d+)'),
+            )
+            for key, pattern in policy_patterns:
+                for m in re.finditer(pattern, raw_output):
+                    facts.append({"type": "ad_password_policy", "value": f"{key}:{m.group(1)}", "confidence": 85, "session_id": session_id})
+                    if key == "min_length" and int(m.group(1)) < 12:
+                        facts.append({"type": "ad_gpo_issue", "value": f"weak_password_min_length:{m.group(1)}", "confidence": 75, "session_id": session_id})
+                    if key == "lockout_threshold" and int(m.group(1)) == 0:
+                        facts.append({"type": "ad_gpo_issue", "value": "account_lockout_disabled", "confidence": 75, "session_id": session_id})
+
+            for m in re.finditer(r'(?im)^(?:Delegation|Unconstrained delegation|Constrained delegation|RBCD):\s*(.+)$', raw_output):
+                value = re.sub(r'\s+', ' ', m.group(1)).strip()
+                if value:
+                    facts.append({"type": "ad_delegation", "value": value[:260], "confidence": 85, "session_id": session_id})
+            if "unconstrained delegation" in raw_lower:
+                facts.append({"type": "ad_delegation", "value": "unconstrained_delegation_present", "confidence": 85, "session_id": session_id})
+            if "resource-based constrained delegation" in raw_lower or "rbcd" in raw_lower:
+                facts.append({"type": "ad_delegation", "value": "resource_based_constrained_delegation_present", "confidence": 80, "session_id": session_id})
+
+            for m in re.finditer(r'(?im)\b(ESC\d+)\b[:\s-]+(.+)$', raw_output):
+                facts.append({"type": "ad_adcs_issue", "value": f"{m.group(1).upper()}:{m.group(2).strip()[:220]}", "confidence": 85, "session_id": session_id})
+            if "adcs" in raw_lower and any(marker in raw_lower for marker in ("vulnerable template", "enrollee supplies subject", "client authentication")):
+                facts.append({"type": "ad_adcs_issue", "value": "adcs_template_review_required", "confidence": 75, "session_id": session_id})
+
+            for m in re.finditer(r'(?im)^GPO issue:\s*(.+)$', raw_output):
+                facts.append({"type": "ad_gpo_issue", "value": m.group(1).strip()[:260], "confidence": 80, "session_id": session_id})
+
+            for m in re.finditer(r'(?im)\b(GenericAll|GenericWrite|WriteDacl|WriteOwner|AddMember|DCSync|AllExtendedRights)\b.*?(?:->|on|to)\s*([A-Za-z0-9_.@\\/-]{2,180})', raw_output):
+                facts.append({"type": "ad_acl_issue", "value": f"{m.group(1)}:{m.group(2)}", "confidence": 80, "session_id": session_id})
 
         if "as-rep roast" in raw_lower or "$krb5asrep$" in raw_lower:
             count_match = re.search(r'(\d+)\s+AS-REP hash\(es\) extracted\s*(?:→|->)\s*(\S+)?', raw_output, re.IGNORECASE)
@@ -762,7 +1235,30 @@ class RegexParser:
                 or "shardx direct browse" in raw_lower):
             url_match = re.search(r'^URL:\s*(\S+)', raw_output, re.MULTILINE)
             if url_match:
-                facts.append({"type": "browser_rendered", "value": url_match.group(1), "confidence": 90, "session_id": session_id})
+                url_value = url_match.group(1)
+                fetch_failed = any(marker in raw_lower for marker in (
+                    "requests fallback failed",
+                    "all scrapling/requests attempts failed",
+                    "page fetch failed",
+                    "shardx browse failed",
+                    "shardbrowser not ready",
+                    "shardbrowser module not found",
+                ))
+                has_positive_render = any(
+                    re.search(pattern, raw_output, re.MULTILINE)
+                    for pattern in (
+                        r'^Page title:\s*.+$',
+                        r'^Title:\s*.+$',
+                        r'^Content size:\s*\d+\s+bytes',
+                        r'^Forms:\s*\d+',
+                        r'^\s*link:\s*\S+',
+                        r'^\s+[^→\-\n]{0,80}(?:→|->)\s*\S+',
+                    )
+                )
+                if fetch_failed and not has_positive_render:
+                    facts.append({"type": "service_status", "value": f"web_fetch_failed:{url_value}", "confidence": 80, "session_id": session_id})
+                else:
+                    facts.append({"type": "browser_rendered", "value": url_value, "confidence": 90, "session_id": session_id})
 
             title_match = re.search(r'^Page title:\s*(.+)$', raw_output, re.MULTILINE)
             if title_match:
@@ -782,6 +1278,10 @@ class RegexParser:
                 facts.append({"type": "web_input", "value": input_value, "confidence": 90, "session_id": session_id})
                 if input_type.lower() == "password":
                     facts.append({"type": "web_surface", "value": "login_form_detected", "confidence": 95, "session_id": session_id})
+            if re.search(r'^Forms:\s*[1-9]', raw_output, re.MULTILINE):
+                input_names = " ".join(m.group(2).lower() for m in re.finditer(r'^\s*input:\s*([^:\s]+):(.+)$', raw_output, re.MULTILINE))
+                if input_names and not any(marker in input_names for marker in ("csrf", "xsrf", "token", "_nonce")):
+                    facts.append({"type": "web_security_note", "value": "csrf_token_not_observed", "confidence": 60, "session_id": session_id})
 
             for m in re.finditer(r'^\s*link:\s*(\S.+)$', raw_output, re.MULTILINE):
                 facts.append({"type": "web_link", "value": m.group(1).strip()[:200], "confidence": 80, "session_id": session_id})
@@ -799,7 +1299,8 @@ class RegexParser:
 
         # ── Internal network / pivot reconnaissance ──
         if ("network discovery" in raw_lower or "internal hosts discovered" in raw_lower
-                or "lateral movement" in raw_lower):
+                or "lateral movement" in raw_lower or "[pivot]" in raw_lower
+                or "network_recon" in tool_lower):
             subnet_match = re.search(r'^\s*Subnets:\s*(.+)$', raw_output, re.MULTILINE)
             if subnet_match:
                 for subnet in re.findall(r'\b(?:\d{1,3}\.){3}\d{1,3}/\d{1,2}\b', subnet_match.group(1)):
@@ -817,6 +1318,12 @@ class RegexParser:
             count_match = re.search(r'Internal hosts discovered:\s*(\d+)', raw_output, re.IGNORECASE)
             if count_match:
                 facts.append({"type": "internal_network", "value": f"hosts_discovered:{count_match.group(1)}", "confidence": 85, "session_id": session_id})
+            elif ("network_recon" in tool_lower or "[running verification] network_recon" in raw_lower) and (
+                "discovering internal networks" in raw_lower
+                or "[pivot]" in raw_lower
+                or re.search(r'\b(?:10|172\.(?:1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b', raw_output)
+            ):
+                facts.append({"type": "service_status", "value": "network_recon_completed", "confidence": 85, "session_id": session_id})
 
             for m in re.finditer(r'LATERAL MOVEMENT SUCCESS:\s*([^\s@]+)@((?:\d{1,3}\.){3}\d{1,3})', raw_output, re.IGNORECASE):
                 user, ip = m.groups()
@@ -870,6 +1377,102 @@ class StructuredParser:
         return facts
 
 
+class WebEndpointParser:
+    """Normalize web-facing observations into stable endpoint facts."""
+
+    def parse(self, tool_name: str, raw_output: str, session_id: str) -> List[Dict[str, Any]]:
+        facts = []
+        raw_lower = (raw_output or "").lower()
+        hard_failure = any(marker in raw_lower for marker in (
+            "no http(s) response",
+            "connection failed",
+            "timed out",
+            "returned no output",
+            "tool not found",
+            "not installed",
+        ))
+        has_positive_render = any(
+            re.search(pattern, raw_output or "", re.MULTILINE)
+            for pattern in (
+                r'^URL:\s*https?://\S+',
+                r'^Page title:\s*.+$',
+                r'^Title:\s*.+$',
+                r'^Content size:\s*\d+\s+bytes',
+                r'^Forms:\s*\d+',
+                r'^\s*link:\s*\S+',
+            )
+        )
+        if hard_failure and not has_positive_render:
+            return facts
+        candidates = []
+
+        command_url = self._url_from_text(tool_name)
+        if command_url and self._tool_name_is_web_facing(tool_name):
+            candidates.append(command_url)
+
+        for pattern in (
+            r'(?im)^URL:\s*(https?://\S+)\s*$',
+            r'(?im)^\[(?:REQUESTS\+BS4|SCRAPLING)[^\]]*-\s*(https?://[^\]\s]+)\]',
+            r'(?im)^\s*\[\*\]\s*Scrapling:\s*(https?://\S+)\s*$',
+        ):
+            for match in re.finditer(pattern, raw_output or ""):
+                candidates.append(match.group(1))
+
+        seen = set()
+        for candidate in candidates:
+            endpoint = self._canonical_endpoint(candidate)
+            if not endpoint or endpoint in seen:
+                continue
+            seen.add(endpoint)
+            facts.append({
+                "type": "web_endpoint",
+                "value": endpoint,
+                "confidence": 90,
+                "session_id": session_id,
+            })
+        return facts
+
+    def _url_from_text(self, text: str) -> str:
+        match = re.search(r'\bhttps?://[^\s"\'<>)}\]]+', text or "", re.IGNORECASE)
+        return match.group(0) if match else ""
+
+    def _tool_name_is_web_facing(self, tool_name: str) -> bool:
+        first = (tool_name or "").strip().split(maxsplit=1)[0].lower()
+        return first in {
+            "whatweb", "curl_headers", "scrapling", "scrapling_crawl",
+            "browser_surface_analysis", "ffuf", "nikto", "wpscan",
+            "sqlmap", "jmx2rce_scan", "manual_recon",
+        }
+
+    def _canonical_endpoint(self, url: str) -> str:
+        raw = (url or "").strip().strip("\"'<>")
+        raw = re.sub(r"[\s\"'<>)}\],;\\]+$", "", raw)
+        if not raw:
+            return ""
+        parsed = urlparse(raw)
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            return ""
+        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+        path = parsed.path or "/"
+        if any(ch in path for ch in ("\"", "'", "{", "}", "\\")):
+            return ""
+        netloc = parsed.hostname.lower()
+        if not ((parsed.scheme.lower() == "http" and port == 80)
+                or (parsed.scheme.lower() == "https" and port == 443)):
+            netloc = f"{netloc}:{port}"
+        canonical_url = urlunparse((parsed.scheme.lower(), netloc, path, "", parsed.query, ""))
+        return json.dumps({
+            "url": canonical_url,
+            "scheme": parsed.scheme.lower(),
+            "host": parsed.hostname.lower(),
+            "port": str(port),
+            "path": path,
+            "service": "",
+            "status": "",
+            "title": "",
+        }, sort_keys=True)
+
+
 class LLMExtractor:
     """Fallback fact extractor using LLM. Only called when regex found ZERO facts."""
     def __init__(self):
@@ -911,9 +1514,32 @@ class OutputParser:
     This prevents wasting LLM calls when regex already parsed everything.
     """
     def __init__(self):
+        self.web_endpoint_parser = WebEndpointParser()
+        self.family_pipeline = ParserFamilyPipeline()
         self.regex_parser = RegexParser()
         self.structured_parser = StructuredParser()
         self.llm_extractor = LLMExtractor()
+        self.family_owned_tool_markers = (
+            "subfinder", "amass", "dnsx", "httpx", "naabu", "tlsx",
+            "wayback", "gau", "katana",
+            "nuclei", "openapi_import", "graphql_check", "api_auth_check",
+            "security_headers", "curl_headers", "cors_check",
+            "session_profile_import", "session_import", "authenticated_crawl",
+            "jwt_analyze", "js_route_extract", "burp_import", "zap_import",
+            "gitleaks", "trufflehog", "semgrep", "trivy", "checkov",
+            "prowler", "scoutsuite",
+            "ad_security_review", "bloodhound_ingest", "gpo_review", "adcs_review",
+        )
+        self.family_owned_raw_markers = (
+            "[asm subfinder", "[asm amass", "[asm dnsx", "[asm httpx",
+            "[asm naabu", "[asm tlsx", "[asm wayback", "[asm gau",
+            "[katana crawl", "[nuclei safe", "[nuclei results]",
+            "[openapi import", "[graphql check", "[api auth check",
+            "[security headers", "[cors check", "[jwt analyze", "[js route extract",
+            "[burp import", "[zap import", "[gitleaks scan", "[trufflehog scan",
+            "[semgrep scan", "[trivy scan", "[checkov scan", "[prowler scan",
+            "[scoutsuite scan", "[ad security review]",
+        )
 
     def _should_try_llm(self, tool_name: str, raw_output: str) -> bool:
         raw = raw_output.strip()
@@ -944,6 +1570,8 @@ class OutputParser:
             "requires valid credentials",
             "requires domain",
             "requires an nt hash",
+            "optionvalidateerror",
+            "failed to validate",
             "keyerror",
             "traceback",
             "exception",
@@ -966,7 +1594,7 @@ class OutputParser:
                 "tool_name", "error_type", "target_ip", "target_host",
                 "target_port", "auth_method", "connection_status",
                 "scan_status", "skip_reason", "ssh_attempt",
-                "host_targeted", "user_targeted", "user",
+                "host_targeted", "user_targeted", "user", "module_name",
             }:
                 continue
             if value.lower() in {"failed", "skipped", "unknown", "none"}:
@@ -978,6 +1606,16 @@ class OutputParser:
             sanitized.append(fact)
         return sanitized
 
+    def _should_run_legacy_regex(self, tool_name: str, raw_output: str) -> bool:
+        """Keep the broad regex fallback away from parser-family-owned tools."""
+        tool_lower = (tool_name or "").lower()
+        raw_lower = (raw_output or "").lower()
+        if any(marker in tool_lower for marker in self.family_owned_tool_markers):
+            return False
+        if any(marker in raw_lower for marker in self.family_owned_raw_markers):
+            return False
+        return True
+
     def parse_tool_output(self, tool_name: str, raw_output: str) -> List[Dict[str, Any]]:
         """
         Extract raw facts from tool output.
@@ -987,16 +1625,24 @@ class OutputParser:
 
         facts = []
 
-        # 1. Regex Parser (primary)
-        facts.extend(self.regex_parser.parse(tool_name, raw_output, session_id))
+        # 1. Family parsers for normalized high-value objects.
+        facts.extend(self.family_pipeline.parse(tool_name, raw_output, session_id))
+        facts.extend(self.web_endpoint_parser.parse(tool_name, raw_output, session_id))
 
-        # 2. Structured Parser. Run it even when regex found facts; mixed
+        # 2. Regex Parser (legacy broad extractor). Keep it only for legacy
+        # killchain/post-access/protocol outputs until those are fully owned by
+        # physical parser families.
+        if self._should_run_legacy_regex(tool_name, raw_output):
+            facts.extend(self.regex_parser.parse(tool_name, raw_output, session_id))
+
+        # 3. Structured Parser. Run it even when regex found facts; mixed
         # plugin JSON often contains CVEs that regex sees first, and skipping
         # structured parsing would lose plugin_result/artifacts/sessions.
         facts.extend(self.structured_parser.parse(tool_name, raw_output, session_id))
 
-        # 3. LLM Extractor — ONLY if regex+structured found ZERO facts and there's meaningful output
-        if not facts and self._should_try_llm(tool_name, raw_output):
+        # 4. LLM Extractor — ONLY if deterministic parsers found ZERO facts and there's meaningful output
+        family_owned_output = not self._should_run_legacy_regex(tool_name, raw_output)
+        if not facts and not family_owned_output and self._should_try_llm(tool_name, raw_output):
             logger.info(f"Regex found 0 facts for '{tool_name}', trying LLM extractor...")
             llm_facts = self.llm_extractor.parse(tool_name, raw_output, session_id)
             facts.extend(llm_facts)

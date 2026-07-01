@@ -30,9 +30,8 @@ import json
 import fcntl
 import threading
 import logging
-from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Callable, List, Any
+from typing import Optional, Dict, Callable, List
 
 logger = logging.getLogger("octopus.supervisor")
 

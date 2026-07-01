@@ -1,0 +1,36 @@
+{
+  "scan_id": "fixture-web-api",
+  "target": "10.0.0.5",
+  "outputs": [
+    {
+      "tool": "nmap",
+      "output": "80/tcp open http nginx\n443/tcp open ssl/http nginx"
+    },
+    {
+      "tool": "scrapling http://10.0.0.5",
+      "output": "URL: http://10.0.0.5/\nTitle: Home\nLinks:\n  /api/users\n  /openapi.json\n"
+    },
+    {
+      "tool": "openapi_import openapi.json",
+      "output": "GET /users/{id} auth=unknown_or_none\nPATCH /users/{id} auth=unknown_or_none"
+    }
+  ],
+  "expected_facts": [
+    ["port_open", "80/tcp (http) [nginx]"],
+    ["web_title", "Home"],
+    ["api_endpoint", "GET:/users/{id}:auth=unknown_or_none"],
+    ["api_security_note", "mass_assignment_candidate:PATCH:/users/{id}"]
+  ],
+  "expected_fact_prefixes": [
+    ["web_endpoint", "{\"host\": \"10.0.0.5\""]
+  ],
+  "expected_actions": [
+    "scrapling http://10.0.0.5/api/users",
+    "openapi_import http://10.0.0.5/openapi.json",
+    "exploit_select 10.0.0.5"
+  ],
+  "expected_surface_states": {
+    "web": "confirmed_present",
+    "api": "confirmed_present"
+  }
+}

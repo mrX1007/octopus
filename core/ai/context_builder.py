@@ -2,33 +2,44 @@
 """
 """
 
+import re
+import json
 from typing import Dict, Any, List
 from core.ai.fact_store import FactStore
 from core.ai.state_resolver import StateResolver
+from core.ai.target_model import TargetModel
+from core.ai.asset_graph import AssetGraph
+from core.ai.surface_state import SurfaceState
 
-# Map port numbers and service names to canonical service labels
+try:
+    from config import CFG
+except ImportError:
+    CFG = {}
+
+# Map service names/banners to canonical service labels. Do not infer services
+# from port numbers: custom deployments move protocols to arbitrary ports.
 SERVICE_PATTERNS = {
-    "ssh":       ["ssh", "22/"],
-    "http":      ["http", "80/", "443/", "8080/", "8443/", "3000/", "3030/", "9000/"],
-    "https":     ["ssl/http", "443/"],
-    "cpanel":    ["cpanel", "whm", "2082/", "2083/", "2086/", "2087/", "2095/", "2096/"],
-    "tomcat":    ["tomcat", "ajp13", "8009/"],
+    "ssh":       ["ssh", "openssh"],
+    "http":      ["http", "httpd", "web server", "nginx", "apache", "cowboy", "golang net/http", "node.js", "express", "php"],
+    "https":     ["ssl/http", "https"],
+    "cpanel":    ["cpanel", "whm"],
+    "tomcat":    ["tomcat", "ajp13"],
     "jmx":       ["jmx"],
-    "ftp":       ["ftp", "21/"],
-    "smtp":      ["smtp", "25/", "465/", "587/"],
-    "pop3":      ["pop3", "110/", "995/"],
-    "imap":      ["imap", "143/", "993/"],
-    "mysql":     ["mysql", "3306/"],
-    "postgres":  ["postgres", "5432/"],
-    "rdp":       ["rdp", "3389/"],
-    "smb":       ["smb", "445/", "139/"],
-    "ldap":      ["ldap", "389/", "636/"],
-    "kerberos":  ["kerberos", "88/"],
-    "winrm":     ["winrm", "5985/", "5986/"],
-    "dns":       ["dns", "53/"],
-    "redis":     ["redis", "6379/"],
-    "mongodb":   ["mongo", "27017/"],
-    "rtsp":      ["rtsp", "554/", "8082/"],
+    "ftp":       ["ftp"],
+    "smtp":      ["smtp", "submission", "smtps"],
+    "pop3":      ["pop3"],
+    "imap":      ["imap"],
+    "mysql":     ["mysql", "mariadb"],
+    "postgres":  ["postgres", "postgresql"],
+    "rdp":       ["rdp", "ms-wbt-server"],
+    "smb":       ["smb", "microsoft-ds", "netbios-ssn", "samba"],
+    "ldap":      ["ldap"],
+    "kerberos":  ["kerberos", "kerberos-sec"],
+    "winrm":     ["winrm"],
+    "dns":       ["dns", "domain"],
+    "redis":     ["redis"],
+    "mongodb":   ["mongo", "mongodb"],
+    "rtsp":      ["rtsp"],
 }
 
 class ContextBuilder:
@@ -50,6 +61,9 @@ class ContextBuilder:
         """
         state = self.state_resolver.resolve_state(scan_id, host)
         facts = self.fact_store.get_facts(scan_id, host)
+        target_model = TargetModel.from_facts(scan_id, host, facts).to_dict()
+        asset_graph = AssetGraph.from_facts(host, facts).to_dict()
+        surface_states = SurfaceState(facts).to_dict()
         
         # Determine highest level conceptual state
         primary_state = "initial_recon"
@@ -72,10 +86,17 @@ class ContextBuilder:
         services = set()
         open_ports = state.get("open_ports", [])
         for port_str in open_ports:
-            port_lower = port_str.lower()
+            port_lower = self._service_text_from_port_fact(port_str)
             for svc_name, patterns in SERVICE_PATTERNS.items():
                 if any(p in port_lower for p in patterns):
                     services.add(svc_name)
+        for fact in facts:
+            if fact.get("type") != "web_endpoint":
+                continue
+            endpoint_text = str(fact.get("value", "")).lower()
+            services.add("http")
+            if '"scheme": "https"' in endpoint_text or endpoint_text.startswith("https://"):
+                services.add("https")
         
         services = sorted(services)
 
@@ -90,8 +111,44 @@ class ContextBuilder:
             "ports_count": len(open_ports),
             "open_questions": open_questions,
             "stage_gates": stage_gates,
+            "automation_policy": self._automation_policy(),
             "next_required_capability": self._next_required_capability(primary_state, open_questions),
+            "network_graph": self._network_graph(facts),
+            "asset_graph": asset_graph,
+            "surface_states": surface_states,
+            "target_model": target_model,
         }
+
+    def _service_text_from_port_fact(self, port_fact: str) -> str:
+        value = (port_fact or "").lower()
+        match = re.match(r"\d+/(?:tcp|udp)\s+\(([^)]*)\)(?:\s+\[(.*?)\])?", value)
+        if not match:
+            return value
+        service, banner = match.groups()
+        return f"{service or ''} {banner or ''}".strip()
+
+    def _network_graph(self, facts: List[Dict[str, Any]]) -> Dict[str, Any]:
+        nodes = []
+        edges = []
+        seen_nodes = set()
+        seen_edges = set()
+        for fact in facts:
+            ftype = fact.get("type")
+            value = fact.get("value", "")
+            if ftype not in {"network_node", "network_edge"}:
+                continue
+            try:
+                parsed = json.loads(value)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            key = json.dumps(parsed, sort_keys=True)
+            if ftype == "network_node" and key not in seen_nodes:
+                seen_nodes.add(key)
+                nodes.append(parsed)
+            elif ftype == "network_edge" and key not in seen_edges:
+                seen_edges.add(key)
+                edges.append(parsed)
+        return {"nodes": nodes, "edges": edges}
     
     def _infer_open_questions(self, state: Dict, services: List[str], primary_state: str,
                               facts: List[Dict[str, Any]] = None) -> List[str]:
@@ -117,22 +174,32 @@ class ContextBuilder:
         if primary_state == "root_access_confirmed":
             if not state.get("post_access_inventory_completed"):
                 return ["post_access_inventory_needed"]
-            return ["persistence_needed"] if not state.get("persistence_established") else []
+            if self._strategy_enabled("auto_persistence") and not state.get("persistence_established"):
+                return ["persistence_needed"]
+            if self._strategy_enabled("auto_internal_recon") and not state.get("internal_recon_completed"):
+                return ["internal_network_recon_pending"]
+            return []
 
         if primary_state == "persistence_established":
             if not state.get("post_access_inventory_completed"):
                 return ["post_access_inventory_needed"]
-            if not state.get("internal_recon_completed"):
+            if self._strategy_enabled("auto_internal_recon") and not state.get("internal_recon_completed"):
                 return ["internal_network_recon_pending"]
-            return ["data_exfiltration_pending"] if not state.get("exfiltration_completed") else []
+            if self._strategy_enabled("auto_data_exfil") and not state.get("exfiltration_completed"):
+                return ["data_exfiltration_pending"]
+            return []
 
         if primary_state == "internal_recon_completed":
             if not state.get("post_access_inventory_completed"):
                 return ["post_access_inventory_needed"]
-            return ["data_exfiltration_pending"] if not state.get("exfiltration_completed") else []
+            if self._strategy_enabled("auto_data_exfil") and not state.get("exfiltration_completed"):
+                return ["data_exfiltration_pending"]
+            return []
 
         if primary_state == "exfiltration_completed":
-            return ["cleanup_needed"] if not state.get("cleanup_completed") else []
+            if self._strategy_enabled("auto_cleanup") and not state.get("cleanup_completed"):
+                return ["cleanup_needed"]
+            return []
 
         if primary_state == "cleanup_completed":
             return []
@@ -190,6 +257,25 @@ class ContextBuilder:
             questions.append("privilege_escalation_path_unknown")
             
         return questions
+
+    def _strategy_enabled(self, key: str, default: bool = False) -> bool:
+        return bool((CFG.get("strategy") or {}).get(key, default))
+
+    def _automation_policy(self) -> Dict[str, bool]:
+        strategy = CFG.get("strategy") or {}
+        return {
+            "auto_post_access_inventory": bool(strategy.get(
+                "auto_post_access_inventory",
+                strategy.get("auto_ssh_inventory", True),
+            )),
+            "auto_ssh_inventory": bool(strategy.get("auto_ssh_inventory", True)),
+            "auto_internal_recon": bool(strategy.get("auto_internal_recon", True)),
+            "auto_payload_generation": bool(strategy.get("auto_payload_generation", False)),
+            "auto_persistence": bool(strategy.get("auto_persistence", False)),
+            "auto_data_exfil": bool(strategy.get("auto_data_exfil", False)),
+            "auto_cleanup": bool(strategy.get("auto_cleanup", False)),
+            "allow_active_msf": bool(strategy.get("allow_active_msf", False)),
+        }
 
     def _stage_gates(self, state: Dict) -> Dict[str, bool]:
         return {

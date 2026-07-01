@@ -1,0 +1,49 @@
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+filterwarnings = [
+    "default",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+extend-exclude = [
+    "venv",
+    "vendor",
+    "data",
+]
+
+[tool.ruff.lint]
+select = [
+    "F601",
+    "F821",
+    "F822",
+    "F823",
+]
+ignore = [
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+"__init__.py" = ["F401"]
+"core/killchain/exploits/__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+follow_imports = "skip"
+files = [
+    "core/tools/targeting.py",
+    "core/plugins/loader.py",
+    "core/ai/legacy_agents.py",
+]
+exclude = [
+    "venv/",
+    "vendor/",
+    "data/",
+]

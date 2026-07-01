@@ -5,36 +5,32 @@ Extracted from tools.py.
 """
 
 import subprocess
-import shutil
 import os
 import re
 import concurrent.futures
-import time as _time
 import logging
 
 # ─────────────────────────────────────────────
 # IMPORTS FROM SHARED BASE (breaks circular deps)
 # ─────────────────────────────────────────────
 from core.tools.base import (
-    run_tool, is_tool_available, _fmt_elapsed, get_tool_config, ToolResult,
-    C_GREY, C_RESET, C_CYAN, C_GREEN, C_YELLOW, C_RED, C_BLUE, C_MAGENTA,
-    _TOOL_AVAILABLE,
+    run_tool, ToolResult, _fmt_elapsed,
+    C_RESET, C_RED,
 )
 
 # ─────────────────────────────────────────────
 # IMPORTS FROM SIBLING MODULES
 # ─────────────────────────────────────────────
 from core.tools.exploit_tools import (
-    register_credential, get_known_creds,
-    get_best_creds_for_target, get_all_known_creds_for_target,
+    get_best_creds_for_target,
     _is_internal_ip, run_bruteforce, run_web_login_bruteforce,
-    run_jmx2rce_scan, run_jmx2rce_rce, run_jmx2rce_read, run_jmx2rce_cleanup,
+    run_jmx2rce_scan,
 )
 from core.tools.recon_tools import (
     run_nmap, run_whois, run_whatweb, run_curl_headers,
     run_dig, run_sslscan, run_ffuf, run_enum4linux,
     run_smbclient, run_wpscan, run_sqlmap, run_nikto,
-    run_scrapling_fetch, run_scrapling_crawl,
+    run_scrapling_fetch,
     run_ssh_user_enum, run_ftp_anonymous_check, run_smtp_probe,
 )
 from core.tools.post_tools import (
@@ -45,6 +41,13 @@ from core.tools.post_tools import (
     _run_crack_hashes,
     _run_cpanel_exploit, _run_shardbrowser_osint,
     run_default_recon,
+)
+from core.tools.targeting import (
+    detect_web_ports_from_nmap as _detect_web_ports_from_nmap,
+    nmap_has_any_open_port as _nmap_has_any_open_port,
+    nmap_service_looks_web as _nmap_service_looks_web,
+    target_looks_domain as _target_looks_domain,
+    web_urls_from_ports as _web_urls_from_ports,
 )
 
 # ─────────────────────────────────────────────
@@ -108,33 +111,153 @@ TOOLS_MENU = {
 }
 
 
-def _detect_web_ports_from_nmap(nmap_output: str) -> list:
-    """Return open HTTP-like ports from nmap output, preserving scan order."""
-    web_ports = []
-    http_like_ports = {
-        "80", "443", "8000", "8008", "8080", "8081", "8082", "8443",
-        "1443", "3000", "3030", "5000", "5601", "8888", "9000",
-        "9090", "10000", "2082", "2083", "2086", "2087", "2095", "2096",
-    }
-    for line in (nmap_output or "").splitlines():
-        match = re.match(r'\s*(\d+)/tcp\s+open\s+(\S+)(?:\s+(.+))?', line, re.IGNORECASE)
-        if not match:
+def _run_registered_extended_tool(results: dict, plan_lines: list[str], tool_name: str,
+                                  target: str, result_key: str = None) -> None:
+    from core.tools.registry import get_tool
+    tool_def = get_tool(tool_name)
+    label = result_key or tool_name
+    if not tool_def:
+        plan_lines.append(f"skip {label}: not_registered")
+        results[label] = f"[N MODE] {tool_name} skipped: not registered"
+        return
+    if not tool_def.is_available():
+        deps = ",".join(tool_def.requires or []) or "dependency"
+        plan_lines.append(f"skip {label}: unavailable:{deps}")
+        results[label] = f"[N MODE] {tool_name} skipped: unavailable dependency: {deps}"
+        return
+    try:
+        plan_lines.append(f"run {label}: {tool_name} {target}")
+        results[label] = tool_def.func(target)
+    except Exception as exc:
+        plan_lines.append(f"error {label}: {str(exc)[:120]}")
+        results[label] = f"[!] {label} error: {exc}"
+
+
+def _run_registered_extended_tools_concurrent(results: dict, plan_lines: list[str],
+                                              jobs: list[tuple[str, str, str]],
+                                              max_workers: int = 6) -> None:
+    """Run independent registry tools concurrently while preserving result keys."""
+    from core.tools.registry import get_tool
+
+    prepared = []
+    for tool_name, target, result_key in jobs:
+        tool_def = get_tool(tool_name)
+        label = result_key or tool_name
+        if not tool_def:
+            plan_lines.append(f"skip {label}: not_registered")
+            results[label] = f"[X MODE] {tool_name} skipped: not registered"
             continue
-        port, service, banner = match.groups()
-        text = f"{service} {banner or ''}".lower()
-        is_web = (
-            port in http_like_ports
-            or "http" in text
-            or "cpanel" in text
-            or "whm" in text
-            or "node.js" in text
-            or "express" in text
-            or "php" in text
-            or "golang net/http" in text
-        )
-        if is_web and port not in web_ports:
-            web_ports.append(port)
-    return web_ports
+        if not tool_def.is_available():
+            deps = ",".join(tool_def.requires or []) or "dependency"
+            plan_lines.append(f"skip {label}: unavailable:{deps}")
+            results[label] = f"[X MODE] {tool_name} skipped: unavailable dependency: {deps}"
+            continue
+        plan_lines.append(f"run {label}: {tool_name} {target}")
+        prepared.append((label, tool_name, target, tool_def.func))
+
+    if not prepared:
+        return
+
+    workers = max(1, min(max_workers, len(prepared)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(func, target): (label, tool_name)
+            for label, tool_name, target, func in prepared
+        }
+        for future in concurrent.futures.as_completed(futures):
+            label, tool_name = futures[future]
+            try:
+                results[label] = future.result()
+            except Exception as exc:
+                plan_lines.append(f"error {label}: {str(exc)[:120]}")
+                results[label] = f"[!] {label} error: {exc}"
+
+
+def _run_exhaustive_applicable_coverage(target: str, results: dict) -> dict:
+    """Run all available safe/applicable discovery and verification layers."""
+    plan_lines = ["[X MODE PLAN]", "base: run_default_recon"]
+    nmap_output = results.get("nmap", "")
+    curl_output = results.get("curl_headers", "")
+    whatweb_output = results.get("whatweb", "")
+    all_recon = nmap_output + curl_output + whatweb_output
+    web_ports = _detect_web_ports_from_nmap(nmap_output)
+    has_web = (
+        bool(web_ports)
+        or "HTTP/" in curl_output
+        or "server:" in curl_output.lower()
+        or any(marker in all_recon.lower() for marker in ("nginx", "apache", "http"))
+    )
+    if has_web and not web_ports:
+        web_ports = ["80"]
+    web_urls = _web_urls_from_ports(target, web_ports) if has_web else []
+
+    print(f"\n  [*] X mode: exhaustive safe/applicable coverage...")
+
+    if _target_looks_domain(target):
+        for tool_name in ("subfinder", "amass_enum", "dnsx", "wayback_urls", "gau_urls"):
+            _run_registered_extended_tool(results, plan_lines, tool_name, target)
+    else:
+        plan_lines.append("asm_domain_discovery: not_applicable:target_is_ip")
+
+    for tool_name in ("httpx_probe", "naabu", "tlsx"):
+        _run_registered_extended_tool(results, plan_lines, tool_name, target)
+
+    if has_web:
+        plan_lines.append(f"web_surface: present ports={','.join(web_ports)}")
+        for url in web_urls:
+            suffix = re.sub(r"[^a-zA-Z0-9]+", "_", url).strip("_").lower()
+            web_jobs = []
+            for tool_name in (
+                "whatweb", "curl_headers", "security_headers_check", "cors_check",
+                "scrapling", "scrapling_crawl", "browser_surface_analysis",
+                "nuclei_safe", "katana_crawl", "wpscan", "sqlmap", "nikto",
+            ):
+                web_jobs.append((tool_name, url, f"{tool_name}_{suffix}"))
+            for spec_path in ("/openapi.json", "/swagger.json", "/api-docs"):
+                web_jobs.append((
+                    "openapi_import",
+                    url.rstrip("/") + spec_path,
+                    f"openapi_import_{suffix}{spec_path.replace('/', '_')}",
+                ))
+            web_jobs.extend((
+                ("graphql_check", url.rstrip("/") + "/graphql", f"graphql_check_{suffix}"),
+                ("api_auth_check", url.rstrip("/") + "/api", f"api_auth_check_{suffix}"),
+            ))
+            _run_registered_extended_tools_concurrent(results, plan_lines, web_jobs, max_workers=8)
+    else:
+        plan_lines.append("web_deep_tools: not_applicable:no_web_surface")
+
+    if _nmap_has_any_open_port(nmap_output, {"21"}):
+        _run_registered_extended_tool(results, plan_lines, "ftp_anonymous_check", target)
+    else:
+        plan_lines.append("ftp_assessment: not_applicable:no_ftp_port")
+
+    if _nmap_has_any_open_port(nmap_output, {"25", "465", "587"}):
+        _run_registered_extended_tool(results, plan_lines, "smtp_probe", target)
+    else:
+        plan_lines.append("mail_service_assessment: not_applicable:no_smtp_port")
+
+    if _nmap_has_any_open_port(nmap_output, {"5432", "3306", "6379", "27017"}):
+        _run_registered_extended_tool(results, plan_lines, "db_inventory", target)
+    else:
+        plan_lines.append("database_inventory: not_applicable:no_database_port")
+
+    if _nmap_has_any_open_port(nmap_output, {"389", "636", "88", "445", "135", "5985", "5986"}):
+        for tool_name in ("ad_enum", "gpo_review", "adcs_review"):
+            _run_registered_extended_tool(results, plan_lines, tool_name, target)
+    else:
+        plan_lines.append("ad_security_review: not_applicable:no_ad_surface_ports")
+
+    for gated in (
+        "bruteforce", "web_login_brute", "msf_run", "killchain_privesc",
+        "killchain_persist", "killchain_lateral", "killchain_exfil",
+        "killchain_cleanup", "pass_the_hash", "psexec", "wmiexec",
+    ):
+        plan_lines.append(f"gated {gated}: requires explicit state/scope/credentials")
+
+    plan_lines.append("secrets/code/cloud: not_applicable:requires_local_repo_or_cloud_provider_context")
+    results["x_mode_plan"] = "\n".join(plan_lines)
+    return results
 
 # ─────────────────────────────────────────────
 # INDIVIDUAL TOOLS
@@ -302,10 +425,32 @@ def run_tool_by_command(command_str: str) -> str:
                 clean_terms.append(p.strip('"').strip("'"))
             return [" ".join(clean_terms)], {}
 
+        url_preserving_tools = {
+            "browser_surface_analysis",
+            "scrapling",
+            "scrapling_crawl",
+            "curl_headers",
+            "security_headers_check",
+            "cors_check",
+            "ffuf",
+            "nikto",
+            "sqlmap",
+            "wpscan",
+            "nuclei_safe",
+            "openapi_import",
+            "graphql_check",
+            "api_auth_check",
+            "katana_crawl",
+        }
+
         for i, p in enumerate(params):
             if p.name in ['target', 'target_ip', 'host', 'url', 'filepath']:
                 if args:
-                    positional_args.append(_extract_ip(args.pop(0)))
+                    raw_arg = args.pop(0)
+                    if p.name == "url" or t_def.name in url_preserving_tools:
+                        positional_args.append(raw_arg)
+                    else:
+                        positional_args.append(_extract_ip(raw_arg))
                 elif p.default != inspect.Parameter.empty:
                     kwargs[p.name] = p.default
             elif p.name in ['query', 'recon_data', 'cmd', 'command', 'action', 'options', 'options_str']:
@@ -360,6 +505,7 @@ def interactive_tool_run(target: str) -> str:
         print(f"  [{key}] {name:<15}")
     print("\n  [a] Run all standard (fast/concurrent)")
     print("  [n] Run standard + smart extended (auto-detects SSH/Web/FTP)")
+    print("  [x] Run EVERYTHING applicable (safe/deep + gated report)")
 
     choice = input("\nChoice(s) e.g. 1 2 4 or a: ").strip().lower()
 
@@ -367,8 +513,23 @@ def interactive_tool_run(target: str) -> str:
         results = run_default_recon(target)
         return format_recon_for_llm(results)
 
+    if choice == "x":
+        results = run_default_recon(target)
+        results = _run_exhaustive_applicable_coverage(target, results)
+        print(f"\n  [*] Phase 3: Kill chain vulnerability assessment...")
+        try:
+            from core.killchain import vuln_assess
+            recon_blob = format_recon_for_llm(results)
+            results["vuln_assess"] = vuln_assess(target, recon_blob)
+        except ImportError:
+            results["vuln_assess"] = "[!] core.killchain package not found — skipping vuln assessment"
+        except Exception as exc:
+            results["vuln_assess"] = f"[!] vuln_assess error: {exc}"
+        return format_recon_for_llm(results)
+
     if choice == "n":
         results = run_default_recon(target)
+        n_mode_plan = ["[N MODE PLAN]", "base: run_default_recon"]
 
         # ── PORT-AWARE EXTENDED TOOLS ──────────────────────────
         nmap_output = results.get("nmap", "")
@@ -390,6 +551,7 @@ def interactive_tool_run(target: str) -> str:
 
         if not web_ports_detected and has_web:
             web_ports_detected = ["80"]  # default
+        web_urls = _web_urls_from_ports(target, web_ports_detected) if has_web else []
 
         # ── PHASE 1: Run web tools and SSH user enum in parallel ──
         phase1_futures = {}
@@ -397,6 +559,7 @@ def interactive_tool_run(target: str) -> str:
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
             if has_web:
                 print(f"\n  [*] Web ports detected {web_ports_detected} — running extended web tools...")
+                n_mode_plan.append(f"web_surface: present ports={','.join(web_ports_detected)}")
                 phase1_futures[executor.submit(run_wpscan, target)] = "wpscan"
                 phase1_futures[executor.submit(run_sqlmap, target)] = "sqlmap"
                 phase1_futures[executor.submit(run_nikto, target)] = "nikto"
@@ -414,13 +577,16 @@ def interactive_tool_run(target: str) -> str:
                 # Non-standard ports are covered by scrapling + nmap scripts
             else:
                 print("\n  [*] No web ports open — skipping wpscan, sqlmap, nikto")
+                n_mode_plan.append("web_surface: not_detected")
 
             if has_ssh:
                 print("  [*] SSH detected — running user enumeration first...")
+                n_mode_plan.append("ssh_surface: present")
                 phase1_futures[executor.submit(run_ssh_user_enum, target)] = "ssh_user_enum"
 
             if has_ftp:
                 print("  [*] FTP detected — running bruteforce...")
+                n_mode_plan.append("ftp_surface: present")
                 phase1_futures[executor.submit(run_bruteforce, "ftp", target)] = "ftp_bruteforce"
 
             if not phase1_futures:
@@ -450,6 +616,46 @@ def interactive_tool_run(target: str) -> str:
                 results["ssh_bruteforce"] = run_bruteforce("ssh", target, extra_users=enum_users or None)
             except Exception as exc:
                 results["ssh_bruteforce"] = f"[!] ssh_bruteforce error: {exc}"
+
+        # ── PHASE 2.5: Registry-aware safe/deep coverage ─────────
+        print(f"\n  [*] Phase 2.5: Registry-aware safe/deep coverage...")
+        if _target_looks_domain(target):
+            for tool_name in ("subfinder", "amass_enum", "dnsx", "wayback_urls", "gau_urls"):
+                _run_registered_extended_tool(results, n_mode_plan, tool_name, target)
+        else:
+            n_mode_plan.append("asm_domain_discovery: not_applicable:target_is_ip")
+
+        for tool_name in ("httpx_probe", "naabu", "tlsx"):
+            _run_registered_extended_tool(results, n_mode_plan, tool_name, target)
+
+        if has_web:
+            for url in web_urls:
+                suffix = re.sub(r"[^a-zA-Z0-9]+", "_", url).strip("_").lower()
+                for tool_name in ("security_headers_check", "cors_check", "nuclei_safe", "katana_crawl"):
+                    _run_registered_extended_tool(
+                        results, n_mode_plan, tool_name, url,
+                        result_key=f"{tool_name}_{suffix}",
+                    )
+                for spec_path in ("/openapi.json", "/swagger.json", "/api-docs"):
+                    _run_registered_extended_tool(
+                        results, n_mode_plan, "openapi_import", url.rstrip("/") + spec_path,
+                        result_key=f"openapi_import_{suffix}{spec_path.replace('/', '_')}",
+                    )
+                _run_registered_extended_tool(
+                    results, n_mode_plan, "graphql_check", url.rstrip("/") + "/graphql",
+                    result_key=f"graphql_check_{suffix}",
+                )
+        else:
+            n_mode_plan.append("web_deep_tools: not_applicable:no_web_surface")
+
+        if _nmap_has_any_open_port(nmap_output, {"389", "636", "88", "445", "135", "5985", "5986"}):
+            for tool_name in ("ad_enum", "gpo_review", "adcs_review"):
+                _run_registered_extended_tool(results, n_mode_plan, tool_name, target)
+        else:
+            n_mode_plan.append("ad_security_review: not_applicable:no_ad_surface_ports")
+
+        n_mode_plan.append("secrets/code/cloud: not_applicable:requires_local_repo_or_cloud_provider_context")
+        results["n_mode_plan"] = "\n".join(n_mode_plan)
 
         # ── PHASE 3 (v4.0): Vulnerability Assessment ──
         print(f"\n  [*] Phase 3: Kill chain vulnerability assessment...")

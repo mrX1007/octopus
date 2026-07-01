@@ -2,7 +2,7 @@
 
 import re
 import logging
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
 from .graph import KnowledgeGraph
 from .models import EdgeType

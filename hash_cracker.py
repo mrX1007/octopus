@@ -5,7 +5,6 @@ Optimized for: Intel i9-14900 / RTX 4080 / 64GB RAM.
 
 Usage:
     from hash_cracker import HashCracker
-import logging
     hc = HashCracker()
     result = hc.smart_crack(shadow_content)
     for user, pwd in hc.get_cracked_pairs():
@@ -16,6 +15,7 @@ import os
 import re
 import sys
 import time
+import logging
 import shutil
 import tempfile
 import subprocess
@@ -50,15 +50,13 @@ HASH_TYPES = {
     "$sha1$": (12000, "PBKDF2-SHA1"),
 }
 
-# Common wordlist paths (Linux + macOS)
+# Common Athena OS wordlist paths.
 WORDLIST_PATHS = [
     "/usr/share/wordlists/rockyou.txt",
     "/usr/share/wordlists/seclists/Passwords/Common-Credentials/10k-most-common.txt",
     "/usr/share/wordlists/seclists/Passwords/darkc0de.txt",
     "/usr/share/wordlists/fasttrack.txt",
     "/usr/share/john/password.lst",
-    "/opt/homebrew/share/wordlists/rockyou.txt",
-    "/opt/homebrew/share/john/password.lst",
     os.path.expanduser("~/.octopus/wordlists/rockyou.txt"),
 ]
 
@@ -68,7 +66,6 @@ RULE_PATHS = [
     "/usr/share/hashcat/rules/d3ad0ne.rule",
     "/usr/share/hashcat/rules/dive.rule",
     "/usr/share/hashcat/rules/rockyou-30000.rule",
-    "/opt/homebrew/share/hashcat/rules/best64.rule",
 ]
 
 

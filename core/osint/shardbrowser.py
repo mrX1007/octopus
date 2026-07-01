@@ -18,16 +18,14 @@ The SDK auto-downloads the ShardX engine + Widevine + fingerprint
 library from CDN on first use — no separate install needed.
 
 Dependencies (pip install):
-  httpx[socks]>=0.27
-  patchright>=1.49
+  pip install -r requirements.txt
 """
 
 import os
 import sys
 import time
-import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 C_GREEN  = "\033[92m"
 C_YELLOW = "\033[93m"
@@ -57,7 +55,7 @@ def _get_sdk():
     except ImportError as e:
         raise ShardBrowserNotInstalled(
             f"ShardX SDK not available: {e}\n"
-            "Install deps: pip install httpx[socks] patchright\n"
+            "Install deps: pip install -r requirements.txt\n"
             "SDK path: vendor/shardbrowser/sdks/python/"
         )
 
@@ -154,7 +152,7 @@ class ShardBrowser:
 
         Args:
             fingerprint: profile id, Profile, dict, or None (random)
-            platform: filter for random profile ("Windows"/"macOS"/"Linux")
+            platform: filter for random profile ("Windows"/"Linux")
             proxy: "socks5://user:pass@host:port" or "http://host:port"
             headless: run without GUI
             randomize: re-randomize hardware fingerprint
@@ -587,4 +585,3 @@ class ShardBrowser:
             }
         except Exception as e:
             return {"installed": False, "error": str(e)}
-
