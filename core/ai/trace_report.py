@@ -90,6 +90,17 @@ class TraceReporter:
         for item in coverage.get("checked_but_not_confirmed", [])[:10]:
             lines.append(f"  checked: {item.get('status')}")
         lines.append("")
+        lines.append("evidence_index:")
+        for item in report.get("evidence_index", [])[:20]:
+            lines.append(
+                f"  - {item.get('evidence_id')} {item.get('fact_type')} "
+                f"tool={self._short(item.get('tool'), 80)} "
+                f"parser={item.get('parsed_by')} confidence={item.get('confidence')}: "
+                f"{self._short(item.get('fact_value'), 160)}"
+            )
+        if not report.get("evidence_index"):
+            lines.append("  none")
+        lines.append("")
         lines.append("finding_groups:")
         for group in report.get("finding_groups", [])[:12]:
             lines.append(
@@ -97,6 +108,24 @@ class TraceReporter:
                 f"candidate={group.get('candidate')} verified={group.get('verified')} "
                 f"exploited={group.get('exploited')} impact={group.get('impact_confirmed')}"
             )
+        lines.append("")
+        lines.append("attack_path:")
+        for idx, step in enumerate(report.get("attack_path", [])[:12], 1):
+            lines.append(
+                f"  {idx}. {step.get('stage')}: {step.get('status')} - "
+                f"{self._short(step.get('detail'), 160)}"
+            )
+        if not report.get("attack_path"):
+            lines.append("  none")
+        lines.append("")
+        lines.append("remediations:")
+        for item in report.get("remediations", [])[:12]:
+            lines.append(
+                f"  - {item.get('service', 'unknown')}: "
+                f"{self._short(item.get('recommendation'), 220)}"
+            )
+        if not report.get("remediations"):
+            lines.append("  none")
         lines.append("")
         lines.append("llm_status:")
         llm_status = report.get("llm_status") or {}
@@ -187,3 +216,6 @@ class TraceReporter:
     def _is_duplicate_output(self, item: Dict[str, Any], all_results: List[Dict[str, Any]]) -> bool:
         output_hash = item.get("output_hash")
         return bool(output_hash and sum(1 for result in all_results if result.get("output_hash") == output_hash) > 1)
+
+    def _short(self, value: Any, limit: int) -> str:
+        return str(value or "").replace("\n", " ")[:limit]

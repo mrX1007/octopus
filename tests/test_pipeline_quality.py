@@ -624,6 +624,184 @@ def test_trace_report_records_deterministic_llm_status():
     assert report["llm_status"]["fallback_policy_used"] is True
 
 
+def test_trace_report_text_includes_evidence_attack_path_and_remediation():
+    import uuid
+    from core.ai.fact_store import FactStore
+    from core.ai.trace_report import TraceReporter
+
+    store = FactStore(f"/tmp/octopus_trace_reporting_{uuid.uuid4().hex}.db")
+    scan_id = "scan-reporting-text"
+    host = "10.0.0.5"
+    store.add_fact(scan_id, host, "port_open", "49153/tcp (redis) [Redis key-value store]", "nmap")
+    store.add_fact(
+        scan_id,
+        host,
+        "vulnerability",
+        "msf_check_positive:exploit/linux/redis/redis_replication_cmd_exec",
+        "msf_check 10.0.0.5 exploit/linux/redis/redis_replication_cmd_exec RPORT=49153",
+    )
+    store.add_fact(
+        scan_id,
+        host,
+        "vulnerability_endpoint",
+        "msf_check_positive:exploit/linux/redis/redis_replication_cmd_exec:49153",
+        "msf_check 10.0.0.5 exploit/linux/redis/redis_replication_cmd_exec RPORT=49153",
+    )
+
+    reporter = TraceReporter(store)
+    text = reporter.to_text(reporter.build(scan_id, host))
+
+    assert "evidence_index:" in text
+    assert "E-001 port_open" in text
+    assert "finding_groups:" in text
+    assert "exploit/linux/redis/redis_replication_cmd_exec" in text
+    assert "attack_path:" in text
+    assert "remediations:" in text
+    assert "Restrict Redis" in text
+
+
+def test_cli_results_table_prints_reporting_sections(monkeypatch, capsys):
+    import core.cli as cli
+
+    monkeypatch.setattr(cli, "RICH_AVAILABLE", False)
+    cli.print_results_table({
+        "risk_level": "HIGH",
+        "vulnerabilities": [],
+        "confirmed_facts": [],
+        "outcome_summary": ["Exploit check positive; execution not performed"],
+        "finding_groups": [{
+            "module": "exploit/linux/redis/redis_replication_cmd_exec",
+            "service": "redis",
+            "ports": [49153, 49154],
+            "candidate": True,
+            "verified": True,
+            "exploited": False,
+            "impact_confirmed": False,
+        }],
+        "coverage": {
+            "confidence": "partial",
+            "degraded": [{"tool": "nuclei_safe", "status": "timeout", "impact": "coverage incomplete"}],
+            "checked_but_not_confirmed": [{"status": "sqlmap_no_get_parameters_found"}],
+        },
+        "attack_path": [{"stage": "Verification", "status": "positive", "detail": "msf check positive"}],
+        "remediations": [{"service": "redis", "recommendation": "Restrict Redis to trusted networks."}],
+    })
+
+    output = capsys.readouterr().out
+
+    assert "[ FINDING STATUS ]" in output
+    assert "ports=49153,49154" in output
+    assert "[ COVERAGE ]" in output
+    assert "[ ATTACK PATH ]" in output
+    assert "[ REMEDIATION ]" in output
+
+
+def test_save_results_persists_deterministic_remediation_when_fix_missing(monkeypatch):
+    import importlib
+    import sys
+    import types
+
+    saved_fixes = []
+    fake_export = types.ModuleType("export")
+    fake_export.export_menu = lambda *args, **kwargs: None
+    fake_db = types.ModuleType("db")
+
+    def save_vulnerability(*args, **kwargs):
+        return 701
+
+    def save_fix(sl_no, vuln_id, fix_text, source="ai"):
+        saved_fixes.append((sl_no, vuln_id, fix_text, source))
+
+    fake_db.save_vulnerability = save_vulnerability
+    fake_db.save_fix = save_fix
+    fake_db.save_exploit = lambda *args, **kwargs: None
+    fake_db.save_summary = lambda *args, **kwargs: None
+    fake_db.get_session = lambda sl_no: {
+        "history": [sl_no, "target", "", "complete"],
+        "vulns": [],
+        "fixes": [],
+        "exploits": [],
+        "summary": None,
+    }
+    fake_db.print_session = lambda data: None
+    for name in [
+        "get_connection", "create_session", "update_session_status",
+        "get_all_history", "get_vulnerabilities", "get_fixes", "get_exploits",
+        "edit_vulnerability", "edit_fix", "edit_exploit", "edit_summary_risk",
+        "delete_vulnerability", "delete_exploit", "delete_fix", "delete_full_session",
+        "print_history",
+    ]:
+        setattr(fake_db, name, lambda *args, **kwargs: None)
+
+    tools_stub = types.ModuleType("tools")
+    tools_stub.interactive_tool_run = lambda *args, **kwargs: ""
+    tools_stub.format_recon_for_llm = lambda data: str(data)
+    tools_stub.run_default_recon = lambda target: {}
+
+    old_octopus = sys.modules.pop("octopus", None)
+    old_export = sys.modules.get("export")
+    old_db = sys.modules.get("db")
+    old_tools = sys.modules.get("tools")
+    sys.modules["export"] = fake_export
+    sys.modules["db"] = fake_db
+    sys.modules["tools"] = tools_stub
+    try:
+        octopus = importlib.import_module("octopus")
+        monkeypatch.setattr(octopus, "confirm", lambda _question: False)
+        monkeypatch.setattr(octopus, "print_results_table", lambda _result: None)
+        octopus._save_and_show_results(99, {
+            "vulnerabilities": [{
+                "vuln_name": "CVE-2099-0001 fixture vulnerability",
+                "severity": "HIGH",
+                "port": "443",
+                "service": "https",
+                "description": "Fixture vulnerability with an AI-provided fix.",
+                "confidence": "CONFIRMED",
+                "evidence_tool": "fixture",
+                "fix": "Apply the vendor patch.",
+            }, {
+                "vuln_name": "msf_check_positive:exploit/linux/redis/redis_replication_cmd_exec",
+                "severity": "HIGH",
+                "port": "49153",
+                "service": "redis",
+                "description": "Metasploit check positive; exploit execution not confirmed.",
+                "confidence": "VERIFIED",
+                "evidence_tool": "msf_check",
+            }],
+            "exploits": [],
+            "risk_level": "HIGH",
+            "raw_scan": "",
+            "full_response": "",
+            "confirmed_facts": [],
+            "remediations": [{
+                "finding": "exploit/linux/redis/redis_replication_cmd_exec",
+                "service": "redis",
+                "recommendation": "Restrict Redis to trusted networks.",
+            }],
+        })
+    finally:
+        sys.modules.pop("octopus", None)
+        if old_octopus is not None:
+            sys.modules["octopus"] = old_octopus
+        if old_export is not None:
+            sys.modules["export"] = old_export
+        else:
+            sys.modules.pop("export", None)
+        if old_db is not None:
+            sys.modules["db"] = old_db
+        else:
+            sys.modules.pop("db", None)
+        if old_tools is not None:
+            sys.modules["tools"] = old_tools
+        else:
+            sys.modules.pop("tools", None)
+
+    assert saved_fixes == [
+        (99, 701, "Apply the vendor patch.", "ai"),
+        (99, 701, "Restrict Redis to trusted networks.", "deterministic"),
+    ]
+
+
 def test_internal_recon_goal_forces_single_network_task():
     from core.ai.pipeline import AIPipeline
 

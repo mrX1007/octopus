@@ -15,7 +15,7 @@ import readline
 __all__ = [
     "banner", "divider", "prompt", "success", "warn", "error", "info",
     "confirm", "run_with_spinner", "print_rich_table", "print_results_table",
-    "setup_readline", "console", "RICH_AVAILABLE",
+    "print_reporting_sections", "setup_readline", "console", "RICH_AVAILABLE",
 ]
 
 # ─── Rich Console (graceful fallback) ───
@@ -205,6 +205,60 @@ def print_rich_table(title: str, columns: list, rows: list):
 # RESULTS TABLE
 # ─────────────────────────────────────────────
 
+def _truncate(value, limit=250):
+    text = str(value or "")
+    return text[:limit]
+
+
+def _ports_text(group: dict) -> str:
+    return ",".join(str(port) for port in (group.get("ports") or []) if port) or "n/a"
+
+
+def print_reporting_sections(result: dict):
+    """Print deterministic reporting blocks shared by all CLI entry points."""
+    outcome = result.get("outcome_summary") or []
+    if outcome:
+        print(f"\n  \033[95m[ FINAL OUTCOME ]\033[0m")
+        for line in outcome:
+            print(f"  \033[95m  •\033[0m {_truncate(line, 300)}")
+
+    finding_groups = result.get("finding_groups") or []
+    if finding_groups:
+        print(f"\n  \033[93m[ FINDING STATUS ]\033[0m")
+        for group in finding_groups[:10]:
+            print(
+                f"  \033[93m  •\033[0m {group.get('module')} "
+                f"svc={group.get('service')} ports={_ports_text(group)} "
+                f"candidate={group.get('candidate')} verified={group.get('verified')} "
+                f"exploited={group.get('exploited')} impact={group.get('impact_confirmed')}"
+            )
+
+    coverage = result.get("coverage") or {}
+    degraded = coverage.get("degraded") or []
+    checked = coverage.get("checked_but_not_confirmed") or []
+    if degraded or checked:
+        print(f"\n  \033[93m[ COVERAGE ]\033[0m confidence={coverage.get('confidence', 'normal')}")
+        for item in degraded[:5]:
+            print(f"  \033[93m  !\033[0m {item.get('tool')} {item.get('status')}: {item.get('impact')}")
+        for item in checked[:8]:
+            print(f"  \033[90m  -\033[0m checked: {item.get('status')}")
+
+    attack_path = result.get("attack_path") or []
+    if attack_path:
+        print(f"\n  \033[95m[ ATTACK PATH ]\033[0m")
+        for idx, step in enumerate(attack_path[:10], 1):
+            print(
+                f"  \033[95m  {idx}.\033[0m {step.get('stage')}: "
+                f"{step.get('status')} - {step.get('detail')}"
+            )
+
+    remediations = result.get("remediations") or []
+    if remediations:
+        print(f"\n  \033[92m[ REMEDIATION ]\033[0m")
+        for item in remediations[:10]:
+            print(f"  \033[92m  •\033[0m {item.get('service', 'unknown')}: {_truncate(item.get('recommendation'), 240)}")
+
+
 def print_results_table(result: dict):
     """Pretty table of vulnerabilities and confirmed facts."""
     vulns = result.get("vulnerabilities", [])
@@ -260,6 +314,8 @@ def print_results_table(result: dict):
             print(f"  {'─'*66}")
         else:
             print(f"  \033[92m[ No vulnerabilities parsed ]\033[0m")
+
+    print_reporting_sections(result)
 
     if facts:
         print(f"\n  \033[96m[ CONFIRMED INTELLIGENCE ]\033[0m")

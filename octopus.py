@@ -28,11 +28,13 @@ from datetime import datetime
 try:
     from core.cli import (
         console, RICH_AVAILABLE as _RICH,
-        run_with_spinner, print_rich_table,
+        run_with_spinner, print_rich_table, print_reporting_sections as _print_reporting_sections,
     )
 except ImportError:
     _RICH = False
     console = None
+    def _print_reporting_sections(_result):
+        return None
 
 try:
     from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
@@ -380,11 +382,7 @@ def print_results_table(result: dict):
     else:
         print(f"  \033[92m[ No vulnerabilities parsed — check full AI response above ]\033[0m")
 
-    outcome = result.get("outcome_summary") or []
-    if outcome:
-        print(f"\n  \033[95m[ FINAL OUTCOME ]\033[0m")
-        for line in outcome:
-            print(f"  \033[95m  •\033[0m {str(line)[:300]}")
+    _print_reporting_sections(result)
 
     if facts:
         print(f"\n  \033[96m[ CONFIRMED INTELLIGENCE (from real tool output) ]\033[0m")
@@ -1513,6 +1511,7 @@ def _exploit_success_metadata(f, facts, state) -> dict:
 def _save_and_show_results(sl_no: int, result: dict, duration_str: str = ""):
     """Save AI analysis results to DB and display them."""
     divider("SAVING TO DATABASE")
+    remediations = result.get("remediations") or []
 
     # save vulnerabilities and their fixes
     for vuln in result["vulnerabilities"]:
@@ -1527,8 +1526,13 @@ def _save_and_show_results(sl_no: int, result: dict, duration_str: str = ""):
             evidence_source=vuln.get("evidence_tool", ""),
             raw_evidence=vuln.get("evidence_snippet", ""),
         )
-        if vuln.get("fix"):
-            save_fix(sl_no, vuln_id, vuln["fix"], source="ai")
+        fix_text = vuln.get("fix")
+        fix_source = "ai"
+        if not fix_text:
+            fix_text = _remediation_for_vulnerability(vuln, remediations)
+            fix_source = "deterministic"
+        if fix_text:
+            save_fix(sl_no, vuln_id, fix_text, source=fix_source)
         conf_tag = vuln.get("confidence", "UNCONFIRMED")
         ev_src = vuln.get("evidence_tool", "llm")
         success(f"Saved vuln: {vuln['vuln_name']} [{vuln['severity']}] ({conf_tag} via {ev_src})")
@@ -1574,6 +1578,23 @@ def _save_and_show_results(sl_no: int, result: dict, duration_str: str = ""):
 
     if confirm("Edit or delete anything in this session?"):
         edit_delete_menu(sl_no)
+
+
+def _remediation_for_vulnerability(vuln: dict, remediations: list) -> str:
+    """Pick the best deterministic remediation for a saved vulnerability."""
+    name = str(vuln.get("vuln_name", "")).lower()
+    service = str(vuln.get("service", "")).lower()
+    for item in remediations:
+        finding = str(item.get("finding", "")).lower()
+        rec_service = str(item.get("service", "")).lower()
+        recommendation = str(item.get("recommendation", "")).strip()
+        if not recommendation:
+            continue
+        if finding and (finding in name or name in finding):
+            return recommendation
+        if service and rec_service and (service == rec_service or service in rec_service or rec_service in service):
+            return recommendation
+    return ""
 
 
 # ─────────────────────────────────────────────
