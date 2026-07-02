@@ -245,7 +245,7 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
     else:
         # Default small list
         pwd_list = [
-            "qweqwe123", "root", "toor", "admin", "password", "123456", "12345678",
+            "root", "toor", "admin", "password", "123456", "12345678",
             "1234", "support", "test", "guest", "changeme", "letmein",
             "welcome", "monkey", "dragon", "master", "qwerty", "login",
             "abc123", "passw0rd", "pass123", "administrator", "P@ssw0rd",

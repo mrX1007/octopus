@@ -525,7 +525,7 @@ def test_legacy_agents_module_imports_current_ai_and_tool_facades(monkeypatch):
     monkeypatch.setattr(
         agents,
         "get_all_known_creds_for_target",
-        lambda target: {"ssh": [("root", "toor")]} if target == "10.0.0.5" else {},
+        lambda target: {"ssh": [("root", "fixture-password")]} if target == "10.0.0.5" else {},
     )
 
     assert callable(agents.ask_ollama)
@@ -1442,7 +1442,7 @@ def test_fact_driven_actions_map_evidence_to_next_commands():
     scan_id = "scan-fact-actions"
     host = "10.0.0.5"
     facts = [
-        {"type": "credential", "value": "support:qweqwe123 (cached)"},
+        {"type": "credential", "value": "support:fixture-password-123 (cached)"},
         {"type": "port_open", "value": "2087/tcp (cpanel) [cPanel/WHM]"},
         {"type": "web_path", "value": "/_reports:301"},
     ]
@@ -1827,12 +1827,58 @@ def test_credential_ranking_prefers_password_login_over_root_key_marker():
     from core.tools import exploit_tools
 
     host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
+    old_get_store = exploit_tools._get_cred_store
     exploit_tools._KNOWN_CREDS[("ssh", host)] = [
         ("root", "__KEY_AUTH__"),
-        ("support", "qweqwe123"),
+        ("support", "fixture-password-123"),
     ]
 
-    assert exploit_tools.get_best_creds_for_target(host, "ssh") == ("support", "qweqwe123")
+    try:
+        exploit_tools._get_cred_store = lambda: None
+        assert exploit_tools.get_best_creds_for_target(host, "ssh") == ("support", "fixture-password-123")
+    finally:
+        exploit_tools._get_cred_store = old_get_store
+        exploit_tools._KNOWN_CREDS.pop(("ssh", host), None)
+
+
+def test_credential_lookup_merges_unified_store_and_legacy_cache():
+    import uuid
+    from core.tools import exploit_tools
+
+    host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
+    old_get_store = exploit_tools._get_cred_store
+
+    class FakeStore:
+        def get(self, service, target):
+            if service == "ssh" and target == host:
+                return [("root", "__KEY_AUTH__")]
+            return []
+
+    try:
+        exploit_tools._get_cred_store = lambda: FakeStore()
+        exploit_tools._KNOWN_CREDS[("ssh", host)] = [("support", "fixture-password-123")]
+        assert exploit_tools.get_known_creds("ssh", host) == [
+            ("root", "__KEY_AUTH__"),
+            ("support", "fixture-password-123"),
+        ]
+        assert exploit_tools.get_best_creds_for_target(host, "ssh") == ("support", "fixture-password-123")
+    finally:
+        exploit_tools._get_cred_store = old_get_store
+        exploit_tools._KNOWN_CREDS.pop(("ssh", host), None)
+
+
+def test_unified_credential_store_prefers_password_over_root_key_marker():
+    import uuid
+    from core.credentials import CredentialStore
+
+    host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
+    store = CredentialStore()
+    store._cache[("ssh", host)] = [
+        ("root", "__KEY_AUTH__"),
+        ("support", "fixture-password-123"),
+    ]
+
+    assert store.get_best(host) == ("support", "fixture-password-123")
 
 
 def test_ssh_exec_blocks_arbitrary_commands_by_default():
@@ -1875,7 +1921,7 @@ def test_get_all_known_creds_reads_unified_store_and_legacy_cache():
         def get_all(self, target):
             if target == host:
                 return {
-                    "ssh": [("support", "qweqwe123")],
+                    "ssh": [("support", "fixture-password-123")],
                     "postgres": [("app", "dbpass")],
                 }
             return {}
@@ -1889,7 +1935,7 @@ def test_get_all_known_creds_reads_unified_store_and_legacy_cache():
         exploit_tools._KNOWN_CREDS.clear()
         exploit_tools._KNOWN_CREDS.update(old_legacy)
 
-    assert creds["ssh"] == [("support", "qweqwe123"), ("root", "__KEY_AUTH__")]
+    assert creds["ssh"] == [("support", "fixture-password-123"), ("root", "__KEY_AUTH__")]
     assert creds["postgres"] == [("app", "dbpass")]
 
 
@@ -1902,7 +1948,7 @@ def test_pipeline_seeds_cached_ssh_creds_and_verifies_instead_of_bruteforce():
     old_get_store = exploit_tools._get_cred_store
     old_legacy = dict(exploit_tools._KNOWN_CREDS)
     exploit_tools._get_cred_store = lambda: None
-    exploit_tools._KNOWN_CREDS[("ssh", host)] = [("support", "qweqwe123")]
+    exploit_tools._KNOWN_CREDS[("ssh", host)] = [("support", "fixture-password-123")]
     try:
         pipeline = AIPipeline(f"/tmp/octopus_pipeline_cached_creds_{uuid.uuid4().hex}.db")
         seeded = pipeline._seed_known_credentials("scan-cached-creds", host)
@@ -1915,7 +1961,7 @@ def test_pipeline_seeds_cached_ssh_creds_and_verifies_instead_of_bruteforce():
 
     pairs = {(fact["type"], fact["value"]) for fact in facts}
     assert seeded == 1
-    assert ("credential", "support:qweqwe123 (cached)") in pairs
+    assert ("credential", "support:fixture-password-123 (cached)") in pairs
     assert expanded == [f"ssh_session {host}"]
 
 
@@ -2244,7 +2290,7 @@ def test_real_app_replay_ssh_only_log_builds_state_without_web_or_msf_noise():
     model = context["target_model"]
 
     assert ("port_open", "22/tcp (ssh) [OpenSSH 7.4 (protocol 2.0)]") in pairs
-    assert ("credential", "support:qweqwe123 (cached)") in pairs
+    assert ("credential", "support:fixture-password-123 (cached)") in pairs
     assert ("service_status", "ssh_user_enum_unreliable_or_patched") in pairs
     assert ("service_status", "msf_check_invalid_options:auxiliary/scanner/ssh/ssh_login") in pairs
     assert not any(ftype == "web_endpoint" for ftype, _value in pairs)

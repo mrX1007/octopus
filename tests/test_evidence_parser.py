@@ -8,7 +8,7 @@ def test_ssh_session_output_seeds_credentials_service_and_privesc():
     output = """
 [*] SSH Post-Exploitation Analysis: support@83.166.241.164:22
 [+] SSH connected as support@83.166.241.164
-Known: support:qweqwe123
+Known: support:fixture-password-123
 
 [+] Hostname
 $ hostname; hostname -f 2>/dev/null || true
@@ -31,7 +31,7 @@ $ find / -perm -4000 -type f 2>/dev/null | head -80
     facts = OutputParser().parse_tool_output("ssh_session", output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
-    assert ("credential", "support:qweqwe123 (cached)") in pairs
+    assert ("credential", "support:fixture-password-123 (cached)") in pairs
     assert ("credential", "ssh_login_success:support@83.166.241.164") in pairs
     assert ("port_open", "22/tcp (ssh)") in pairs
     assert ("service_status", "ssh_authenticated") in pairs
@@ -856,7 +856,7 @@ def test_hash_cracking_output_marks_credentials_without_leaking_password_fact():
   Total hashes:   2
   Cracked:        1
   CRACKED CREDENTIALS:
-    + root:toor
+    + root:fixture-password-123
 AI: 1/2 hashes cracked. Use cracked credentials for SSH login.
 """
 
@@ -867,7 +867,7 @@ AI: 1/2 hashes cracked. Use cracked credentials for SSH login.
     assert ("hash_cracking", "cracked:1/2") in pairs
     assert ("credential", "cracked_credentials:1") in pairs
     assert ("credential", "cracked_password_for:root") in pairs
-    assert ("credential", "root:toor") not in pairs
+    assert ("credential", "root:fixture-password-123") not in pairs
 
 
 def test_low_value_failed_structured_facts_are_sanitized():

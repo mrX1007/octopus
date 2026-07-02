@@ -11,15 +11,17 @@ Usage:
     from core.credentials import CredentialStore
 
     creds = CredentialStore.instance()   # singleton
-    creds.add("ssh", "10.0.0.1", "root", "toor", source="bruteforce")
-    creds.get("ssh", "10.0.0.1")         # → [("root", "toor")]
-    creds.get_best("10.0.0.1")           # → ("root", "toor")
-    creds.get_all("10.0.0.1")            # → {"ssh": [("root", "toor")]}
+    creds.add("ssh", "10.0.0.1", "root", "fixture-password", source="bruteforce")
+    creds.get("ssh", "10.0.0.1")         # → [("root", "fixture-password")]
+    creds.get_best("10.0.0.1")           # → ("root", "fixture-password")
+    creds.get_all("10.0.0.1")            # → {"ssh": [("root", "fixture-password")]}
 """
 
 import logging
 import threading
 from typing import List, Tuple, Dict, Optional
+
+from core.credential_ranking import best_credential
 
 C_GREEN  = "\033[92m"
 C_YELLOW = "\033[93m"
@@ -182,14 +184,11 @@ class CredentialStore:
 
     def get_best(self, target: str) -> Tuple[Optional[str], Optional[str]]:
         """Get best credential for any service on target.
-        Prefers root > other SSH > any service."""
+        Prefers real SSH secrets over auth-state markers."""
         # SSH first
         ssh_creds = self.get("ssh", target)
         if ssh_creds:
-            for user, pwd in ssh_creds:
-                if user == "root":
-                    return (user, pwd)
-            return ssh_creds[0]
+            return best_credential(ssh_creds)
         # Any service
         for (svc, tgt), cred_list in self._cache.items():
             if tgt == target and cred_list:

