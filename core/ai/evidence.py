@@ -252,7 +252,7 @@ class RegexParser:
                     "session_id": session_id,
                 })
 
-        if re.search(r'\[(?:TIMEOUT|timeout)\]', raw_output):
+        if re.search(r'\[(?:TIMEOUT|timeout)\]', raw_output) or "killed after" in raw_lower or "timed out after" in raw_lower:
             tool_label = (tool_name or "tool").split()[0]
             facts.append({
                 "type": "service_status",
@@ -260,6 +260,15 @@ class RegexParser:
                 "confidence": 80,
                 "session_id": session_id,
             })
+
+        if "shodan" in tool_lower or "shodan host" in raw_lower:
+            if "no information available for that ip" in raw_lower:
+                facts.append({
+                    "type": "service_status",
+                    "value": "external_intel_no_host_information:shodan",
+                    "confidence": 85,
+                    "session_id": session_id,
+                })
 
         if "ffuf" in tool_lower or "scrapling_crawl" in tool_lower or "crawl" in tool_lower:
             if "no http(s) response" in raw_lower:
@@ -650,6 +659,8 @@ class RegexParser:
             injectable = re.search(r"Parameter:\s*([^\s(]+).*?(?:is vulnerable|appears to be injectable)", raw_output, re.IGNORECASE | re.DOTALL)
             if injectable:
                 facts.append({"type": "vulnerability", "value": f"sql_injection:{injectable.group(1)}", "confidence": 90, "session_id": session_id})
+            elif "no usable links found" in raw_lower or "no get parameters" in raw_lower:
+                facts.append({"type": "service_status", "value": "sqlmap_no_get_parameters_found", "confidence": 85, "session_id": session_id})
             elif "all tested parameters do not appear to be injectable" in raw_lower:
                 facts.append({"type": "service_status", "value": "sqlmap_no_injection_found", "confidence": 85, "session_id": session_id})
 
@@ -896,6 +907,8 @@ class RegexParser:
             if "__schema" in raw_output or "queryType" in raw_output:
                 facts.append({"type": "api_endpoint", "value": "POST:/graphql:graphql", "confidence": 85, "session_id": session_id})
                 facts.append({"type": "api_security_note", "value": "graphql_introspection_enabled", "confidence": 85, "session_id": session_id})
+            elif "not accessible" in raw_lower or "no response" in raw_lower or "connection" in raw_lower:
+                facts.append({"type": "service_status", "value": "graphql_introspection_not_confirmed", "confidence": 80, "session_id": session_id})
 
         if "security_headers" in tool_lower or "[security headers" in raw_lower or "curl_headers" in tool_lower or "headers:" in raw_lower:
             header_map = {}
@@ -1624,6 +1637,7 @@ class OutputParser:
         session_id = self._extract_session_id(raw_output)
 
         facts = []
+        facts.extend(self._parse_negative_status(tool_name, raw_output, session_id))
 
         # 1. Family parsers for normalized high-value objects.
         facts.extend(self.family_pipeline.parse(tool_name, raw_output, session_id))
@@ -1648,6 +1662,24 @@ class OutputParser:
             facts.extend(llm_facts)
 
         return self._sanitize_facts(facts)
+
+    def _parse_negative_status(self, tool_name: str, raw_output: str, session_id: str) -> List[Dict[str, Any]]:
+        facts = []
+        tool_lower = (tool_name or "").lower()
+        raw_lower = (raw_output or "").lower()
+        first_tool = (tool_name or "tool").split()[0]
+
+        if re.search(r'\[(?:TIMEOUT|timeout)\]', raw_output or "") or "killed after" in raw_lower or "timed out after" in raw_lower:
+            facts.append({"type": "service_status", "value": f"tool_timeout:{first_tool}", "confidence": 80, "session_id": session_id})
+        if ("shodan" in tool_lower or "shodan host" in raw_lower) and "no information available for that ip" in raw_lower:
+            facts.append({"type": "service_status", "value": "external_intel_no_host_information:shodan", "confidence": 85, "session_id": session_id})
+        if "sqlmap" in tool_lower and ("no usable links found" in raw_lower or "no get parameters" in raw_lower):
+            facts.append({"type": "service_status", "value": "sqlmap_no_get_parameters_found", "confidence": 85, "session_id": session_id})
+        if ("graphql_check" in tool_lower or "[graphql check" in raw_lower) and (
+            "not accessible" in raw_lower or "no response" in raw_lower or "connection" in raw_lower
+        ):
+            facts.append({"type": "service_status", "value": "graphql_introspection_not_confirmed", "confidence": 80, "session_id": session_id})
+        return facts
 
     def _extract_session_id(self, raw_output: str) -> str:
         patterns = [

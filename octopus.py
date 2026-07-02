@@ -1128,6 +1128,8 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
     v12: Handles exploit_success, potential_vulnerability, exploit_attempted.
     Adds full_response key to prevent KeyError in save_summary.
     """
+    from core.ai.reporting import enrich_result_with_reporting
+
     facts = fact_store.get_facts(scan_id, target)
     hypotheses = fact_store.get_hypotheses(scan_id, target)
 
@@ -1153,7 +1155,10 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
                 "port": meta["port"],
                 "service": meta["service"],
                 "description": meta["description"],
-                "confidence": "CONFIRMED",
+                "confidence": meta.get("confidence", "CONFIRMED"),
+                "evidence_state": meta.get("evidence_state", "verified"),
+                "exploit_executed": meta.get("exploit_executed", False),
+                "impact_confirmed": meta.get("impact_confirmed", False),
                 "evidence_tool": f.get("source", ""),
             })
 
@@ -1234,7 +1239,7 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
     if outcome_summary:
         summary_text += "\n\nOUTCOME SUMMARY:\n" + "\n".join(f"- {line}" for line in outcome_summary)
 
-    return {
+    result = {
         "vulnerabilities": vulns,
         "exploits": exploits,
         "risk_level": risk,
@@ -1244,6 +1249,7 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
         "confirmed_facts": confirmed_facts,
         "outcome_summary": outcome_summary,
     }
+    return enrich_result_with_reporting(result, facts, state)
 
 
 def _mask_secret_value(value: str) -> str:
@@ -1398,7 +1404,14 @@ def _endpoint_metadata_for_vulnerability(f, facts) -> dict:
                 return {
                     "port": port,
                     "service": _service_for_port(facts, port),
-                    "description": f"Confirmed Metasploit check positive for {module} on port {port}",
+                    "description": (
+                        f"Metasploit check positive for {module} on port {port}. "
+                        "Exploit execution and shell/command impact are not confirmed by this fact."
+                    ),
+                    "evidence_state": "verified_check",
+                    "confidence": "VERIFIED",
+                    "exploit_executed": False,
+                    "impact_confirmed": False,
                 }
 
     if value == "tomcat_jmx_proxy_exposed":
@@ -1443,6 +1456,10 @@ def _vulnerability_metadata(f, facts, state) -> dict:
             "port": endpoint_meta.get("port", "unknown"),
             "service": endpoint_meta.get("service", "unknown"),
             "description": endpoint_meta.get("description", "Confirmed vulnerability"),
+            "evidence_state": endpoint_meta.get("evidence_state", "verified"),
+            "confidence": endpoint_meta.get("confidence", "VERIFIED"),
+            "exploit_executed": endpoint_meta.get("exploit_executed", False),
+            "impact_confirmed": endpoint_meta.get("impact_confirmed", False),
         }
     return {
         "severity": "HIGH",

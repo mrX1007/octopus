@@ -497,6 +497,131 @@ def test_vulnerability_metadata_uses_endpoint_facts_for_confirmed_findings():
 
     assert meta["port"] == "49153"
     assert meta["service"] == "redis"
+    assert meta["exploit_executed"] is False
+    assert meta["impact_confirmed"] is False
+
+
+def test_exploit_select_context_excludes_json_web_endpoint_facts():
+    import json
+    import uuid
+    from core.ai.pipeline import AIPipeline
+
+    host = "10.0.0.5"
+    pipeline = AIPipeline(f"/tmp/octopus_exploit_context_{uuid.uuid4().hex}.db")
+    scan_id = "scan-exploit-context"
+    pipeline.fact_store.add_fact(scan_id, host, "port_open", "22/tcp (ssh) [OpenSSH 7.4]", "test")
+    pipeline.fact_store.add_fact(
+        scan_id,
+        host,
+        "web_endpoint",
+        json.dumps({"host": host, "url": f"http://{host}/"}, sort_keys=True),
+        "test",
+    )
+
+    command = pipeline._augment_command_with_context(f"exploit_select {host}", scan_id, host)
+
+    assert "port_open -> 22/tcp (ssh)" in command
+    assert "web_endpoint" not in command
+    assert '{"host"' not in command
+
+
+def test_reporting_groups_repeated_msf_checks_without_marking_exploited():
+    from core.ai.reporting import build_finding_groups
+
+    facts = [
+        {"id": 1, "type": "port_open", "value": "49153/tcp (redis) [Redis key-value store]"},
+        {"id": 2, "type": "port_open", "value": "49154/tcp (redis) [Redis key-value store]"},
+        {
+            "id": 3,
+            "type": "vulnerability",
+            "value": "msf_check_positive:exploit/linux/redis/redis_replication_cmd_exec",
+        },
+        {
+            "id": 4,
+            "type": "vulnerability_endpoint",
+            "value": "msf_check_positive:exploit/linux/redis/redis_replication_cmd_exec:49153",
+        },
+        {
+            "id": 5,
+            "type": "vulnerability_endpoint",
+            "value": "msf_check_positive:exploit/linux/redis/redis_replication_cmd_exec:49154",
+        },
+        {
+            "id": 6,
+            "type": "active_command",
+            "value": "msf_run 10.0.0.5 exploit/linux/redis/redis_replication_cmd_exec RPORT=49153",
+        },
+    ]
+
+    groups = build_finding_groups(facts, {})
+
+    assert len(groups) == 1
+    group = groups[0]
+    assert group["module"] == "exploit/linux/redis/redis_replication_cmd_exec"
+    assert group["service"] == "redis"
+    assert group["ports"] == ["49153", "49154"]
+    assert group["verified"] is True
+    assert group["exploited"] is False
+    assert group["impact_confirmed"] is False
+    assert group["severity"] == "HIGH"
+
+
+def test_reporting_evidence_index_and_coverage_summarize_traceability():
+    from core.ai.reporting import build_coverage_summary, build_evidence_index
+
+    facts = [
+        {
+            "id": 42,
+            "type": "service_status",
+            "value": "tool_timeout:nuclei_safe",
+            "confidence": 80,
+            "source": "nuclei_safe http://10.0.0.5",
+            "evidence_hash": "abc123def456",
+            "observations": [{"source": "nuclei_safe http://10.0.0.5"}],
+        },
+        {
+            "id": 43,
+            "type": "service_status",
+            "value": "sqlmap_no_get_parameters_found",
+            "confidence": 85,
+            "source": "sqlmap http://10.0.0.5",
+            "evidence_hash": "def456abc123",
+        },
+    ]
+
+    evidence = build_evidence_index(facts)
+    coverage = build_coverage_summary(facts)
+
+    assert evidence[0]["evidence_id"] == "E-001"
+    assert evidence[0]["fact_id"] == 42
+    assert evidence[0]["command"] == "nuclei_safe http://10.0.0.5"
+    assert coverage["confidence"] == "partial"
+    assert coverage["degraded"][0]["tool"] == "nuclei_safe"
+    assert coverage["checked_but_not_confirmed"][0]["status"] == "sqlmap_no_get_parameters_found"
+
+
+def test_trace_report_records_deterministic_llm_status():
+    from core.ai.trace_report import TraceReporter
+    from core.ai.fact_store import FactStore
+
+    reporter = TraceReporter(FactStore("/tmp/octopus_trace_llm_status.db"))
+    report = reporter.build(
+        "scan-llm-status",
+        "10.0.0.5",
+        goal_trace=[{"loop": 1, "thought": "LLM suggested X but policy forced Y"}],
+        task_outcomes=[
+            {
+                "agent": "AnalysisAgent",
+                "task": "analyze_vulnerabilities",
+                "status": "failed",
+                "reason": "analysis_returned_no_hypotheses",
+            }
+        ],
+    )
+
+    assert report["llm_status"]["primary_response"] == "empty"
+    assert report["llm_status"]["empty_response_events"] == 1
+    assert report["llm_status"]["fallback_policy_used"] is True
 
 
 def test_internal_recon_goal_forces_single_network_task():
@@ -763,8 +888,8 @@ def test_pipeline_feeds_internal_and_web_surface_facts_into_exploit_selector():
     assert "service_version -> nginx:local:nginx/1.14.0" in cmd
     assert "local_listening_port -> 8080" in cmd
     assert "web_server -> nginx/1.14.0" in cmd
-    assert "app_manifest -> /var/www/app/package.json" in cmd
-    assert "config_candidate -> /var/www/app/.env" in cmd
+    assert "app_manifest -> /var/www/app/package.json" not in cmd
+    assert "config_candidate -> /var/www/app/.env" not in cmd
 
 
 def test_fact_driven_actions_enrich_internal_and_web_surfaces():
@@ -1361,7 +1486,7 @@ def test_exploit_select_context_filters_offscope_web_urls():
     command = pipeline._augment_command_with_context(f"exploit_select {target}", scan_id, target)
 
     assert "83.166.242.55" in command
-    assert "/admin" in command
+    assert "/admin" not in command
     assert "nginx/1.14.0" in command
     assert "nginx.org" not in command
     assert "nginx.com" not in command

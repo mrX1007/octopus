@@ -380,6 +380,7 @@ class AIPipeline:
             target,
             goal_trace=self.goal_trace,
             command_trace=self.command_trace,
+            task_outcomes=self.task_outcomes,
             context=context,
         )
 
@@ -2033,17 +2034,8 @@ class AIPipeline:
             "vulnerability",
             "web_server",
             "web_powered_by",
-            "web_title",
-            "web_surface",
-            "web_endpoint",
-            "web_link",
-            "web_input",
-            "browser_rendered",
             "local_listening_port",
             "app_stack",
-            "web_root",
-            "app_manifest",
-            "config_candidate",
         }
         recon_bits = []
         for fact in facts:

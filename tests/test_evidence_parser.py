@@ -870,6 +870,29 @@ AI: 1/2 hashes cracked. Use cracked credentials for SSH login.
     assert ("credential", "root:fixture-password-123") not in pairs
 
 
+def test_negative_evidence_from_timeouts_and_unconfirmed_checks():
+    from core.ai.evidence import OutputParser
+
+    output = """
+[TIMEOUT] nuclei killed after 300s
+[WARNING] no usable links found (with GET parameters)
+[!] Shodan host error: No information available for that IP.
+[GRAPHQL CHECK - http://10.0.0.5/graphql]
+No response from endpoint
+"""
+
+    facts = OutputParser().parse_tool_output(
+        "nuclei_safe sqlmap shodan graphql_check http://10.0.0.5",
+        output,
+    )
+    pairs = {(fact["type"], fact["value"]) for fact in facts}
+
+    assert ("service_status", "tool_timeout:nuclei_safe") in pairs
+    assert ("service_status", "sqlmap_no_get_parameters_found") in pairs
+    assert ("service_status", "external_intel_no_host_information:shodan") in pairs
+    assert ("service_status", "graphql_introspection_not_confirmed") in pairs
+
+
 def test_low_value_failed_structured_facts_are_sanitized():
     from core.ai.evidence import OutputParser
 

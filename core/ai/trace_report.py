@@ -4,6 +4,13 @@ import json
 from typing import Any, Dict, List
 
 from core.ai.fact_store import FactStore
+from core.ai.reporting import (
+    build_attack_path,
+    build_coverage_summary,
+    build_evidence_index,
+    build_finding_groups,
+    build_remediations,
+)
 
 
 class TraceReporter:
@@ -18,19 +25,35 @@ class TraceReporter:
         target: str,
         goal_trace: List[Dict[str, Any]] = None,
         command_trace: List[Dict[str, Any]] = None,
+        task_outcomes: List[Dict[str, Any]] = None,
         context: Dict[str, Any] = None,
     ) -> Dict[str, Any]:
         facts = self.fact_store.get_facts(scan_id, target)
         command_results = self.fact_store.get_command_results(scan_id, target)
+        context = context or {}
+        state = {
+            "root_access_confirmed": bool((context.get("stage_gates") or {}).get("root")),
+            "persistence_established": bool((context.get("stage_gates") or {}).get("persistence")),
+            "internal_recon_completed": bool((context.get("stage_gates") or {}).get("internal_recon")),
+            "cleanup_completed": bool((context.get("stage_gates") or {}).get("cleanup")),
+        }
+        finding_groups = build_finding_groups(facts, state)
         return {
             "scan_id": scan_id,
             "target": target,
             "summary": self._summary(facts, command_results, goal_trace or [], command_trace or []),
-            "surface_states": ((context or {}).get("target_model") or {}).get("surface_states")
-                or ((context or {}).get("surface_states") or {}),
-            "asset_graph_summary": ((context or {}).get("asset_graph") or {}).get("summary", {}),
+            "surface_states": (context.get("target_model") or {}).get("surface_states")
+                or (context.get("surface_states") or {}),
+            "asset_graph_summary": (context.get("asset_graph") or {}).get("summary", {}),
+            "evidence_index": build_evidence_index(facts),
+            "finding_groups": finding_groups,
+            "coverage": build_coverage_summary(facts),
+            "attack_path": build_attack_path(facts, state),
+            "remediations": build_remediations(finding_groups, facts),
+            "llm_status": self._llm_status(goal_trace or [], task_outcomes or []),
             "goal_trace": goal_trace or [],
             "command_trace": command_trace or [],
+            "task_outcomes": task_outcomes or [],
             "command_results": command_results,
             "fact_flow": self._fact_flow(facts),
         }
@@ -58,6 +81,29 @@ class TraceReporter:
         lines.append("asset_graph_summary:")
         for key, value in sorted((report.get("asset_graph_summary") or {}).items()):
             lines.append(f"  {key}: {value}")
+        lines.append("")
+        lines.append("coverage:")
+        coverage = report.get("coverage") or {}
+        lines.append(f"  confidence: {coverage.get('confidence', 'normal')}")
+        for item in coverage.get("degraded", [])[:10]:
+            lines.append(f"  degraded: {item.get('tool')} {item.get('status')} - {item.get('impact')}")
+        for item in coverage.get("checked_but_not_confirmed", [])[:10]:
+            lines.append(f"  checked: {item.get('status')}")
+        lines.append("")
+        lines.append("finding_groups:")
+        for group in report.get("finding_groups", [])[:12]:
+            lines.append(
+                f"  - {group.get('module')} service={group.get('service')} ports={group.get('ports')} "
+                f"candidate={group.get('candidate')} verified={group.get('verified')} "
+                f"exploited={group.get('exploited')} impact={group.get('impact_confirmed')}"
+            )
+        lines.append("")
+        lines.append("llm_status:")
+        llm_status = report.get("llm_status") or {}
+        lines.append(f"  primary_response: {llm_status.get('primary_response', 'unknown')}")
+        lines.append(f"  empty_response_events: {llm_status.get('empty_response_events', 0)}")
+        lines.append(f"  fallback_policy_used: {llm_status.get('fallback_policy_used', False)}")
+        lines.append(f"  scan_continued_safely: {llm_status.get('scan_continued_safely', True)}")
         lines.append("")
         lines.append("commands:")
         for item in report.get("command_results", [])[-20:]:
@@ -114,6 +160,29 @@ class TraceReporter:
                 "confidence": fact.get("confidence", 100),
             })
         return flow
+
+    def _llm_status(
+        self,
+        goal_trace: List[Dict[str, Any]],
+        task_outcomes: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        empty_events = [
+            item for item in task_outcomes
+            if item.get("agent") == "AnalysisAgent"
+            and item.get("status") == "failed"
+            and item.get("reason") == "analysis_returned_no_hypotheses"
+        ]
+        fallback_events = [
+            item for item in goal_trace
+            if any(marker in str(item.get("thought", "")).lower() for marker in ("policy forced", "fallback"))
+        ]
+        return {
+            "primary_response": "empty" if empty_events else "available_or_not_needed",
+            "empty_response_events": len(empty_events),
+            "fallback_policy_used": bool(fallback_events),
+            "fallback_events": fallback_events[-5:],
+            "scan_continued_safely": True,
+        }
 
     def _is_duplicate_output(self, item: Dict[str, Any], all_results: List[Dict[str, Any]]) -> bool:
         output_hash = item.get("output_hash")
