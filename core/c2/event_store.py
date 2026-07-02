@@ -13,6 +13,7 @@ import json
 import time
 import sqlite3
 import threading
+from contextlib import contextmanager
 from typing import Callable, Dict, Any, List, Optional
 
 
@@ -64,12 +65,20 @@ class EventStore:
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self._init_schema()
 
-    def _get_conn(self) -> sqlite3.Connection:
+    @contextmanager
+    def _get_conn(self):
         conn = sqlite3.connect(self.db_path, timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_schema(self):
         with self._get_conn() as conn:

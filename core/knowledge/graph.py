@@ -5,6 +5,7 @@ import json
 import time
 import sqlite3
 import logging
+from contextlib import contextmanager
 from typing import List, Dict, Optional, Tuple
 from collections import deque
 
@@ -65,40 +66,60 @@ class KnowledgeGraph:
         if conn is not self._persistent_conn:
             conn.close()
 
+    @contextmanager
+    def _connect(self):
+        conn = self._get_conn()
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            self._close_conn(conn)
+
+    def close(self) -> None:
+        if self._persistent_conn is not None:
+            self._persistent_conn.close()
+            self._persistent_conn = None
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
     def _init_db(self):
         """Create schema if not exists."""
-        conn = self._get_conn()
-        c = conn.cursor()
+        with self._connect() as conn:
+            c = conn.cursor()
 
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS nodes (
-                id TEXT PRIMARY KEY,
-                type TEXT NOT NULL,
-                properties TEXT NOT NULL DEFAULT '{}',
-                created_at REAL NOT NULL,
-                updated_at REAL NOT NULL
-            )
-        ''')
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS nodes (
+                    id TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    properties TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL
+                )
+            ''')
 
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS edges (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                src TEXT NOT NULL,
-                dst TEXT NOT NULL,
-                edge_type TEXT NOT NULL,
-                properties TEXT NOT NULL DEFAULT '{}',
-                created_at REAL NOT NULL,
-                UNIQUE(src, dst, edge_type)
-            )
-        ''')
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS edges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    src TEXT NOT NULL,
+                    dst TEXT NOT NULL,
+                    edge_type TEXT NOT NULL,
+                    properties TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL,
+                    UNIQUE(src, dst, edge_type)
+                )
+            ''')
 
-        c.execute('CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type)')
-
-        conn.commit()
-        self._close_conn(conn)
+            c.execute('CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type)')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src)')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst)')
+            c.execute('CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type)')
 
     # ═══════════════════════════════════════════════
     # NODE CRUD — Typed High-Level API
@@ -108,16 +129,14 @@ class KnowledgeGraph:
                      properties: dict) -> str:
         """Insert or update a node. Returns node_id."""
         now = time.time()
-        conn = self._get_conn()
-        conn.execute('''
-            INSERT INTO nodes (id, type, properties, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                properties = excluded.properties,
-                updated_at = excluded.updated_at
-        ''', (node_id, node_type.value, json.dumps(properties), now, now))
-        conn.commit()
-        self._close_conn(conn)
+        with self._connect() as conn:
+            conn.execute('''
+                INSERT INTO nodes (id, type, properties, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    properties = excluded.properties,
+                    updated_at = excluded.updated_at
+            ''', (node_id, node_type.value, json.dumps(properties), now, now))
         return node_id
 
     def add_asset(self, ip: str, hostname: str = "", os: str = "",
@@ -215,20 +234,17 @@ class KnowledgeGraph:
              **properties):
         """Create a typed edge between two nodes. Idempotent."""
         now = time.time()
-        conn = self._get_conn()
         try:
-            conn.execute('''
-                INSERT INTO edges (src, dst, edge_type, properties, created_at)
-                VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(src, dst, edge_type) DO UPDATE SET
-                    properties = excluded.properties
-            ''', (src_id, dst_id, edge_type.value,
-                  json.dumps(properties), now))
-            conn.commit()
+            with self._connect() as conn:
+                conn.execute('''
+                    INSERT INTO edges (src, dst, edge_type, properties, created_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(src, dst, edge_type) DO UPDATE SET
+                        properties = excluded.properties
+                ''', (src_id, dst_id, edge_type.value,
+                      json.dumps(properties), now))
         except Exception as e:
             logging.debug(f"KnowledgeGraph.link error: {e}")
-        finally:
-            self._close_conn(conn)
 
     def link_credential_to_asset(self, cred_id: str, asset_id: str,
                                  method: str = "ssh"):
@@ -249,11 +265,10 @@ class KnowledgeGraph:
 
     def get_node(self, node_id: str) -> Optional[dict]:
         """Get a single node by ID. Returns properties + metadata."""
-        conn = self._get_conn()
-        row = conn.execute(
-            'SELECT * FROM nodes WHERE id = ?', (node_id,)
-        ).fetchone()
-        self._close_conn(conn)
+        with self._connect() as conn:
+            row = conn.execute(
+                'SELECT * FROM nodes WHERE id = ?', (node_id,)
+            ).fetchone()
         if not row:
             return None
         return {
@@ -266,12 +281,11 @@ class KnowledgeGraph:
 
     def get_nodes_by_type(self, node_type: NodeType) -> List[dict]:
         """Get all nodes of a specific type."""
-        conn = self._get_conn()
-        rows = conn.execute(
-            'SELECT * FROM nodes WHERE type = ? ORDER BY created_at',
-            (node_type.value,)
-        ).fetchall()
-        self._close_conn(conn)
+        with self._connect() as conn:
+            rows = conn.execute(
+                'SELECT * FROM nodes WHERE type = ? ORDER BY created_at',
+                (node_type.value,)
+            ).fetchall()
         return [{
             "id": r["id"],
             "type": r["type"],
@@ -281,17 +295,16 @@ class KnowledgeGraph:
     def get_edges_from(self, node_id: str,
                        edge_type: EdgeType = None) -> List[dict]:
         """Get all outgoing edges from a node."""
-        conn = self._get_conn()
-        if edge_type:
-            rows = conn.execute(
-                'SELECT * FROM edges WHERE src = ? AND edge_type = ?',
-                (node_id, edge_type.value)
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                'SELECT * FROM edges WHERE src = ?', (node_id,)
-            ).fetchall()
-        self._close_conn(conn)
+        with self._connect() as conn:
+            if edge_type:
+                rows = conn.execute(
+                    'SELECT * FROM edges WHERE src = ? AND edge_type = ?',
+                    (node_id, edge_type.value)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    'SELECT * FROM edges WHERE src = ?', (node_id,)
+                ).fetchall()
         return [{
             "src": r["src"], "dst": r["dst"],
             "edge_type": r["edge_type"],
@@ -301,17 +314,16 @@ class KnowledgeGraph:
     def get_edges_to(self, node_id: str,
                      edge_type: EdgeType = None) -> List[dict]:
         """Get all incoming edges to a node."""
-        conn = self._get_conn()
-        if edge_type:
-            rows = conn.execute(
-                'SELECT * FROM edges WHERE dst = ? AND edge_type = ?',
-                (node_id, edge_type.value)
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                'SELECT * FROM edges WHERE dst = ?', (node_id,)
-            ).fetchall()
-        self._close_conn(conn)
+        with self._connect() as conn:
+            if edge_type:
+                rows = conn.execute(
+                    'SELECT * FROM edges WHERE dst = ? AND edge_type = ?',
+                    (node_id, edge_type.value)
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    'SELECT * FROM edges WHERE dst = ?', (node_id,)
+                ).fetchall()
         return [{
             "src": r["src"], "dst": r["dst"],
             "edge_type": r["edge_type"],
@@ -406,17 +418,15 @@ class KnowledgeGraph:
         BFS to find all attack paths from src to dst.
         Returns list of paths, each path is [node, edge_type, node, ...].
         """
-        conn = self._get_conn()
-
         # Build adjacency list
         adj: Dict[str, List[Tuple[str, str]]] = {}
-        rows = conn.execute('SELECT src, dst, edge_type FROM edges').fetchall()
+        with self._connect() as conn:
+            rows = conn.execute('SELECT src, dst, edge_type FROM edges').fetchall()
         for r in rows:
             src = r["src"]
             if src not in adj:
                 adj[src] = []
             adj[src].append((r["dst"], r["edge_type"]))
-        self._close_conn(conn)
 
         # BFS
         all_paths = []
@@ -591,32 +601,29 @@ class KnowledgeGraph:
 
     def stats(self) -> dict:
         """Get counts by node type and edge type."""
-        conn = self._get_conn()
         result = {"nodes": {}, "edges": {}, "total_nodes": 0, "total_edges": 0}
 
-        # Node counts
-        rows = conn.execute(
-            'SELECT type, COUNT(*) as cnt FROM nodes GROUP BY type'
-        ).fetchall()
-        for r in rows:
-            result["nodes"][r["type"]] = r["cnt"]
-            result["total_nodes"] += r["cnt"]
+        with self._connect() as conn:
+            # Node counts
+            rows = conn.execute(
+                'SELECT type, COUNT(*) as cnt FROM nodes GROUP BY type'
+            ).fetchall()
+            for r in rows:
+                result["nodes"][r["type"]] = r["cnt"]
+                result["total_nodes"] += r["cnt"]
 
-        # Edge counts
-        rows = conn.execute(
-            'SELECT edge_type, COUNT(*) as cnt FROM edges GROUP BY edge_type'
-        ).fetchall()
-        for r in rows:
-            result["edges"][r["edge_type"]] = r["cnt"]
-            result["total_edges"] += r["cnt"]
+            # Edge counts
+            rows = conn.execute(
+                'SELECT edge_type, COUNT(*) as cnt FROM edges GROUP BY edge_type'
+            ).fetchall()
+            for r in rows:
+                result["edges"][r["edge_type"]] = r["cnt"]
+                result["total_edges"] += r["cnt"]
 
-        self._close_conn(conn)
         return result
 
     def clear(self):
         """Clear all data. Use with caution."""
-        conn = self._get_conn()
-        conn.execute('DELETE FROM edges')
-        conn.execute('DELETE FROM nodes')
-        conn.commit()
-        self._close_conn(conn)
+        with self._connect() as conn:
+            conn.execute('DELETE FROM edges')
+            conn.execute('DELETE FROM nodes')

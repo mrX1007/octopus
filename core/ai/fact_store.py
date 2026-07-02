@@ -5,6 +5,7 @@ import time
 import sqlite3
 import json
 import hashlib
+from contextlib import contextmanager
 from typing import List, Dict, Any, Tuple
 
 class FactStore:
@@ -13,8 +14,17 @@ class FactStore:
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
         self._init_db()
 
+    @contextmanager
     def _get_conn(self):
-        return sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_db(self):
         with self._get_conn() as conn:

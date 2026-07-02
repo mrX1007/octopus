@@ -2,6 +2,7 @@ import sqlite3
 import os
 import json
 import time
+from contextlib import contextmanager
 from datetime import datetime
 
 class C2Database:
@@ -10,12 +11,20 @@ class C2Database:
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self._init_db()
 
+    @contextmanager
     def _get_conn(self):
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
-        return conn
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _init_db(self):
         with self._get_conn() as conn:
@@ -178,4 +187,3 @@ class C2Database:
                 WHERE agent_id = ? AND expired_at IS NULL
             """, (agent_id,)).fetchone()
             return dict(row) if row else None
-
