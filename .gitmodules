@@ -1,0 +1,6 @@
+[submodule "vendor/cpanel_sniper"]
+	path = vendor/cpanel_sniper
+	url = https://github.com/Ishanoshada/CVE-2026-41940-Exploit-PoC
+[submodule "vendor/shardbrowser"]
+	path = vendor/shardbrowser
+	url = https://github.com/ProxyShard/ShardBrowser

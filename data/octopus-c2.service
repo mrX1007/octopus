@@ -1,0 +1,15 @@
+[Unit]
+Description=METATRON C2 Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/Users/admin/Downloads/octopus
+ExecStart=/usr/bin/env python3 core/c2/daemon.py
+Restart=always
+RestartSec=3
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target
