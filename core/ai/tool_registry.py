@@ -237,7 +237,6 @@ class ToolRegistry:
             "network_recon": "internal_network_recon",
             "internal_service_discovery": "internal_service_discovery",
             "internal_service_probe": "internal_service_discovery",
-            "internal_services": "internal_service_discovery",
             "lateral": "lateral_movement",
             "lateral_move": "lateral_movement",
             "lateral_movement": "lateral_movement",
@@ -248,7 +247,6 @@ class ToolRegistry:
             "killchain_vuln": "vulnerability_assessment",
             "killchain_exploit": "exploit_selection",
             "auto_exploit": "exploit_selection",
-            "ssh_inventory": "post_access_inventory",
             "controlled_ssh_inventory": "post_access_inventory",
             "post_access_inventory": "post_access_inventory",
         }
