@@ -40,7 +40,7 @@ follow_imports = "skip"
 files = [
     "core/tools/targeting.py",
     "core/plugins/loader.py",
-    "core/ai/legacy_agents.py",
+    "core/ai/runtime.py",
 ]
 exclude = [
     "venv/",
