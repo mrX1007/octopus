@@ -2,11 +2,12 @@
 
 import json
 import logging
-from typing import Dict, Any, List
-from core.ai.llm_context import compact_context_for_llm
-from core.ai.tool_registry import ToolRegistry
+from typing import Any
+
 from core.ai.evidence import EvidenceVerifier
+from core.ai.llm_context import compact_context_for_llm
 from core.ai.ollama_client import ask_ollama
+from core.ai.tool_registry import ToolRegistry
 
 logger = logging.getLogger("octopus.agents")
 
@@ -14,7 +15,7 @@ class DiscoveryAgent:
     def __init__(self, tool_registry: ToolRegistry):
         self.tool_registry = tool_registry
 
-    def execute_task(self, task: str, target: str) -> List[str]:
+    def execute_task(self, task: str, target: str) -> list[str]:
         """Returns a list of commands to run for discovery."""
         return self.tool_registry.get_commands_for_task(task, target)
 
@@ -36,7 +37,7 @@ Ensure the format matches EXACTLY:
 }
 """
 
-    def analyze(self, scan_id: str, host: str) -> Dict[str, Any]:
+    def analyze(self, scan_id: str, host: str) -> dict[str, Any]:
         """Reads context and returns hypotheses."""
         context = self.context_builder.build_context(scan_id, host)
         llm_context = compact_context_for_llm(context, role="analysis")
@@ -54,7 +55,7 @@ Ensure the format matches EXACTLY:
             # v12: check the error contract
             if response.startswith("[!]"):
                 logger.warning(f"AnalysisAgent LLM error: {response}")
-                print(f"[!] AnalysisAgent: LLM returned error, skipping analysis")
+                print("[!] AnalysisAgent: LLM returned error, skipping analysis")
                 return {"hypotheses": []}
 
             return json.loads(response)
@@ -68,10 +69,10 @@ class VerificationAgent:
         self.tool_registry = tool_registry
         self.verifier = verifier
 
-    def execute_task(self, task: str, target: str) -> List[str]:
+    def execute_task(self, task: str, target: str) -> list[str]:
         """Returns commands to run to verify a task."""
         return self.tool_registry.get_commands_for_task(task, target)
 
-    def verify_hypothesis(self, scan_id: str, host: str, claim: str, required_evidence: List[str]) -> Dict[str, Any]:
+    def verify_hypothesis(self, scan_id: str, host: str, claim: str, required_evidence: list[str]) -> dict[str, Any]:
         """Delegates to the Evidence Verifier."""
         return self.verifier.verify_claim(scan_id, host, claim, required_evidence)

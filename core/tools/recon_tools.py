@@ -4,27 +4,43 @@ Reconnaissance tool wrappers.
 Extracted from tools.py.
 """
 
-import os
+import base64
+import json
 import logging
+import os
 import re
 import shutil
 import socket
-import json
-import base64
+from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 from core.tools.base import (
-    run_tool, get_tool_config,
-    C_RESET, C_GREEN, C_YELLOW,
+    C_GREEN,
+    C_RESET,
+    C_YELLOW,
+    get_tool_config,
+    run_tool,
 )
 from core.tools.registry import tool
 from core.tools.targeting import (
     as_url as _as_url,
+)
+from core.tools.targeting import (
     coerce_port as _coerce_port,
+)
+from core.tools.targeting import (
     ensure_url as _ensure_url,
+)
+from core.tools.targeting import (
     split_host_port as _split_host_port,
+)
+from core.tools.targeting import (
     target_host as _target_host,
+)
+from core.tools.targeting import (
     target_looks_domain as _is_probably_domain,
+)
+from core.tools.targeting import (
     url_candidates as _url_candidates,
 )
 
@@ -68,7 +84,8 @@ def _load_session_profile(path: str) -> dict:
     if not path or not os.path.exists(path):
         return {"headers": {}, "cookies": {}}
     try:
-        data = json.loads(open(path, "r", encoding="utf-8", errors="ignore").read())
+        with open(path, encoding="utf-8", errors="ignore") as profile_file:
+            data = json.load(profile_file)
     except Exception:
         return {"headers": {}, "cookies": {}}
     return {
@@ -87,14 +104,13 @@ def _decode_jwt_segment(segment: str) -> dict:
 
 
 @tool(name="nmap", aliases=["nmap_scan"], category="recon", description="Run Nmap with smart caching and two-phase scanning.", requires=["nmap"])
-def run_nmap(target: str, extra_flags: list = None) -> str:
-    """nmap with config-driven flags and timeout.
-    v7.0: Smart Nmap caching and aggressive 2-phase scanning.
+def run_nmap(target: str, extra_flags: Optional[list] = None) -> str:
+    """Run Nmap with config-driven flags, caching, and two-phase scanning.
     Prevents duplicate '-p-' scans which waste immense time.
     """
     tc = get_tool_config("nmap")
     flags = list(tc.get("default_flags", ["-sV", "-sC", "-T4", "--open", "-Pn", "-sT"]))
-    timeout = tc.get("timeout", 300)  # v4.0: fixed from 180 → 300 to match config.yaml
+    timeout = tc.get("timeout", 300)
 
     if extra_flags:
         flags = extra_flags
@@ -104,7 +120,7 @@ def run_nmap(target: str, extra_flags: list = None) -> str:
         if "-sT" not in flags:
             flags.insert(1, "-sT")
 
-    # v7.0: Smart Nmap Cache + Staged execution
+    # Reuse Nmap results across staged execution.
     if "-p-" in flags:
         print(f"  {C_YELLOW}[FIX] Full port scan (-p-) intercepted → using Smart Nmap{C_RESET}")
         
@@ -112,13 +128,13 @@ def run_nmap(target: str, extra_flags: list = None) -> str:
         cache_file = f"/tmp/nmap_smart_{target.replace('/', '_')}.log"
         if os.path.exists(cache_file):
             print(f"  {C_YELLOW}[CACHE] Reusing previous Nmap results for {target}{C_RESET}")
-            with open(cache_file, "r") as f:
+            with open(cache_file) as f:
                 return f.read()
 
         # Phase 1: Top 1000 ports (Fast)
         print(f"  {C_YELLOW}  Phase 1: Top 1000 ports (fast){C_RESET}")
         flags_stage1 = [f for f in flags if f != "-p-"] + ["--top-ports", "1000"]
-        result1 = run_tool(["nmap"] + flags_stage1 + [target], timeout=300)
+        result1 = run_tool(["nmap", *flags_stage1, target], timeout=300)
 
         # Extract open ports from Phase 1 to decide if we need Phase 2
         open_ports_p1 = re.findall(r"(\d+)/tcp\s+open", result1)
@@ -128,12 +144,12 @@ def run_nmap(target: str, extra_flags: list = None) -> str:
             print(f"  {C_YELLOW}  Phase 2: Few ports found, running full -p- scan{C_RESET}")
             # we do a fast full scan without version detection to find obscure ports quickly
             flags_stage2 = ["-p-", "--min-rate", "1000", "-T4", "-Pn", target]
-            result2 = run_tool(["nmap"] + flags_stage2, timeout=600)
+            result2 = run_tool(["nmap", *flags_stage2], timeout=600)
         else:
             print(f"  {C_YELLOW}  Phase 2: Many common ports found, using targeted extension{C_RESET}")
             extended_ports = "8443,8000,8888,3000,27017,6379,11211,9200,5601,5985,5986,4444,9090,10000"
             flags_stage2 = [f for f in flags if f != "-p-"] + ["-p", extended_ports]
-            result2 = run_tool(["nmap"] + flags_stage2 + [target], timeout=300)
+            result2 = run_tool(["nmap", *flags_stage2, target], timeout=300)
 
         final_output = f"[PHASE 1 — Top 1000 ports]\n{result1}\n\n[PHASE 2 — Deep Scan]\n{result2}"
         
@@ -147,7 +163,7 @@ def run_nmap(target: str, extra_flags: list = None) -> str:
         return final_output
 
     print(f"  [*] nmap {' '.join(flags)} {target}")
-    return run_tool(["nmap"] + flags + [target], timeout=timeout)
+    return run_tool(["nmap", *flags, target], timeout=timeout)
 
 
 @tool(name="whois", aliases=[], category="recon", description="Run whois against target.", requires=["whois"])
@@ -178,7 +194,7 @@ def run_curl_headers(target: str) -> str:
         curl_cmd = ["curl", "-sI", "--max-time", "10", "--location"]
         if url.startswith("https://"):
             curl_cmd.append("-k")
-        output = run_tool(curl_cmd + [url], timeout=timeout)
+        output = run_tool([*curl_cmd, url], timeout=timeout)
         parts.append(f"[Headers: {url}]\n{output}")
     return "\n\n".join(parts)
 
@@ -320,7 +336,7 @@ def run_openapi_import(target: str) -> str:
             resp = requests.get(source, timeout=20, verify=False)
             body = resp.text
         else:
-            with open(source, "r", encoding="utf-8", errors="ignore") as fh:
+            with open(source, encoding="utf-8", errors="ignore") as fh:
                 body = fh.read()
         try:
             data = json.loads(body)
@@ -500,7 +516,7 @@ def run_sslscan(target: str) -> str:
     tc = get_tool_config("sslscan")
     flags = tc.get("flags", ["--no-colour"])
     print(f"  [*] sslscan {target}")
-    return run_tool(["sslscan"] + flags + [target], timeout=tc.get("timeout", 120))
+    return run_tool(["sslscan", *flags, target], timeout=tc.get("timeout", 120))
 
 
 @tool(
@@ -665,7 +681,7 @@ def run_enum4linux(target: str) -> str:
     tc = get_tool_config("enum4linux")
     flags = tc.get("flags", ["-a"])
     print(f"  [*] enum4linux {' '.join(flags)} {target}")
-    return run_tool(["enum4linux"] + flags + [target], timeout=tc.get("timeout", 150))
+    return run_tool(["enum4linux", *flags, target], timeout=tc.get("timeout", 150))
 
 
 @tool(name="smbclient", aliases=[], category="recon", description="Run smbclient -L to list shares anonymously.", requires=["smbclient"])
@@ -674,7 +690,7 @@ def run_smbclient(target: str) -> str:
     tc = get_tool_config("smbclient")
     flags = tc.get("flags", ["-N"])
     print(f"  [*] smbclient -L {target} {' '.join(flags)}")
-    return run_tool(["smbclient", "-L", target] + flags, timeout=tc.get("timeout", 45))
+    return run_tool(["smbclient", "-L", target, *flags], timeout=tc.get("timeout", 45))
 
 
 @tool(name="wpscan", aliases=[], category="recon", description="Run wpscan for wordpress targets.", requires=["wpscan"])
@@ -684,7 +700,7 @@ def run_wpscan(target: str) -> str:
     flags = tc.get("flags", ["--no-update", "--random-user-agent"])
     url = _ensure_url(target)
     print(f"  [*] wpscan --url {url}")
-    return run_tool(["wpscan", "--url", url] + flags, timeout=tc.get("timeout", 180))
+    return run_tool(["wpscan", "--url", url, *flags], timeout=tc.get("timeout", 180))
 
 
 @tool(name="sqlmap", aliases=[], category="recon", description="Run sqlmap basic crawl detection.", requires=["sqlmap"])
@@ -697,7 +713,7 @@ def run_sqlmap(target: str) -> str:
     url = _ensure_url(target)
     print(f"  [*] sqlmap -u {url} --level={level} --risk={risk}")
     return run_tool(
-        ["sqlmap", "-u", url] + flags + [f"--level={level}", f"--risk={risk}"],
+        ["sqlmap", "-u", url, *flags, f"--level={level}", f"--risk={risk}"],
         timeout=tc.get("timeout", 180)
     )
 
@@ -710,7 +726,7 @@ def run_nikto(target: str) -> str:
     scan_target = _ensure_url(target)
     wall_timeout = tc.get("timeout", 300)
     print(f"  [*] nikto -h {scan_target}  (wall={wall_timeout}s)")
-    output = run_tool(["nikto", "-h", scan_target] + flags, timeout=wall_timeout)
+    output = run_tool(["nikto", "-h", scan_target, *flags], timeout=wall_timeout)
     completed = ""
     if "timed out after" not in str(output).lower() and "killed after" not in str(output).lower():
         completed = f"\n[NIKTO COMPLETE - {scan_target}]"
@@ -744,7 +760,8 @@ def run_jwt_analyze(target: str) -> str:
     token = (target or "").strip()
     if os.path.exists(token):
         try:
-            token = open(token, "r", encoding="utf-8", errors="ignore").read().strip()
+            with open(token, encoding="utf-8", errors="ignore") as token_file:
+                token = token_file.read().strip()
         except Exception as exc:
             return f"[JWT ANALYZE] failed to read token file: {str(exc)[:180]}"
     match = re.search(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*', token)
@@ -759,7 +776,7 @@ def run_jwt_analyze(target: str) -> str:
         f"alg: {header.get('alg', '')}",
         f"typ: {header.get('typ', '')}",
         f"kid: {header.get('kid', '')}",
-        f"claims: {', '.join(sorted(str(k) for k in payload.keys()))}",
+        f"claims: {', '.join(sorted(str(k) for k in payload))}",
         f"issuer: {payload.get('iss', '')}",
         f"audience: {payload.get('aud', '')}",
         f"expires: {payload.get('exp', '')}",
@@ -787,7 +804,8 @@ def run_burp_import(target: str) -> str:
     if not os.path.exists(path):
         return f"[BURP IMPORT] file not found: {path}"
     try:
-        data = open(path, "r", encoding="utf-8", errors="ignore").read()
+        with open(path, encoding="utf-8", errors="ignore") as report_file:
+            data = report_file.read()
     except Exception as exc:
         return f"[BURP IMPORT] failed: {str(exc)[:180]}"
     urls = re.findall(r'<url><!\[CDATA\[(.*?)\]\]></url>|"url"\s*:\s*"([^"]+)"', data, re.IGNORECASE)
@@ -810,7 +828,8 @@ def run_zap_import(target: str) -> str:
     if not os.path.exists(path):
         return f"[ZAP IMPORT] file not found: {path}"
     try:
-        data = open(path, "r", encoding="utf-8", errors="ignore").read()
+        with open(path, encoding="utf-8", errors="ignore") as report_file:
+            data = report_file.read()
     except Exception as exc:
         return f"[ZAP IMPORT] failed: {str(exc)[:180]}"
     urls = re.findall(r'"uri"\s*:\s*"([^"]+)"|<uri>(.*?)</uri>', data, re.IGNORECASE)
@@ -831,15 +850,13 @@ def run_zap_import(target: str) -> str:
     return "\n".join(lines)
 
 
-# ─────────────────────────────────────────────
-# SCRAPLING INTEGRATION (NEW v3.0)
-# ─────────────────────────────────────────────
+# SCRAPLING INTEGRATION
 
 @tool(name="scrapling", aliases=["scrapling_fetch"], category="recon", description="Fetch a URL using scrapling's StealthyFetcher.")
 def run_scrapling_fetch(url: str) -> str:
     """
     Fetch a URL using scrapling's StealthyFetcher for JS-rendered pages and anti-bot bypass.
-    v3.1: Falls back to requests+BeautifulSoup (NOT raw curl) to preserve form/link extraction.
+    Falls back to requests and BeautifulSoup to preserve form/link extraction.
     """
     # Ensure URL has protocol
     if not url.startswith("http"):
@@ -962,7 +979,7 @@ def run_scrapling_fetch(url: str) -> str:
         return _extract_page_data(html_str=resp.text, status_code=resp.status_code, source="requests+bs4")
     except Exception as e:
         print(f"  {C_YELLOW}[!] Requests fallback failed: {str(e)[:80]}{C_RESET}")
-        # v4.0: Try alternate ports if main URL fails
+        # Try alternate web ports when the primary URL fails.
         base_host = url.split("//")[-1].split("/")[0].split(":")[0]
         alt_ports = [8080, 8443, 443, 1443, 3000, 9090]
         for alt_port in alt_ports:
@@ -1052,7 +1069,7 @@ def run_scrapling_crawl(url: str, max_pages: int = 10) -> str:
                         next_url = _same_host_link(current_url, href)
                         if next_url and next_url not in visited and next_url not in to_visit:
                             to_visit.append(next_url)
-            except Exception as e:
+            except Exception:
                 results.append(f"  [ERR] {current_url}")
                 continue
 
@@ -1066,15 +1083,13 @@ def run_scrapling_crawl(url: str, max_pages: int = 10) -> str:
         return f"[!] Crawl failed: {e}"
 
 
-# ─────────────────────────────────────────────
 # SSH USER ENUMERATION (CVE-2018-15473)
-# ─────────────────────────────────────────────
 
 @tool(name="ssh_user_enum", aliases=["ssh-user-enum", "sshenum"], category="recon", description="Enumerate valid SSH usernames via CVE-2018-15473.", requires=["python:paramiko"])
 def run_ssh_user_enum(target: str, port: int = 22) -> str:
     """
     Enumerate valid SSH usernames via CVE-2018-15473 (OpenSSH ≤ 7.7).
-    v3.7: Early-abort — tests 5 canary users first. If ALL return valid,
+    Tests five canary users first. If all return valid,
     the server is patched (returns AuthenticationException for everyone).
     Skips remaining users to save time (~30s instead of ~2min).
     """
@@ -1093,7 +1108,7 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
     try:
         if sock.connect_ex((target, port)) != 0:
             return f"[!] SSH port {port} is not open on {target}"
-    except Exception as e:
+    except Exception:
         return f"[!] Cannot connect to {target}:{port}"
     finally:
         sock.close()
@@ -1128,7 +1143,7 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
                     return False
                 transport.close()
                 return True
-            except Exception as e:
+            except Exception:
                 return False
             finally:
                 try:
@@ -1136,7 +1151,7 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
                 except Exception as _exc:
                     logging.debug(f"Suppressed in recon_tools.py: {_exc}")
             return False
-        except Exception as e:
+        except Exception:
             return False
 
     # ── PHASE 1: CANARY TEST (5 users) ────────────────────────────
@@ -1164,14 +1179,14 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
     # If ALL canary users (including obviously fake ones) are "valid" → PATCHED
     if canary_total > 0 and canary_valid == canary_total:
         print(f"  [!] ALL {canary_total} canary users returned valid (including fake names)")
-        print(f"  [!] Server is PATCHED — aborting full enumeration (saves ~2 min)")
+        print("  [!] Server is PATCHED — aborting full enumeration (saves ~2 min)")
         output = f"[SSH USER ENUMERATION — {target}:{port}]\n"
-        output += f"CVE-2018-15473 (OpenSSH ≤ 7.7)\n"
+        output += "CVE-2018-15473 (OpenSSH ≤ 7.7)\n"
         output += f"Canary test: {canary_valid}/{canary_total} returned valid (including fake usernames)\n"
-        output += f"\n[!] WARNING: Server is PATCHED against CVE-2018-15473 — ALL users return valid.\n"
-        output += f"[!] Results are UNRELIABLE. Skipped full enumeration.\n"
-        output += f"[!] Falling back to default priority users for bruteforce.\n"
-        output += f"\nAI: ssh_user_enum results are UNRELIABLE. Use default users for bruteforce.\n"
+        output += "\n[!] WARNING: Server is PATCHED against CVE-2018-15473 — ALL users return valid.\n"
+        output += "[!] Results are UNRELIABLE. Skipped full enumeration.\n"
+        output += "[!] Falling back to default priority users for bruteforce.\n"
+        output += "\nAI: ssh_user_enum results are UNRELIABLE. Use default users for bruteforce.\n"
         return output
 
     # If canary test shows SOME invalid → server MAY be vulnerable
@@ -1201,34 +1216,29 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
                     print(f"      [+] VALID USER: {username}")
                 else:
                     invalid_count += 1
-            except Exception as e:
+            except Exception:
                 error_count += 1
 
     total_tested = len(valid_users) + invalid_count + canary_total
     output = f"[SSH USER ENUMERATION — {target}:{port}]\n"
-    output += f"CVE-2018-15473 (OpenSSH ≤ 7.7)\n"
+    output += "CVE-2018-15473 (OpenSSH ≤ 7.7)\n"
     output += f"Tested: {total_tested} usernames\n"
     output += f"Valid: {len(valid_users)} | Invalid: {invalid_count} | Errors: {error_count}\n"
 
     # Double-check false positive (if >70% valid despite canary passing)
     if total_tested > 0 and len(valid_users) / total_tested > 0.70:
         output += f"\n[!] WARNING: {len(valid_users)}/{total_tested} ({100*len(valid_users)//total_tested}%) users returned valid.\n"
-        output += f"[!] Server is likely PATCHED against CVE-2018-15473 — results UNRELIABLE.\n"
-        output += f"[!] Falling back to default priority users for bruteforce.\n"
-        output += f"\nAI: ssh_user_enum results are UNRELIABLE. Use default users for bruteforce.\n"
+        output += "[!] Server is likely PATCHED against CVE-2018-15473 — results UNRELIABLE.\n"
+        output += "[!] Falling back to default priority users for bruteforce.\n"
+        output += "\nAI: ssh_user_enum results are UNRELIABLE. Use default users for bruteforce.\n"
         valid_users.clear()
     elif valid_users:
-        output += f"\nCONFIRMED VALID USERS:\n"
+        output += "\nCONFIRMED VALID USERS:\n"
         for u in valid_users:
             output += f"  ✓ {u}\n"
         output += f"\nAI: Use these users for targeted bruteforce with [TOOL: bruteforce ssh {target}]\n"
     else:
-        output += f"\nNo valid users confirmed (server may be patched or not vulnerable).\n"
-        output += f"AI: Proceed with default user list for bruteforce.\n"
+        output += "\nNo valid users confirmed (server may be patched or not vulnerable).\n"
+        output += "AI: Proceed with default user list for bruteforce.\n"
 
     return output
-
-
-# ─────────────────────────────────────────────
-# BRUTEFORCE (v3.7 — LEAN 2-TIER, NO TIMEOUT CAP)
-# ─────────────────────────────────────────────

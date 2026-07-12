@@ -4,16 +4,14 @@ Shared tool execution utilities used by all tools sub-modules.
 Breaks circular dependency between runner ↔ exploit_tools ↔ recon_tools.
 """
 
-import subprocess
-import shutil
-import time
-import threading
 import dataclasses
 import json
+import shutil
+import subprocess
+import threading
+import time
 
-# ─────────────────────────────────────────────
 # ANSI COLORS
-# ─────────────────────────────────────────────
 C_GREY    = "\033[90m"
 C_RESET   = "\033[0m"
 C_CYAN    = "\033[96m"
@@ -23,9 +21,7 @@ C_RED     = "\033[91m"
 C_BLUE    = "\033[94m"
 C_MAGENTA = "\033[95m"
 
-# ─────────────────────────────────────────────
 # TOOL AVAILABILITY CACHE
-# ─────────────────────────────────────────────
 _TOOL_AVAILABLE = {}
 
 
@@ -36,9 +32,7 @@ def is_tool_available(name: str) -> bool:
     return _TOOL_AVAILABLE[name]
 
 
-# ─────────────────────────────────────────────
 # TOOL RESULT DATACLASS
-# ─────────────────────────────────────────────
 @dataclasses.dataclass
 class ToolResult:
     """Structured tool execution result."""
@@ -82,9 +76,7 @@ class ToolResult:
         raise AttributeError(name)
 
 
-# ─────────────────────────────────────────────
 # CONFIG LOADER
-# ─────────────────────────────────────────────
 def get_tool_config(tool_name: str) -> dict:
     """Get tool-specific config from config.yaml."""
     try:
@@ -94,9 +86,7 @@ def get_tool_config(tool_name: str) -> dict:
         return {}
 
 
-# ─────────────────────────────────────────────
 # FORMAT HELPER
-# ─────────────────────────────────────────────
 def _fmt_elapsed(secs: int) -> str:
     """Format seconds as compact human readable for heartbeat."""
     if secs < 120:
@@ -109,13 +99,11 @@ def _fmt_elapsed(secs: int) -> str:
         return f"{h}h{m:02d}m"
 
 
-# ─────────────────────────────────────────────
 # BASE RUNNER
-# ─────────────────────────────────────────────
 def run_tool(command: list, timeout: int = 120) -> str:
     """
     Execute a shell command with LIVE output streaming.
-    v3.7: Dynamic heartbeat, unlimited timeout support, hydra progress parsing.
+    Supports dynamic heartbeat output, unlimited timeouts, and Hydra progress.
       - timeout=0 means UNLIMITED — the tool runs until it finishes naturally.
       - Heartbeat interval scales: <5min→30s, 5-30min→60s, >30min→120s
       - Hydra [STATUS] lines are shown as real-time progress.
@@ -166,15 +154,16 @@ def run_tool(command: list, timeout: int = 120) -> str:
                         elapsed = int(time.time() - start_time)
                         print(f"      [{elapsed}s] {rendered[:160]}")
                     continue
-                if tool_bin in ("hydra", "nmap", "masscan", "nikto", "sqlmap", "gobuster", "ffuf"):
-                    if any(kw in line.lower() for kw in [
+                if tool_bin in ("hydra", "nmap", "masscan", "nikto", "sqlmap", "gobuster", "ffuf") and any(
+                    kw in line.lower() for kw in [
                         "host:", "[22]", "[80]", "valid", "login:", "found",
                         "open", "discovered", "password", "success", "[ssh]",
                         "ports", "vuln", "error", "complete",
                         "1 of 1 target completed", "successfully completed"
-                    ]):
-                        elapsed = int(time.time() - start_time)
-                        print(f"      [{elapsed}s] {line[:140]}")
+                    ]
+                ):
+                    elapsed = int(time.time() - start_time)
+                    print(f"      [{elapsed}s] {line[:140]}")
 
         reader = threading.Thread(target=_read_output, daemon=True)
         reader.start()

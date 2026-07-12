@@ -19,9 +19,10 @@ Usage:
 
 import logging
 import threading
-from typing import List, Tuple, Dict, Optional
+from typing import Optional
 
 from core.credential_ranking import best_credential
+from core.secrets import SecretStore, get_secret_store, is_secret_ref
 
 C_GREEN  = "\033[92m"
 C_YELLOW = "\033[93m"
@@ -40,9 +41,10 @@ class CredentialStore:
     _instance = None
     _lock = threading.Lock()
 
-    def __init__(self):
-        # {(service, target): [(user, password, metadata), ...]}
-        self._cache: Dict[tuple, list] = {}
+    def __init__(self, secret_store: Optional[SecretStore] = None):
+        # {(service, target): [(user, secret_ref), ...]}
+        self._cache: dict[tuple, list] = {}
+        self.secret_store = secret_store or get_secret_store()
         self._db_available = False
         self._kg_available = False
         self._boot()
@@ -65,19 +67,27 @@ class CredentialStore:
             c.execute("SELECT target_ip, service, username, password FROM credentials")
             for row in c.fetchall():
                 target, service, user, pwd = row
+                secret_ref = pwd if is_secret_ref(pwd) else self.secret_store.store(
+                    str(pwd), kind=f"credential:{service}"
+                )
                 key = (service.lower(), target)
                 if key not in self._cache:
                     self._cache[key] = []
-                entry = (user, pwd)
+                entry = (user, secret_ref)
                 if entry not in self._cache[key]:
                     self._cache[key].append(entry)
+                if secret_ref != pwd:
+                    c.execute(
+                        "UPDATE credentials SET password = %s WHERE target_ip = %s AND service = %s AND username = %s AND password = %s",
+                        (secret_ref, target, service, user, pwd),
+                    )
+            conn.commit()
             conn.close()
             self._db_available = True
-        except Exception as e:
+        except Exception:
             pass  # MariaDB not available — cache-only mode
 
         try:
-            from core.knowledge import KnowledgeGraph
             self._kg_available = True
         except Exception as _exc:
             logging.debug(f"Suppressed in credentials.py: {_exc}")
@@ -105,7 +115,10 @@ class CredentialStore:
         """
         service = service.lower()
         key = (service, target)
-        entry = (user, password)
+        secret_ref = password if is_secret_ref(password) else self.secret_store.store(
+            password, kind=f"credential:{service}"
+        )
+        entry = (user, secret_ref)
 
         with self._lock:
             if key not in self._cache:
@@ -118,13 +131,14 @@ class CredentialStore:
             print(f"  {C_GREEN}[+] Credential registered: {service}://{user}@{target}{C_RESET}")
 
         # Layer 2: MariaDB
-        self._sync_to_db(service, target, user, password)
+        self._sync_to_db(service, target, user, secret_ref)
 
         # Layer 3: Knowledge Graph
-        self._sync_to_kg(service, target, user, password, source, verified, port)
+        self._sync_to_kg(service, target, user, secret_ref, source, verified, port)
 
         # Layer 1b: Sync to legacy in-memory cache in exploit_tools.py
-        self._sync_to_legacy(service, target, user, password)
+        runtime_secret = self.secret_store.reveal(secret_ref) if is_secret_ref(secret_ref) else secret_ref
+        self._sync_to_legacy(service, target, user, runtime_secret)
 
         return True
 
@@ -178,11 +192,14 @@ class CredentialStore:
 
     # ─── Read API ────────────────────────────────────────────
 
-    def get(self, service: str, target: str) -> List[Tuple[str, str]]:
+    def get(self, service: str, target: str) -> list[tuple[str, str]]:
         """Get credentials for service@target. Returns [(user, password), ...]."""
-        return list(self._cache.get((service.lower(), target), []))
+        return [
+            (user, self.secret_store.reveal(secret) if is_secret_ref(secret) else secret)
+            for user, secret in self._cache.get((service.lower(), target), [])
+        ]
 
-    def get_best(self, target: str) -> Tuple[Optional[str], Optional[str]]:
+    def get_best(self, target: str) -> tuple[Optional[str], Optional[str]]:
         """Get best credential for any service on target.
         Prefers real SSH secrets over auth-state markers."""
         # SSH first
@@ -190,17 +207,21 @@ class CredentialStore:
         if ssh_creds:
             return best_credential(ssh_creds)
         # Any service
-        for (svc, tgt), cred_list in self._cache.items():
+        for (_svc, tgt), cred_list in self._cache.items():
             if tgt == target and cred_list:
-                return cred_list[0]
+                user, secret = cred_list[0]
+                return user, self.secret_store.reveal(secret) if is_secret_ref(secret) else secret
         return (None, None)
 
-    def get_all(self, target: str) -> Dict[str, List[Tuple[str, str]]]:
+    def get_all(self, target: str) -> dict[str, list[tuple[str, str]]]:
         """Get ALL credentials for target, grouped by service."""
         result = {}
         for (svc, tgt), cred_list in self._cache.items():
             if tgt == target and cred_list:
-                result[svc] = list(cred_list)
+                result[svc] = [
+                    (user, self.secret_store.reveal(secret) if is_secret_ref(secret) else secret)
+                    for user, secret in cred_list
+                ]
         return result
 
     def has_creds(self, service: str, target: str) -> bool:
@@ -211,9 +232,9 @@ class CredentialStore:
         """Total number of unique credentials."""
         return sum(len(v) for v in self._cache.values())
 
-    def all_targets(self) -> List[str]:
+    def all_targets(self) -> list[str]:
         """Get all targets that have credentials."""
-        return list(set(tgt for (_, tgt) in self._cache.keys()))
+        return list({tgt for (_, tgt) in self._cache})
 
     # ─── Bulk API ────────────────────────────────────────────
 
@@ -233,7 +254,8 @@ class CredentialStore:
             return "No credentials known."
         lines = ["KNOWN CREDENTIALS:"]
         for (svc, tgt), cred_list in sorted(self._cache.items()):
-            for user, pwd in cred_list:
+            for user, secret in cred_list:
+                pwd = self.secret_store.reveal(secret) if is_secret_ref(secret) else secret
                 masked = pwd[:2] + "***" if len(pwd) > 3 else "***"
                 lines.append(f"  {svc}://{user}:{masked}@{tgt}")
         return "\n".join(lines)
@@ -243,5 +265,13 @@ class CredentialStore:
         result = {}
         for (svc, tgt), cred_list in self._cache.items():
             key = f"{svc}@{tgt}"
-            result[key] = [{"user": u, "password": p} for u, p in cred_list]
+            result[key] = [
+                {
+                    "user": user,
+                    "secret_ref": secret if is_secret_ref(secret) else self.secret_store.store(
+                        secret, kind=f"credential:{svc}"
+                    ),
+                }
+                for user, secret in cred_list
+            ]
         return result

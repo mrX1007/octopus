@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import re
-from typing import List
 
 from .common import BaseParser, Fact, fact, tool_lower
 
@@ -13,11 +12,14 @@ class NmapParser(BaseParser):
         r"(open|filtered)[ \t]+(\S+)(?:[ \t]+([^\n]+))?"
     )
 
-    def parse(self, tool_name: str, raw_output: str, session_id: str) -> List[Fact]:
-        if "nmap" not in tool_lower(tool_name) and "rustscan" not in tool_lower(tool_name):
-            if not self.port_line_re.search(raw_output or ""):
-                return []
-        facts: List[Fact] = []
+    def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
+        if (
+            "nmap" not in tool_lower(tool_name)
+            and "rustscan" not in tool_lower(tool_name)
+            and not self.port_line_re.search(raw_output or "")
+        ):
+            return []
+        facts: list[Fact] = []
         for match in self.port_line_re.finditer(raw_output or ""):
             port, proto, state, service, version = match.groups()
             if state == "filtered":

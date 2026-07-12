@@ -2,7 +2,6 @@
 """Tests for config.py — configuration loading, merging, env overrides."""
 
 import os
-import pytest
 from unittest.mock import patch
 
 
@@ -62,6 +61,71 @@ class TestDeepMerge:
         _deep_merge(base, override)
         # Base should not be mutated
         assert "y" not in base["a"]
+
+    def test_merge_detaches_untouched_nested_values_and_override(self):
+        from config import _deep_merge
+
+        base = {"nested": {"items": ["base"]}}
+        override = {"extension": {"items": ["override"]}}
+        result = _deep_merge(base, override)
+
+        result["nested"]["items"].append("changed")
+        result["extension"]["items"].append("changed")
+        assert base["nested"]["items"] == ["base"]
+        assert override["extension"]["items"] == ["override"]
+
+    def test_default_loads_do_not_share_nested_state(self):
+        import config
+
+        with patch("config._find_config", return_value=""):
+            first = config.load_config()
+            second = config.load_config()
+        first["wordlists"]["passwords"].append("/tmp/leak")
+
+        assert "/tmp/leak" not in second["wordlists"]["passwords"]
+        assert "/tmp/leak" not in config.DEFAULTS["wordlists"]["passwords"]
+
+
+class TestConfigValidation:
+    def test_invalid_nested_sections_keep_defaults(self, tmp_path):
+        import config
+
+        path = tmp_path / "invalid.yaml"
+        path.write_text(
+            "db: null\npaths: broken\nwordlists: []\ntools: null\n",
+            encoding="utf-8",
+        )
+        with patch("config._find_config", return_value=str(path)):
+            cfg = config.load_config()
+
+        assert cfg["db"] == config.DEFAULTS["db"]
+        assert cfg["paths"] == {
+            key: os.path.expanduser(value)
+            for key, value in config.DEFAULTS["paths"].items()
+        }
+        assert cfg["wordlists"] == config.DEFAULTS["wordlists"]
+        assert cfg["tools"] == config.DEFAULTS["tools"]
+
+    def test_invalid_known_leaf_keeps_default(self, tmp_path):
+        import config
+
+        path = tmp_path / "invalid-leaf.yaml"
+        path.write_text("db:\n  host: null\n  user: 42\n", encoding="utf-8")
+        with patch("config._find_config", return_value=str(path)):
+            cfg = config.load_config()
+
+        assert cfg["db"]["host"] == config.DEFAULTS["db"]["host"]
+        assert cfg["db"]["user"] == config.DEFAULTS["db"]["user"]
+
+    def test_non_mapping_yaml_falls_back_safely(self, tmp_path):
+        import config
+
+        path = tmp_path / "list.yaml"
+        path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
+        with patch("config._find_config", return_value=str(path)):
+            cfg = config.load_config()
+
+        assert cfg["db"] == config.DEFAULTS["db"]
 
 
 class TestEnvVarOverrides:
@@ -127,3 +191,10 @@ class TestFindWordlist:
         from config import find_all_wordlists
         result = find_all_wordlists("passwords")
         assert isinstance(result, list)
+
+    def test_helpers_tolerate_malformed_custom_config(self):
+        from config import find_all_wordlists, find_wordlist, get_tool_config
+
+        assert find_wordlist("passwords", {"wordlists": None}) == ""
+        assert find_all_wordlists("passwords", {"wordlists": "bad"}) == []
+        assert get_tool_config("nmap", {"tools": None}) == {}

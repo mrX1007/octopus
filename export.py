@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 
 
-import os
 import datetime
-from reportlab.lib.pagesizes import A4
-from reportlab.lib import colors
-from reportlab.lib.units import mm
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
-from reportlab.lib.enums import TA_CENTER
+import html
+import os
+import re
+import unicodedata
+from typing import Optional
 
-# DB access — import from db.py (single source of truth)
-from db import get_connection, get_session, get_all_history
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.lib.units import mm
+from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+from core.secrets import redact_data, redact_text
+from db import get_all_history, get_session
 
 SEVERITY_COLORS = {
     "critical": "#c0392b",
@@ -30,7 +35,84 @@ RISK_COLORS = {
 }
 
 
-# v7.0: CVSS base score mapping from severity
+def _normalize_session_report(data: dict) -> dict:
+    """Return the canonical DB session-report shape without mutating the caller.
+
+    ``db.get_session()`` uses ``vulns``.  Older tests and third-party callers used
+    ``vulnerabilities``; accept that spelling only as an input compatibility alias.
+    """
+    if not isinstance(data, dict):
+        raise TypeError("session report must be a dictionary")
+    data = redact_data(data)
+    vulns = data.get("vulns")
+    if vulns is None:
+        vulns = data.get("vulnerabilities")
+    return {
+        "history": data.get("history"),
+        "vulns": list(vulns or []),
+        "fixes": list(data.get("fixes") or []),
+        "exploits": list(data.get("exploits") or []),
+        "summary": data.get("summary"),
+    }
+
+
+def _row_value(row, index: int, default=""):
+    if row is None or len(row) <= index or row[index] is None:
+        return default
+    return row[index]
+
+
+def _safe_component(value, fallback: str) -> str:
+    text = unicodedata.normalize("NFKC", redact_text(value, kind="report_filename"))
+    text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("._-")
+    return (text[:120] or fallback)
+
+
+def _report_path(output_dir: str, sl_no, target, extension: str) -> str:
+    """Build a contained, non-symlink report filename under ``output_dir``."""
+    root_input = os.path.abspath(os.path.expanduser(str(output_dir or ".")))
+    os.makedirs(root_input, exist_ok=True)
+    root = os.path.realpath(root_input)
+    safe_sl = _safe_component(sl_no, "unknown")
+    safe_target = _safe_component(target, "target")
+    safe_ext = re.sub(r"[^a-z0-9]", "", str(extension).lower())
+    if not safe_ext:
+        raise ValueError("report extension must contain letters or digits")
+    candidate = os.path.abspath(
+        os.path.join(root, f"octopus_SL{safe_sl}_{safe_target}.{safe_ext}")
+    )
+    try:
+        contained = os.path.commonpath((root, candidate)) == root
+    except ValueError:
+        contained = False
+    if not contained:
+        raise ValueError("report filename escaped the configured output directory")
+    if os.path.lexists(candidate) and os.path.islink(candidate):
+        raise ValueError("refusing to overwrite a symbolic-link report path")
+    return candidate
+
+
+def _html_text(value) -> str:
+    return html.escape(redact_text(value, kind="report"), quote=True)
+
+
+def _pdf_text(value) -> str:
+    # ReportLab Paragraph consumes a small XML/HTML dialect.
+    return html.escape(redact_text(value, kind="report"), quote=True)
+
+
+def _csv_safe(value):
+    """Neutralize spreadsheet formulas while preserving non-string values."""
+    if not isinstance(value, str):
+        return value
+    value = redact_text(value, kind="report")
+    stripped = value.lstrip(" \t\r\n")
+    if value.startswith(("\t", "\r")) or (stripped and stripped[0] in "=+-@"):
+        return "'" + value
+    return value
+
+
 def _cvss_from_severity(severity: str) -> float:
     """Map severity label to approximate CVSS base score."""
     mapping = {
@@ -43,15 +125,29 @@ def _cvss_from_severity(severity: str) -> float:
     return mapping.get((severity or "unknown").lower(), 0.0)
 
 
-def _generate_executive_summary(data: dict) -> str:
-    """v7.0: Generate a 3-paragraph executive summary from scan results."""
-    tgt = data["history"][1]
-    risk = data["summary"][4] if data["summary"] else "UNKNOWN"
-    vulns = data.get("vulns", [])
-    exploits = data.get("exploits", [])
+def _vuln_cvss(vulnerability) -> float:
+    """Prefer the score stored by the scanner, then fall back to severity."""
+    stored = _row_value(vulnerability, 11, None)
+    if stored not in (None, ""):
+        try:
+            return float(stored)
+        except (TypeError, ValueError):
+            pass
+    return _cvss_from_severity(_sev(vulnerability))
 
-    critical_count = sum(1 for v in vulns if (v[3] or "").lower() == "critical")
-    high_count = sum(1 for v in vulns if (v[3] or "").lower() == "high")
+
+def _generate_executive_summary(data: dict) -> str:
+    """Generate a three-paragraph executive summary from scan results."""
+    data = _normalize_session_report(data)
+    if not data["history"]:
+        raise ValueError("session report has no history row")
+    tgt = _row_value(data["history"], 1, "unknown target")
+    risk = str(_row_value(data["summary"], 4, "UNKNOWN") or "UNKNOWN")
+    vulns = data["vulns"]
+    exploits = data["exploits"]
+
+    critical_count = sum(1 for v in vulns if _sev(v) == "critical")
+    high_count = sum(1 for v in vulns if _sev(v) == "high")
     total_vulns = len(vulns)
     total_exploits = len(exploits)
 
@@ -68,9 +164,9 @@ def _generate_executive_summary(data: dict) -> str:
         para2 = (f"The overall risk level is assessed as {risk.upper()}. "
                  f"No active exploitation was performed during this assessment.")
 
-    para3 = (f"Recommended next steps: prioritize patching of all CRITICAL and HIGH "
-             f"severity vulnerabilities, implement network segmentation to limit "
-             f"lateral movement, and schedule a re-assessment within 30 days.")
+    para3 = ("Recommended next steps: prioritize patching of all CRITICAL and HIGH "
+             "severity vulnerabilities, implement network segmentation to limit "
+             "lateral movement, and schedule a re-assessment within 30 days.")
 
     return f"{para1}\n\n{para2}\n\n{para3}"
 
@@ -80,24 +176,25 @@ def _get_report_dir() -> str:
     try:
         from config import CFG
         return CFG["paths"]["reports"]
-    except Exception as e:
+    except Exception:
         return os.path.expanduser("~/OCTOPUS/reports")
 
 
-def export_pdf(data: dict, output_dir: str = None) -> str:
+def export_pdf(data: dict, output_dir: Optional[str] = None) -> str:
+    data = _normalize_session_report(data)
+    if not data["history"]:
+        raise ValueError("session report has no history row")
     h        = data["history"]
     sl       = h[0]
     tgt      = h[1]
     date     = str(h[2])
-    risk     = data["summary"][4] if data["summary"] else "UNKNOWN"
-    ai       = data["summary"][3] if data["summary"] else ""
+    risk     = str(_row_value(data["summary"], 4, "UNKNOWN") or "UNKNOWN")
+    ai       = _row_value(data["summary"], 3, "")
 
     if output_dir is None:
         output_dir = _get_report_dir()
 
-    os.makedirs(output_dir, exist_ok=True)
-    safe = tgt.replace("https://","").replace("http://","").replace("/","_").replace(".","_")
-    filename = os.path.join(output_dir, f"octopus_SL{sl}_{safe}.pdf")
+    filename = _report_path(output_dir, sl, tgt, "pdf")
     doc      = SimpleDocTemplate(filename, pagesize=A4,
                                   topMargin=15*mm, bottomMargin=15*mm,
                                   leftMargin=15*mm, rightMargin=15*mm)
@@ -149,7 +246,6 @@ def export_pdf(data: dict, output_dir: str = None) -> str:
     story.append(HRFlowable(width="100%", thickness=0.5,
                              color=colors.HexColor("#dddddd"), spaceAfter=6))
 
-    # v7.0: Executive Summary
     exec_summary = _generate_executive_summary(data)
     exec_style = ParagraphStyle("es", fontSize=9, fontName="Helvetica-Oblique",
                                  textColor=colors.HexColor("#2c3e50"),
@@ -159,7 +255,7 @@ def export_pdf(data: dict, output_dir: str = None) -> str:
     story.append(Paragraph("Executive Summary", h1_style))
     for para in exec_summary.split("\n\n"):
         if para.strip():
-            story.append(Paragraph(para.strip(), exec_style))
+            story.append(Paragraph(_pdf_text(para.strip()), exec_style))
             story.append(Spacer(1, 3))
     story.append(Spacer(1, 6))
 
@@ -169,10 +265,11 @@ def export_pdf(data: dict, output_dir: str = None) -> str:
     if data["vulns"]:
         vd = [["#", "Vulnerability", "Severity", "CVSS", "Port", "Service"]]
         for v in data["vulns"]:
-            cvss = _cvss_from_severity(v[3])
-            vd.append([str(v[0]), str(v[2] or "-"),
-                       str(v[3] or "-").upper(), f"{cvss:.1f}",
-                       str(v[4] or "-"), str(v[5] or "-")])
+            cvss = _vuln_cvss(v)
+            vd.append([str(_row_value(v, 0, "-")), str(_row_value(v, 2, "-") or "-"),
+                       str(_row_value(v, 3, "-") or "-").upper(), f"{cvss:.1f}",
+                       str(_row_value(v, 4, "-") or "-"),
+                       str(_row_value(v, 5, "-") or "-")])
         vt  = Table(vd, colWidths=[10*mm, 60*mm, 22*mm, 15*mm, 15*mm, 28*mm], repeatRows=1)
         vts = [
             ("FONTNAME",       (0,0), (-1,0),  "Helvetica-Bold"),
@@ -184,10 +281,9 @@ def export_pdf(data: dict, output_dir: str = None) -> str:
             ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.HexColor("#f9f9f9"), colors.white]),
         ]
         for i, v in enumerate(data["vulns"], 1):
-            sc = colors.HexColor(SEVERITY_COLORS.get((v[3] or "unknown").lower(), "#7f8c8d"))
+            sc = colors.HexColor(SEVERITY_COLORS.get(_sev(v), "#7f8c8d"))
             vts.append(("TEXTCOLOR", (2,i), (2,i), sc))
             vts.append(("FONTNAME",  (2,i), (2,i), "Helvetica-Bold"))
-            # v7.0: Color CVSS score too
             vts.append(("TEXTCOLOR", (3,i), (3,i), sc))
             vts.append(("FONTNAME",  (3,i), (3,i), "Helvetica-Bold"))
         vt.setStyle(TableStyle(vts))
@@ -198,11 +294,29 @@ def export_pdf(data: dict, output_dir: str = None) -> str:
         story.append(HRFlowable(width="100%", thickness=0.5,
                                  color=colors.HexColor("#dddddd"), spaceAfter=6))
         for v in data["vulns"]:
-            sc  = colors.HexColor(SEVERITY_COLORS.get((v[3] or "unknown").lower(), "#7f8c8d"))
+            severity = str(_row_value(v, 3, "UNKNOWN") or "UNKNOWN")
+            sc  = colors.HexColor(SEVERITY_COLORS.get(severity.lower(), "#7f8c8d"))
             lbl = ParagraphStyle("vl", fontSize=9, fontName="Helvetica-Bold", textColor=sc)
-            story.append(Paragraph(f"[{(v[3] or 'UNKNOWN').upper()}] {v[2]}", lbl))
-            if v[6]:
-                story.append(Paragraph(str(v[6]), body_style))
+            name = _row_value(v, 2, "-") or "-"
+            story.append(Paragraph(_pdf_text(f"[{severity.upper()}] {name}"), lbl))
+            description = _row_value(v, 6, "")
+            if description:
+                story.append(Paragraph(_pdf_text(description), body_style))
+            provenance = []
+            confidence = _row_value(v, 7, "")
+            evidence_source = _row_value(v, 8, "")
+            raw_evidence = _row_value(v, 9, "")
+            repro_cmd = _row_value(v, 10, "")
+            if confidence:
+                provenance.append(f"Confidence: {confidence}")
+            if evidence_source:
+                provenance.append(f"Evidence source: {evidence_source}")
+            if provenance:
+                story.append(Paragraph(_pdf_text(" | ".join(provenance)), body_style))
+            if raw_evidence:
+                story.append(Paragraph(_pdf_text(f"Evidence: {raw_evidence}"), code_style))
+            if repro_cmd:
+                story.append(Paragraph(_pdf_text(f"Reproduce: {repro_cmd}"), code_style))
             story.append(Spacer(1, 4))
     else:
         story.append(Paragraph("No vulnerabilities recorded.", body_style))
@@ -213,8 +327,10 @@ def export_pdf(data: dict, output_dir: str = None) -> str:
                              color=colors.HexColor("#dddddd"), spaceAfter=6))
     if data["fixes"]:
         for f in data["fixes"]:
-            story.append(Paragraph(f"Fix for vuln id={f[2]}:", body_style))
-            story.append(Paragraph(str(f[3] or "-"), code_style))
+            story.append(Paragraph(
+                _pdf_text(f"Fix for vuln id={_row_value(f, 2, '-')}"), body_style
+            ))
+            story.append(Paragraph(_pdf_text(_row_value(f, 3, "-") or "-"), code_style))
             story.append(Spacer(1, 3))
     else:
         story.append(Paragraph("No fixes recorded.", body_style))
@@ -250,7 +366,7 @@ def export_pdf(data: dict, output_dir: str = None) -> str:
         for line in str(ai).split("\n"):
             line = line.strip()
             if line:
-                story.append(Paragraph(line, body_style))
+                story.append(Paragraph(_pdf_text(line), body_style))
                 story.append(Spacer(1, 2))
     else:
         story.append(Paragraph("No AI analysis recorded.", body_style))
@@ -267,51 +383,69 @@ def export_pdf(data: dict, output_dir: str = None) -> str:
     return filename
 
 
-def export_html(data: dict, output_dir: str = None) -> str:
+def export_html(data: dict, output_dir: Optional[str] = None) -> str:
+    data = _normalize_session_report(data)
+    if not data["history"]:
+        raise ValueError("session report has no history row")
     h    = data["history"]
     sl   = h[0]
     tgt  = h[1]
     date = str(h[2])
-    risk = data["summary"][4] if data["summary"] else "UNKNOWN"
-    ai   = data["summary"][3] if data["summary"] else ""
+    risk = str(_row_value(data["summary"], 4, "UNKNOWN") or "UNKNOWN")
+    ai   = _row_value(data["summary"], 3, "")
     rc   = RISK_COLORS.get(risk.upper(), "#7f8c8d")
 
     if output_dir is None:
         output_dir = _get_report_dir()
 
-    os.makedirs(output_dir, exist_ok=True)
-    safe = tgt.replace("https://","").replace("http://","").replace("/","_").replace(".","_")
-    filename = os.path.join(output_dir, f"octopus_SL{sl}_{safe}.html")
+    filename = _report_path(output_dir, sl, tgt, "html")
     vuln_rows = ""
     for v in data["vulns"]:
-        sc = SEVERITY_COLORS.get((v[3] or "unknown").lower(), "#7f8c8d")
-        vuln_rows += (f"<tr><td>{v[0]}</td>"
-                      f"<td><strong>{v[2]}</strong><br><small>{v[6] or ''}</small></td>"
+        severity = str(_row_value(v, 3, "unknown") or "unknown")
+        sc = SEVERITY_COLORS.get(severity.lower(), "#7f8c8d")
+        provenance = []
+        if _row_value(v, 7, ""):
+            provenance.append(f"Confidence: {_row_value(v, 7)}")
+        if _row_value(v, 8, ""):
+            provenance.append(f"Source: {_row_value(v, 8)}")
+        if _row_value(v, 9, ""):
+            provenance.append(f"Evidence: {_row_value(v, 9)}")
+        if _row_value(v, 10, ""):
+            provenance.append(f"Reproduce: {_row_value(v, 10)}")
+        provenance_html = "".join(
+            f"<br><small>{_html_text(item)}</small>" for item in provenance
+        )
+        vuln_rows += (f"<tr><td>{_html_text(_row_value(v, 0, '-'))}</td>"
+                      f"<td><strong>{_html_text(_row_value(v, 2, '-'))}</strong>"
+                      f"<br><small>{_html_text(_row_value(v, 6, ''))}</small>{provenance_html}</td>"
                       f"<td><span style='color:{sc};font-weight:bold'>"
-                      f"{(v[3] or 'unknown').upper()}</span></td>"
-                      f"<td>{v[4] or '-'}</td><td>{v[5] or '-'}</td></tr>")
+                      f"{_html_text(severity.upper())}</span></td>"
+                      f"<td>{_html_text(_row_value(v, 4, '-') or '-')}</td>"
+                      f"<td>{_html_text(_row_value(v, 5, '-') or '-')}</td></tr>")
 
     fix_rows = ""
     for f in data["fixes"]:
-        fix_rows += (f"<tr><td>{f[0]}</td><td>vuln #{f[2]}</td>"
-                     f"<td><code>{f[3] or '-'}</code></td>"
-                     f"<td>{f[4] or 'ai'}</td></tr>")
+        fix_rows += (f"<tr><td>{_html_text(_row_value(f, 0, '-'))}</td>"
+                     f"<td>vuln #{_html_text(_row_value(f, 2, '-'))}</td>"
+                     f"<td><code>{_html_text(_row_value(f, 3, '-') or '-')}</code></td>"
+                     f"<td>{_html_text(_row_value(f, 4, 'ai') or 'ai')}</td></tr>")
 
     exp_rows = ""
     for e in data["exploits"]:
-        exp_rows += (f"<tr><td>{e[0]}</td><td>{e[2] or '-'}</td>"
-                     f"<td>{e[3] or '-'}</td>"
-                     f"<td><code>{str(e[4] or '-')[:80]}</code></td>"
-                     f"<td>{e[5] or '-'}</td></tr>")
+        exp_rows += (f"<tr><td>{_html_text(_row_value(e, 0, '-'))}</td>"
+                     f"<td>{_html_text(_row_value(e, 2, '-') or '-')}</td>"
+                     f"<td>{_html_text(_row_value(e, 3, '-') or '-')}</td>"
+                     f"<td><code>{_html_text(str(_row_value(e, 4, '-') or '-')[:80])}</code></td>"
+                     f"<td>{_html_text(_row_value(e, 5, '-') or '-')}</td></tr>")
 
-    ai_html = "".join(f"<p>{line}</p>"
+    ai_html = "".join(f"<p>{_html_text(line)}</p>"
                       for line in str(ai).split("\n") if line.strip())
 
-    html = f"""<!DOCTYPE html>
+    html_doc = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Octopus Report — {tgt}</title>
+<title>Octopus Report — {_html_text(tgt)}</title>
 <style>
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{font-family:'Segoe UI',sans-serif;background:#0d0d0d;color:#e0e0e0;padding:30px}}
@@ -353,19 +487,19 @@ a{{color:#555}}
 <div class="meta-grid">
   <div class="meta-card">
     <div class="label">Target</div>
-    <div class="value">{tgt}</div>
+    <div class="value">{_html_text(tgt)}</div>
   </div>
   <div class="meta-card">
     <div class="label">Session</div>
-    <div class="value">SL# {sl}</div>
+    <div class="value">SL# {_html_text(sl)}</div>
   </div>
   <div class="meta-card">
     <div class="label">Scan Date</div>
-    <div class="value">{date}</div>
+    <div class="value">{_html_text(date)}</div>
   </div>
   <div class="meta-card">
     <div class="label">Risk Level</div>
-    <div class="value risk">{risk}</div>
+    <div class="value risk">{_html_text(risk)}</div>
   </div>
 </div>
 
@@ -401,12 +535,13 @@ a{{color:#555}}
 </body>
 </html>"""
 
-    with open(filename, "w") as f:
-        f.write(html)
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(html_doc)
     return filename
 
 
 def export_menu(data: dict):
+    data = _normalize_session_report(data)
     if not data["history"]:
         print("[!] No session data to export.")
         return
@@ -455,9 +590,6 @@ def export_menu(data: dict):
         print("\033[93m[!] Invalid choice.\033[0m")
 
 
-# ─────────────────────────────────────────────
-# JSON EXPORT
-# ─────────────────────────────────────────────
 
 def export_json(data: dict, output_dir: str = ".") -> str:
     """Export scan results as structured JSON.
@@ -467,18 +599,20 @@ def export_json(data: dict, output_dir: str = ".") -> str:
     """
     import json
 
+    data = _normalize_session_report(data)
+    if not data["history"]:
+        raise ValueError("session report has no history row")
     h = data["history"]
     sl_no = h[0]
     target = h[1]
     scan_date = str(h[2]) if h[2] else ""
     status = h[3] if len(h) > 3 else "unknown"
 
-    vulns = data.get("vulnerabilities", [])
-    fixes = data.get("fixes", [])
-    exploits = data.get("exploits", [])
-    summary = data.get("summary")
+    vulns = data["vulns"]
+    fixes = data["fixes"]
+    exploits = data["exploits"]
+    summary = data["summary"]
 
-    # Build structured output
     report = {
         "metadata": {
             "tool": "OCTOPUS",
@@ -504,18 +638,21 @@ def export_json(data: dict, output_dir: str = ".") -> str:
             "medium": sum(1 for v in vulns if _sev(v) == "medium"),
             "low": sum(1 for v in vulns if _sev(v) == "low"),
             "exploits_attempted": len(exploits),
-            "cvss_max": max((_cvss_from_severity(_sev(v)) for v in vulns), default=0.0),
+            "cvss_max": max((_vuln_cvss(v) for v in vulns), default=0.0),
         },
         "vulnerabilities": [
             {
-                "id": v[0],
-                "name": v[2] if len(v) > 2 else "",
-                "severity": v[3] if len(v) > 3 else "",
-                "port": v[4] if len(v) > 4 else "",
-                "service": v[5] if len(v) > 5 else "",
-                "description": v[6] if len(v) > 6 else "",
-                "confidence": v[7] if len(v) > 7 else "",
-                "cvss_score": _cvss_from_severity(v[3] if len(v) > 3 else ""),
+                "id": _row_value(v, 0),
+                "name": _row_value(v, 2),
+                "severity": _row_value(v, 3),
+                "port": _row_value(v, 4),
+                "service": _row_value(v, 5),
+                "description": _row_value(v, 6),
+                "confidence": _row_value(v, 7),
+                "evidence_source": _row_value(v, 8),
+                "raw_evidence": _row_value(v, 9),
+                "repro_cmd": _row_value(v, 10),
+                "cvss_score": _vuln_cvss(v),
             }
             for v in vulns
         ],
@@ -541,7 +678,7 @@ def export_json(data: dict, output_dir: str = ".") -> str:
         ],
     }
 
-    filename = os.path.join(output_dir, f"octopus_SL{sl_no}_{target.replace('.', '_')}.json")
+    filename = _report_path(output_dir, sl_no, target, "json")
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2, ensure_ascii=False, default=str)
 
@@ -550,43 +687,47 @@ def export_json(data: dict, output_dir: str = ".") -> str:
 
 def _sev(v) -> str:
     """Extract severity string from vulnerability tuple, lowercase."""
-    return (v[3] if len(v) > 3 else "unknown").lower().strip()
+    return str(_row_value(v, 3, "unknown") or "unknown").lower().strip()
 
 
-# ─────────────────────────────────────────────
-# CSV EXPORT
-# ─────────────────────────────────────────────
 
 def export_csv(data: dict, output_dir: str = ".") -> str:
     """Export vulnerabilities as CSV for spreadsheet analysis."""
     import csv
 
+    data = _normalize_session_report(data)
+    if not data["history"]:
+        raise ValueError("session report has no history row")
     h = data["history"]
     sl_no = h[0]
     target = h[1]
-    vulns = data.get("vulnerabilities", [])
+    vulns = data["vulns"]
 
-    filename = os.path.join(output_dir, f"octopus_SL{sl_no}_{target.replace('.', '_')}.csv")
+    filename = _report_path(output_dir, sl_no, target, "csv")
 
     with open(filename, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
             "ID", "SL#", "Target", "Vulnerability", "Severity",
             "CVSS", "Port", "Service", "Description", "Confidence",
+            "Evidence Source", "Raw Evidence", "Reproduction Command",
         ])
         for v in vulns:
-            writer.writerow([
-                v[0],
+            writer.writerow([_csv_safe(value) for value in [
+                _row_value(v, 0),
                 sl_no,
                 target,
-                v[2] if len(v) > 2 else "",
-                v[3] if len(v) > 3 else "",
-                _cvss_from_severity(v[3] if len(v) > 3 else ""),
-                v[4] if len(v) > 4 else "",
-                v[5] if len(v) > 5 else "",
-                v[6] if len(v) > 6 else "",
-                v[7] if len(v) > 7 else "",
-            ])
+                _row_value(v, 2),
+                _row_value(v, 3),
+                _vuln_cvss(v),
+                _row_value(v, 4),
+                _row_value(v, 5),
+                _row_value(v, 6),
+                _row_value(v, 7),
+                _row_value(v, 8),
+                _row_value(v, 9),
+                _row_value(v, 10),
+            ]])
 
     return filename
 
@@ -603,7 +744,7 @@ if __name__ == "__main__":
     print(f"{'SL#':<6} {'TARGET':<28} {'DATE':<22} {'STATUS'}")
     print("─" * 65)
     for row in rows:
-        print(f"{row[0]:<6} {row[1]:<28} {str(row[2]):<22} {row[3]}")
+        print(f"{row[0]:<6} {row[1]:<28} {row[2]!s:<22} {row[3]}")
     print()
 
     sl_input = input("\033[36mEnter SL# to export: \033[0m").strip()

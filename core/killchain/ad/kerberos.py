@@ -16,7 +16,7 @@ import logging
 import os
 import shutil
 import subprocess
-from typing import Dict, List, Optional
+from typing import Optional
 
 # ── Logging ──────────────────────────────────────────────────────────────
 logger = logging.getLogger("octopus.killchain.ad.kerberos")
@@ -39,13 +39,11 @@ IMPACKET_TIMEOUT = 120
 CLI_TIMEOUT = 300
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Internal helpers
-# ═══════════════════════════════════════════════════════════════════════════
 
-def _normalize_creds(creds: Optional[Dict[str, str]]) -> Dict[str, str]:
+def _normalize_creds(creds: Optional[dict[str, str]]) -> dict[str, str]:
     """Return a dict with guaranteed keys: user, password, domain, nthash."""
-    defaults: Dict[str, str] = {"user": "", "password": "", "domain": "", "nthash": ""}
+    defaults: dict[str, str] = {"user": "", "password": "", "domain": "", "nthash": ""}
     if creds:
         defaults.update(creds)
     return defaults
@@ -75,14 +73,12 @@ def _run_cli(cmd: str, timeout: int = CLI_TIMEOUT) -> str:
         return f"[!] Command error: {exc}"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # AS-REP Roasting
-# ═══════════════════════════════════════════════════════════════════════════
 
 def asrep_roast(
     target: str,
-    userlist: Optional[List[str]] = None,
-    creds: Optional[Dict[str, str]] = None,
+    userlist: Optional[list[str]] = None,
+    creds: Optional[dict[str, str]] = None,
 ) -> str:
     """Perform AS-REP Roasting to find accounts with Kerberos pre-auth disabled.
 
@@ -111,8 +107,8 @@ def asrep_roast(
 
     # ── Try impacket ──────────────────────────────────────────────
     try:
-        from impacket.krb5.kerberosv5 import getKerberosTGT  # noqa: F401 – availability check
         from impacket.krb5 import constants as krb5_constants  # noqa: F401
+        from impacket.krb5.kerberosv5 import getKerberosTGT  # noqa: F401 - availability check
     except ImportError:
         logger.debug("impacket not available for AS-REP Roasting")
     else:
@@ -187,11 +183,9 @@ def asrep_roast(
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Kerberoasting
-# ═══════════════════════════════════════════════════════════════════════════
 
-def kerberoast(target: str, creds: Optional[Dict[str, str]] = None) -> str:
+def kerberoast(target: str, creds: Optional[dict[str, str]] = None) -> str:
     """Kerberoast — request TGS tickets for service accounts and crack offline.
 
     Tries impacket's ``GetUserSPNs`` first, then the CLI.
@@ -270,11 +264,9 @@ def kerberoast(target: str, creds: Optional[Dict[str, str]] = None) -> str:
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Ticket extraction
-# ═══════════════════════════════════════════════════════════════════════════
 
-def extract_tickets(target: str, creds: Optional[Dict[str, str]] = None) -> str:
+def extract_tickets(target: str, creds: Optional[dict[str, str]] = None) -> str:
     """Extract TGT/TGS tickets from memory or request new ones via impacket.
 
     Uses ``getTGT`` from impacket to request a TGT for the supplied
@@ -301,10 +293,9 @@ def extract_tickets(target: str, creds: Optional[Dict[str, str]] = None) -> str:
 
     # ── Try impacket getTGT ───────────────────────────────────────
     try:
-        from impacket.krb5.kerberosv5 import getKerberosTGT
-        from impacket.krb5.types import Principal, KerberosTime
         from impacket.krb5 import constants as krb5_constants
-        import datetime
+        from impacket.krb5.kerberosv5 import getKerberosTGT
+        from impacket.krb5.types import Principal
 
         logger.info("Requesting TGT via impacket for %s@%s", creds["user"], creds["domain"])
         user_principal = Principal(
@@ -312,7 +303,7 @@ def extract_tickets(target: str, creds: Optional[Dict[str, str]] = None) -> str:
             type=krb5_constants.PrincipalNameType.NT_PRINCIPAL.value,
         )
 
-        tgt, cipher, old_session_key, session_key = getKerberosTGT(
+        tgt, cipher, old_session_key, _session_key = getKerberosTGT(
             user_principal,
             creds["password"],
             creds["domain"],
@@ -359,9 +350,7 @@ def extract_tickets(target: str, creds: Optional[Dict[str, str]] = None) -> str:
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Ticket cracking
-# ═══════════════════════════════════════════════════════════════════════════
 
 def crack_tickets(
     ticket_file: str,

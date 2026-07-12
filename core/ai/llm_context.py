@@ -3,8 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
-
+from typing import Any
 
 ROLE_LIST_LIMITS = {
     "director": 8,
@@ -14,7 +13,7 @@ ROLE_LIST_LIMITS = {
 STRING_LIMIT = 320
 
 
-def compact_context_for_llm(context: Dict[str, Any], role: str = "generic") -> Dict[str, Any]:
+def compact_context_for_llm(context: dict[str, Any], role: str = "generic") -> dict[str, Any]:
     """Return a bounded, JSON-friendly context for Director/Planner/Analysis.
 
     The full context contains normalized graphs, typed facts, coverage data, and
@@ -26,7 +25,7 @@ def compact_context_for_llm(context: Dict[str, Any], role: str = "generic") -> D
     if not isinstance(context, dict):
         return {"context": _trim_value(context, role)}
 
-    compact: Dict[str, Any] = {}
+    compact: dict[str, Any] = {}
     for key in (
         "host",
         "state",
@@ -57,9 +56,9 @@ def compact_context_for_llm(context: Dict[str, Any], role: str = "generic") -> D
     return compact
 
 
-def _compact_target_model(model: Dict[str, Any], role: str) -> Dict[str, Any]:
+def _compact_target_model(model: dict[str, Any], role: str) -> dict[str, Any]:
     limit = ROLE_LIST_LIMITS.get(role, 12)
-    compact: Dict[str, Any] = {}
+    compact: dict[str, Any] = {}
     for key in ("target", "host", "access", "unknowns", "api", "risk_analysis"):
         if key in model:
             compact[key] = _trim_value(model[key], role)
@@ -111,9 +110,9 @@ def _compact_target_model(model: Dict[str, Any], role: str) -> Dict[str, Any]:
     return compact
 
 
-def _compact_graph(graph: Dict[str, Any], role: str) -> Dict[str, Any]:
+def _compact_graph(graph: dict[str, Any], role: str) -> dict[str, Any]:
     limit = max(4, ROLE_LIST_LIMITS.get(role, 12) // 2)
-    compact: Dict[str, Any] = {}
+    compact: dict[str, Any] = {}
     for key in ("nodes", "edges"):
         value = graph.get(key)
         if isinstance(value, list):
@@ -125,7 +124,7 @@ def _compact_graph(graph: Dict[str, Any], role: str) -> Dict[str, Any]:
     return compact
 
 
-def _trim_list(values: Any, role: str, limit: Optional[int] = None) -> Any:
+def _trim_list(values: Any, role: str, limit: int | None = None) -> Any:
     if not isinstance(values, list):
         return _trim_value(values, role)
     limit = limit or ROLE_LIST_LIMITS.get(role, 12)
@@ -144,7 +143,7 @@ def _trim_value(value: Any, role: str) -> Any:
     if isinstance(value, list):
         return _trim_list(value, role, limit)
     if isinstance(value, dict):
-        trimmed: Dict[str, Any] = {}
+        trimmed: dict[str, Any] = {}
         for idx, (key, item) in enumerate(value.items()):
             if idx >= 40:
                 trimmed["omitted_keys"] = len(value) - idx

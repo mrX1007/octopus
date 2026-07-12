@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
-from typing import Any, Dict, Iterable
+from collections.abc import Iterable
+from typing import Any, ClassVar
 
 
 class SurfaceState:
     """Classify major assessment surfaces as unknown/present/absent."""
 
-    SURFACES = {
+    SURFACES: ClassVar[dict[str, dict[str, Any]]] = {
         "asm": {
             "positive_types": {"asset_domain", "asset_ip", "asset_url", "asset_service"},
             "negative_prefixes": ("asm_skipped:",),
@@ -41,10 +42,10 @@ class SurfaceState:
         },
     }
 
-    def __init__(self, facts: Iterable[Dict[str, Any]]):
+    def __init__(self, facts: Iterable[dict[str, Any]]):
         self.facts = list(facts or [])
 
-    def to_dict(self) -> Dict[str, str]:
+    def to_dict(self) -> dict[str, str]:
         return {surface: self.state(surface) for surface in self.SURFACES}
 
     def state(self, surface: str) -> str:

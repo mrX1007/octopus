@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Tests for db.py — CRUD operations, connection pool, transactions."""
 
-import pytest
-from unittest.mock import patch, MagicMock, PropertyMock
 from datetime import datetime
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 
 class TestGetConnection:
@@ -22,7 +23,7 @@ class TestGetConnection:
         mock_pool_class.return_value = mock_pool
         mock_pool.get_connection.return_value = MagicMock()
 
-        conn = db.get_connection()
+        db.get_connection()
 
         mock_pool_class.assert_called_once()
         mock_pool.get_connection.assert_called_once()
@@ -60,9 +61,8 @@ class TestTransaction:
         mock_conn = MagicMock()
         mock_get_conn.return_value = mock_conn
 
-        with pytest.raises(ValueError):
-            with db.transaction() as conn:
-                raise ValueError("test error")
+        with pytest.raises(ValueError), db.transaction():
+            raise ValueError("test error")
 
         mock_conn.rollback.assert_called_once()
         mock_conn.close.assert_called_once()
@@ -100,6 +100,23 @@ class TestCreateSession:
         call_args = mock_cursor.execute.call_args
         assert "10.0.0.1" in str(call_args)
 
+    @patch("db.get_connection")
+    def test_create_session_rolls_back_and_closes_on_error(self, mock_get_conn):
+        import db
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.execute.side_effect = RuntimeError("write failed")
+        mock_conn.cursor.return_value = mock_cursor
+        mock_get_conn.return_value = mock_conn
+
+        with pytest.raises(RuntimeError, match="write failed"):
+            db.create_session("10.0.0.1")
+
+        mock_conn.rollback.assert_called_once()
+        mock_cursor.close.assert_called_once()
+        mock_conn.close.assert_called_once()
+
 
 class TestSaveVulnerability:
     """Test vulnerability saving."""
@@ -119,6 +136,80 @@ class TestSaveVulnerability:
         # The name parameter should be truncated to 100 chars
         params = call_args[1]
         assert len(params[1]) <= 100
+
+    @patch("db.get_connection")
+    def test_save_vulnerability_persists_provenance(self, mock_get_conn):
+        import db
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_get_conn.return_value = mock_conn
+
+        db.save_vulnerability(
+            1, "finding", "HIGH", "80", "http", "desc",
+            evidence_source="nmap", raw_evidence="evidence",
+            repro_cmd="curl target", cvss_score=8.4,
+        )
+
+        sql, params = mock_cursor.execute.call_args[0]
+        assert "repro_cmd" in sql
+        assert "cvss_score" in sql
+        assert params[-4:] == ("nmap", "evidence", "curl target", 8.4)
+
+
+class TestSummaryPersistence:
+    @patch("db.get_connection")
+    def test_save_summary_is_an_upsert(self, mock_get_conn):
+        import db
+
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_get_conn.return_value = mock_conn
+
+        db.save_summary(7, "raw", "analysis", "HIGH")
+
+        sql = mock_cursor.execute.call_args[0][0]
+        assert "ON DUPLICATE KEY UPDATE" in sql
+        mock_conn.commit.assert_called_once()
+        mock_conn.close.assert_called_once()
+
+
+class TestGetSession:
+    @patch("db.get_connection")
+    def test_returns_canonical_deterministic_contract(self, mock_get_conn):
+        import db
+
+        history = (7, "target", datetime.now(), "complete")
+        summary = (2, 7, "raw", "analysis", "HIGH", datetime.now())
+        vulns = [(1, 7, "finding")]
+        fixes = [(1, 7, 1, "fix")]
+        exploits = [(1, 7, "exploit")]
+        mock_conn = MagicMock()
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.side_effect = [history, summary]
+        mock_cursor.fetchall.side_effect = [vulns, fixes, exploits]
+        mock_conn.cursor.return_value = mock_cursor
+        mock_get_conn.return_value = mock_conn
+
+        result = db.get_session(7)
+
+        assert result == {
+            "history": history,
+            "vulns": vulns,
+            "fixes": fixes,
+            "exploits": exploits,
+            "summary": summary,
+        }
+        assert "vulnerabilities" not in result
+        sql = "\n".join(call.args[0] for call in mock_cursor.execute.call_args_list)
+        assert "vulnerabilities WHERE sl_no = %s ORDER BY id ASC" in sql
+        assert "fixes WHERE sl_no = %s ORDER BY id ASC" in sql
+        assert "exploits_attempted WHERE sl_no = %s ORDER BY id ASC" in sql
+        assert "ORDER BY generated_at DESC, id DESC LIMIT 1" in sql
+        mock_cursor.close.assert_called_once()
+        mock_conn.close.assert_called_once()
 
 
 class TestGetAllHistory:

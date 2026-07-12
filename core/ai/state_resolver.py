@@ -2,22 +2,23 @@
 
 
 import json
-from typing import Dict, Any
+from typing import Any
+
 
 class StateResolver:
     def __init__(self, fact_store):
         self.fact_store = fact_store
 
-    def resolve_state(self, scan_id: str, host: str) -> Dict[str, Any]:
+    def resolve_state(self, scan_id: str, host: str) -> dict[str, Any]:
         """
         Pulls all facts for a host and infers the current attack state.
         Returns a dictionary representing the state.
         """
-        facts = self.fact_store.get_facts(scan_id, host)
+        facts: list[dict[str, Any]] = self.fact_store.get_facts(scan_id, host)
         fact_values = [f['value'].lower() for f in facts]
         fact_types = [f['type'].lower() for f in facts]
 
-        state = {
+        state: dict[str, Any] = {
             "target": host,
             "recon_completed": False,
             "web_services_found": False,
@@ -34,7 +35,7 @@ class StateResolver:
         }
 
         # Group facts by session_id
-        session_facts = {}
+        session_facts: dict[Any, list[dict[str, Any]]] = {}
         for f in facts:
             sid = f.get('session_id', 'none')
             if sid not in session_facts:

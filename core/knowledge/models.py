@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 
 import time
-from enum import Enum
 from dataclasses import dataclass, field
-from typing import List, Dict
+from enum import Enum
 
+from core.secrets import get_redactor, is_secret_ref
 
-# ═══════════════════════════════════════════════
 # NODE & EDGE TYPES
-# ═══════════════════════════════════════════════
 
 class NodeType(Enum):
     ASSET = "asset"
@@ -35,9 +33,7 @@ class EdgeType(Enum):
     PIVOTS_TO = "pivots_to"                 # Asset → Asset (lateral movement)
 
 
-# ═══════════════════════════════════════════════
 # NODE MODELS
-# ═══════════════════════════════════════════════
 
 @dataclass
 class Asset:
@@ -45,8 +41,8 @@ class Asset:
     ip: str
     hostname: str = ""
     os: str = ""
-    ports: List[int] = field(default_factory=list)
-    tags: Dict[str, str] = field(default_factory=dict)
+    ports: list[int] = field(default_factory=list)
+    tags: dict[str, str] = field(default_factory=dict)
     rooted: bool = False
     first_seen: float = field(default_factory=time.time)
 
@@ -70,7 +66,7 @@ class Identity:
     identity_type: str = "local"
     uid: int = -1
     shell: str = ""
-    groups: List[str] = field(default_factory=list)
+    groups: list[str] = field(default_factory=list)
 
     @property
     def node_id(self) -> str:
@@ -95,6 +91,10 @@ class Credential:
     verified: bool = False
     service: str = ""
     host: str = ""
+
+    def __post_init__(self) -> None:
+        if self.secret and not is_secret_ref(self.secret):
+            self.secret = get_redactor().protect(self.secret, kind=self.secret_type or "credential")
 
     @property
     def node_id(self) -> str:
@@ -188,7 +188,7 @@ class Campaign:
     name: str
     objective: str = ""
     started_at: float = field(default_factory=time.time)
-    targets: List[str] = field(default_factory=list)
+    targets: list[str] = field(default_factory=list)
     status: str = "active"
 
     @property

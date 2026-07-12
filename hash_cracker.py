@@ -11,15 +11,13 @@ Usage:
         register_credential("ssh", host, user, pwd)
 """
 
-import os
-import re
-import sys
-import time
 import logging
+import os
 import shutil
-import tempfile
 import subprocess
-from datetime import datetime
+import sys
+import tempfile
+import time
 
 try:
     from config import CFG, find_wordlist
@@ -362,7 +360,7 @@ class HashCracker:
                     except Exception as _exc:
                         logging.debug(f"Suppressed in hash_cracker.py: {_exc}")
                 self._map_cracked_to_users(data["entries"])
-                output += f"  Mask phase complete\n"
+                output += "  Mask phase complete\n"
 
         total_elapsed = time.time() - total_start
         self._map_cracked_to_users(entries)
@@ -374,12 +372,12 @@ class HashCracker:
         output += f"  Engine:         {'hashcat (GPU)' if self.hashcat else 'john (CPU)'}\n\n"
 
         if self.cracked_users:
-            output += f"  CRACKED CREDENTIALS:\n"
+            output += "  CRACKED CREDENTIALS:\n"
             for user, pwd in self.cracked_users.items():
                 output += f"    + {user}:{pwd}\n"
                 print(f"  {C_GREEN}[+] CRACKED: {user}:{pwd}{C_RESET}")
         else:
-            output += f"  No passwords cracked.\n"
+            output += "  No passwords cracked.\n"
 
         remaining = [e for e in entries if e["user"] not in self.cracked_users]
         if remaining:
@@ -453,9 +451,9 @@ if __name__ == "__main__":
             info = hc.identify_hash_type(target)
             print(f"  Hash type: {info}")
     else:
-        print(f"  Usage:")
-        print(f"    python3 hash_cracker.py /path/to/shadow")
-        print(f"    python3 hash_cracker.py '$6$salt$hash...'")
+        print("  Usage:")
+        print("    python3 hash_cracker.py /path/to/shadow")
+        print("    python3 hash_cracker.py '$6$salt$hash...'")
         print(f"\n  hashcat: {'Y ' + str(hc.hashcat) if hc.hashcat else 'N'}")
         print(f"  john:    {'Y ' + str(hc.john) if hc.john else 'N'}")
         print(f"  GPU:     {'Y CUDA' if hc.has_gpu else 'N'}")

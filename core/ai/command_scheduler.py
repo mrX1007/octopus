@@ -2,9 +2,12 @@
 
 import hashlib
 import re
-from dataclasses import dataclass, asdict
-from typing import Any, Dict, Iterable, Set
+from collections.abc import Iterable
+from dataclasses import asdict, dataclass, field
+from typing import Any, Optional
 from urllib.parse import urlparse, urlunparse
+
+from core.execution import ExecutionContext, ExecutionPolicy, redact_sensitive_command
 
 
 @dataclass
@@ -14,31 +17,75 @@ class CommandDecision:
     action: str
     reason: str
     prerequisite: str = ""
+    policy: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["command"] = self._redacted_command()
+        return payload
+
+    def _redacted_command(self) -> str:
+        return redact_sensitive_command(self.command)
 
 
 class CommandScheduler:
     """Deterministic command de-duplication and negative-fact gating."""
 
+    def __init__(self, execution_policy: Optional[ExecutionPolicy] = None):
+        self.execution_policy = execution_policy or ExecutionPolicy()
+
     def decide(
         self,
         command: str,
-        facts: Iterable[Dict[str, Any]],
-        executed_keys: Set[str],
+        facts: Iterable[dict[str, Any]],
+        executed_keys: set[str],
+        execution_context: Optional[ExecutionContext] = None,
     ) -> CommandDecision:
+        context = execution_context or ExecutionContext.automatic(
+            actor="command_scheduler",
+            origin="automation",
+        )
+        policy_decision = self.execution_policy.authorize_command(command, context)
         key = self.command_key(command)
+        if not policy_decision.allowed:
+            return CommandDecision(
+                command,
+                key,
+                "skip",
+                f"policy_denied:{policy_decision.reason}",
+                "execution_authorization",
+                policy_decision.to_dict(),
+            )
         if key in executed_keys:
-            return CommandDecision(command, key, "skip", "duplicate_command_key")
+            return CommandDecision(
+                command,
+                key,
+                "skip",
+                "duplicate_command_key",
+                policy=policy_decision.to_dict(),
+            )
 
         block_reason = self._negative_fact_block(command, facts)
         if block_reason:
-            return CommandDecision(command, key, "skip", block_reason, "confirmed_absent")
+            return CommandDecision(
+                command,
+                key,
+                "skip",
+                block_reason,
+                "confirmed_absent",
+                policy_decision.to_dict(),
+            )
 
-        return CommandDecision(command, key, "execute", "state_changed_or_unseen")
+        return CommandDecision(
+            command,
+            key,
+            "execute",
+            "state_changed_or_unseen",
+            policy=policy_decision.to_dict(),
+        )
 
     def command_key(self, command: str) -> str:
+        command = redact_sensitive_command(command)
         command = re.sub(r"\s+", " ", (command or "").strip())
         parts = command.split()
         if not parts:
@@ -55,7 +102,7 @@ class CommandScheduler:
             # Key by target plus a stable hash of that context.
             target = parts[1]
             context = command.split(target, 1)[1].strip()
-            digest = hashlib.sha1(context.encode("utf-8", "ignore")).hexdigest()[:16] if context else "noctx"
+            digest = hashlib.sha256(context.encode("utf-8", "ignore")).hexdigest()[:16] if context else "noctx"
             return f"exploit_select {target} {digest}"
 
         if len(parts) >= 2 and re.match(r"^https?://", parts[1], re.IGNORECASE):
@@ -63,7 +110,7 @@ class CommandScheduler:
 
         return command
 
-    def _negative_fact_block(self, command: str, facts: Iterable[Dict[str, Any]]) -> str:
+    def _negative_fact_block(self, command: str, facts: Iterable[dict[str, Any]]) -> str:
         parts = re.sub(r"\s+", " ", (command or "").strip()).split()
         if not parts:
             return ""

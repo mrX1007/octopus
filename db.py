@@ -1,19 +1,36 @@
 #!/usr/bin/env python3
 
 import logging
+from contextlib import contextmanager, suppress
+from datetime import datetime
+from typing import Any, Optional, TypedDict
+
 import mysql.connector
 from mysql.connector.pooling import MySQLConnectionPool
-from contextlib import contextmanager
-from datetime import datetime
+
+from core.secrets import redact_data, redact_text
 
 logger = logging.getLogger("octopus.db")
 
 
-# ─────────────────────────────────────────────
+def _safe_text(value: Any, limit: Optional[int] = None, *, kind: str = "database") -> str:
+    safe = redact_text(value, kind=kind)
+    return safe[:limit] if limit is not None else safe
+
+
 # CONNECTION POOL
-# ─────────────────────────────────────────────
 
 _pool = None
+
+
+class SessionReport(TypedDict):
+    """Canonical payload returned by :func:`get_session`."""
+
+    history: Optional[Any]
+    vulns: list[Any]
+    fixes: list[Any]
+    exploits: list[Any]
+    summary: Optional[Any]
 
 
 def _get_db_config() -> dict:
@@ -76,17 +93,38 @@ def transaction():
     try:
         yield conn
         conn.commit()
-    except Exception as e:
+    except Exception:
         conn.rollback()
         raise
     finally:
         conn.close()
 
 
-# v4.2: Auto-migration — runs on import, idempotent
+@contextmanager
+def _cursor(write: bool = False):
+    """Yield a cursor and always release both cursor and connection."""
+    conn = get_connection()
+    cursor = None
+    try:
+        cursor = conn.cursor()
+        yield cursor
+        if write:
+            conn.commit()
+    except Exception:
+        if write:
+            conn.rollback()
+        raise
+    finally:
+        if cursor is not None:
+            cursor.close()
+        conn.close()
+
+
 def init_db():
     """Auto-migrate schema: create base tables and add missing columns.
     Safe to call multiple times — uses CREATE IF NOT EXISTS and checks before altering."""
+    conn = None
+    c = None
     try:
         conn = get_connection()
         c = conn.cursor()
@@ -157,6 +195,7 @@ def init_db():
                 ai_analysis MEDIUMTEXT,
                 risk_level VARCHAR(20),
                 generated_at DATETIME,
+                UNIQUE KEY uq_summary_slno (sl_no),
                 FOREIGN KEY (sl_no) REFERENCES history(sl_no)
                     ON DELETE CASCADE
             )
@@ -230,7 +269,7 @@ def init_db():
                 ADD COLUMN repro_cmd TEXT DEFAULT NULL
             """)
 
-        # ── v7.0: Add 'cvss_score' to vulnerabilities if missing ──
+        # Add 'cvss_score' to existing vulnerability tables.
         c.execute("""
             SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_SCHEMA = DATABASE()
@@ -243,7 +282,7 @@ def init_db():
                 ADD COLUMN cvss_score FLOAT DEFAULT NULL
             """)
 
-        # ── v7.0: Add 'facts_extracted' to tool_results if missing ─
+        # Add 'facts_extracted' to existing tool-result tables.
         c.execute("""
             SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_SCHEMA = DATABASE()
@@ -256,7 +295,7 @@ def init_db():
                 ADD COLUMN facts_extracted TEXT DEFAULT NULL
             """)
 
-        # ── v7.0: Add 'stage' to tool_results if missing ──────────
+        # Add 'stage' to existing tool-result tables.
         c.execute("""
             SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
             WHERE TABLE_SCHEMA = DATABASE()
@@ -269,7 +308,7 @@ def init_db():
                 ADD COLUMN stage VARCHAR(30) DEFAULT 'RECON'
             """)
 
-        # ── v8.0: Create c2_sessions table ────────────────────────
+        # Create C2 session storage for existing databases.
         c.execute("""
             CREATE TABLE IF NOT EXISTS c2_sessions (
                 agent_id VARCHAR(64) PRIMARY KEY,
@@ -283,7 +322,7 @@ def init_db():
             )
         """)
 
-        # ── v8.0: Create credentials table ────────────────────────
+        # Create credential storage for existing databases.
         c.execute("""
             CREATE TABLE IF NOT EXISTS credentials (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -297,54 +336,73 @@ def init_db():
             )
         """)
 
-        # ── v9.0: Performance indices ─────────────────────────────
+        # Keep exactly one deterministic summary per session. Existing databases
+        # may contain duplicates from the former append-only save_summary().
+        c.execute("""
+            SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'summary'
+              AND COLUMN_NAME = 'sl_no'
+              AND NON_UNIQUE = 0
+        """)
+        if c.fetchone()[0] == 0:
+            c.execute("""
+                DELETE older FROM summary AS older
+                INNER JOIN summary AS newer
+                    ON older.sl_no = newer.sl_no AND older.id < newer.id
+            """)
+            c.execute("""
+                ALTER TABLE summary
+                ADD UNIQUE INDEX uq_summary_slno (sl_no)
+            """)
+
+        # Backfill performance indices on existing databases.
         _index_stmts = [
             "CREATE INDEX IF NOT EXISTS idx_vuln_slno ON vulnerabilities(sl_no)",
             "CREATE INDEX IF NOT EXISTS idx_fix_slno ON fixes(sl_no)",
             "CREATE INDEX IF NOT EXISTS idx_exploit_slno ON exploits_attempted(sl_no)",
-            "CREATE INDEX IF NOT EXISTS idx_summary_slno ON summary(sl_no)",
             "CREATE INDEX IF NOT EXISTS idx_tool_results_slno ON tool_results(sl_no)",
             "CREATE INDEX IF NOT EXISTS idx_history_target ON history(target)",
             "CREATE INDEX IF NOT EXISTS idx_history_status ON history(status)",
             "CREATE INDEX IF NOT EXISTS idx_creds_target ON credentials(target_ip)",
         ]
         for stmt in _index_stmts:
-            try:
+            with suppress(mysql.connector.Error):
                 c.execute(stmt)
-            except mysql.connector.Error:
-                pass  # Index may already exist on older MariaDB without IF NOT EXISTS
 
         conn.commit()
-        conn.close()
     except Exception as e:
+        if conn is not None:
+            with suppress(Exception):
+                conn.rollback()
         # Don't crash on migration failure — just warn
         logger.warning(f"DB migration warning: {e}")
         print(f"[!] DB migration warning: {e}")
+    finally:
+        if c is not None:
+            with suppress(Exception):
+                c.close()
+        if conn is not None:
+            with suppress(Exception):
+                conn.close()
 
 
 # Run migration on import
-try:
+with suppress(Exception):
     init_db()
-except Exception as e:
-    pass
 
 
-# ─────────────────────────────────────────────
 # WRITE FUNCTIONS
-# ─────────────────────────────────────────────
 
 def create_session(target: str) -> int:
     """Insert new row into history. Returns sl_no."""
-    conn = get_connection()
-    c = conn.cursor()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute(
-        "INSERT INTO history (target, scan_date, status) VALUES (%s, %s, %s)",
-        (target, now, "active")
-    )
-    conn.commit()
-    sl_no = c.lastrowid
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute(
+            "INSERT INTO history (target, scan_date, status) VALUES (%s, %s, %s)",
+            (_safe_text(target, 255, kind="target"), now, "active")
+        )
+        sl_no = c.lastrowid
     return sl_no
 
 
@@ -354,185 +412,181 @@ def update_session_status(sl_no: int, status: str):
     if status not in allowed:
         print(f"[!] Invalid status: {status}. Allowed: {allowed}")
         return
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE history SET status = %s WHERE sl_no = %s", (status, sl_no))
-    conn.commit()
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute("UPDATE history SET status = %s WHERE sl_no = %s", (status, sl_no))
 
 
 def save_vulnerability(sl_no: int, vuln_name: str, severity: str,
                        port: str, service: str, description: str,
                        confidence: str = "UNCONFIRMED",
                        evidence_source: str = "",
-                       raw_evidence: str = "") -> int:
-    """Insert a vulnerability. Returns its id.
-    v4.2: Added confidence (CONFIRMED/POSSIBLE/UNCONFIRMED) and evidence_source."""
+                       raw_evidence: str = "",
+                       repro_cmd: str = "",
+                       cvss_score: Optional[float] = None) -> int:
+    """Insert a vulnerability and return its identifier.
+
+    Confidence accepts CONFIRMED, POSSIBLE, or UNCONFIRMED.
+    """
     # Validate confidence level
     valid_conf = {"CONFIRMED", "POSSIBLE", "UNCONFIRMED"}
-    if confidence.upper() not in valid_conf:
-        confidence = "UNCONFIRMED"
-    else:
-        confidence = confidence.upper()
+    confidence = "UNCONFIRMED" if confidence.upper() not in valid_conf else confidence.upper()
 
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO vulnerabilities
-        (sl_no, vuln_name, severity, port, service, description,
-         confidence, evidence_source, raw_evidence)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """, (sl_no,
-          str(vuln_name or "")[:100],
-          str(severity or "")[:20],
-          str(port or "")[:20],
-          str(service or "")[:50],
-          str(description or "")[:500],
-          confidence,
-          str(evidence_source or "")[:100],
-          str(raw_evidence or "")[:5000]))
-    conn.commit()
-    vuln_id = c.lastrowid
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute("""
+            INSERT INTO vulnerabilities
+            (sl_no, vuln_name, severity, port, service, description,
+             confidence, evidence_source, raw_evidence, repro_cmd, cvss_score)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (sl_no,
+              _safe_text(vuln_name, 100),
+              _safe_text(severity, 20),
+              _safe_text(port, 20),
+              _safe_text(service, 50),
+              _safe_text(description, 500),
+              confidence,
+              _safe_text(evidence_source, 100),
+              _safe_text(raw_evidence, 5000, kind="evidence"),
+              _safe_text(repro_cmd, 5000, kind="command"),
+              cvss_score))
+        vuln_id = c.lastrowid
     return vuln_id
 
 
 def save_fix(sl_no: int, vuln_id: int, fix_text: str, source: str = "ai"):
     """Insert a fix linked to a vulnerability."""
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO fixes (sl_no, vuln_id, fix_text, source)
-        VALUES (%s, %s, %s, %s)
-    """, (sl_no, vuln_id, str(fix_text or "")[:1000], str(source or "")[:50]))
-    conn.commit()
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute("""
+            INSERT INTO fixes (sl_no, vuln_id, fix_text, source)
+            VALUES (%s, %s, %s, %s)
+        """, (sl_no, vuln_id, _safe_text(fix_text, 1000), _safe_text(source, 50)))
 
 
 def save_exploit(sl_no, exploit_name, tool_used, payload, result, notes):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO exploits_attempted (sl_no, exploit_name, tool_used, payload, result, notes)
-        VALUES (%s, %s, %s, %s, %s, %s)
-    """, (sl_no,
-          str(exploit_name or "")[:100],
-          str(tool_used or "")[:50],
-          str(payload or "")[:100],
-          str(result or "")[:100],
-          str(notes or "")[:200]))
-    conn.commit()
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute("""
+            INSERT INTO exploits_attempted (sl_no, exploit_name, tool_used, payload, result, notes)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (sl_no,
+              _safe_text(exploit_name, 100),
+              _safe_text(tool_used, 50),
+              _safe_text(payload, 100, kind="payload"),
+              _safe_text(result, 100),
+              _safe_text(notes, 200)))
 
 
 def save_tool_result(sl_no: int, command: str, stdout: str,
                      stderr: str = "", exit_code: int = -1,
                      duration: float = 0.0):
-    """v4.2: Store normalized tool result in DB for audit trail."""
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("""
-        INSERT INTO tool_results
-        (sl_no, command, stdout, stderr, exit_code, duration_seconds)
-        VALUES (%s, %s, %s, %s, %s, %s)
-    """, (sl_no,
-          str(command or "")[:2000],
-          str(stdout or "")[:50000],
-          str(stderr or "")[:5000],
-          exit_code,
-          duration))
-    conn.commit()
-    conn.close()
+    """Store a normalized tool result in the audit database."""
+    with _cursor(write=True) as c:
+        c.execute("""
+            INSERT INTO tool_results
+            (sl_no, command, stdout, stderr, exit_code, duration_seconds)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (sl_no,
+              _safe_text(command, 2000, kind="command"),
+              _safe_text(stdout, 50000, kind="tool_output"),
+              _safe_text(stderr, 5000, kind="tool_error"),
+              exit_code,
+              duration))
 
 
 def save_summary(sl_no: int, raw_scan: str, ai_analysis: str, risk_level: str):
-    """Insert the full session summary."""
-    conn = get_connection()
-    c = conn.cursor()
+    """Create or replace the single summary associated with a session."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("""
-        INSERT INTO summary (sl_no, raw_scan, ai_analysis, risk_level, generated_at)
-        VALUES (%s, %s, %s, %s, %s)
-    """, (sl_no, raw_scan, ai_analysis, risk_level, now))
-    conn.commit()
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute("""
+            INSERT INTO summary (sl_no, raw_scan, ai_analysis, risk_level, generated_at)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                raw_scan = VALUES(raw_scan),
+                ai_analysis = VALUES(ai_analysis),
+                risk_level = VALUES(risk_level),
+                generated_at = VALUES(generated_at)
+        """, (
+            sl_no,
+            _safe_text(raw_scan, kind="raw_scan"),
+            _safe_text(ai_analysis, kind="analysis"),
+            _safe_text(risk_level, 20),
+            now,
+        ))
 
 
-# ─────────────────────────────────────────────
 # READ FUNCTIONS
-# ─────────────────────────────────────────────
 
 def get_all_history():
     """Return all rows from history ordered by newest first."""
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT sl_no, target, scan_date, status FROM history ORDER BY sl_no DESC")
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    with _cursor() as c:
+        c.execute("SELECT sl_no, target, scan_date, status FROM history ORDER BY sl_no DESC")
+        rows = c.fetchall()
+    return redact_data(rows)
 
 
-def get_session(sl_no: int) -> dict:
-    """Return everything linked to a sl_no across all tables."""
-    conn = get_connection()
-    c = conn.cursor()
+def get_session(sl_no: int) -> SessionReport:
+    """Return the canonical, deterministically ordered session report."""
+    with _cursor() as c:
+        c.execute("SELECT * FROM history WHERE sl_no = %s", (sl_no,))
+        history = c.fetchone()
 
-    c.execute("SELECT * FROM history WHERE sl_no = %s", (sl_no,))
-    history = c.fetchone()
+        c.execute(
+            "SELECT * FROM vulnerabilities WHERE sl_no = %s ORDER BY id ASC",
+            (sl_no,),
+        )
+        vulns = c.fetchall()
 
-    c.execute("SELECT * FROM vulnerabilities WHERE sl_no = %s", (sl_no,))
-    vulns = c.fetchall()
+        c.execute("SELECT * FROM fixes WHERE sl_no = %s ORDER BY id ASC", (sl_no,))
+        fixes = c.fetchall()
 
-    c.execute("SELECT * FROM fixes WHERE sl_no = %s", (sl_no,))
-    fixes = c.fetchall()
+        c.execute(
+            "SELECT * FROM exploits_attempted WHERE sl_no = %s ORDER BY id ASC",
+            (sl_no,),
+        )
+        exploits = c.fetchall()
 
-    c.execute("SELECT * FROM exploits_attempted WHERE sl_no = %s", (sl_no,))
-    exploits = c.fetchall()
+        c.execute("""
+            SELECT * FROM summary WHERE sl_no = %s
+            ORDER BY generated_at DESC, id DESC LIMIT 1
+        """, (sl_no,))
+        summary = c.fetchone()
 
-    c.execute("SELECT * FROM summary WHERE sl_no = %s", (sl_no,))
-    summary = c.fetchone()
-
-    conn.close()
-
-    return {
+    report = {
         "history":   history,
         "vulns":     vulns,
         "fixes":     fixes,
         "exploits":  exploits,
         "summary":   summary
     }
+    return redact_data(report)
 
 
 def get_vulnerabilities(sl_no: int):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT * FROM vulnerabilities WHERE sl_no = %s", (sl_no,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    with _cursor() as c:
+        c.execute(
+            "SELECT * FROM vulnerabilities WHERE sl_no = %s ORDER BY id ASC",
+            (sl_no,),
+        )
+        rows = c.fetchall()
+    return redact_data(rows)
 
 
 def get_fixes(sl_no: int):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT * FROM fixes WHERE sl_no = %s", (sl_no,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    with _cursor() as c:
+        c.execute("SELECT * FROM fixes WHERE sl_no = %s ORDER BY id ASC", (sl_no,))
+        rows = c.fetchall()
+    return redact_data(rows)
 
 
 def get_exploits(sl_no: int):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT * FROM exploits_attempted WHERE sl_no = %s", (sl_no,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    with _cursor() as c:
+        c.execute(
+            "SELECT * FROM exploits_attempted WHERE sl_no = %s ORDER BY id ASC",
+            (sl_no,),
+        )
+        rows = c.fetchall()
+    return redact_data(rows)
 
 
-# ─────────────────────────────────────────────
 # EDIT FUNCTIONS
-# ─────────────────────────────────────────────
 
 def edit_vulnerability(vuln_id: int, field: str, value: str):
     """Edit a single field in vulnerabilities by id."""
@@ -540,24 +594,18 @@ def edit_vulnerability(vuln_id: int, field: str, value: str):
     if field not in allowed:
         print(f"[!] Invalid field: {field}. Allowed: {allowed}")
         return
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute(
-        f"UPDATE vulnerabilities SET {field} = %s WHERE id = %s",
-        (value, vuln_id)
-    )
-    conn.commit()
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute(
+            f"UPDATE vulnerabilities SET {field} = %s WHERE id = %s",
+            (_safe_text(value, 500), vuln_id)
+        )
     print(f"[+] vulnerabilities.{field} updated for id={vuln_id}")
 
 
 def edit_fix(fix_id: int, fix_text: str):
     """Edit the fix_text of a fix by id."""
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE fixes SET fix_text = %s WHERE id = %s", (fix_text, fix_id))
-    conn.commit()
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute("UPDATE fixes SET fix_text = %s WHERE id = %s", (_safe_text(fix_text, 1000), fix_id))
     print(f"[+] fix id={fix_id} updated.")
 
 
@@ -567,89 +615,68 @@ def edit_exploit(exploit_id: int, field: str, value: str):
     if field not in allowed:
         print(f"[!] Invalid field: {field}. Allowed: {allowed}")
         return
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute(
-        f"UPDATE exploits_attempted SET {field} = %s WHERE id = %s",
-        (value, exploit_id)
-    )
-    conn.commit()
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute(
+            f"UPDATE exploits_attempted SET {field} = %s WHERE id = %s",
+            (_safe_text(value, 200), exploit_id)
+        )
     print(f"[+] exploits_attempted.{field} updated for id={exploit_id}")
 
 
 def edit_summary_risk(sl_no: int, risk_level: str):
     """Update the risk level on a summary."""
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE summary SET risk_level = %s WHERE sl_no = %s", (risk_level, sl_no))
-    conn.commit()
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute("UPDATE summary SET risk_level = %s WHERE sl_no = %s", (_safe_text(risk_level, 20), sl_no))
     print(f"[+] Summary risk_level updated for SL#{sl_no}")
 
 
-# ─────────────────────────────────────────────
 # DELETE FUNCTIONS
-# ─────────────────────────────────────────────
 
 def delete_vulnerability(vuln_id: int):
     """Delete a single vulnerability and its linked fixes."""
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("DELETE FROM fixes WHERE vuln_id = %s", (vuln_id,))
-    c.execute("DELETE FROM vulnerabilities WHERE id = %s", (vuln_id,))
-    conn.commit()
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute("DELETE FROM fixes WHERE vuln_id = %s", (vuln_id,))
+        c.execute("DELETE FROM vulnerabilities WHERE id = %s", (vuln_id,))
     print(f"[+] Vulnerability id={vuln_id} and its fixes deleted.")
 
 
 def delete_exploit(exploit_id: int):
     """Delete a single exploit attempt."""
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("DELETE FROM exploits_attempted WHERE id = %s", (exploit_id,))
-    conn.commit()
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute("DELETE FROM exploits_attempted WHERE id = %s", (exploit_id,))
     print(f"[+] Exploit id={exploit_id} deleted.")
 
 
 def delete_fix(fix_id: int):
     """Delete a single fix."""
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("DELETE FROM fixes WHERE id = %s", (fix_id,))
-    conn.commit()
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute("DELETE FROM fixes WHERE id = %s", (fix_id,))
     print(f"[+] Fix id={fix_id} deleted.")
 
 
 def delete_full_session(sl_no: int):
     """
-    Wipe everything linked to a sl_no across all 5 tables.
+    Wipe everything linked to a sl_no across all session-owned tables.
     Order matters — delete children before parent (FK constraints).
     """
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("DELETE FROM fixes             WHERE sl_no = %s", (sl_no,))
-    c.execute("DELETE FROM exploits_attempted WHERE sl_no = %s", (sl_no,))
-    c.execute("DELETE FROM vulnerabilities   WHERE sl_no = %s", (sl_no,))
-    c.execute("DELETE FROM summary           WHERE sl_no = %s", (sl_no,))
-    c.execute("DELETE FROM history           WHERE sl_no = %s", (sl_no,))
-    conn.commit()
-    conn.close()
+    with _cursor(write=True) as c:
+        c.execute("DELETE FROM fixes             WHERE sl_no = %s", (sl_no,))
+        c.execute("DELETE FROM exploits_attempted WHERE sl_no = %s", (sl_no,))
+        c.execute("DELETE FROM tool_results      WHERE sl_no = %s", (sl_no,))
+        c.execute("DELETE FROM vulnerabilities   WHERE sl_no = %s", (sl_no,))
+        c.execute("DELETE FROM summary           WHERE sl_no = %s", (sl_no,))
+        c.execute("DELETE FROM history           WHERE sl_no = %s", (sl_no,))
     print(f"[+] Full session SL#{sl_no} deleted from all tables.")
 
 
-# ─────────────────────────────────────────────
 # DISPLAY HELPERS
-# ─────────────────────────────────────────────
 
 def print_history(rows):
     print("\n" + "─"*65)
     print(f"{'SL#':<6} {'TARGET':<28} {'DATE':<22} {'STATUS'}")
     print("─"*65)
     for row in rows:
-        print(f"{row[0]:<6} {row[1]:<28} {str(row[2]):<22} {row[3]}")
+        print(f"{row[0]:<6} {row[1]:<28} {row[2]!s:<22} {row[3]}")
     print()
 
 
@@ -694,44 +721,36 @@ def print_session(data: dict):
     print()
 
 
-# ─────────────────────────────────────────────
-# v7.0: ENHANCED TOOL RESULT STORAGE
-# ─────────────────────────────────────────────
+# ENHANCED TOOL RESULT STORAGE
 
 def save_tool_result_v7(sl_no: int, command: str, stdout: str,
                         stderr: str = "", exit_code: int = 0,
-                        duration: float = 0.0, facts: list = None,
+                        duration: float = 0.0, facts: Optional[list] = None,
                         stage: str = "RECON") -> int:
-    """v7.0: Save tool result with extracted facts and kill chain stage."""
+    """Save a tool result with extracted facts and kill-chain stage."""
     import json
-    conn = get_connection()
-    c = conn.cursor()
-    facts_json = json.dumps(facts) if facts else None
+    facts_json = json.dumps(redact_data(facts)) if facts else None
     try:
-        c.execute("""
-            INSERT INTO tool_results
-                (sl_no, command, stdout, stderr, exit_code,
-                 duration_seconds, facts_extracted, stage)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """, (sl_no, command[:500], stdout[:50000] if stdout else "",
-              stderr[:5000] if stderr else "", exit_code,
-              duration, facts_json, stage))
-        conn.commit()
-        result_id = c.lastrowid
+        with _cursor(write=True) as c:
+            c.execute("""
+                INSERT INTO tool_results
+                    (sl_no, command, stdout, stderr, exit_code,
+                     duration_seconds, facts_extracted, stage)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (sl_no, _safe_text(command, 500, kind="command"),
+                  _safe_text(stdout, 50000, kind="tool_output"),
+                  _safe_text(stderr, 5000, kind="tool_error"), exit_code,
+                  duration, facts_json, stage))
+            result_id = c.lastrowid
     except Exception as e:
         print(f"[!] save_tool_result_v7 failed: {e}")
         result_id = -1
-    finally:
-        conn.close()
     return result_id
 
 
 def get_session_analytics(sl_no: int) -> dict:
-    """v7.0: Get analytics for a scan session.
+    """Get analytics for a scan session.
     Returns dict with tool counts, success rate, time per stage."""
-    conn = get_connection()
-    c = conn.cursor()
-
     analytics = {
         "total_tools": 0,
         "success_count": 0,
@@ -743,48 +762,45 @@ def get_session_analytics(sl_no: int) -> dict:
     }
 
     try:
-        # Tool execution stats
-        c.execute("""
-            SELECT COUNT(*), SUM(exit_code = 0), SUM(exit_code != 0),
-                   SUM(duration_seconds)
-            FROM tool_results WHERE sl_no = %s
-        """, (sl_no,))
-        row = c.fetchone()
-        if row:
-            analytics["total_tools"] = row[0] or 0
-            analytics["success_count"] = row[1] or 0
-            analytics["failure_count"] = row[2] or 0
-            analytics["total_duration"] = round(row[3] or 0, 1)
+        with _cursor() as c:
+            # Tool execution stats
+            c.execute("""
+                SELECT COUNT(*), SUM(exit_code = 0), SUM(exit_code != 0),
+                       SUM(duration_seconds)
+                FROM tool_results WHERE sl_no = %s
+            """, (sl_no,))
+            row = c.fetchone()
+            if row:
+                analytics["total_tools"] = row[0] or 0
+                analytics["success_count"] = row[1] or 0
+                analytics["failure_count"] = row[2] or 0
+                analytics["total_duration"] = round(row[3] or 0, 1)
 
-        # Stages reached
-        c.execute("""
-            SELECT DISTINCT stage FROM tool_results
-            WHERE sl_no = %s AND stage IS NOT NULL
-        """, (sl_no,))
-        analytics["stages_reached"] = [r[0] for r in c.fetchall()]
+            # Stages reached
+            c.execute("""
+                SELECT DISTINCT stage FROM tool_results
+                WHERE sl_no = %s AND stage IS NOT NULL
+            """, (sl_no,))
+            analytics["stages_reached"] = [r[0] for r in c.fetchall()]
 
-        # Vulnerability counts
-        c.execute("""
-            SELECT COUNT(*),
-                   SUM(confidence = 'CONFIRMED')
-            FROM vulnerabilities WHERE sl_no = %s
-        """, (sl_no,))
-        vrow = c.fetchone()
-        if vrow:
-            analytics["vulns_found"] = vrow[0] or 0
-            analytics["vulns_confirmed"] = vrow[1] or 0
+            # Vulnerability counts
+            c.execute("""
+                SELECT COUNT(*),
+                       SUM(confidence = 'CONFIRMED')
+                FROM vulnerabilities WHERE sl_no = %s
+            """, (sl_no,))
+            vrow = c.fetchone()
+            if vrow:
+                analytics["vulns_found"] = vrow[0] or 0
+                analytics["vulns_confirmed"] = vrow[1] or 0
 
     except Exception as e:
         print(f"[!] get_session_analytics failed: {e}")
-    finally:
-        conn.close()
 
     return analytics
 
 
-# ─────────────────────────────────────────────
 # QUICK CONNECTION TEST
-# ─────────────────────────────────────────────
 
 if __name__ == "__main__":
     try:

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import re
-from typing import List
 
 from .common import BaseParser, Fact, fact, tool_lower
 
@@ -9,10 +8,10 @@ from .common import BaseParser, Fact, fact, tool_lower
 class ADParser(BaseParser):
     family = "ad"
 
-    def parse(self, tool_name: str, raw_output: str, session_id: str) -> List[Fact]:
+    def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
         if not any(marker in tool_lower(tool_name) for marker in ("ad_", "bloodhound", "gpo", "adcs", "kerberoast", "asrep")):
             return []
-        facts: List[Fact] = []
+        facts: list[Fact] = []
         for match in re.finditer(r"\b(?:Domain Name|Domain|Workgroup)\s*[:=]\s*([A-Za-z0-9._-]{2,})", raw_output or "", re.IGNORECASE):
             domain = match.group(1).strip(".")
             if domain.lower() not in {"unknown", "none", "workgroup"}:

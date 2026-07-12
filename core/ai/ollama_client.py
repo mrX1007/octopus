@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
+import json
+import logging
 import re
 import sys
 import time
-import json
-import logging
+from collections.abc import Generator
+
 import requests
-from typing import Generator
 
 # ─────────────────────────────────────────────
 # CONFIG CONSTANTS
@@ -170,14 +171,14 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
         # ── Diagnostic logging ──
         logger.debug(f"RAW response length={len(full_response)}, tokens={token_count}")
         if len(full_response) < 500:
-            logger.debug(f"RAW response: {repr(full_response)}")
+            logger.debug(f"RAW response: {full_response!r}")
 
         # ── Strip <thought> and <think> tags (even if unclosed) ──
         clean = re.sub(r'<(?:thought|think)>[\s\S]*?(?:</(?:thought|think)>|$)', '', full_response).strip()
 
         logger.debug(f"CLEAN response length={len(clean)}")
         if len(clean) < 500:
-            logger.debug(f"CLEAN response: {repr(clean)}")
+            logger.debug(f"CLEAN response: {clean!r}")
 
         # ── Empty check BEFORE any JSON extraction ──
         if not clean:
@@ -225,7 +226,7 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
                 payload["format"] = "json"
 
         try:
-            label = f" (minimal mode)" if use_minimal else ""
+            label = " (minimal mode)" if use_minimal else ""
             print(f"\n[*] Streaming from {MODEL_NAME}{label}...")
 
             resp = requests.post(OLLAMA_URL, json=payload, stream=True, timeout=OLLAMA_TIMEOUT)
@@ -322,8 +323,8 @@ def _extract_json(text: str) -> str:
             break
 
     if start_idx == -1:
-        logger.warning(f"No JSON start found in: {repr(s[:200])}")
-        return f"[!] No JSON found in LLM response"
+        logger.warning(f"No JSON start found in: {s[:200]!r}")
+        return "[!] No JSON found in LLM response"
 
     # Match brackets to find the correct end
     open_char = s[start_idx]
@@ -362,8 +363,8 @@ def _extract_json(text: str) -> str:
                 break
 
     if end_idx == -1:
-        logger.warning(f"No JSON end found. start_idx={start_idx}, text={repr(s[:200])}")
-        return f"[!] Incomplete JSON in LLM response"
+        logger.warning(f"No JSON end found. start_idx={start_idx}, text={s[:200]!r}")
+        return "[!] Incomplete JSON in LLM response"
 
     result = s[start_idx:end_idx + 1]
     logger.debug(f"Extracted JSON ({len(result)} chars)")
@@ -375,7 +376,7 @@ def _extract_first_valid_json(text: str) -> str:
     s = text or ""
     pairs = {"{": "}", "[": "]"}
     closers = set(pairs.values())
-    for start_idx, open_char in ((idx, ch) for idx, ch in enumerate(s) if ch in pairs):
+    for start_idx, _open_char in ((idx, ch) for idx, ch in enumerate(s) if ch in pairs):
         stack = []
         in_string = False
         escape = False

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 
-import os
-import sys
+import contextlib
 import json
-import time
+import os
+import re
+import sys
+import tempfile
 from datetime import datetime
+from typing import Optional
 
 try:
     import shodan
@@ -33,14 +36,19 @@ C_MAGENTA = "\033[95m"
 C_RESET  = "\033[0m"
 C_BOLD   = "\033[1m"
 
-# ═══════════════════════════════════════════════
+
+def _safe_file_component(value, fallback: str = "results") -> str:
+    """Return a bounded filename component with no path semantics."""
+    component = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value or ""))
+    component = re.sub(r"_+", "_", component).strip("._-")
+    return component[:100] or fallback
+
 # SHODAN RECON CLASS
-# ═══════════════════════════════════════════════
 
 class ShodanRecon:
     """Full Shodan API wrapper with DB storage and pipeline integration."""
 
-    def __init__(self, api_key: str = None):
+    def __init__(self, api_key: Optional[str] = None):
         """Initialize Shodan client.
         Key priority: argument → .env SHODAN_API_KEY → config.yaml → error."""
         self.api_key = api_key or get_secret("SHODAN_API_KEY", "")
@@ -71,7 +79,9 @@ class ShodanRecon:
 
     def _ensure_dir(self):
         """Create results directory if needed."""
-        os.makedirs(self.results_dir, exist_ok=True)
+        root = os.path.abspath(os.path.expanduser(str(self.results_dir)))
+        os.makedirs(root, exist_ok=True)
+        return os.path.realpath(root)
 
     def _get_db(self):
         """Get/create MariaDB connection. Returns None if unavailable."""
@@ -88,13 +98,14 @@ class ShodanRecon:
             )
             self._ensure_table()
             return self._db_conn
-        except Exception as e:
+        except Exception:
             return None
 
     def _ensure_table(self):
         """Create shodan_results table if not exists."""
         if not self._db_conn:
             return
+        cur = None
         try:
             cur = self._db_conn.cursor()
             cur.execute("""
@@ -120,13 +131,17 @@ class ShodanRecon:
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
             self._db_conn.commit()
-            cur.close()
         except Exception as e:
+            with contextlib.suppress(Exception):
+                self._db_conn.rollback()
             print(f"  {C_GREY}[~] DB table creation: {e}{C_RESET}")
+        finally:
+            if cur is not None:
+                cur.close()
 
     # ─── CORE API METHODS ──────────────────────
 
-    def search(self, query: str, max_results: int = None) -> dict:
+    def search(self, query: str, max_results: Optional[int] = None) -> dict:
         """Run Shodan search query.
         Examples: 'port:22 country:RU', 'apache 2.4.49', 'vuln:CVE-2021-44228'
         Returns: {'total': N, 'matches': [...], 'query': str}"""
@@ -276,6 +291,7 @@ class ShodanRecon:
         if not matches:
             return
 
+        cur = None
         try:
             cur = conn.cursor()
             sql = """INSERT INTO shodan_results
@@ -303,31 +319,44 @@ class ShodanRecon:
 
             cur.executemany(sql, rows)
             conn.commit()
-            cur.close()
             print(f"  {C_GREEN}[+] Saved {len(rows)} results to DB{C_RESET}")
 
         except Exception as e:
+            with contextlib.suppress(Exception):
+                conn.rollback()
             print(f"  {C_GREY}[~] DB save failed (JSON backup used): {e}{C_RESET}")
+        finally:
+            if cur is not None:
+                cur.close()
 
     def _save_json(self, data: dict, prefix: str = "results"):
         """Save results to JSON file as backup."""
-        self._ensure_dir()
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        # Clean prefix for filename
-        clean_prefix = "".join(c if c.isalnum() or c in "_-" else "_" for c in prefix)
-        filepath = os.path.join(self.results_dir, f"{clean_prefix}_{ts}.json")
+        root = self._ensure_dir()
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        clean_prefix = _safe_file_component(prefix)
+        fd = None
+        filepath = ""
         try:
-            with open(filepath, "w") as f:
+            fd, filepath = tempfile.mkstemp(
+                prefix=f"{clean_prefix}_{ts}_", suffix=".json", dir=root,
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                fd = None
                 json.dump(data, f, indent=2, default=str)
             print(f"  {C_GREY}[~] JSON backup: {filepath}{C_RESET}")
             return filepath
         except Exception as e:
+            if fd is not None:
+                os.close(fd)
+            if filepath:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(filepath)
             print(f"  {C_GREY}[~] JSON save failed: {e}{C_RESET}")
             return ""
 
     # ─── PIPELINE & FORMATTING ─────────────────
 
-    def format_for_pipeline(self, results: dict = None) -> list:
+    def format_for_pipeline(self, results: Optional[dict] = None) -> list:
         """Convert Shodan results to OCTOPUS target list.
         Returns: [{ip, ports: [int], services: [{port, name, version}], vulns: [str]}]"""
         matches = (results or {}).get("matches", self._last_results)
@@ -362,14 +391,14 @@ class ShodanRecon:
                 by_ip[ip]["vulns"].add(v)
 
         targets = []
-        for ip, data in by_ip.items():
+        for data in by_ip.values():
             data["vulns"] = sorted(data["vulns"])
             data["ports"].sort()
             targets.append(data)
 
         return targets
 
-    def format_for_llm(self, results: dict = None) -> str:
+    def format_for_llm(self, results: Optional[dict] = None) -> str:
         """Format results for AI analysis context."""
         targets = self.format_for_pipeline(results)
         if not targets:
@@ -391,7 +420,7 @@ class ShodanRecon:
         if total > 20:
             lines.append(f"\n  ... and {total - 20} more hosts.\n")
 
-        lines.append(f"\nAI: Analyze targets above. High-vuln hosts are priority for killchain.\n")
+        lines.append("\nAI: Analyze targets above. High-vuln hosts are priority for killchain.\n")
         return "\n".join(lines)
 
     def auto_pipeline(self, query: str) -> str:
@@ -414,7 +443,7 @@ class ShodanRecon:
 
         # 4. Summary
         vuln_hosts = sum(1 for t in targets if t.get("vulns"))
-        output += f"\n[PIPELINE SUMMARY]\n"
+        output += "\n[PIPELINE SUMMARY]\n"
         output += f"  Total hosts: {len(targets)}\n"
         output += f"  Hosts with known CVEs: {vuln_hosts}\n"
         output += f"  Results saved to DB + {self.results_dir}\n"
@@ -429,9 +458,7 @@ class ShodanRecon:
         return output
 
 
-# ═══════════════════════════════════════════════
 # STANDALONE FUNCTIONS (called from tools.py)
-# ═══════════════════════════════════════════════
 
 def run_shodan_search(query: str) -> str:
     """[TOOL: shodan search QUERY] handler."""
@@ -469,14 +496,14 @@ def run_shodan_host(ip: str) -> str:
         for cve in info["vulns"][:25]:
             output += f"    • {cve}\n"
 
-    output += f"\n  Services:\n"
+    output += "\n  Services:\n"
     for svc in info.get("services", []):
         vuln_tag = f" {C_RED}[VULN: {', '.join(svc['vulns'][:3])}]{C_RESET}" if svc.get("vulns") else ""
         output += f"    {svc['port']}/{svc['transport']} — {svc['product']} {svc['version']}{vuln_tag}\n"
         if svc.get("banner"):
             output += f"      Banner: {svc['banner'][:120]}\n"
 
-    output += f"\nAI: Use nmap for deep scan, then killchain_vuln_assess for exploitation.\n"
+    output += "\nAI: Use nmap for deep scan, then killchain_vuln_assess for exploitation.\n"
     return output
 
 
@@ -500,13 +527,13 @@ def run_shodan_vulns(ip: str) -> str:
         output += f"  • {cve}\n"
 
     # Cross-reference with services
-    output += f"\n  Vulnerable Services:\n"
+    output += "\n  Vulnerable Services:\n"
     for svc in info.get("services", []):
         if svc.get("vulns"):
             output += f"    {svc['port']}/{svc['transport']} {svc['product']} {svc['version']}: "
             output += f"{', '.join(svc['vulns'])}\n"
 
-    output += f"\nAI: Cross-check CVEs with searchsploit.\n"
+    output += "\nAI: Cross-check CVEs with searchsploit.\n"
     for cve in vulns[:5]:
         output += f"  [SEARCHSPLOIT: {cve}]\n"
 
@@ -528,12 +555,12 @@ def run_shodan_interactive(target: str = "") -> str:
 
     # Interactive mode
     print(f"\n  {C_CYAN}Options:{C_RESET}")
-    print(f"    1. Search (dork/query)")
-    print(f"    2. Host lookup (IP)")
-    print(f"    3. Vulnerability scan (IP)")
-    print(f"    4. Exploit search")
-    print(f"    5. Auto-pipeline (search -> killchain)")
-    print(f"    6. Range/subnet scan (CIDR)")
+    print("    1. Search (dork/query)")
+    print("    2. Host lookup (IP)")
+    print("    3. Vulnerability scan (IP)")
+    print("    4. Exploit search")
+    print("    5. Auto-pipeline (search -> killchain)")
+    print("    6. Range/subnet scan (CIDR)")
 
     try:
         choice = input(f"\n  {C_CYAN}Choice [1-6]: {C_RESET}").strip()
@@ -574,10 +601,6 @@ def run_shodan_interactive(target: str = "") -> str:
     return "[!] Cancelled\n"
 
 
-# ═══════════════════════════════════════════════
-# v8.1: RANGE / SUBNET SCANNING
-# ═══════════════════════════════════════════════
-
 def run_shodan_range(cidr: str) -> str:
     """[TOOL: shodan range 83.166.241.0/24] — scan entire subnet.
     Uses Shodan 'net:CIDR' search filter."""
@@ -587,10 +610,7 @@ def run_shodan_range(cidr: str) -> str:
 
     # Normalize: accept both '83.166.241.0/24' and 'net:83.166.241.0/24'
     cidr = cidr.strip()
-    if cidr.startswith("net:"):
-        query = cidr
-    else:
-        query = f"net:{cidr}"
+    query = cidr if cidr.startswith("net:") else f"net:{cidr}"
 
     print(f"\n  {C_MAGENTA}[SHODAN RANGE SCAN] {cidr}{C_RESET}")
 
@@ -611,7 +631,7 @@ def run_shodan_range(cidr: str) -> str:
         for p in t.get("ports", []):
             port_counts[p] = port_counts.get(p, 0) + 1
     if port_counts:
-        output += f"  Port distribution:\n"
+        output += "  Port distribution:\n"
         for port, count in sorted(port_counts.items(), key=lambda x: -x[1])[:15]:
             output += f"    {port}: {count} hosts\n"
 
@@ -626,7 +646,7 @@ def run_shodan_range(cidr: str) -> str:
 
 
 def run_shodan_smart(target: str) -> str:
-    """v8.1: Auto-detect input type and route to correct handler.
+    """Detect the input type and route it to the correct handler.
     - 1.2.3.4        → host lookup
     - 1.2.3.0/24     → range scan
     - net:1.2.3.0/24 → range scan
@@ -652,9 +672,7 @@ def run_shodan_smart(target: str) -> str:
     return run_shodan_search(target)
 
 
-# ═══════════════════════════════════════════════
 # SELF-TEST
-# ═══════════════════════════════════════════════
 
 if __name__ == "__main__":
     print(f"\n{C_RED}    OCTOPUS — Shodan Module Test{C_RESET}\n")
@@ -670,6 +688,6 @@ if __name__ == "__main__":
             else:
                 print(run_shodan_search(target))
         else:
-            print(f"  Usage: python3 shodan_module.py <IP or query>")
+            print("  Usage: python3 shodan_module.py <IP or query>")
     else:
         print(f"  {C_RED}[✗] API not available{C_RESET}")

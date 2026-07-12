@@ -1,4 +1,3 @@
-# OCTOPUS v11 — C2 Framework
 """
 Command & Control subsystem.
 
@@ -14,15 +13,15 @@ Components:
 
 from core.c2.crypto_engine import C2CryptoEngine
 from core.c2.db_backend import C2Database
-from core.c2.event_store import EventStore, Event
-from core.c2.operators import OperatorManager
+from core.c2.event_store import Event, EventStore
 from core.c2.key_store import KeyStore
+from core.c2.operators import OperatorManager
 
 __all__ = [
     "C2CryptoEngine",
     "C2Database",
-    "EventStore",
     "Event",
-    "OperatorManager",
+    "EventStore",
     "KeyStore",
+    "OperatorManager",
 ]

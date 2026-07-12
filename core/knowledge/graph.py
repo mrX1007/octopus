@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 
-import os
 import json
-import time
-import sqlite3
 import logging
-from contextlib import contextmanager
-from typing import List, Dict, Optional, Tuple
+import os
+import sqlite3
+import time
 from collections import deque
+from contextlib import contextmanager, suppress
+from typing import Optional
 
-from .models import (
-    NodeType, EdgeType,
-    Asset, Identity, Credential, Service,
-    Session, Vulnerability, Campaign
-)
+from core.secrets import redact_data
+
+from .models import Asset, Campaign, Credential, EdgeType, Identity, NodeType, Service, Session, Vulnerability
 
 
 class KnowledgeGraph:
@@ -29,7 +27,7 @@ class KnowledgeGraph:
         print(g.get_attack_surface("10.0.0.1"))
     """
 
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: Optional[str] = None):
         if not db_path:
             base = os.path.dirname(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__))))
@@ -84,10 +82,8 @@ class KnowledgeGraph:
             self._persistent_conn = None
 
     def __del__(self):
-        try:
+        with suppress(Exception):
             self.close()
-        except Exception:
-            pass
 
     def _init_db(self):
         """Create schema if not exists."""
@@ -121,14 +117,30 @@ class KnowledgeGraph:
             c.execute('CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst)')
             c.execute('CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type)')
 
-    # ═══════════════════════════════════════════════
+            for row in c.execute("SELECT id, properties FROM nodes").fetchall():
+                try:
+                    properties = json.loads(row["properties"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    properties = {}
+                safe_properties = json.dumps(redact_data(properties), sort_keys=True)
+                if safe_properties != row["properties"]:
+                    c.execute("UPDATE nodes SET properties = ? WHERE id = ?", (safe_properties, row["id"]))
+            for row in c.execute("SELECT id, properties FROM edges").fetchall():
+                try:
+                    properties = json.loads(row["properties"])
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    properties = {}
+                safe_properties = json.dumps(redact_data(properties), sort_keys=True)
+                if safe_properties != row["properties"]:
+                    c.execute("UPDATE edges SET properties = ? WHERE id = ?", (safe_properties, row["id"]))
+
     # NODE CRUD — Typed High-Level API
-    # ═══════════════════════════════════════════════
 
     def _upsert_node(self, node_id: str, node_type: NodeType,
                      properties: dict) -> str:
         """Insert or update a node. Returns node_id."""
         now = time.time()
+        properties = redact_data(properties)
         with self._connect() as conn:
             conn.execute('''
                 INSERT INTO nodes (id, type, properties, created_at, updated_at)
@@ -140,7 +152,7 @@ class KnowledgeGraph:
         return node_id
 
     def add_asset(self, ip: str, hostname: str = "", os: str = "",
-                  ports: List[int] = None, **kw) -> Asset:
+                  ports: Optional[list[int]] = None, **kw) -> Asset:
         """Add or update a host asset."""
         asset = Asset(ip=ip, hostname=hostname, os=os,
                       ports=ports or [], **kw)
@@ -215,7 +227,7 @@ class KnowledgeGraph:
         return vuln
 
     def add_campaign(self, name: str, objective: str = "",
-                     targets: List[str] = None) -> Campaign:
+                     targets: Optional[list[str]] = None) -> Campaign:
         """Add or update a campaign."""
         camp = Campaign(name=name, objective=objective,
                         targets=targets or [])
@@ -226,14 +238,13 @@ class KnowledgeGraph:
             self.link(f"asset:{target_ip}", camp.node_id, EdgeType.MEMBER_OF)
         return camp
 
-    # ═══════════════════════════════════════════════
     # EDGE (RELATIONSHIP) API
-    # ═══════════════════════════════════════════════
 
     def link(self, src_id: str, dst_id: str, edge_type: EdgeType,
              **properties):
         """Create a typed edge between two nodes. Idempotent."""
         now = time.time()
+        properties = redact_data(properties)
         try:
             with self._connect() as conn:
                 conn.execute('''
@@ -259,9 +270,7 @@ class KnowledgeGraph:
         """Link a vulnerability to a service."""
         self.link(svc_id, vuln_id, EdgeType.VULNERABLE_TO)
 
-    # ═══════════════════════════════════════════════
     # QUERY API
-    # ═══════════════════════════════════════════════
 
     def get_node(self, node_id: str) -> Optional[dict]:
         """Get a single node by ID. Returns properties + metadata."""
@@ -274,12 +283,12 @@ class KnowledgeGraph:
         return {
             "id": row["id"],
             "type": row["type"],
-            "properties": json.loads(row["properties"]),
+            "properties": redact_data(json.loads(row["properties"])),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }
 
-    def get_nodes_by_type(self, node_type: NodeType) -> List[dict]:
+    def get_nodes_by_type(self, node_type: NodeType) -> list[dict]:
         """Get all nodes of a specific type."""
         with self._connect() as conn:
             rows = conn.execute(
@@ -289,11 +298,11 @@ class KnowledgeGraph:
         return [{
             "id": r["id"],
             "type": r["type"],
-            "properties": json.loads(r["properties"]),
+            "properties": redact_data(json.loads(r["properties"])),
         } for r in rows]
 
     def get_edges_from(self, node_id: str,
-                       edge_type: EdgeType = None) -> List[dict]:
+                       edge_type: EdgeType = None) -> list[dict]:
         """Get all outgoing edges from a node."""
         with self._connect() as conn:
             if edge_type:
@@ -308,11 +317,11 @@ class KnowledgeGraph:
         return [{
             "src": r["src"], "dst": r["dst"],
             "edge_type": r["edge_type"],
-            "properties": json.loads(r["properties"]),
+            "properties": redact_data(json.loads(r["properties"])),
         } for r in rows]
 
     def get_edges_to(self, node_id: str,
-                     edge_type: EdgeType = None) -> List[dict]:
+                     edge_type: EdgeType = None) -> list[dict]:
         """Get all incoming edges to a node."""
         with self._connect() as conn:
             if edge_type:
@@ -327,7 +336,7 @@ class KnowledgeGraph:
         return [{
             "src": r["src"], "dst": r["dst"],
             "edge_type": r["edge_type"],
-            "properties": json.loads(r["properties"]),
+            "properties": redact_data(json.loads(r["properties"])),
         } for r in rows]
 
     def get_attack_surface(self, host_ip: str) -> dict:
@@ -398,7 +407,7 @@ class KnowledgeGraph:
 
         return result
 
-    def get_credentials_for_host(self, host_ip: str) -> List[dict]:
+    def get_credentials_for_host(self, host_ip: str) -> list[dict]:
         """Get all credentials that can access a specific host."""
         asset_id = f"asset:{host_ip}"
         cred_edges = self.get_edges_to(asset_id, EdgeType.CAN_ACCESS)
@@ -413,13 +422,13 @@ class KnowledgeGraph:
         return creds
 
     def find_paths(self, src_id: str, dst_id: str,
-                   max_depth: int = 5) -> List[List[str]]:
+                   max_depth: int = 5) -> list[list[str]]:
         """
         BFS to find all attack paths from src to dst.
         Returns list of paths, each path is [node, edge_type, node, ...].
         """
         # Build adjacency list
-        adj: Dict[str, List[Tuple[str, str]]] = {}
+        adj: dict[str, list[tuple[str, str]]] = {}
         with self._connect() as conn:
             rows = conn.execute('SELECT src, dst, edge_type FROM edges').fetchall()
         for r in rows:
@@ -448,12 +457,12 @@ class KnowledgeGraph:
 
             for neighbor, edge_type in adj.get(current, []):
                 if neighbor not in path:  # prevent cycles
-                    new_path = path + [f"-[{edge_type}]->", neighbor]
+                    new_path = [*path, f"-[{edge_type}]->", neighbor]
                     queue.append((neighbor, new_path))
 
         return all_paths
 
-    def get_pivot_targets(self, compromised_host: str) -> List[dict]:
+    def get_pivot_targets(self, compromised_host: str) -> list[dict]:
         """
         Get potential lateral movement targets from a compromised host.
         Looks at:
@@ -509,9 +518,7 @@ class KnowledgeGraph:
 
         return targets
 
-    # ═══════════════════════════════════════════════
     # LLM CONTEXT GENERATION
-    # ═══════════════════════════════════════════════
 
     def to_llm_context(self, target_ip: str) -> str:
         """
@@ -595,9 +602,7 @@ class KnowledgeGraph:
 
         return "\n".join(lines)
 
-    # ═══════════════════════════════════════════════
     # STATISTICS
-    # ═══════════════════════════════════════════════
 
     def stats(self) -> dict:
         """Get counts by node type and edge type."""

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import os
-from typing import Dict, Any
+from typing import Any, Optional
 
 from core.transport.base import GoTLSTransport, PythonTransport, Transport
 from core.transport.profiles import get_profile
@@ -50,9 +50,9 @@ class OpsecClient:
             print(f"[!] Failed to compile JA3 client: {e}")
 
     def request(self, method: str, url: str,
-                headers: Dict[str, str] = None,
+                headers: Optional[dict[str, str]] = None,
                 body: str = "",
-                **kwargs) -> Dict[str, Any]:
+                **kwargs) -> dict[str, Any]:
         """
         Make an HTTP request with traffic shaping and JA3 spoofing.
         Traffic policy (jitter, retries, pacing) is applied automatically.

@@ -11,13 +11,13 @@ The Transport is NOT the TLS layer — it wraps HTTP clients
 and applies behavioral shaping on top.
 """
 
-import os
-import time
-import random
 import json
+import os
+import random
 import tempfile
+import time
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List
+from typing import Any, Optional
 
 
 class TrafficPolicy:
@@ -72,7 +72,7 @@ class TrafficPolicy:
         delay += random.uniform(-self.retry_jitter, self.retry_jitter)
         return max(0.1, delay)
 
-    def chunk_data(self, data: bytes) -> List[bytes]:
+    def chunk_data(self, data: bytes) -> list[bytes]:
         """Split data into profile-appropriate chunks."""
         if len(data) <= self.chunk_size:
             return [data]
@@ -93,13 +93,13 @@ class Transport(ABC):
 
     def __init__(self, policy: Optional[TrafficPolicy] = None):
         self.policy = policy or TrafficPolicy()
-        self._temp_files: List[str] = []
+        self._temp_files: list[str] = []
 
     @abstractmethod
     def _do_request(self, method: str, url: str,
-                    headers: Dict[str, str] = None,
-                    body: bytes = None,
-                    timeout: float = 30.0) -> Dict[str, Any]:
+                    headers: Optional[dict[str, str]] = None,
+                    body: Optional[bytes] = None,
+                    timeout: float = 30.0) -> dict[str, Any]:
         """
         Perform the actual HTTP request.
         Returns: {"status_code": int, "headers": dict, "body": str, "error": str}
@@ -107,9 +107,9 @@ class Transport(ABC):
         pass
 
     def request(self, method: str, url: str,
-                headers: Dict[str, str] = None,
-                body: bytes = None,
-                timeout: float = 30.0) -> Dict[str, Any]:
+                headers: Optional[dict[str, str]] = None,
+                body: Optional[bytes] = None,
+                timeout: float = 30.0) -> dict[str, Any]:
         """
         Make an HTTP request with traffic policy applied.
         Handles jitter, retries, and temp file cleanup.
@@ -158,9 +158,9 @@ class PythonTransport(Transport):
     """Transport implementation using Python requests library."""
 
     def _do_request(self, method: str, url: str,
-                    headers: Dict[str, str] = None,
-                    body: bytes = None,
-                    timeout: float = 30.0) -> Dict[str, Any]:
+                    headers: Optional[dict[str, str]] = None,
+                    body: Optional[bytes] = None,
+                    timeout: float = 30.0) -> dict[str, Any]:
         try:
             import requests
         except ImportError:
@@ -193,7 +193,7 @@ class GoTLSTransport(Transport):
     Wraps core/opsec/ja3_client.go as a subprocess.
     """
 
-    def __init__(self, go_binary: str = None, browser: str = "chrome",
+    def __init__(self, go_binary: Optional[str] = None, browser: str = "chrome",
                  policy: Optional[TrafficPolicy] = None):
         super().__init__(policy)
         self.browser = browser
@@ -205,9 +205,9 @@ class GoTLSTransport(Transport):
             self.go_binary = os.path.join(base, "opsec", "ja3_client")
 
     def _do_request(self, method: str, url: str,
-                    headers: Dict[str, str] = None,
-                    body: bytes = None,
-                    timeout: float = 30.0) -> Dict[str, Any]:
+                    headers: Optional[dict[str, str]] = None,
+                    body: Optional[bytes] = None,
+                    timeout: float = 30.0) -> dict[str, Any]:
         import subprocess
 
         req_data = {
@@ -236,7 +236,7 @@ class GoTLSTransport(Transport):
             return {"error": "Request timed out", "status_code": 0,
                     "headers": {}, "body": ""}
         except json.JSONDecodeError:
-            return {"error": f"Invalid JSON from Go client",
+            return {"error": "Invalid JSON from Go client",
                     "status_code": 0, "headers": {}, "body": ""}
         except FileNotFoundError:
             return {"error": f"Go binary not found: {self.go_binary}",

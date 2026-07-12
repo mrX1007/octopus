@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Optional
 
 from core.ai.fact_store import FactStore
 from core.ai.reporting import (
@@ -18,16 +18,17 @@ class TraceReporter:
 
     def __init__(self, fact_store: FactStore):
         self.fact_store = fact_store
+        self.redactor = fact_store.redactor
 
     def build(
         self,
         scan_id: str,
         target: str,
-        goal_trace: List[Dict[str, Any]] = None,
-        command_trace: List[Dict[str, Any]] = None,
-        task_outcomes: List[Dict[str, Any]] = None,
-        context: Dict[str, Any] = None,
-    ) -> Dict[str, Any]:
+        goal_trace: Optional[list[dict[str, Any]]] = None,
+        command_trace: Optional[list[dict[str, Any]]] = None,
+        task_outcomes: Optional[list[dict[str, Any]]] = None,
+        context: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
         facts = self.fact_store.get_facts(scan_id, target)
         command_results = self.fact_store.get_command_results(scan_id, target)
         context = context or {}
@@ -39,7 +40,7 @@ class TraceReporter:
             "cleanup_completed": bool((context.get("stage_gates") or {}).get("cleanup")),
         }
         finding_groups = build_finding_groups(facts, state)
-        return {
+        report = {
             "scan_id": scan_id,
             "target": target,
             "summary": self._summary(facts, command_results, goal_trace or [], command_trace or []),
@@ -59,11 +60,13 @@ class TraceReporter:
             "command_results": command_results,
             "fact_flow": self._fact_flow(facts),
         }
+        return self.redactor.redact_data(report)
 
-    def to_text(self, report: Dict[str, Any]) -> str:
+    def to_text(self, report: dict[str, Any]) -> str:
+        report = self.redactor.redact_data(report)
         summary = report.get("summary") or {}
         lines = [
-            f"OCTOPUS trace report",
+            "OCTOPUS trace report",
             f"scan_id: {report.get('scan_id')}",
             f"target: {report.get('target')}",
             "",
@@ -167,17 +170,17 @@ class TraceReporter:
             lines.append("  none")
         return "\n".join(lines)
 
-    def to_json(self, report: Dict[str, Any]) -> str:
-        return json.dumps(report, indent=2, sort_keys=True, default=str)
+    def to_json(self, report: dict[str, Any]) -> str:
+        return json.dumps(self.redactor.redact_data(report), indent=2, sort_keys=True, default=str)
 
     def _summary(
         self,
-        facts: List[Dict[str, Any]],
-        command_results: List[Dict[str, Any]],
-        goal_trace: List[Dict[str, Any]],
-        command_trace: List[Dict[str, Any]],
-    ) -> Dict[str, int]:
-        output_hashes = {}
+        facts: list[dict[str, Any]],
+        command_results: list[dict[str, Any]],
+        goal_trace: list[dict[str, Any]],
+        command_trace: list[dict[str, Any]],
+    ) -> dict[str, int]:
+        output_hashes: dict[Any, int] = {}
         for result in command_results:
             output_hashes[result.get("output_hash")] = output_hashes.get(result.get("output_hash"), 0) + 1
         return {
@@ -189,7 +192,7 @@ class TraceReporter:
             "goals": len(goal_trace),
         }
 
-    def _fact_flow(self, facts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _fact_flow(self, facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         flow = []
         for fact in facts:
             flow.append({
@@ -201,35 +204,27 @@ class TraceReporter:
             })
         return flow
 
-    def _human_evidence(self, evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _human_evidence(self, evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
             item for item in evidence or []
-            if self._is_human_fact_type(item.get("fact_type"))
+            if self._is_human_fact_type(str(item.get("fact_type") or ""))
         ]
 
-    def _human_fact_flow(self, flow: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _human_fact_flow(self, flow: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [
             item for item in flow or []
-            if self._is_human_fact_type(item.get("type"))
+            if self._is_human_fact_type(str(item.get("type") or ""))
         ]
 
     def _is_human_fact_type(self, fact_type: str) -> bool:
-        if fact_type in {
-            "check_result",
-            "llm_health",
-            "network_node",
-            "network_edge",
-            "external_url",
-        }:
-            return False
-        return True
+        return fact_type not in {"check_result", "llm_health", "network_node", "network_edge", "external_url"}
 
     def _llm_status(
         self,
-        goal_trace: List[Dict[str, Any]],
-        task_outcomes: List[Dict[str, Any]],
-        llm_events: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+        goal_trace: list[dict[str, Any]],
+        task_outcomes: list[dict[str, Any]],
+        llm_events: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         empty_events = [
             item for item in task_outcomes
             if item.get("agent") == "AnalysisAgent"
@@ -253,7 +248,7 @@ class TraceReporter:
             "scan_continued_safely": True,
         }
 
-    def _llm_events(self, facts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    def _llm_events(self, facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         events = []
         for fact in facts:
             if fact.get("type") != "llm_health":
@@ -268,9 +263,9 @@ class TraceReporter:
             events.append(payload)
         return events
 
-    def _is_duplicate_output(self, item: Dict[str, Any], all_results: List[Dict[str, Any]]) -> bool:
+    def _is_duplicate_output(self, item: dict[str, Any], all_results: list[dict[str, Any]]) -> bool:
         output_hash = item.get("output_hash")
         return bool(output_hash and sum(1 for result in all_results if result.get("output_hash") == output_hash) > 1)
 
     def _short(self, value: Any, limit: int) -> str:
-        return str(value or "").replace("\n", " ")[:limit]
+        return self.redactor.redact_text(value, kind="trace").replace("\n", " ")[:limit]

@@ -14,7 +14,7 @@ Usage:
 class C:
     """ANSI color and style constants."""
 
-    # ── Styles ──
+    # Styles
     RESET = "\033[0m"
     BOLD = "\033[1m"
     DIM = "\033[2m"
@@ -24,7 +24,7 @@ class C:
     INVERSE = "\033[7m"
     STRIKETHROUGH = "\033[9m"
 
-    # ── Foreground Colors ──
+    # Foreground colors
     BLACK = "\033[30m"
     RED = "\033[91m"
     GREEN = "\033[92m"
@@ -35,7 +35,7 @@ class C:
     WHITE = "\033[97m"
     GRAY = "\033[90m"
 
-    # ── Background Colors ──
+    # Background colors
     BG_RED = "\033[41m"
     BG_GREEN = "\033[42m"
     BG_YELLOW = "\033[43m"
@@ -44,7 +44,7 @@ class C:
     BG_CYAN = "\033[46m"
     BG_WHITE = "\033[47m"
 
-    # ── Semantic Aliases ──
+    # Semantic aliases
     SUCCESS = GREEN
     ERROR = RED
     WARNING = YELLOW
@@ -54,7 +54,6 @@ class C:
     HIGHLIGHT = BOLD + CYAN
 
 
-# ── Severity Color Map ──
 _SEVERITY_COLORS = {
     "critical": C.BOLD + C.RED,
     "high": C.RED,

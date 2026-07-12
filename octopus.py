@@ -12,23 +12,31 @@ try:
 except ImportError as _export_import_error:
     def export_menu(*_args, _err=_export_import_error, **_kwargs):
         print(f"[!] Export module unavailable: {_err}")
+import atexit
+import glob
+import importlib.util
+import json
+import logging
 import os
 import re as _re
-import sys
-import glob
-import json
+import readline
 import signal
 import subprocess
-import atexit
-import logging
-import readline
+import sys
 from datetime import datetime
 
 # ─── Import CLI primitives from core/cli ───
 try:
     from core.cli import (
-        console, RICH_AVAILABLE as _RICH,
-        run_with_spinner, print_rich_table, print_reporting_sections as _print_reporting_sections,
+        RICH_AVAILABLE as _RICH,
+    )
+    from core.cli import (
+        console,
+        print_rich_table,
+        run_with_spinner,
+    )
+    from core.cli import (
+        print_reporting_sections as _print_reporting_sections,
     )
 except ImportError:
     _RICH = False
@@ -44,28 +52,28 @@ except ImportError:
 
 try:
     from db import (
-        get_connection,
         create_session,
-        update_session_status,
-        save_vulnerability,
-        save_fix,
-        save_exploit,
-        save_summary,
-        get_all_history,
-        get_session,
-        get_vulnerabilities,
-        get_fixes,
-        get_exploits,
-        edit_vulnerability,
-        edit_fix,
-        edit_exploit,
-        edit_summary_risk,
-        delete_vulnerability,
         delete_exploit,
         delete_fix,
         delete_full_session,
+        delete_vulnerability,
+        edit_exploit,
+        edit_fix,
+        edit_summary_risk,
+        edit_vulnerability,
+        get_all_history,
+        get_connection,
+        get_exploits,
+        get_fixes,
+        get_session,
+        get_vulnerabilities,
         print_history,
-        print_session
+        print_session,
+        save_exploit,
+        save_fix,
+        save_summary,
+        save_vulnerability,
+        update_session_status,
     )
 except ImportError as _db_import_error:
     def _db_unavailable(*_args, _err=_db_import_error, **_kwargs):
@@ -76,10 +84,12 @@ except ImportError as _db_import_error:
     edit_vulnerability = edit_fix = edit_exploit = edit_summary_risk = _db_unavailable
     delete_vulnerability = delete_exploit = delete_fix = delete_full_session = _db_unavailable
     print_history = print_session = _db_unavailable
-from tools import interactive_tool_run, format_recon_for_llm, run_default_recon
+import contextlib
+
+from core.ai.fact_store import FactStore
 from core.ai.pipeline import AIPipeline
 from core.ai.trace_report import TraceReporter
-from core.ai.fact_store import FactStore
+from tools import interactive_tool_run
 
 # Load config
 try:
@@ -88,9 +98,7 @@ except ImportError:
     CFG = {"paths": {"reports": "~/OCTOPUS/reports", "logs": "~/OCTOPUS/logs"}}
 
 
-# ─────────────────────────────────────────────
 # LOGGING SETUP
-# ─────────────────────────────────────────────
 
 def _setup_logging():
     """Set up dual logging: file + console-critical only."""
@@ -106,21 +114,22 @@ def _setup_logging():
             logging.FileHandler(log_file, encoding="utf-8"),
         ]
     )
+    from core.secrets import install_logging_redaction
+
+    install_logging_redaction()
     logging.info(f"OCTOPUS v{__version__} started")
     logging.info(f"Log file: {log_file}")
     return log_file
 
 
-# ─────────────────────────────────────────────
 # SIGINT HANDLER (graceful Ctrl+C)
-# ─────────────────────────────────────────────
 
 _current_sl_no = None  # track active scan for checkpoint on interrupt
 _supervisor = None     # set in __main__ block
 
 def _sigint_handler(signum, frame):
     """Handle Ctrl+C gracefully — save checkpoint if mid-scan."""
-    print(f"\n\n\033[93m[!] Interrupted (Ctrl+C). Cleaning up...\033[0m")
+    print("\n\n\033[93m[!] Interrupted (Ctrl+C). Cleaning up...\033[0m")
     logging.warning("Interrupted by user (SIGINT)")
 
     if _current_sl_no:
@@ -137,16 +146,13 @@ def _sigint_handler(signum, frame):
             logging.debug(f"Suppressed in octopus.py: {_exc}")
 
     print("\033[91m[*] Shutting down Octopus.\033[0m\n")
-    # Use os._exit to avoid threading atexit crash — sys.exit(130) conflicts
-    # with concurrent.futures thread pool join during shutdown
+    # Avoid interpreter-shutdown crashes from concurrent.futures atexit joins.
     os._exit(130)
 
 signal.signal(signal.SIGINT, _sigint_handler)
 
 
-# ─────────────────────────────────────────────
 # BANNER
-# ─────────────────────────────────────────────
 
 def banner():
     os.system("clear")
@@ -166,9 +172,7 @@ def banner():
 """)
 
 
-# ─────────────────────────────────────────────
 # HELPERS
-# ─────────────────────────────────────────────
 
 def divider(label=""):
     if label:
@@ -236,9 +240,7 @@ def confirm(question: str) -> bool:
     return ans == "y"
 
 
-# ─────────────────────────────────────────────
 # READLINE TAB COMPLETION + HISTORY
-# ─────────────────────────────────────────────
 
 _HISTORY_FILE = os.path.expanduser("~/.octopus_history")
 
@@ -285,16 +287,38 @@ def _setup_readline():
     try:
         readline.read_history_file(_HISTORY_FILE)
         readline.set_history_length(500)
+        from core.secrets import redact_text
+
+        entries = [
+            redact_text(readline.get_history_item(index), kind="readline_history")
+            for index in range(1, readline.get_current_history_length() + 1)
+        ]
+        readline.clear_history()
+        for entry in entries:
+            readline.add_history(entry)
+        readline.write_history_file(_HISTORY_FILE)
+        os.chmod(_HISTORY_FILE, 0o600)
     except FileNotFoundError:
         pass
 
     # Save history on exit
-    atexit.register(readline.write_history_file, _HISTORY_FILE)
+    def _write_redacted_history() -> None:
+        from core.secrets import redact_text
+
+        entries = [
+            redact_text(readline.get_history_item(index), kind="readline_history")
+            for index in range(1, readline.get_current_history_length() + 1)
+        ]
+        readline.clear_history()
+        for entry in entries:
+            readline.add_history(entry)
+        readline.write_history_file(_HISTORY_FILE)
+        os.chmod(_HISTORY_FILE, 0o600)
+
+    atexit.register(_write_redacted_history)
 
 
-# ─────────────────────────────────────────────
 # RICH PROGRESS HELPERS
-# ─────────────────────────────────────────────
 
 def run_with_spinner(description: str, func, *args, **kwargs):
     """Run a function with a Rich spinner. Falls back to plain output.
@@ -343,7 +367,7 @@ def print_rich_table(title: str, columns: list, rows: list):
         print(f"\033[96m{header}\033[0m")
         print(f"  {'─' * (len(columns) * 15)}")
         for row in rows:
-            print("  " + "".join(f"{str(c):<15}" for c in row))
+            print("  " + "".join(f"{c!s:<15}" for c in row))
 
 
 def print_results_table(result: dict):
@@ -366,7 +390,7 @@ def print_results_table(result: dict):
     print(f"{'═'*70}")
 
     if vulns:
-        print(f"\n  \033[91m[ VULNERABILITIES FOUND ]\033[0m")
+        print("\n  \033[91m[ VULNERABILITIES FOUND ]\033[0m")
         print(f"  {'─'*66}")
         print(f"  {'SEVERITY':<12} {'PORT':<10} {'SERVICE':<20} {'NAME'}")
         print(f"  {'─'*66}")
@@ -380,14 +404,14 @@ def print_results_table(result: dict):
             print(f"  {sc}{sev:<12}\033[0m {port:<10} {svc:<20} {name}")
         print(f"  {'─'*66}")
     else:
-        print(f"  \033[92m[ No vulnerabilities parsed — check full AI response above ]\033[0m")
+        print("  \033[92m[ No vulnerabilities parsed — check full AI response above ]\033[0m")
 
     _print_reporting_sections(result)
 
     if facts:
-        print(f"\n  \033[96m[ CONFIRMED INTELLIGENCE (from real tool output) ]\033[0m")
+        print("\n  \033[96m[ CONFIRMED INTELLIGENCE (from real tool output) ]\033[0m")
         for f in facts:
-            # v8.1: Strip <thought> tags and raw [TOOL:] lines from display
+            # Keep internal thought and dispatch markup out of terminal output.
             clean = _re.sub(r'<thought>.*?</thought>', '', str(f), flags=_re.DOTALL).strip()
             # Remove lines that are just tool tags
             clean_lines = []
@@ -402,14 +426,12 @@ def print_results_table(result: dict):
     print(f"\n{'═'*70}\n")
 
 
-# ─────────────────────────────────────────────
 # PRE-FLIGHT CHECKS
-# ─────────────────────────────────────────────
 
 def preflight_checks() -> bool:
-    """Verify critical dependencies before starting.
-    v8.0: Shodan, hashcat, john checks."""
+    """Verify critical dependencies before starting."""
     import shutil
+
     import requests
     all_ok = True
 
@@ -484,8 +506,9 @@ def preflight_checks() -> bool:
 
     # 5. Scrapling
     try:
-        import scrapling
-        success(f"Scrapling: available (StealthyFetcher for JS pages)")
+        if importlib.util.find_spec("scrapling") is None:
+            raise ImportError
+        success("Scrapling: available (StealthyFetcher for JS pages)")
     except ImportError:
         warn("Scrapling: NOT installed -- JS page fetching disabled. Fix: pip install scrapling")
 
@@ -501,18 +524,19 @@ def preflight_checks() -> bool:
     else:
         warn("nuclei: NOT installed")
 
-    # 8. Shodan (v8.0)
+    # 8. Shodan
     try:
-        import shodan as _shodan_lib
+        if importlib.util.find_spec("shodan") is None:
+            raise ImportError
         shodan_key = os.environ.get("SHODAN_API_KEY", "")
         if shodan_key and shodan_key != "YOUR_KEY_HERE":
-            success(f"Shodan: API key configured")
+            success("Shodan: API key configured")
         else:
             warn("Shodan: library installed but no API key in .env")
     except ImportError:
         warn("Shodan: NOT installed. Fix: pip install shodan")
 
-    # 9. Hash cracking tools (v8.0)
+    # 9. Hash cracking tools
     if shutil.which("hashcat"):
         success("hashcat: found (GPU cracking)")
     else:
@@ -526,16 +550,14 @@ def preflight_checks() -> bool:
     return all_ok
 
 
-# ─────────────────────────────────────────────
 # NEW SCAN
-# ─────────────────────────────────────────────
 
 def new_scan():
     global _current_sl_no
     divider("NEW SCAN")
 
-    print(f"  \033[96m[1]\033[0m  Direct IP / Domain")
-    print(f"  \033[95m[2]\033[0m  Shodan Discovery")
+    print("  \033[96m[1]\033[0m  Direct IP / Domain")
+    print("  \033[95m[2]\033[0m  Shodan Discovery")
     divider()
 
     mode = prompt("scan mode> ")
@@ -599,16 +621,296 @@ def _new_scan_direct():
     logging.info(f"Scan complete: sl_no={sl_no}, risk={result['risk_level']}, duration={duration_str}")
 
 
-# ─────────────────────────────────────────────
-# v8.1: SHODAN DISCOVERY SCAN
-# ─────────────────────────────────────────────
+# SHODAN DISCOVERY SCAN
+
+def _clamp_shodan_workers(raw_value, target_count: int,
+                          default: int = 5, maximum: int = 16) -> int:
+    """Return a safe worker count bounded by both policy and job count."""
+    try:
+        requested = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        requested = default
+    try:
+        jobs = max(1, int(target_count))
+    except (TypeError, ValueError):
+        jobs = 1
+    ceiling = max(1, int(maximum))
+    return max(1, min(requested, ceiling, jobs))
+
+
+def _build_shodan_context(target: dict) -> str:
+    """Build deterministic Shodan context without terminal or DB side effects."""
+    target_ip = str(target.get("ip", ""))
+    lines = [
+        f"[SHODAN PRE-SCAN DATA for {target_ip}]",
+        f"  Ports: {', '.join(str(p) for p in target.get('ports', []))}",
+        f"  Org: {target.get('org') or 'unknown'}",
+        f"  OS: {target.get('os') or 'unknown'}",
+    ]
+    if target.get("vulns"):
+        lines.append(f"  Known CVEs: {', '.join(str(v) for v in target['vulns'][:20])}")
+    for service in target.get("services", []):
+        if not isinstance(service, dict):
+            continue
+        lines.append(
+            f"  {service.get('port', '')}/{service.get('name', '')} "
+            f"{service.get('version', '')}".rstrip()
+        )
+    return "\n".join(lines) + "\n\n"
+
+
+def _shodan_recon_worker(index: int, total: int, target: dict) -> dict:
+    """Collect recon data in an isolated child and return it to the main thread."""
+    import time
+    import traceback
+
+    started = time.monotonic()
+    target_ip = str(target.get("ip", "")).strip()
+    context = _build_shodan_context(target)
+    if not target_ip:
+        return {
+            "index": index, "total": total, "target": target_ip,
+            "raw_scan": context, "error": "Shodan target has no IP",
+            "traceback": "", "elapsed_seconds": time.monotonic() - started,
+        }
+
+    try:
+        marker = "__OCTOPUS_RECON_JSON__="
+        child_code = (
+            "import json, sys\n"
+            "from core.recon.recon_engine import run_async_recon\n"
+            "result = run_async_recon([sys.argv[1]], concurrency=10)\n"
+            f"print({marker!r} + json.dumps(result, default=str))\n"
+        )
+        configured_timeout = CFG.get("shodan", {}).get("timeout", 30)
+        try:
+            timeout = max(60, min(int(configured_timeout) * 4, 900))
+        except (TypeError, ValueError):
+            timeout = 120
+        child = subprocess.run(
+            [sys.executable, "-c", child_code, target_ip],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        if child.returncode != 0:
+            detail = (child.stderr or child.stdout or "recon child failed").strip()
+            raise RuntimeError(detail[-2000:])
+        if marker not in child.stdout:
+            raise RuntimeError("recon child returned no structured result")
+        encoded = child.stdout.rsplit(marker, 1)[1].splitlines()[0]
+        recon_output = json.loads(encoded)
+        if not isinstance(recon_output, dict):
+            raise TypeError("recon child result must be a mapping")
+        if isinstance(recon_output, dict):
+            collected = recon_output.get(target_ip, "")
+        return {
+            "index": index,
+            "total": total,
+            "target": target_ip,
+            "raw_scan": context + str(collected or ""),
+            "error": None,
+            "traceback": "",
+            "worker_output": child.stdout.rsplit(marker, 1)[0] + child.stderr,
+            "elapsed_seconds": time.monotonic() - started,
+        }
+    except Exception as exc:
+        return {
+            "index": index,
+            "total": total,
+            "target": target_ip,
+            "raw_scan": context + f"[RECON ERROR] {exc}\n",
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+            "worker_output": "",
+            "elapsed_seconds": time.monotonic() - started,
+        }
+
+
+def _write_shodan_scan_log(sl_no: int, target: str, content: str) -> str:
+    """Create an exclusive, contained scan log from the main thread."""
+    import tempfile
+
+    configured = CFG.get("paths", {}).get("logs", tempfile.gettempdir())
+    try:
+        root = os.path.abspath(os.path.expanduser(str(configured or tempfile.gettempdir())))
+        os.makedirs(root, exist_ok=True)
+        root = os.path.realpath(root)
+    except OSError:
+        root = tempfile.gettempdir()
+    safe_target = _re.sub(r"[^A-Za-z0-9._-]+", "_", str(target or "target"))
+    safe_target = _re.sub(r"_+", "_", safe_target).strip("._-")[:80] or "target"
+    safe_sl = _re.sub(r"[^0-9A-Za-z_-]+", "_", str(sl_no))[:32] or "unknown"
+    fd = None
+    path = ""
+    try:
+        fd, path = tempfile.mkstemp(
+            prefix=f"shodan_SL{safe_sl}_{safe_target}_", suffix=".log", dir=root,
+        )
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = None
+            handle.write(str(content or ""))
+    except Exception:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        if path:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(path)
+        logging.exception("Could not write Shodan scan log")
+        return "unavailable"
+    return path
+
+
+def _run_shodan_parallel_scans(selected: list, workers: int) -> dict:
+    """Parallelize recon, then serialize FactStore/UI/DB work on this thread."""
+    import concurrent.futures
+    import contextlib
+
+    total = len(selected)
+    worker_count = _clamp_shodan_workers(workers, total)
+    completed = 0
+    failed = 0
+    future_jobs = {}
+    pending_sessions = set()
+
+    @contextlib.contextmanager
+    def _terminal_session_guard():
+        try:
+            yield
+        finally:
+            # Covers cancellation/KeyboardInterrupt while waiting for futures.
+            for pending_sl_no in list(pending_sessions):
+                try:
+                    update_session_status(pending_sl_no, "failed")
+                    pending_sessions.discard(pending_sl_no)
+                except Exception:
+                    logging.exception(
+                        "Could not mark Shodan session SL#%s failed", pending_sl_no,
+                    )
+
+    with _terminal_session_guard(), concurrent.futures.ThreadPoolExecutor(
+            max_workers=worker_count) as executor:
+        for index, target in enumerate(selected, 1):
+            target_ip = str(target.get("ip", "")).strip()
+            try:
+                # Session lifecycle persistence is deliberately main-thread only.
+                sl_no = create_session(target_ip)
+                pending_sessions.add(sl_no)
+            except Exception as exc:
+                failed += 1
+                error(f"Could not create session for {target_ip or '<missing IP>'}: {exc}")
+                continue
+            try:
+                future = executor.submit(_shodan_recon_worker, index, total, dict(target))
+            except Exception as exc:
+                failed += 1
+                try:
+                    update_session_status(sl_no, "failed")
+                    pending_sessions.discard(sl_no)
+                except Exception:
+                    pass
+                error(f"Could not start worker for {target_ip}: {exc}")
+                continue
+            future_jobs[future] = {
+                "index": index,
+                "total": total,
+                "target": target_ip,
+                "sl_no": sl_no,
+                "scan_start": datetime.now(),
+            }
+
+        for future in concurrent.futures.as_completed(future_jobs):
+            job = future_jobs[future]
+            sl_no = job["sl_no"]
+            target_ip = job["target"]
+            log_lines = [f"Session: SL#{sl_no}", f"Target: {target_ip}"]
+            try:
+                worker_data = future.result()
+            except Exception as exc:
+                worker_data = {
+                    "error": f"worker crashed: {exc}",
+                    "traceback": "",
+                    "raw_scan": "",
+                    "worker_output": "",
+                    "elapsed_seconds": 0.0,
+                }
+
+            if worker_data.get("worker_output"):
+                log_lines.extend(["", "[RECON OUTPUT]", worker_data["worker_output"]])
+
+            worker_error = worker_data.get("error")
+            if worker_error:
+                failed += 1
+                log_lines.extend([
+                    "Status: failed",
+                    f"Error: {worker_error}",
+                    worker_data.get("traceback", ""),
+                ])
+                try:
+                    update_session_status(sl_no, "failed")
+                    pending_sessions.discard(sl_no)
+                except Exception as status_exc:
+                    log_lines.append(f"Status update failed: {status_exc}")
+                log_path = _write_shodan_scan_log(sl_no, target_ip, "\n".join(log_lines))
+                error(f"[{job['index']}/{total}] {target_ip} failed (Log: {log_path})")
+                continue
+
+            try:
+                # AIPipeline owns the shared SQLite FactStore. Keeping it here
+                # makes this loop a single writer while recon remains parallel.
+                raw_scan = worker_data.get("raw_scan", "")
+                pipeline = AIPipeline()
+                state = pipeline.run_scan(str(sl_no), target_ip, raw_scan=raw_scan)
+                _save_trace_report(pipeline, str(sl_no), target_ip)
+                result = _adapt_state_to_result(
+                    state, pipeline.fact_store, str(sl_no), target_ip, raw_scan,
+                )
+                duration = datetime.now() - job["scan_start"]
+                duration_str = str(duration).split('.')[0]
+
+                # Result persistence and every interactive prompt stay on main.
+                _save_and_show_results(sl_no, result, duration_str)
+                update_session_status(sl_no, "complete")
+                pending_sessions.discard(sl_no)
+                completed += 1
+                risk = str(result.get("risk_level", "UNKNOWN"))
+                log_lines.extend([
+                    "Status: complete",
+                    f"Risk: {risk}",
+                    f"Duration: {duration_str}",
+                    f"Recon seconds: {worker_data.get('elapsed_seconds', 0.0):.3f}",
+                ])
+                log_path = _write_shodan_scan_log(sl_no, target_ip, "\n".join(log_lines))
+                color = ("\033[91m" if risk == "CRITICAL" else
+                         "\033[93m" if risk == "HIGH" else "\033[92m")
+                print(f"  \033[96m[{job['index']}/{total}]\033[0m {target_ip} finished "
+                      f"→ Risk: {color}{risk}\033[0m (Log: {log_path})")
+            except BaseException as exc:
+                failed += 1
+                log_lines.extend(["Status: failed", f"Error: {exc}"])
+                try:
+                    update_session_status(sl_no, "failed")
+                    pending_sessions.discard(sl_no)
+                except Exception as status_exc:
+                    log_lines.append(f"Status update failed: {status_exc}")
+                log_path = _write_shodan_scan_log(sl_no, target_ip, "\n".join(log_lines))
+                error(f"[{job['index']}/{total}] {target_ip} failed: {exc} (Log: {log_path})")
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise
+
+    return {"completed": completed, "failed": failed, "workers": worker_count}
+
 
 def _new_scan_shodan():
     """Shodan Discovery: flexible search → target list → auto-pipeline."""
     global _current_sl_no
 
     print(f"\n  \033[95m{'=' * 60}\033[0m")
-    print(f"  \033[95m    SHODAN DISCOVERY ENGINE v8.1\033[0m")
+    print("  \033[95m    SHODAN DISCOVERY ENGINE v8.1\033[0m")
     print(f"  \033[95m{'=' * 60}\033[0m")
 
     try:
@@ -623,18 +925,18 @@ def _new_scan_shodan():
         return
 
     # ── Search builder ──
-    print(f"\n  \033[96m[ SEARCH BUILDER ]\033[0m")
-    print(f"  \033[90mBuild your query step by step, or enter a raw dork.\033[0m")
+    print("\n  \033[96m[ SEARCH BUILDER ]\033[0m")
+    print("  \033[90mBuild your query step by step, or enter a raw dork.\033[0m")
     print()
-    print(f"  \033[92m[1]\033[0m  By port            \033[90m(e.g. 22, 3389, 8080)\033[0m")
-    print(f"  \033[92m[2]\033[0m  By service/product  \033[90m(e.g. Apache, nginx, OpenSSH)\033[0m")
-    print(f"  \033[92m[3]\033[0m  By vulnerability    \033[90m(e.g. CVE-2021-44228)\033[0m")
-    print(f"  \033[92m[4]\033[0m  By subnet/range     \033[90m(e.g. 83.166.241.0/24)\033[0m")
-    print(f"  \033[92m[5]\033[0m  By organization     \033[90m(e.g. org:\"Google\")\033[0m")
-    print(f"  \033[92m[6]\033[0m  By country + port   \033[90m(e.g. country:RU port:22)\033[0m")
-    print(f"  \033[92m[7]\033[0m  By tag/label        \033[90m(e.g. tag:ics, tag:webcam)\033[0m")
-    print(f"  \033[92m[8]\033[0m  Raw dork            \033[90m(free-form Shodan query)\033[0m")
-    print(f"  \033[92m[9]\033[0m  Saved results       \033[90m(load from DB)\033[0m")
+    print("  \033[92m[1]\033[0m  By port            \033[90m(e.g. 22, 3389, 8080)\033[0m")
+    print("  \033[92m[2]\033[0m  By service/product  \033[90m(e.g. Apache, nginx, OpenSSH)\033[0m")
+    print("  \033[92m[3]\033[0m  By vulnerability    \033[90m(e.g. CVE-2021-44228)\033[0m")
+    print("  \033[92m[4]\033[0m  By subnet/range     \033[90m(e.g. 83.166.241.0/24)\033[0m")
+    print("  \033[92m[5]\033[0m  By organization     \033[90m(e.g. org:\"Google\")\033[0m")
+    print("  \033[92m[6]\033[0m  By country + port   \033[90m(e.g. country:RU port:22)\033[0m")
+    print("  \033[92m[7]\033[0m  By tag/label        \033[90m(e.g. tag:ics, tag:webcam)\033[0m")
+    print("  \033[92m[8]\033[0m  Raw dork            \033[90m(free-form Shodan query)\033[0m")
+    print("  \033[92m[9]\033[0m  Saved results       \033[90m(load from DB)\033[0m")
     divider()
 
     mode = prompt("shodan> ")
@@ -644,20 +946,19 @@ def _new_scan_shodan():
         port = prompt("  Port(s) [comma-separated, e.g. 22,80,443]: ")
         country = prompt("  Country code [optional, e.g. RU, US, DE]: ").strip()
         if not port:
-            warn("No port entered."); return
+            warn("No port entered.")
+            return
         # Build multi-port query
         ports = [p.strip() for p in port.split(",") if p.strip()]
-        if len(ports) == 1:
-            query = f"port:{ports[0]}"
-        else:
-            query = " ".join(f"port:{p}" for p in ports)
+        query = f"port:{ports[0]}" if len(ports) == 1 else " ".join(f"port:{p}" for p in ports)
         if country:
             query += f" country:{country.upper()}"
 
     elif mode == "2":
         product = prompt("  Service/product name: ")
         if not product:
-            warn("No service entered."); return
+            warn("No service entered.")
+            return
         version = prompt("  Version [optional]: ").strip()
         country = prompt("  Country code [optional]: ").strip()
         query = f'product:"{product}"'
@@ -669,38 +970,44 @@ def _new_scan_shodan():
     elif mode == "3":
         cve = prompt("  CVE ID (e.g. CVE-2021-44228): ")
         if not cve:
-            warn("No CVE entered."); return
+            warn("No CVE entered.")
+            return
         query = f"vuln:{cve}"
 
     elif mode == "4":
         cidr = prompt("  CIDR range (e.g. 83.166.241.0/24): ")
         if not cidr:
-            warn("No range entered."); return
+            warn("No range entered.")
+            return
         query = f"net:{cidr}" if not cidr.startswith("net:") else cidr
 
     elif mode == "5":
         org = prompt("  Organization name: ")
         if not org:
-            warn("No org entered."); return
+            warn("No org entered.")
+            return
         query = f'org:"{org}"'
 
     elif mode == "6":
         country = prompt("  Country code (RU, US, DE...): ")
         port = prompt("  Port: ")
         if not country or not port:
-            warn("Need both country and port."); return
+            warn("Need both country and port.")
+            return
         query = f"country:{country.upper()} port:{port}"
 
     elif mode == "7":
         tag = prompt("  Tag (ics, webcam, scada, vpn...): ")
         if not tag:
-            warn("No tag entered."); return
+            warn("No tag entered.")
+            return
         query = f"tag:{tag}"
 
     elif mode == "8":
         query = prompt("  Raw Shodan dork: ")
         if not query:
-            warn("No query entered."); return
+            warn("No query entered.")
+            return
 
     elif mode == "9":
         _shodan_load_saved(sr)
@@ -711,7 +1018,7 @@ def _new_scan_shodan():
         return
 
     # ── Optional filters ──
-    print(f"\n  \033[96m[ OPTIONAL FILTERS ]\033[0m")
+    print("\n  \033[96m[ OPTIONAL FILTERS ]\033[0m")
     extra_os = prompt("  OS filter [optional, e.g. Linux, Windows]: ").strip()
     extra_before = prompt("  Updated before [optional, e.g. 2025-01-01]: ").strip()
     extra_after = prompt("  Updated after [optional, e.g. 2024-01-01]: ").strip()
@@ -757,15 +1064,15 @@ def _new_scan_shodan():
     print(f"  {'─' * 70}")
 
     # ── Action menu ──
-    print(f"\n  \033[96m[ ACTIONS ]\033[0m")
-    print(f"  \033[92m[1]\033[0m  Scan ALL targets (auto-pipeline)")
-    print(f"  \033[92m[2]\033[0m  Select targets by # (e.g. 1,3,5-10)")
-    print(f"  \033[92m[3]\033[0m  Filter: only hosts with CVEs")
-    print(f"  \033[92m[4]\033[0m  Filter: only hosts with specific port")
-    print(f"  \033[92m[5]\033[0m  View detailed info on one host")
-    print(f"  \033[92m[6]\033[0m  Save results only (scan later)")
-    print(f"  \033[92m[7]\033[0m  New search")
-    print(f"  \033[91m[0]\033[0m  Back to menu")
+    print("\n  \033[96m[ ACTIONS ]\033[0m")
+    print("  \033[92m[1]\033[0m  Scan ALL targets (auto-pipeline)")
+    print("  \033[92m[2]\033[0m  Select targets by # (e.g. 1,3,5-10)")
+    print("  \033[92m[3]\033[0m  Filter: only hosts with CVEs")
+    print("  \033[92m[4]\033[0m  Filter: only hosts with specific port")
+    print("  \033[92m[5]\033[0m  View detailed info on one host")
+    print("  \033[92m[6]\033[0m  Save results only (scan later)")
+    print("  \033[92m[7]\033[0m  New search")
+    print("  \033[91m[0]\033[0m  Back to menu")
     divider()
 
     action = prompt("action> ")
@@ -839,93 +1146,18 @@ def _new_scan_shodan():
         print(f"  ... and {len(selected) - 20} more")
 
     workers_input = prompt("  Concurrent workers [default: 5]: ")
-    workers = int(workers_input) if workers_input.isdigit() else 5
+    workers = _clamp_shodan_workers(workers_input, len(selected))
 
     if not confirm(f"\nProceed with scanning {len(selected)} target(s) using {workers} workers?"):
         return
 
-    import concurrent.futures
-    import contextlib
-    import io
-    import tempfile
-    
-    # Store results safely
-    results = []
-    
-    def _scan_target_worker(i, total, t):
-        target_ip = t["ip"]
-        log_file = f"/tmp/octopus_scan_{target_ip.replace('.', '_')}.log"
-        
-        # We redirect stdout so threads don't corrupt the main terminal
-        buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            try:
-                print(f"[*] Starting scan for {target_ip}...")
-                sl_no = create_session(target_ip)
-                scan_start = datetime.now()
-
-                shodan_context = f"[SHODAN PRE-SCAN DATA for {target_ip}]\n"
-                shodan_context += f"  Ports: {', '.join(str(p) for p in t.get('ports', []))}\n"
-                shodan_context += f"  Org: {t.get('org', 'unknown')}\n"
-                shodan_context += f"  OS: {t.get('os', 'unknown')}\n"
-                if t.get("vulns"):
-                    shodan_context += f"  Known CVEs: {', '.join(t['vulns'][:20])}\n"
-                for svc in t.get("services", []):
-                    shodan_context += f"  {svc['port']}/{svc.get('name','')} {svc.get('version','')}\n"
-                shodan_context += "\n"
-
-                try:
-                    from core.recon.recon_engine import run_async_recon
-                    # run_async_recon returns a dict: {target: combined_output_string}
-                    recon_output = run_async_recon([target_ip], concurrency=10)
-                    
-                    raw_scan = shodan_context
-                    if target_ip in recon_output:
-                        raw_scan += recon_output[target_ip]
-                except Exception as e:
-                    raw_scan = shodan_context + f"[RECON ERROR] {e}\n"
-
-                pipeline = AIPipeline()
-                state = pipeline.run_scan(str(sl_no), target_ip, raw_scan=raw_scan)
-                _save_trace_report(pipeline, str(sl_no), target_ip)
-                result = _adapt_state_to_result(state, pipeline.fact_store, str(sl_no), target_ip, raw_scan)
-                duration = datetime.now() - scan_start
-                duration_str = str(duration).split('.')[0]
-
-                update_session_status(sl_no, "complete")
-                _save_and_show_results(sl_no, result, duration_str)
-                
-                print(f"[*] Scan complete for {target_ip}. Risk: {result.get('risk_level')}")
-                
-            except Exception as e:
-                print(f"[-] FATAL ERROR processing {target_ip}: {e}")
-                import traceback
-                traceback.print_exc(file=sys.stdout)
-                result = {"risk_level": "ERROR", "summary": str(e)}
-        
-        # Save log
-        with open(log_file, "w") as lf:
-            lf.write(buf.getvalue())
-            
-        return i, total, target_ip, result, log_file
-
     print(f"\n  \033[96m[*] Starting parallel scan ({workers} workers). Output saved to logs.\033[0m\n")
-    
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = []
-        for i, t in enumerate(selected, 1):
-            futures.append(executor.submit(_scan_target_worker, i, len(selected), t))
-            
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                i, total, ip, result, log_file = future.result()
-                risk = result.get('risk_level', 'UNKNOWN')
-                color = "\033[91m" if risk == "CRITICAL" else ("\033[93m" if risk == "HIGH" else "\033[92m")
-                print(f"  \033[96m[{i}/{total}]\033[0m {ip} finished → Risk: {color}{risk}\033[0m (Log: {log_file})")
-            except Exception as e:
-                print(f"  \033[91m[!] Worker error: {e}\033[0m")
-
-    success(f"Pipeline complete: {len(selected)} target(s) scanned in parallel.")
+    outcome = _run_shodan_parallel_scans(selected, workers)
+    if outcome["failed"]:
+        warn(f"Pipeline finished: {outcome['completed']} complete, "
+             f"{outcome['failed']} failed.")
+    else:
+        success(f"Pipeline complete: {outcome['completed']} target(s) scanned.")
 
 
 def _parse_selection(sel_str: str, items: list) -> list:
@@ -973,7 +1205,7 @@ def _shodan_load_saved(sr):
             warn("No saved Shodan results in database.")
             return
 
-        print(f"\n  \033[96m[ SAVED SHODAN QUERIES ]\033[0m")
+        print("\n  \033[96m[ SAVED SHODAN QUERIES ]\033[0m")
         print(f"  {'─' * 60}")
         print(f"  {'#':<4} {'QUERY':<35} {'HOSTS':<8} {'LAST RUN'}")
         print(f"  {'─' * 60}")
@@ -1004,9 +1236,7 @@ def _shodan_load_saved(sr):
         error(f"DB query failed: {e}")
 
 
-# ─────────────────────────────────────────────
 # RESUME UNFINISHED SCAN
-# ─────────────────────────────────────────────
 
 def resume_scan():
     """Check /tmp for saved octopus checkpoints and offer to resume them."""
@@ -1029,19 +1259,19 @@ def resume_scan():
             with open(path) as f:
                 data = json.load(f)
             parsed.append((path, data))
-        except Exception as e:
+        except Exception:
             continue
 
     if not parsed:
         warn("Found checkpoint files but they are corrupted or unreadable.")
         return
 
-    print(f"\n  \033[93m[ UNFINISHED SESSIONS DETECTED ]\033[0m")
+    print("\n  \033[93m[ UNFINISHED SESSIONS DETECTED ]\033[0m")
     print(f"  {'─'*58}")
     print(f"  {'#':<4} {'SL#':<8} {'TARGET':<30} {'LOOP':<8} {'FACTS'}")
     print(f"  {'─'*58}")
 
-    for idx, (path, data) in enumerate(parsed, 1):
+    for idx, (_path, data) in enumerate(parsed, 1):
         sl_no   = data.get("sl_no", "?")
         target  = data.get("target", "?")
         loop    = data.get("loop", "?")
@@ -1207,10 +1437,12 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
 
     # Risk level from state
     risk = "LOW"
-    if state.get("root_access_confirmed"): risk = "CRITICAL"
-    elif has_exploit_success: risk = "CRITICAL"
-    elif has_confirmed_vuln: risk = "HIGH"
-    elif state.get("credentials_found") or has_potential_vuln: risk = "MEDIUM"
+    if state.get("root_access_confirmed") or has_exploit_success:
+        risk = "CRITICAL"
+    elif has_confirmed_vuln:
+        risk = "HIGH"
+    elif state.get("credentials_found") or has_potential_vuln:
+        risk = "MEDIUM"
 
     # Build summary text
     confirmed_facts = []
@@ -1256,7 +1488,13 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
         "confirmed_facts": confirmed_facts,
         "outcome_summary": outcome_summary,
     }
-    return enrich_result_with_reporting(result, facts, state)
+    enriched = enrich_result_with_reporting(result, facts, state)
+    redactor = getattr(fact_store, "redactor", None)
+    if redactor is None:
+        from core.secrets import get_redactor
+
+        redactor = get_redactor()
+    return redactor.redact_data(enriched)
 
 
 def _mask_secret_value(value: str) -> str:
@@ -1454,7 +1692,7 @@ def _fact_text(facts) -> str:
 
 
 def _is_cpanel_evidence(f, facts) -> bool:
-    text = _fact_text([f] + list(facts))
+    text = _fact_text([f, *list(facts)])
     source = str(f.get("source", "")).lower()
     value = str(f.get("value", "")).lower()
     return (
@@ -1469,7 +1707,7 @@ def _is_cpanel_evidence(f, facts) -> bool:
 
 
 def _is_pwnkit_evidence(f, facts) -> bool:
-    text = _fact_text([f] + list(facts))
+    text = _fact_text([f, *list(facts)])
     value = str(f.get("value", "")).lower()
     return (
         "pwnkit" in value
@@ -1607,9 +1845,7 @@ def _exploit_success_metadata(f, facts, state) -> dict:
         "result": "Success",
     }
 
-# ─────────────────────────────────────────────
 # SAVE & SHOW RESULTS (shared by new_scan + resume_scan)
-# ─────────────────────────────────────────────
 
 def _save_and_show_results(sl_no: int, result: dict, duration_str: str = ""):
     """Save AI analysis results to DB and display them."""
@@ -1700,9 +1936,7 @@ def _remediation_for_vulnerability(vuln: dict, remediations: list) -> str:
     return ""
 
 
-# ─────────────────────────────────────────────
 # VIEW HISTORY
-# ─────────────────────────────────────────────
 
 def view_history():
     divider("SCAN HISTORY")
@@ -1738,9 +1972,7 @@ def view_history():
         edit_delete_menu(sl_no)
 
 
-# ─────────────────────────────────────────────
 # EDIT / DELETE MENU
-# ─────────────────────────────────────────────
 
 def edit_delete_menu(sl_no: int):
     while True:
@@ -1907,9 +2139,7 @@ def edit_delete_menu(sl_no: int):
             warn("Invalid choice.")
 
 
-# ─────────────────────────────────────────────
 # CHECKPOINT NOTICE
-# ─────────────────────────────────────────────
 
 def _check_pending_checkpoints() -> int:
     """Return the count of pending checkpoint files."""
@@ -1917,9 +2147,7 @@ def _check_pending_checkpoints() -> int:
     return len(glob.glob(os.path.join(ck_dir, "octopus_checkpoint_*.json")))
 
 
-# ─────────────────────────────────────────────
 # MAIN MENU
-# ─────────────────────────────────────────────
 
 def main_menu():
     while True:
@@ -1966,9 +2194,7 @@ def main_menu():
             warn("Invalid choice.")
 
 
-# ─────────────────────────────────────────────
 # C2 MANAGEMENT MENU (THIN CLIENT)
-# ─────────────────────────────────────────────
 
 def _load_api_key() -> str:
     """Load the operator API key from file or environment."""
@@ -1981,7 +2207,7 @@ def _load_api_key() -> str:
     base_dir = os.path.dirname(os.path.abspath(__file__))
     key_file = os.path.join(base_dir, "data", "default_admin.key")
     if os.path.exists(key_file):
-        with open(key_file, "r") as f:
+        with open(key_file) as f:
             return f.read().strip()
     
     return ""
@@ -2027,10 +2253,10 @@ def _start_c2_daemon():
     # Pre-check: ensure FastAPI + uvicorn are installed
     try:
         import fastapi  # noqa: F401
-        import uvicorn   # noqa: F401
+        import uvicorn  # noqa: F401
     except ImportError as e:
         error(f"Missing dependency for C2 daemon: {e}")
-        print(f"  \033[93m[!] Install: pip install fastapi uvicorn\033[0m")
+        print("  \033[93m[!] Install: pip install fastapi uvicorn\033[0m")
         return
 
     # Ensure data/ directory exists
@@ -2054,7 +2280,7 @@ def _start_c2_daemon():
         )
 
     import time
-    for i in range(8):
+    for _i in range(8):
         time.sleep(1)
         if os.path.exists(sock_path):
             resp = _send_to_daemon("ping")
@@ -2214,9 +2440,7 @@ def c2_management_menu():
             warn("Invalid choice.")
 
 
-# ─────────────────────────────────────────────
 # ENTRY POINT
-# ─────────────────────────────────────────────
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "trace":
@@ -2229,8 +2453,7 @@ if __name__ == "__main__":
     # ── CLI sub-commands: status, stop, health, pid ──
     if len(sys.argv) > 1 and sys.argv[1] in ("status", "stop", "health", "pid"):
         try:
-            from core.supervisor import Supervisor
-            sys.argv = [sys.argv[0]] + sys.argv[1:]
+            sys.argv = [sys.argv[0], *sys.argv[1:]]
             from core.supervisor import cli as _supervisor_cli
             _supervisor_cli()
         except ImportError:
@@ -2243,7 +2466,7 @@ if __name__ == "__main__":
 
     # ── Supervisor: PID management + health monitoring ──
     try:
-        from core.supervisor import create_supervisor, AlreadyRunningError
+        from core.supervisor import AlreadyRunningError, create_supervisor
         _supervisor = create_supervisor(
             monitor_ollama=True,
             monitor_db=True,
@@ -2281,7 +2504,7 @@ if __name__ == "__main__":
 
     info(f"Logging to: {log_file}")
     
-    # Auto-start C2 daemon (v10: uses core/c2/daemon.py, not c2_server.py)
+    # The daemon owns the C2 control plane before plugin discovery begins.
     _start_c2_daemon()
 
     # Discover dynamically loaded plugins and modules

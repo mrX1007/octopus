@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 
-import os
 import re
-import time
-import socket
 import shutil
 import subprocess
-import concurrent.futures
 
 try:
     import paramiko
@@ -14,7 +10,7 @@ except ImportError:
     paramiko = None
 
 try:
-    from config import CFG, find_wordlist, find_all_wordlists
+    from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
     def find_wordlist(cat): return ""
@@ -31,9 +27,7 @@ C_MAGENTA = "\033[95m"
 C_RESET  = "\033[0m"
 
 
-# ═══════════════════════════════════════════════
 # PARAMIKO SSH HELPERS (shared across stages)
-# ═══════════════════════════════════════════════
 
 
 def vuln_assess(target: str, recon_data: str = "") -> str:
@@ -145,11 +139,7 @@ def vuln_assess(target: str, recon_data: str = "") -> str:
     return output
 
 
-# ═══════════════════════════════════════════════
-# STAGE 2: AUTOMATED EXPLOITATION
-# ═══════════════════════════════════════════════
-
-# Map common service versions to MSF modules
+# Module mapping consumed by the exploitation stage.
 _VERSION_TO_MSF = {
     "vsftpd 2.3.4": "exploit/unix/ftp/vsftpd_234_backdoor",
     "proftpd 1.3.3": "exploit/unix/ftp/proftpd_133c_backdoor",
@@ -181,5 +171,3 @@ _VERSION_TO_MSF = {
     "eternalblue": "exploit/windows/smb/ms17_010_eternalblue",
     "smb": "auxiliary/scanner/smb/smb_ms17_010",
 }
-
-

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-try:
+import contextlib
+
+with contextlib.suppress(ImportError):
     from .shardbrowser import ShardBrowser, ShardBrowserNotInstalled
-except ImportError:
-    pass

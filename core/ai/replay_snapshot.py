@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import json
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 from core.ai.pipeline import AIPipeline
 
@@ -12,7 +12,7 @@ class ReplaySnapshot:
     def __init__(self, db_path: str):
         self.pipeline = AIPipeline(db_path)
 
-    def run(self, spec: Dict[str, Any]) -> Dict[str, Any]:
+    def run(self, spec: dict[str, Any]) -> dict[str, Any]:
         scan_id = spec["scan_id"]
         target = spec["target"]
         result = self.pipeline.replay_outputs(scan_id, target, spec.get("outputs", []))
@@ -20,7 +20,7 @@ class ReplaySnapshot:
         fact_pairs = {(fact.get("type"), fact.get("value")) for fact in facts}
         actions = [item.get("command") for item in result.get("snapshot_actions", [])]
         context = result.get("context") or {}
-        failures: List[str] = []
+        failures: list[str] = []
 
         for expected in spec.get("expected_facts", []):
             pair = self._expected_pair(expected)
@@ -51,18 +51,18 @@ class ReplaySnapshot:
             "surface_states": surface_states,
         }
 
-    def assert_ok(self, spec: Dict[str, Any]) -> Dict[str, Any]:
+    def assert_ok(self, spec: dict[str, Any]) -> dict[str, Any]:
         result = self.run(spec)
         if not result["ok"]:
             raise AssertionError("; ".join(result["failures"]))
         return result
 
-    def assert_file_ok(self, path: str) -> Dict[str, Any]:
-        with open(path, "r", encoding="utf-8") as fh:
+    def assert_file_ok(self, path: str) -> dict[str, Any]:
+        with open(path, encoding="utf-8") as fh:
             spec = json.load(fh)
         return self.assert_ok(spec)
 
-    def _expected_pair(self, expected: Any) -> Tuple[str, str]:
+    def _expected_pair(self, expected: Any) -> tuple[str, str]:
         if isinstance(expected, dict):
             return str(expected.get("type")), str(expected.get("value"))
         if isinstance(expected, (list, tuple)) and len(expected) == 2:

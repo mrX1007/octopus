@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 
-from typing import Any, Dict, List
+from typing import Any
 
 
 class RiskAnalyzer:
     """Derive prioritized security analysis from normalized target model."""
 
-    def __init__(self, model: Dict[str, Any]):
+    def __init__(self, model: dict[str, Any]):
         self.model = model or {}
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "ad_attack_paths": self.ad_attack_paths(),
             "cloud_posture": self.cloud_posture(),
@@ -17,7 +17,7 @@ class RiskAnalyzer:
             "code_reachability": self.code_reachability(),
         }
 
-    def ad_attack_paths(self) -> List[Dict[str, Any]]:
+    def ad_attack_paths(self) -> list[dict[str, Any]]:
         ad = self.model.get("active_directory") or {}
         paths = []
         for item in ad.get("attack_paths", []):
@@ -31,14 +31,14 @@ class RiskAnalyzer:
             paths.append({"severity": "high", "kind": "acl", "value": item.get("value", ""), "reason": "dangerous ACL observed"})
         return paths
 
-    def cloud_posture(self) -> Dict[str, List[Dict[str, Any]]]:
-        grouped: Dict[str, List[Dict[str, Any]]] = {}
+    def cloud_posture(self) -> dict[str, list[dict[str, Any]]]:
+        grouped: dict[str, list[dict[str, Any]]] = {}
         for finding in (self.model.get("security_findings") or {}).get("cloud", []):
             provider = finding.get("provider") or "unknown"
             grouped.setdefault(provider, []).append(finding)
         return grouped
 
-    def secret_rotation(self) -> List[Dict[str, Any]]:
+    def secret_rotation(self) -> list[dict[str, Any]]:
         actions = []
         for secret in (self.model.get("security_findings") or {}).get("secrets", []):
             actions.append({
@@ -51,7 +51,7 @@ class RiskAnalyzer:
             })
         return actions
 
-    def code_reachability(self) -> List[Dict[str, Any]]:
+    def code_reachability(self) -> list[dict[str, Any]]:
         endpoints = self.model.get("endpoints") or []
         services = self.model.get("services") or []
         exposed = bool(endpoints or services)

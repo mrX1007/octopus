@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 
-import re
 import logging
-from typing import List, Tuple
+import re
 
 from .graph import KnowledgeGraph
 from .models import EdgeType
@@ -21,7 +20,7 @@ class KnowledgeEnricher:
         self.graph = graph
         self._processed = set()   # avoid duplicate processing
 
-    def enrich_from_facts(self, target_ip: str, facts: List[Tuple[str, str]]):
+    def enrich_from_facts(self, target_ip: str, facts: list[tuple[str, str]]):
         """
         Process (fact_text, source_tool) tuples and create graph nodes/edges.
         """
@@ -49,7 +48,7 @@ class KnowledgeEnricher:
     def _process_fact(self, target_ip: str, fact_text: str, source: str):
         """Route a fact to the appropriate handler."""
         ft = fact_text.strip()
-        ft_lower = ft.lower()
+        ft.lower()
 
         # ── PORT OPEN ──
         m = re.match(r'Port (\d+) OPEN \((\S+)\)', ft)

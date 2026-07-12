@@ -16,15 +16,13 @@ Usage::
 """
 
 import logging
-import os
 import re
 import select
 import socket
 import struct
 import subprocess
 import threading
-import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 try:
     import paramiko
@@ -36,7 +34,7 @@ try:
 except ImportError:
     CFG = {}
 
-from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
+from core.killchain.ssh_helpers import _ssh_exec
 
 # ── Logging ──────────────────────────────────────────────────────────────
 logger = logging.getLogger("octopus.killchain.pivot")
@@ -65,12 +63,10 @@ COMMON_PORTS = [21, 22, 23, 25, 53, 80, 88, 110, 135, 139, 143, 389,
                 5432, 5900, 5985, 5986, 8080, 8443, 8888, 9090]
 
 # Active tunnels registry — used for cleanup
-_active_tunnels: Dict[str, Dict[str, Any]] = {}
+_active_tunnels: dict[str, dict[str, Any]] = {}
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # SOCKS5 proxy
-# ═══════════════════════════════════════════════════════════════════════════
 
 class _Socks5Handler(threading.Thread):
     """Handle a single SOCKS5 client connection via SSH tunnel."""
@@ -107,7 +103,7 @@ class _Socks5Handler(threading.Thread):
         request = self._client.recv(4)
         if len(request) < 4:
             return
-        ver, cmd, _rsv, atyp = struct.unpack("!BBBB", request)
+        _ver, cmd, _rsv, atyp = struct.unpack("!BBBB", request)
         if cmd != SOCKS5_CMD_CONNECT:
             self._send_reply(0x07)  # command not supported
             return
@@ -224,7 +220,7 @@ def setup_socks_proxy(
     def _accept_loop() -> None:
         while not stop_event.is_set():
             try:
-                client_sock, addr = server_sock.accept()
+                client_sock, _addr = server_sock.accept()
                 handler = _Socks5Handler(client_sock, transport)
                 handler.start()
             except socket.timeout:
@@ -250,19 +246,17 @@ def setup_socks_proxy(
 
     output += f"[+] SOCKS5 proxy listening on 127.0.0.1:{local_port}\n"
     output += f"    Tunnel ID: {tunnel_id}\n\n"
-    output += f"  Usage with proxychains:\n"
+    output += "  Usage with proxychains:\n"
     output += f"    echo 'socks5 127.0.0.1 {local_port}' >> /etc/proxychains4.conf\n"
-    output += f"    proxychains nmap -sT -Pn <internal_target>\n\n"
-    output += f"  Usage with curl:\n"
+    output += "    proxychains nmap -sT -Pn <internal_target>\n\n"
+    output += "  Usage with curl:\n"
     output += f"    curl --socks5 127.0.0.1:{local_port} http://<internal_target>\n"
     print(f"    {C_GREEN}[+] SOCKS5 proxy active on port {local_port}{C_RESET}")
 
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Local port forwarding
-# ═══════════════════════════════════════════════════════════════════════════
 
 def _forward_handler(
     local_sock: socket.socket,
@@ -376,7 +370,7 @@ def setup_local_forward(
         "thread": listener,
     }
 
-    output += f"[+] Local forward active\n"
+    output += "[+] Local forward active\n"
     output += f"    127.0.0.1:{local_port} → {remote_host}:{remote_port}\n"
     output += f"    Tunnel ID: {tunnel_id}\n\n"
     output += f"  Access via: nc 127.0.0.1 {local_port}\n"
@@ -385,9 +379,7 @@ def setup_local_forward(
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Remote port forwarding
-# ═══════════════════════════════════════════════════════════════════════════
 
 def setup_remote_forward(
     ssh_client: "paramiko.SSHClient",
@@ -463,7 +455,7 @@ def setup_remote_forward(
         "thread": handler,
     }
 
-    output += f"[+] Remote forward active\n"
+    output += "[+] Remote forward active\n"
     output += f"    Remote :{remote_port} → {local_host}:{local_port}\n"
     output += f"    Tunnel ID: {tunnel_id}\n"
     print(f"    {C_GREEN}[+] Remote forward active: :{remote_port} → {local_host}:{local_port}{C_RESET}")
@@ -471,13 +463,11 @@ def setup_remote_forward(
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Multi-hop SSH tunnel chain
-# ═══════════════════════════════════════════════════════════════════════════
 
 def create_ssh_chain(
-    hop_list: List[Dict[str, Any]],
-) -> Tuple[Optional["paramiko.SSHClient"], str]:
+    hop_list: list[dict[str, Any]],
+) -> tuple[Optional["paramiko.SSHClient"], str]:
     """Create a multi-hop SSH tunnel chain through a series of hosts.
 
     Each hop connects through the previous hop's SSH channel, creating
@@ -507,8 +497,8 @@ def create_ssh_chain(
         output += "[!] Empty hop list.\n"
         return None, output
 
-    clients: List["paramiko.SSHClient"] = []
-    prev_transport: Optional["paramiko.Transport"] = None
+    clients: list[paramiko.SSHClient] = []
+    prev_transport: Optional[paramiko.Transport] = None
 
     for idx, hop in enumerate(hop_list):
         host = hop["host"]
@@ -577,14 +567,12 @@ def create_ssh_chain(
     return clients[-1], output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Proxy-aware scanning
-# ═══════════════════════════════════════════════════════════════════════════
 
 def scan_through_proxy(
     proxy_port: int,
     target: str,
-    ports: Optional[List[int]] = None,
+    ports: Optional[list[int]] = None,
     timeout: int = SCAN_TIMEOUT,
 ) -> str:
     """Scan a target through an active SOCKS5 proxy (TCP connect scan).
@@ -607,7 +595,7 @@ def scan_through_proxy(
     print(f"\n  {C_CYAN}[PIVOT] Scanning {target} through SOCKS5 proxy :{proxy_port}{C_RESET}")
     output = f"[PROXY SCAN — {target} via SOCKS5:{proxy_port}]\n{'═' * 60}\n\n"
 
-    open_ports: List[int] = []
+    open_ports: list[int] = []
     closed_count = 0
 
     # ── Try native SOCKS5 connect ─────────────────────────────────
@@ -627,7 +615,7 @@ def scan_through_proxy(
                 s.close()
                 open_ports.append(port)
                 output += f"    {C_GREEN}{port}/tcp  OPEN{C_RESET}\n"
-            except Exception as e:
+            except Exception:
                 closed_count += 1
     else:
         # Fall back to proxychains + nmap
@@ -642,7 +630,7 @@ def scan_through_proxy(
         if proxychains_bin and nmap_bin:
             port_str = ",".join(str(p) for p in ports)
             cmd = f"{proxychains_bin} -q {nmap_bin} -sT -Pn -p {port_str} {target}"
-            output += f"  (via proxychains + nmap)\n"
+            output += "  (via proxychains + nmap)\n"
             try:
                 result = subprocess.run(
                     cmd, shell=True, capture_output=True, text=True,
@@ -686,7 +674,7 @@ def scan_through_proxy(
                     else:
                         closed_count += 1
                     s.close()
-                except Exception as e:
+                except Exception:
                     closed_count += 1
 
     output += f"\n{'═' * 60}\n"
@@ -697,9 +685,7 @@ def scan_through_proxy(
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Network discovery
-# ═══════════════════════════════════════════════════════════════════════════
 
 def get_network_info(ssh_client: "paramiko.SSHClient") -> str:
     """Discover internal networks from a compromised host.
@@ -792,8 +778,8 @@ def get_network_info(ssh_client: "paramiko.SSHClient") -> str:
 
     # ── Extract discovered subnets ────────────────────────────────
     all_text = output
-    discovered_subnets: List[str] = []
-    discovered_hosts: List[str] = []
+    discovered_subnets: list[str] = []
+    discovered_hosts: list[str] = []
 
     # Subnets from ip addr / routes
     for m in re.finditer(r"(\d+\.\d+\.\d+\.\d+/\d+)", all_text):
@@ -811,7 +797,7 @@ def get_network_info(ssh_client: "paramiko.SSHClient") -> str:
             discovered_hosts.append(ip)
 
     output += f"{'═' * 60}\n"
-    output += f"[SUMMARY]\n"
+    output += "[SUMMARY]\n"
     output += f"  Subnets: {', '.join(discovered_subnets) if discovered_subnets else 'none'}\n"
     output += f"  Hosts:   {len(discovered_hosts)} unique IPs discovered\n"
     for ip in sorted(set(discovered_hosts))[:30]:

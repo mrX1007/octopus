@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
-import time
 import json
-import sqlite3
 import os
+import sqlite3
+import time
 from contextlib import closing
-from typing import List, Dict, Any
 from dataclasses import dataclass, field
+from typing import Any, Optional
+
+from core.secrets import get_redactor
 
 
 @dataclass
@@ -16,7 +18,7 @@ class AuditEntry:
     action: str         # "tool.execute", "credential.found", etc.
     target: str         # IP, hostname, or resource
     result: str         # "success", "failed", "timeout"
-    details: Dict[str, Any] = field(default_factory=dict)
+    details: dict[str, Any] = field(default_factory=dict)
     duration: float = 0.0
 
 
@@ -31,7 +33,8 @@ class AuditLog:
         entries = audit.query(actor="operator1", limit=50)
     """
 
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: Optional[str] = None):
+        self.redactor = get_redactor()
         if not db_path:
             base = os.path.dirname(os.path.dirname(os.path.dirname(
                 os.path.abspath(__file__))))
@@ -59,18 +62,41 @@ class AuditLog:
             conn.execute('CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(timestamp)')
             conn.execute('CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor)')
             conn.execute('CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action)')
+            for row in conn.execute(
+                "SELECT id, actor, action, target, result, details FROM audit_log"
+            ).fetchall():
+                details = self.redactor.redact_data(json.loads(row[5] or "{}"))
+                safe = (
+                    self.redactor.redact_text(row[1], kind="audit_actor"),
+                    self.redactor.redact_text(row[2], kind="audit_action"),
+                    self.redactor.redact_text(row[3], kind="audit_target"),
+                    self.redactor.redact_text(row[4], kind="audit_result"),
+                    json.dumps(details, sort_keys=True),
+                    row[0],
+                )
+                conn.execute(
+                    "UPDATE audit_log SET actor = ?, action = ?, target = ?, result = ?, details = ? WHERE id = ?",
+                    safe,
+                )
             conn.commit()
 
     def log_action(self, actor: str, action: str, target: str = "",
-                   result: str = "success", details: dict = None,
+                   result: str = "success", details: Optional[dict] = None,
                    duration: float = 0.0):
         """Log a generic action."""
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute('''
                 INSERT INTO audit_log (timestamp, actor, action, target, result, details, duration)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (time.time(), actor, action, target, result,
-                  json.dumps(details or {}), duration))
+            ''', (
+                time.time(),
+                self.redactor.redact_text(actor, kind="audit_actor"),
+                self.redactor.redact_text(action, kind="audit_action"),
+                self.redactor.redact_text(target, kind="audit_target"),
+                self.redactor.redact_text(result, kind="audit_result"),
+                json.dumps(self.redactor.redact_data(details or {}), sort_keys=True),
+                duration,
+            ))
             conn.commit()
 
     def log_tool_execution(self, tool: str, target: str,
@@ -81,9 +107,9 @@ class AuditLog:
         self.log_action(actor, f"tool.{tool}", target, result,
                         {"exit_code": exit_code}, duration)
 
-    def query(self, actor: str = None, action: str = None,
-              target: str = None, since: float = 0,
-              limit: int = 100) -> List[AuditEntry]:
+    def query(self, actor: Optional[str] = None, action: Optional[str] = None,
+              target: Optional[str] = None, since: float = 0,
+              limit: int = 100) -> list[AuditEntry]:
         """Query audit log with filters."""
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
@@ -109,6 +135,6 @@ class AuditLog:
             timestamp=r["timestamp"], actor=r["actor"],
             action=r["action"], target=r["target"],
             result=r["result"],
-            details=json.loads(r["details"]),
+            details=self.redactor.redact_data(json.loads(r["details"])),
             duration=r["duration"],
         ) for r in rows]

@@ -7,20 +7,24 @@ import json
 import logging
 import re
 import time
-from typing import Dict, Any, List
+from typing import Any, Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 
-from core.ai.fact_store import FactStore
-from core.ai.state_resolver import StateResolver
 from core.ai.context_builder import ContextBuilder
 from core.ai.director import DirectorLLM
-from core.ai.command_scheduler import CommandScheduler
-from core.ai.policy import DeterministicPolicy
-from core.ai.trace_report import TraceReporter
+from core.ai.evidence import EvidenceVerifier
 from core.ai.planner import MissionPlanner
+from core.ai.policy import DeterministicPolicy
+from core.ai.runtime import PipelineRuntime
+from core.ai.state_resolver import StateResolver
+from core.ai.task_agents import AnalysisAgent, DiscoveryAgent, VerificationAgent
 from core.ai.tool_registry import ToolRegistry
-from core.ai.evidence import OutputParser, EvidenceVerifier
-from core.ai.task_agents import DiscoveryAgent, AnalysisAgent, VerificationAgent
+from core.execution import (
+    CAP_ACTIVE_TOOL,
+    CAP_DIRECT_BINARY,
+    CAP_REGISTERED_TOOL,
+    ExecutionContext,
+)
 
 logger = logging.getLogger("octopus.pipeline")
 
@@ -33,17 +37,18 @@ except ImportError:
 
 class AIPipeline:
     def __init__(self, db_path: str = "data/facts.db"):
-        self.fact_store = FactStore(db_path)
+        self.runtime = PipelineRuntime(db_path, runner=lambda command: run_arbitrary_cmd(command))
+        self.fact_store = self.runtime.facts
         self.state_resolver = StateResolver(self.fact_store)
         self.context_builder = ContextBuilder(self.fact_store, self.state_resolver)
         self.director = DirectorLLM()
-        self.command_scheduler = CommandScheduler()
+        self.command_scheduler = self.runtime.scheduler
         self.policy = DeterministicPolicy()
         self.planner = MissionPlanner()
         self.tool_registry = ToolRegistry()
-        self.output_parser = OutputParser()
+        self.output_parser = self.runtime.parser
         self.evidence_verifier = EvidenceVerifier(self.fact_store)
-        self.trace_reporter = TraceReporter(self.fact_store)
+        self.trace_reporter = self.runtime.reporter
 
         self.discovery_agent = DiscoveryAgent(self.tool_registry)
         self.analysis_agent = AnalysisAgent(self.fact_store, self.context_builder)
@@ -97,7 +102,11 @@ class AIPipeline:
                 if stored["created"]:
                     seeded += 1
                     self.total_new_facts += stored["new_facts"]
-                    print(f"    [+] Seeded: {f['type']} -> {f['value']} (conf={f.get('confidence', 100)})")
+                    safe_fact = stored["fact"]
+                    print(
+                        f"    [+] Seeded: {safe_fact['type']} -> {safe_fact['value']} "
+                        f"(conf={safe_fact.get('confidence', 100)})"
+                    )
             self._sync_runtime_credentials_from_facts(target, facts)
             print(f"[*] Seeded {seeded} facts from manual tool output.")
 
@@ -157,13 +166,13 @@ class AIPipeline:
             llm_fallback_only = self._llm_fallback_only()
             if llm_fallback_only:
                 print(f"\n[!] LLM DEAD: {self.consecutive_llm_failures} consecutive failures. Running on fallback only.")
-                print(f"    Check: ollama ps / ollama logs / ollama restart")
+                print("    Check: ollama ps / ollama logs / ollama restart")
 
             loop_label = str(max_iterations) if max_iterations is not None else "unlimited"
             print(f"\n{'='*50}\n[LOOP {loop}/{loop_label}]")
 
             # 1. State Resolution & Context Building
-            state = self.state_resolver.resolve_state(scan_id, target)
+            self.state_resolver.resolve_state(scan_id, target)
             context = self.context_builder.build_context(scan_id, target)
             print(f"[*] Context: state={context['state']}, services={context['services']}, questions={context['open_questions']}")
             self._print_stage_gates(context)
@@ -192,10 +201,12 @@ class AIPipeline:
             # Anti-loop check: No new facts for 3 loops
             current_fact_count = len(self.fact_store.get_facts(scan_id, target))
             self.fact_history_counts.append(current_fact_count)
-            if len(self.fact_history_counts) >= 4:
-                if self.fact_history_counts[-1] == self.fact_history_counts[-4]:
-                    print("[!] ANTI-LOOP: No new facts for 3 loops. Terminating scan.")
-                    break
+            if (
+                len(self.fact_history_counts) >= 4
+                and self.fact_history_counts[-1] == self.fact_history_counts[-4]
+            ):
+                print("[!] ANTI-LOOP: No new facts for 3 loops. Terminating scan.")
+                break
 
             # 3. Mission Planner (pass context instead of raw state)
             if self._llm_fallback_only():
@@ -380,7 +391,7 @@ class AIPipeline:
         self._print_efficiency_report(scan_id, target, elapsed)
         return self.state_resolver.resolve_state(scan_id, target)
 
-    def replay_outputs(self, scan_id: str, target: str, outputs: List[Dict[str, str]]) -> Dict[str, Any]:
+    def replay_outputs(self, scan_id: str, target: str, outputs: list[dict[str, str]]) -> dict[str, Any]:
         """Replay saved raw tool outputs through the parser and fact bus.
 
         Each entry is {"tool": "...", "output": "..."} or
@@ -404,7 +415,7 @@ class AIPipeline:
             "snapshot_actions": self.snapshot_actions(scan_id, target),
         }
 
-    def snapshot_actions(self, scan_id: str, target: str) -> List[Dict[str, str]]:
+    def snapshot_actions(self, scan_id: str, target: str) -> list[dict[str, str]]:
         """Return the deterministic next actions without executing them."""
         facts = self.fact_store.get_facts(scan_id, target)
         executed_fact_actions = set(self.executed_fact_action_commands)
@@ -416,12 +427,13 @@ class AIPipeline:
             self.service_intelligence_evidence_seen = service_evidence_seen
         decisions = []
         all_facts = self.fact_store.get_facts(scan_id, target)
+        execution_context = self._execution_context(scan_id, target)
         for command in commands:
-            decision = self.command_scheduler.decide(command, all_facts, self.executed_command_keys)
+            decision = self.runtime.decide(command, all_facts, self.executed_command_keys, execution_context)
             decisions.append(decision.to_dict())
         return decisions
 
-    def trace_report(self, scan_id: str, target: str) -> Dict[str, Any]:
+    def trace_report(self, scan_id: str, target: str) -> dict[str, Any]:
         context = self.context_builder.build_context(scan_id, target)
         return self.trace_reporter.build(
             scan_id,
@@ -446,10 +458,39 @@ class AIPipeline:
             return None
         return None if parsed <= 0 else parsed
 
+    def _execution_context(self, scan_id: str, target: str) -> ExecutionContext:
+        """Bind automatic commands to the current scan target and origin."""
+        try:
+            from config import CFG
+        except ImportError:
+            CFG = {}
+        strategy = CFG.get("strategy", {})
+        active_authorized = bool(strategy.get("active_authorized", False)) and self._target_in_authorized_scope(
+            target, strategy.get("authorized_targets", [])
+        )
+        if active_authorized:
+            return ExecutionContext(
+                actor=f"scan:{scan_id}",
+                origin="ai_pipeline",
+                target_scope=(target,),
+                capabilities=frozenset({
+                    CAP_REGISTERED_TOOL,
+                    CAP_DIRECT_BINARY,
+                    CAP_ACTIVE_TOOL,
+                }),
+                approved=True,
+                approval_id=f"config:active_authorized:{scan_id}",
+            )
+        return ExecutionContext.automatic(
+            target_scope=(target,),
+            actor=f"scan:{scan_id}",
+            origin="ai_pipeline",
+        )
+
     def _llm_fallback_only(self) -> bool:
         return self.consecutive_llm_failures >= self.MAX_CONSECUTIVE_LLM_FAILURES
 
-    def _director_fallback_result(self, context: Dict[str, Any]) -> Dict[str, Any]:
+    def _director_fallback_result(self, context: dict[str, Any]) -> dict[str, Any]:
         result = self.director._fallback_logic(context, self.goal_history)
         result.update({
             "llm_status": "skipped",
@@ -458,7 +499,7 @@ class AIPipeline:
         })
         return result
 
-    def _planner_fallback_result(self, goal: str) -> Dict[str, Any]:
+    def _planner_fallback_result(self, goal: str) -> dict[str, Any]:
         result = self.planner._fallback_logic(goal)
         result.update({
             "llm_status": "skipped",
@@ -498,14 +539,14 @@ class AIPipeline:
             })
         return normalized
 
-    def _extract_plan_steps(self, plan_res: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _extract_plan_steps(self, plan_res: dict[str, Any]) -> list[dict[str, Any]]:
         if not isinstance(plan_res, dict):
             return self._coerce_plan_steps(plan_res)
         if isinstance(plan_res.get("plan"), (list, dict)):
             return self._coerce_plan_steps(plan_res.get("plan"))
         return self._coerce_plan_steps(plan_res)
 
-    def _coerce_plan_steps(self, raw_plan) -> List[Dict[str, Any]]:
+    def _coerce_plan_steps(self, raw_plan) -> list[dict[str, Any]]:
         if isinstance(raw_plan, list):
             return [step for step in raw_plan if isinstance(step, dict)]
         if not isinstance(raw_plan, dict):
@@ -545,7 +586,7 @@ class AIPipeline:
             return "VerificationAgent"
         return "DiscoveryAgent"
 
-    def _optimize_plan(self, plan, goal: str, context: Dict[str, Any]):
+    def _optimize_plan(self, plan, goal: str, context: dict[str, Any]):
         """Apply deterministic guardrails around LLM plans.
 
         The LLM is useful for flexible planning, but the kill-chain state is the
@@ -578,7 +619,7 @@ class AIPipeline:
         return self._enrich_plan(optimized, goal, context)
 
 
-    def _post_exploit_plan(self, goal: str, state: str, context: Dict[str, Any] = None):
+    def _post_exploit_plan(self, goal: str, state: str, context: Optional[dict[str, Any]] = None):
         context = context or {}
         open_questions = set(context.get("open_questions") or [])
         post_states = {"root_access_confirmed", "persistence_established", "internal_recon_completed", "exfiltration_completed"}
@@ -612,7 +653,7 @@ class AIPipeline:
         task = self.tool_registry.canonical_task(task)
         return task in self.completed_tasks or task in self.blocked_tasks
 
-    def _enrich_plan(self, plan, goal: str, context: Dict[str, Any]):
+    def _enrich_plan(self, plan, goal: str, context: dict[str, Any]):
         """Add one high-value context-specific task when the plan has room."""
         services = set(context.get("services") or [])
         open_questions = set(context.get("open_questions") or [])
@@ -711,9 +752,7 @@ class AIPipeline:
             enriched.insert(insert_at, {"agent": "DiscoveryAgent", "task": task})
             present.add(task)
             print(f"[*] Plan enriched with {task} from context services={sorted(services)}")
-            if short_specialized_vuln_plan and task == "cpanel_assessment":
-                self._trim_low_priority_enrichment(enriched, protected={task})
-            elif len(enriched) > self._plan_enrichment_limit():
+            if (short_specialized_vuln_plan and task == "cpanel_assessment") or len(enriched) > self._plan_enrichment_limit():
                 self._trim_low_priority_enrichment(enriched, protected={task})
 
         if goal == "vulnerability_assessment" and "external_vulnerability_assessment_pending" in coverage_gaps:
@@ -721,7 +760,7 @@ class AIPipeline:
 
         return self.policy.validate_plan(enriched, context)
 
-    def _rank_candidate_tasks(self, candidates: List[str], context: Dict[str, Any], critical_candidates: set = None) -> List[str]:
+    def _rank_candidate_tasks(self, candidates: list[str], context: dict[str, Any], critical_candidates: Optional[set] = None) -> list[str]:
         critical_candidates = {self.tool_registry.canonical_task(t) for t in (critical_candidates or set())}
         seen = set()
         normalized = []
@@ -757,7 +796,7 @@ class AIPipeline:
 
         return sorted(normalized, key=rank)
 
-    def _unmet_task_preconditions(self, preconditions: List[str], context: Dict[str, Any]) -> List[str]:
+    def _unmet_task_preconditions(self, preconditions: list[str], context: dict[str, Any]) -> list[str]:
         unmet = []
         services = set(context.get("services") or [])
         target_model = context.get("target_model") or {}
@@ -812,7 +851,7 @@ class AIPipeline:
         host = (target or "").strip().split("://")[-1].split("/", 1)[0].split(":", 1)[0]
         return bool(re.search(r"[A-Za-z]", host) and "." in host)
 
-    def _trim_low_priority_enrichment(self, plan: List[Dict[str, Any]], protected: set) -> None:
+    def _trim_low_priority_enrichment(self, plan: list[dict[str, Any]], protected: set) -> None:
         """Keep plans short while preserving critical context-specific checks."""
         low_priority = [
             "web_application_mapping",
@@ -830,7 +869,7 @@ class AIPipeline:
         if len(plan) > 3:
             plan.pop(-2)
 
-    def _run_task_commands(self, scan_id: str, target: str, cmds: List[str], fact_label: str, verification: bool = False) -> Dict[str, Any]:
+    def _run_task_commands(self, scan_id: str, target: str, cmds: list[str], fact_label: str, verification: bool = False) -> dict[str, Any]:
         new_facts = 0
         parsed_facts = 0
         command_results = []
@@ -903,27 +942,32 @@ class AIPipeline:
         }
 
     def _execute_pipeline_command(self, scan_id: str, target: str, cmd: str,
-                                  fact_label: str, prefix: str) -> Dict[str, Any]:
-        decision = self.command_scheduler.decide(
+                                  fact_label: str, prefix: str) -> dict[str, Any]:
+        execution_context = self._execution_context(scan_id, target)
+        decision = self.runtime.decide(
             cmd,
             self.fact_store.get_facts(scan_id, target),
             self.executed_command_keys,
+            execution_context,
         )
+        audit_decision = decision.to_dict()
+        audit_cmd = audit_decision["command"]
         if decision.action == "skip":
-            print(f"     [Skipped] {cmd} ({decision.reason})")
-            self._record_command_trace(decision.to_dict(), None)
-            return self._skipped_command_result(cmd, decision.reason)
+            print(f"     [Skipped] {audit_cmd} ({decision.reason})")
+            self._record_command_trace(audit_decision, None)
+            return self._skipped_command_result(audit_cmd, decision.reason)
 
         self.executed_command_keys.add(decision.key)
-        print(f"     {prefix} {cmd}")
+        print(f"     {prefix} {audit_cmd}")
         running_fact = self._command_check_result_fact(
-            cmd=cmd,
+            cmd=audit_cmd,
             target=target,
             command_key=decision.key,
             status="running",
         )
-        running_store = self._store_fact(scan_id, target, running_fact, cmd)
-        output = run_arbitrary_cmd(cmd)
+        running_store = self._store_fact(scan_id, target, running_fact, audit_cmd)
+        dispatch_result = self.runtime.execute(decision, execution_context)
+        output = dispatch_result.output
         self.tools_run_count += 1
         if cmd.startswith("ssh_inventory "):
             self.executed_post_access_commands.add(cmd)
@@ -933,24 +977,25 @@ class AIPipeline:
         facts = self.output_parser.parse_tool_output(cmd, output_str)
         parsed_output_facts = len(facts)
         status = self._command_check_status(cmd, output_str, failed, parsed_output_facts)
-        facts.extend(self._command_end_check_results(cmd, target, decision.key, status, output_str, facts))
+        facts.extend(self._command_end_check_results(audit_cmd, target, decision.key, status, output_str, facts))
         for fact in facts:
-            fact.setdefault("source", cmd)
-        stored_facts = [running_fact] + list(facts)
+            fact.setdefault("source", audit_cmd)
+        stored_facts = [running_fact, *list(facts)]
         command_new_facts = running_store["new_facts"]
 
         for f in facts:
-            stored = self._store_fact(scan_id, target, f, cmd)
+            stored = self._store_fact(scan_id, target, f, audit_cmd)
             stored_facts.extend(stored["derived_facts"])
             if stored["created"] and f.get("type") != "check_result":
-                print(f"     [+] {fact_label}: {f['type']} -> {f['value']}")
+                safe_fact = stored["fact"]
+                print(f"     [+] {fact_label}: {safe_fact['type']} -> {safe_fact['value']}")
             command_new_facts += stored["new_facts"]
         self._sync_runtime_credentials_from_facts(target, facts)
         _result_id, unique_output = self.fact_store.add_command_result(
             scan_id=scan_id,
             host=target,
             command_key=decision.key,
-            command=cmd,
+            command=audit_cmd,
             output_hash=output_hash,
             output_bytes=len(output_str.encode("utf-8", "ignore")),
             parsed_facts=parsed_output_facts,
@@ -963,7 +1008,7 @@ class AIPipeline:
             "new_facts": command_new_facts,
             "parsed_facts": parsed_output_facts,
             "command_result": {
-                "command": cmd,
+                "command": audit_cmd,
                 "failed": failed,
                 "output_hash": output_hash,
                 "duplicate_output": not unique_output,
@@ -976,7 +1021,7 @@ class AIPipeline:
         self._record_command_trace(decision.to_dict(), result["command_result"])
         return result
 
-    def _skipped_command_result(self, cmd: str, reason: str) -> Dict[str, Any]:
+    def _skipped_command_result(self, cmd: str, reason: str) -> dict[str, Any]:
         return {
             "facts": [],
             "new_facts": 0,
@@ -1003,8 +1048,8 @@ class AIPipeline:
         command_key: str,
         status: str,
         output_str: str,
-        parsed_facts: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
+        parsed_facts: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
         results = [
             self._command_check_result_fact(
                 cmd=cmd,
@@ -1051,12 +1096,12 @@ class AIPipeline:
         status: str,
         output_str: str = "",
         kind: str = "",
-        scope: Dict[str, str] = None,
+        scope: Optional[dict[str, str]] = None,
         mode: str = "",
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         tool = self._command_tool_name(cmd)
         status = self._normalized_check_status(cmd, status, output_str)
-        payload = {
+        payload: dict[str, Any] = {
             "tool": tool,
             "command_key": command_key,
             "command": cmd,
@@ -1082,9 +1127,12 @@ class AIPipeline:
 
     def _normalized_check_status(self, cmd: str, status: str, output_str: str = "") -> str:
         text = (output_str or "").lower()
-        if self._command_tool_name(cmd) == "msf_check":
-            if "success:" in text or "appears to be vulnerable" in text or "is vulnerable" in text:
-                return "completed"
+        if self._command_tool_name(cmd) == "msf_check" and (
+            "success:" in text
+            or "appears to be vulnerable" in text
+            or "is vulnerable" in text
+        ):
+            return "completed"
         if "msf login check skipped" in text:
             return "skipped"
         if "[timeout]" in text or "killed after" in text or "timed out after" in text:
@@ -1148,7 +1196,7 @@ class AIPipeline:
             return "check_only"
         return "check_only"
 
-    def _command_check_scope(self, cmd: str, target: str) -> Dict[str, str]:
+    def _command_check_scope(self, cmd: str, target: str) -> dict[str, str]:
         url_match = re.search(r"\bhttps?://[^\s'\"<>]+", cmd or "", re.IGNORECASE)
         if url_match:
             return {"type": "endpoint", "value": self._canonical_check_url(url_match.group(0))}
@@ -1176,7 +1224,7 @@ class AIPipeline:
         host, port, proto = match.groups()
         return f"{host.lower()}:{int(port)}/{proto.lower()}"
 
-    def _internal_service_scopes_from_compact_state(self, cmd: str) -> List[str]:
+    def _internal_service_scopes_from_compact_state(self, cmd: str) -> list[str]:
         scopes = []
         seen = set()
         decoder = json.JSONDecoder()
@@ -1197,7 +1245,7 @@ class AIPipeline:
                 if not host or port in {None, ""}:
                     continue
                 try:
-                    scope = f"{host}:{int(port)}/{proto}"
+                    scope = f"{host}:{int(str(port))}/{proto}"
                 except (TypeError, ValueError):
                     continue
                 if scope not in seen:
@@ -1205,7 +1253,7 @@ class AIPipeline:
                     scopes.append(scope)
         return scopes
 
-    def _store_fact(self, scan_id: str, target: str, fact: Dict[str, Any], source: str) -> Dict[str, Any]:
+    def _store_fact(self, scan_id: str, target: str, fact: dict[str, Any], source: str) -> dict[str, Any]:
         """Store a parsed fact plus normalized derived facts.
 
         The canonical fact remains deduplicated; repeated sightings are kept by
@@ -1213,10 +1261,17 @@ class AIPipeline:
         endpoint and graph objects instead of reparsing free-form strings.
         """
         fact = self._scope_normalized_fact(target, fact)
+        safe_fact = dict(fact)
+        safe_value, secret_refs = self.fact_store.redactor.redact_fact(
+            safe_fact.get("type", ""), safe_fact.get("value", "")
+        )
+        safe_fact["value"] = safe_value
+        if secret_refs:
+            safe_fact["secret_refs"] = list(secret_refs)
         _fact_id, created = self.fact_store.add_fact_with_status(
-            scan_id, target, fact["type"], fact["value"], source,
-            confidence=fact.get("confidence", 100),
-            session_id=fact.get("session_id", "none"),
+            scan_id, target, safe_fact["type"], safe_fact["value"], source,
+            confidence=safe_fact.get("confidence", 100),
+            session_id=safe_fact.get("session_id", "none"),
         )
         new_facts = 1 if created else 0
         derived_facts = self._derived_facts_from_fact(target, fact, source)
@@ -1233,9 +1288,10 @@ class AIPipeline:
             "created": created,
             "new_facts": new_facts,
             "derived_facts": derived_facts,
+            "fact": safe_fact,
         }
 
-    def _scope_normalized_fact(self, target: str, fact: Dict[str, Any]) -> Dict[str, Any]:
+    def _scope_normalized_fact(self, target: str, fact: dict[str, Any]) -> dict[str, Any]:
         """Prevent external links from becoming in-scope web endpoints.
 
         Browser/crawler outputs often include vendor/documentation links. They
@@ -1255,7 +1311,7 @@ class AIPipeline:
         normalized["confidence"] = min(int(normalized.get("confidence", 60) or 60), 70)
         return normalized
 
-    def _derived_facts_from_fact(self, target: str, fact: Dict[str, Any], source: str) -> List[Dict[str, Any]]:
+    def _derived_facts_from_fact(self, target: str, fact: dict[str, Any], source: str) -> list[dict[str, Any]]:
         ftype = str(fact.get("type", "")).lower()
         value = str(fact.get("value", "")).strip()
         derived = []
@@ -1332,7 +1388,7 @@ class AIPipeline:
             "title": "",
         }, sort_keys=True)
 
-    def _network_graph_facts(self, target: str, ftype: str, value: str) -> List[Dict[str, Any]]:
+    def _network_graph_facts(self, target: str, ftype: str, value: str) -> list[dict[str, Any]]:
         host = self._target_host(target)
         if not host:
             return []
@@ -1400,7 +1456,7 @@ class AIPipeline:
                 })
         return facts
 
-    def _followup_commands_from_facts(self, facts: List[Dict[str, Any]]) -> List[str]:
+    def _followup_commands_from_facts(self, facts: list[dict[str, Any]]) -> list[str]:
         """Run safe verification commands emitted by earlier tools once."""
         commands = []
         allowed_prefixes = ("msf_check ", "searchsploit ", "plugin ")
@@ -1424,8 +1480,8 @@ class AIPipeline:
         return commands
 
     def _run_fact_driven_actions(
-        self, scan_id: str, target: str, facts: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        self, scan_id: str, target: str, facts: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """Run deterministic next actions implied by concrete facts.
 
         New facts are fed back into the selector for a bounded number of layers
@@ -1441,7 +1497,7 @@ class AIPipeline:
         commands_started = 0
         pending_batches = [(0, facts or [])]
 
-        def enqueue_result(result: Dict[str, Any], depth: int) -> None:
+        def enqueue_result(result: dict[str, Any], depth: int) -> None:
             if max_depth is not None and depth >= max_depth:
                 return
             if result.get("new_facts", 0) <= 0:
@@ -1552,8 +1608,8 @@ class AIPipeline:
         return None if value <= 0 else max(1, value)
 
     def _fact_driven_action_commands(
-        self, scan_id: str, target: str, facts: List[Dict[str, Any]]
-    ) -> List[str]:
+        self, scan_id: str, target: str, facts: list[dict[str, Any]]
+    ) -> list[str]:
         """Map facts to safe deterministic follow-up actions."""
         commands = []
         all_facts = self.fact_store.get_facts(scan_id, target)
@@ -1592,7 +1648,7 @@ class AIPipeline:
                 break
         return deduped
 
-    def _facts_include_cached_ssh_credential(self, facts: List[Dict[str, Any]]) -> bool:
+    def _facts_include_cached_ssh_credential(self, facts: list[dict[str, Any]]) -> bool:
         for fact in facts:
             if str(fact.get("type", "")).lower() != "credential":
                 continue
@@ -1606,8 +1662,8 @@ class AIPipeline:
         return False
 
     def _service_intelligence_commands(
-        self, scan_id: str, target: str, facts: List[Dict[str, Any]], all_pairs: set
-    ) -> List[str]:
+        self, scan_id: str, target: str, facts: list[dict[str, Any]], all_pairs: set
+    ) -> list[str]:
         """Run version-to-exploit intelligence for newly observed services."""
         evidence_keys = [
             key for key in (
@@ -1639,7 +1695,7 @@ class AIPipeline:
 
         return commands
 
-    def _service_intelligence_evidence_key(self, fact: Dict[str, Any]) -> str:
+    def _service_intelligence_evidence_key(self, fact: dict[str, Any]) -> str:
         if not self._fact_is_external_service_evidence(fact):
             return ""
         ftype = str(fact.get("type", "")).lower()
@@ -1655,10 +1711,10 @@ class AIPipeline:
             return ""
         return f"{ftype}:{value[:220]}"
 
-    def _facts_include_service_evidence(self, facts: List[Dict[str, Any]]) -> bool:
+    def _facts_include_service_evidence(self, facts: list[dict[str, Any]]) -> bool:
         return any(self._fact_is_external_service_evidence(fact) for fact in facts)
 
-    def _fact_is_external_service_evidence(self, fact: Dict[str, Any]) -> bool:
+    def _fact_is_external_service_evidence(self, fact: dict[str, Any]) -> bool:
         ftype = str(fact.get("type", "")).lower()
         value = str(fact.get("value", "")).strip().lower()
         source = str(fact.get("source", "")).lower()
@@ -1686,7 +1742,7 @@ class AIPipeline:
             for ftype, value in fact_pairs
         )
 
-    def _searchsploit_queries_from_facts(self, facts: List[Dict[str, Any]]) -> List[str]:
+    def _searchsploit_queries_from_facts(self, facts: list[dict[str, Any]]) -> list[str]:
         queries = []
         for fact in facts:
             if not self._fact_is_external_service_evidence(fact):
@@ -1788,15 +1844,16 @@ class AIPipeline:
                 return True
         return False
 
-    def _facts_indicate_cpanel_surface(self, facts: List[Dict[str, Any]]) -> bool:
+    def _facts_indicate_cpanel_surface(self, facts: list[dict[str, Any]]) -> bool:
         for fact in facts:
             ftype = str(fact.get("type", "")).lower()
             value = str(fact.get("value", "")).lower()
             if ftype == "application_access" and "cpanel" in value:
                 return False
-            if ftype in {"port_open", "web_surface", "web_server", "web_redirect"}:
-                if any(marker in value for marker in ("cpanel", "whm", ":2082", ":2083", ":2086", ":2087")):
-                    return True
+            if ftype in {"port_open", "web_surface", "web_server", "web_redirect"} and any(
+                marker in value for marker in ("cpanel", "whm", ":2082", ":2083", ":2086", ":2087")
+            ):
+                return True
         return False
 
     def _cpanel_already_verified(self, fact_pairs: set) -> bool:
@@ -1810,29 +1867,41 @@ class AIPipeline:
         return False
 
     def _service_action_commands(
-        self, target: str, facts: List[Dict[str, Any]], all_pairs: set
-    ) -> List[str]:
+        self, target: str, facts: list[dict[str, Any]], all_pairs: set
+    ) -> list[str]:
         """Add deterministic protocol-specific probes for newly observed services."""
         commands = []
         for port, service, value in self._open_service_ports(facts):
-            if self._is_ftp_service(port, service, value):
-                if not self._service_status_seen(all_pairs, ("ftp_anonymous_allowed", "ftp_anonymous_denied", "ftp_probe_failed"), port):
-                    commands.append(f"ftp_anonymous_check {target} {port}")
+            is_ftp = self._is_ftp_service(port, service, value)
+            if is_ftp and not self._service_status_seen(
+                all_pairs,
+                ("ftp_anonymous_allowed", "ftp_anonymous_denied", "ftp_probe_failed"),
+                port,
+            ):
+                commands.append(f"ftp_anonymous_check {target} {port}")
+            if is_ftp:
                 continue
 
-            if self._is_smtp_service(port, service, value):
-                if not self._service_status_seen(all_pairs, ("smtp_probe_completed", "smtp_probe_failed"), port):
-                    commands.append(f"smtp_probe {target} {port}")
+            is_smtp = self._is_smtp_service(port, service, value)
+            if is_smtp and not self._service_status_seen(
+                all_pairs,
+                ("smtp_probe_completed", "smtp_probe_failed"),
+                port,
+            ):
+                commands.append(f"smtp_probe {target} {port}")
+            if is_smtp:
                 continue
 
             db_service = self._database_service_for_port(port, service, value)
-            if db_service:
-                if not self._database_inventory_seen(all_pairs, db_service, port):
-                    if self._has_database_credentials(target, db_service):
-                        commands.append(f"db_inventory {target} {port} {db_service}")
+            if (
+                db_service
+                and not self._database_inventory_seen(all_pairs, db_service, port)
+                and self._has_database_credentials(target, db_service)
+            ):
+                commands.append(f"db_inventory {target} {port} {db_service}")
         return commands
 
-    def _open_service_ports(self, facts: List[Dict[str, Any]]) -> List[tuple]:
+    def _open_service_ports(self, facts: list[dict[str, Any]]) -> list[tuple]:
         ports = []
         for fact in facts:
             if str(fact.get("type", "")).lower() != "port_open":
@@ -1873,9 +1942,10 @@ class AIPipeline:
         for ftype, value in fact_pairs:
             if ftype != "service_status":
                 continue
-            if value.startswith(("db_inventory_completed:", "db_inventory_failed:")):
-                if f":{service}:{port}" in value or value.endswith(f":{port}"):
-                    return True
+            if value.startswith(("db_inventory_completed:", "db_inventory_failed:")) and (
+                f":{service}:{port}" in value or value.endswith(f":{port}")
+            ):
+                return True
         return False
 
     def _has_database_credentials(self, target: str, service: str) -> bool:
@@ -1888,7 +1958,7 @@ class AIPipeline:
             candidate_keys.add("mariadb")
         return any(creds.get(key) for key in candidate_keys)
 
-    def _web_path_action_commands(self, scan_id: str, target: str, facts: List[Dict[str, Any]]) -> List[str]:
+    def _web_path_action_commands(self, scan_id: str, target: str, facts: list[dict[str, Any]]) -> list[str]:
         endpoints = self._web_endpoints_from_facts(scan_id, target)
         if not endpoints:
             host = (target or "").strip().split("://")[-1].split("/")[0].split(":")[0]
@@ -1917,7 +1987,7 @@ class AIPipeline:
                 break
         return commands
 
-    def _web_link_action_commands(self, scan_id: str, target: str, facts: List[Dict[str, Any]]) -> List[str]:
+    def _web_link_action_commands(self, scan_id: str, target: str, facts: list[dict[str, Any]]) -> list[str]:
         urls = self._normalized_web_link_urls(scan_id, target, facts)
         commands = []
         limit = self._web_link_followup_command_limit()
@@ -1943,7 +2013,7 @@ class AIPipeline:
                     break
         return commands
 
-    def _normalized_web_link_urls(self, scan_id: str, target: str, facts: List[Dict[str, Any]]) -> List[str]:
+    def _normalized_web_link_urls(self, scan_id: str, target: str, facts: list[dict[str, Any]]) -> list[str]:
         endpoints = self._web_endpoints_from_facts(scan_id, target)
         if not endpoints:
             host = self._target_host(target)
@@ -2076,8 +2146,8 @@ class AIPipeline:
         return (target or "").strip().split("://")[-1].split("/")[0].split(":")[0]
 
     def _web_surface_action_commands(
-        self, scan_id: str, target: str, facts: List[Dict[str, Any]], all_pairs: set
-    ) -> List[str]:
+        self, scan_id: str, target: str, facts: list[dict[str, Any]], all_pairs: set
+    ) -> list[str]:
         """Render/crawl discovered web surfaces once, using ShardBrowser fallback when needed."""
         if not self._facts_include_web_surface(facts):
             return []
@@ -2118,7 +2188,7 @@ class AIPipeline:
                 break
         return commands
 
-    def _facts_include_web_surface(self, facts: List[Dict[str, Any]]) -> bool:
+    def _facts_include_web_surface(self, facts: list[dict[str, Any]]) -> bool:
         return any(
             str(fact.get("type", "")).lower() in {
                 "port_open", "web_server", "web_title", "web_surface",
@@ -2155,7 +2225,7 @@ class AIPipeline:
             for ftype, value in fact_pairs
         )
 
-    def _nuclei_seen(self, facts: List[Dict[str, Any]], fact_pairs: set, endpoint: str) -> bool:
+    def _nuclei_seen(self, facts: list[dict[str, Any]], fact_pairs: set, endpoint: str) -> bool:
         endpoint_l = endpoint.lower().rstrip("/")
         if any(
             ftype == "service_status" and value == f"nuclei_scan_completed:{endpoint_l}"
@@ -2176,7 +2246,7 @@ class AIPipeline:
                 return True
         return False
 
-    def _sync_runtime_credentials_from_facts(self, target: str, facts: List[Dict[str, Any]]) -> None:
+    def _sync_runtime_credentials_from_facts(self, target: str, facts: list[dict[str, Any]]) -> None:
         """Mirror concrete SSH credentials from parsed facts into the tool cache."""
         try:
             from core.tools.exploit_tools import register_credential
@@ -2201,7 +2271,7 @@ class AIPipeline:
                 user, password = cached_match.groups()
                 register_credential("ssh", host, user, password)
 
-    def _known_credentials_for_target(self, target: str) -> Dict[str, List[tuple]]:
+    def _known_credentials_for_target(self, target: str) -> dict[str, list[tuple]]:
         """Read known credentials from the unified store/legacy cache."""
         try:
             from core.tools.exploit_tools import get_all_known_creds_for_target
@@ -2240,8 +2310,8 @@ class AIPipeline:
         return seeded
 
     def _run_controlled_post_access_followups(
-        self, scan_id: str, target: str, facts: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
+        self, scan_id: str, target: str, facts: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         parsed_facts = 0
         new_facts = 0
         command_results = []
@@ -2262,8 +2332,8 @@ class AIPipeline:
         }
 
     def _controlled_post_access_commands_from_facts(
-        self, target: str, facts: List[Dict[str, Any]]
-    ) -> List[str]:
+        self, target: str, facts: list[dict[str, Any]]
+    ) -> list[str]:
         """Run read-only SSH inventory once after confirmed SSH authentication."""
         if not self._auto_ssh_inventory_enabled():
             return []
@@ -2275,7 +2345,7 @@ class AIPipeline:
         self.executed_post_access_commands.add(cmd)
         return [cmd]
 
-    def _facts_confirm_ssh_access(self, facts: List[Dict[str, Any]]) -> bool:
+    def _facts_confirm_ssh_access(self, facts: list[dict[str, Any]]) -> bool:
         for fact in facts:
             ftype = str(fact.get("type", "")).lower()
             value = str(fact.get("value", "")).lower()
@@ -2319,7 +2389,7 @@ class AIPipeline:
             return None
         return None if value <= 0 else max(1, value)
 
-    def _active_commands_from_facts(self, facts: List[Dict[str, Any]]) -> List[str]:
+    def _active_commands_from_facts(self, facts: list[dict[str, Any]]) -> list[str]:
         """Collect gated active commands for later execution after verification."""
         commands = []
         for fact in facts:
@@ -2334,8 +2404,8 @@ class AIPipeline:
         return commands[:3]
 
     def _active_followups_after_verification(
-        self, target: str, candidates: List[str], verification_facts: List[Dict[str, Any]]
-    ) -> List[str]:
+        self, target: str, candidates: list[str], verification_facts: list[dict[str, Any]]
+    ) -> list[str]:
         """Promote msf_run only after msf_check positively verifies the same module."""
         if not candidates or not self._active_msf_allowed(target):
             return []
@@ -2381,7 +2451,7 @@ class AIPipeline:
             CFG = {}
         return max(0, int(CFG.get("strategy", {}).get("max_active_msf_runs_per_scan", 1)))
 
-    def _target_in_authorized_scope(self, target: str, scopes: List[str]) -> bool:
+    def _target_in_authorized_scope(self, target: str, scopes: list[str]) -> bool:
         if not scopes:
             return False
         host = (target or "").strip().split("://")[-1].split("/")[0].split(":")[0]
@@ -2400,15 +2470,18 @@ class AIPipeline:
                 continue
         return False
 
-    def _expand_command_with_context(self, cmd: str, scan_id: str, target: str) -> List[str]:
+    def _expand_command_with_context(self, cmd: str, scan_id: str, target: str) -> list[str]:
         """Expand generic web commands across discovered HTTP endpoints."""
         parts = (cmd or "").strip().split(maxsplit=1)
         if len(parts) != 2:
             return [cmd]
         tool, arg = parts[0], parts[1].strip()
-        if tool == "bruteforce" and arg == f"ssh {target}":
-            if self._known_credentials_for_target(target).get("ssh"):
-                return [f"ssh_session {target}"]
+        if (
+            tool == "bruteforce"
+            and arg == f"ssh {target}"
+            and self._known_credentials_for_target(target).get("ssh")
+        ):
+            return [f"ssh_session {target}"]
         if arg != target:
             return [cmd]
 
@@ -2433,7 +2506,7 @@ class AIPipeline:
         selected = endpoints if limit is None else endpoints[:limit]
         return [f"{tool} {endpoint}" for endpoint in selected]
 
-    def _jmx_or_tomcat_endpoints(self, scan_id: str, target: str) -> List[str]:
+    def _jmx_or_tomcat_endpoints(self, scan_id: str, target: str) -> list[str]:
         host = self._target_host(target)
         endpoints = []
         seen = set()
@@ -2487,7 +2560,7 @@ class AIPipeline:
                 return True
         return False
 
-    def _web_endpoints_from_facts(self, scan_id: str, target: str) -> List[str]:
+    def _web_endpoints_from_facts(self, scan_id: str, target: str) -> list[str]:
         host = (target or "").strip().split("://")[-1].split("/")[0].split(":")[0]
         endpoints = []
         endpoint_keys = set()
@@ -2535,7 +2608,7 @@ class AIPipeline:
         if endpoint_host == target_host:
             return True
         try:
-            target_ip = ipaddress.ip_address(target_host)
+            ipaddress.ip_address(target_host)
             ipaddress.ip_address(endpoint_host)
             return False
         except ValueError:
@@ -2605,9 +2678,11 @@ class AIPipeline:
             if not self._fact_is_external_service_evidence(fact):
                 continue
             value = str(fact.get("value", "")).replace("\n", " ").replace("\r", " ").strip()
-            if fact.get("type") in {"web_endpoint", "web_link", "browser_rendered"}:
-                if not self._web_fact_in_target_scope(value, target):
-                    continue
+            if (
+                fact.get("type") in {"web_endpoint", "web_link", "browser_rendered"}
+                and not self._web_fact_in_target_scope(value, target)
+            ):
+                continue
             if value:
                 recon_bits.append(f"{fact['type']} -> {value}")
 
@@ -2621,9 +2696,9 @@ class AIPipeline:
         selected_bits = recon_bits if fact_limit is None else recon_bits[:fact_limit]
         return f"{cmd} {' | '.join(selected_bits)}"
 
-    def _exploit_select_compact_context(self, facts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _exploit_select_compact_context(self, facts: list[dict[str, Any]]) -> dict[str, Any]:
         """Build a bounded recon state for exploit_select when raw recon_data is thin."""
-        context: Dict[str, Any] = {
+        context: dict[str, Any] = {
             "open_ports": [],
             "internal_services": [],
         }
@@ -2667,7 +2742,7 @@ class AIPipeline:
         context["internal_services"] = context["internal_services"][:20]
         return {key: value for key, value in context.items() if value}
 
-    def _parse_port_fact_for_context(self, value: str) -> Dict[str, Any]:
+    def _parse_port_fact_for_context(self, value: str) -> dict[str, Any]:
         match = re.match(r"(?:(?P<host>[^:\s]+):)?(?P<port>\d+)/(?:tcp|udp)\s+\((?P<service>[^)]*)\)(?:\s+\[(?P<banner>.*?)\])?", value)
         if not match:
             return {}
@@ -2682,7 +2757,7 @@ class AIPipeline:
             item["banner"] = match.group("banner")[:120]
         return item
 
-    def _parse_internal_service_for_context(self, value: str) -> Dict[str, Any]:
+    def _parse_internal_service_for_context(self, value: str) -> dict[str, Any]:
         match = re.match(r"(?P<host>(?:\d{1,3}\.){3}\d{1,3}):(?P<port>\d+)/(?:tcp|udp)\s+\((?P<service>[^)]*)\)", value)
         if not match:
             return {}
@@ -2768,7 +2843,7 @@ class AIPipeline:
         )
         return any(marker in text for marker in failure_markers)
 
-    def _classify_task_result(self, task_result: Dict[str, Any]) -> str:
+    def _classify_task_result(self, task_result: dict[str, Any]) -> str:
         commands = task_result["commands"]
         parsed_facts = task_result["parsed_facts"]
         if self._has_blocked_stage_fact(commands):
@@ -2781,7 +2856,7 @@ class AIPipeline:
             return "no_new_facts"
         return "completed"
 
-    def _command_result_reason(self, command_results: List[Dict[str, Any]], parsed_facts: int, new_facts: int) -> str:
+    def _command_result_reason(self, command_results: list[dict[str, Any]], parsed_facts: int, new_facts: int) -> str:
         if not command_results:
             return "no_commands"
         if self._has_blocked_stage_fact(command_results):
@@ -2798,7 +2873,7 @@ class AIPipeline:
             return "facts_seen_but_already_known"
         return f"{new_facts}_new_facts"
 
-    def _has_blocked_stage_fact(self, command_results: List[Dict[str, Any]]) -> bool:
+    def _has_blocked_stage_fact(self, command_results: list[dict[str, Any]]) -> bool:
         for command in command_results:
             for ftype, value in command.get("fact_pairs", []):
                 if ftype == "stage_status" and str(value).endswith(":blocked_missing_credentials"):
@@ -2813,7 +2888,7 @@ class AIPipeline:
         reason: str,
         new_facts: int,
         parsed_facts: int,
-        commands: List[Dict[str, Any]],
+        commands: list[dict[str, Any]],
         duration: float,
     ):
         outcome = {
@@ -2832,7 +2907,7 @@ class AIPipeline:
         elif status == "no_new_facts":
             self.no_fact_tasks.append(task)
 
-    def _record_goal_trace(self, loop: int, context: Dict[str, Any], decision: Dict[str, Any]) -> None:
+    def _record_goal_trace(self, loop: int, context: dict[str, Any], decision: dict[str, Any]) -> None:
         self.goal_trace.append({
             "loop": loop,
             "goal": decision.get("goal", "conclude"),
@@ -2849,7 +2924,7 @@ class AIPipeline:
         scan_id: str,
         target: str,
         role: str,
-        result: Dict[str, Any],
+        result: dict[str, Any],
         loop: int,
     ) -> None:
         status = str((result or {}).get("llm_status", "")).strip().lower()
@@ -2880,14 +2955,14 @@ class AIPipeline:
             f"llm:{role}",
         )
 
-    def _update_llm_failure_counter(self, result: Dict[str, Any]) -> None:
+    def _update_llm_failure_counter(self, result: dict[str, Any]) -> None:
         status = str((result or {}).get("llm_status", "")).strip().lower()
         if status == "failed":
             self.consecutive_llm_failures += 1
         elif status == "ok":
             self.consecutive_llm_failures = 0
 
-    def _record_command_trace(self, decision: Dict[str, Any], result: Dict[str, Any] = None) -> None:
+    def _record_command_trace(self, decision: dict[str, Any], result: Optional[dict[str, Any]] = None) -> None:
         item = {
             "command": decision.get("command"),
             "key": decision.get("key"),
@@ -2907,7 +2982,7 @@ class AIPipeline:
             })
         self.command_trace.append(item)
 
-    def _print_stage_gates(self, context: Dict[str, Any]):
+    def _print_stage_gates(self, context: dict[str, Any]):
         gates = context.get("stage_gates") or {}
         if not gates:
             return

@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 import shutil
-from typing import List, Dict, Set
+from typing import Any, Optional
+
 
 class ToolRegistry:
     def __init__(self):
@@ -547,7 +548,7 @@ class ToolRegistry:
         key = (task or "").strip().lower().replace("-", "_").replace(" ", "_")
         return self.task_aliases.get(key, key)
 
-    def task_profile(self, task: str) -> Dict[str, object]:
+    def task_profile(self, task: str) -> dict[str, Any]:
         """Return scheduling metadata for a canonical task."""
         task = self.canonical_task(task)
         return dict(self.task_profiles.get(
@@ -585,7 +586,7 @@ class ToolRegistry:
         self._available_cache[binary_name] = available
         return available
 
-    def _tool_names_for_task(self, task: str, seen: Set[str] = None) -> List[str]:
+    def _tool_names_for_task(self, task: str, seen: Optional[set[str]] = None) -> list[str]:
         """Expand a task into concrete tool names, including nested tasks."""
         task = self.canonical_task(task)
         seen = seen or set()
@@ -602,7 +603,7 @@ class ToolRegistry:
         return list(dict.fromkeys(names))
 
     def get_commands_for_task(self, task: str, target: str, user: str = "root",
-                              password: str = "", _seen: Set[str] = None) -> List[str]:
+                              password: str = "", _seen: Optional[set[str]] = None) -> list[str]:
         """
         Translate a conceptual task into concrete CLI commands.
         Only returns commands whose binary is actually installed.
@@ -646,14 +647,14 @@ class ToolRegistry:
         """Check if a task is registered."""
         return self.canonical_task(task) in self.task_map
     
-    def get_available_tools_summary(self) -> Dict[str, List[str]]:
+    def get_available_tools_summary(self) -> dict[str, list[str]]:
         """Return a summary of which tools are available for which tasks."""
         summary = {}
-        for task, entries in self.task_map.items():
+        for task, _entries in self.task_map.items():
             summary[task] = self.get_available_tools_for_task(task)
         return summary
 
-    def get_available_tools_for_task(self, task: str) -> List[str]:
+    def get_available_tools_for_task(self, task: str) -> list[str]:
         """Return available tool names for one canonical task."""
         task = self.canonical_task(task)
         available = []
@@ -666,10 +667,10 @@ class ToolRegistry:
         """True when at least one command can run for the task."""
         return bool(self.get_available_tools_for_task(task))
 
-    def get_unavailable_tools_summary(self) -> Dict[str, List[str]]:
+    def get_unavailable_tools_summary(self) -> dict[str, list[str]]:
         """Return unavailable tools per task for startup diagnostics."""
         summary = {}
-        for task, entries in self.task_map.items():
+        for task, _entries in self.task_map.items():
             unavailable = []
             for binary_name in self._tool_names_for_task(task):
                 if not self._is_tool_available(binary_name):
@@ -681,7 +682,7 @@ class ToolRegistry:
         """Return how a registered tool is allowed to participate in pipeline flow."""
         return self.tool_execution_profiles.get(tool_name, "auto")
 
-    def get_coverage_report(self, registered_tools: List[str] = None) -> Dict[str, object]:
+    def get_coverage_report(self, registered_tools: Optional[list[str]] = None) -> dict[str, Any]:
         """Classify registry coverage without treating gated/manual tools as bugs."""
         if registered_tools is None:
             try:
@@ -721,7 +722,7 @@ class ToolRegistry:
             "unknown": sorted(registered - covered),
         }
 
-    def get_discovered_plugins_summary(self) -> List[Dict[str, str]]:
+    def get_discovered_plugins_summary(self) -> list[dict[str, str]]:
         """Return metadata for class-based plugins discovered under modules/."""
         if self._plugin_summary_cache is not None:
             return self._plugin_summary_cache

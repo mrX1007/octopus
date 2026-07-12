@@ -2,17 +2,30 @@
 """
 """
 
-import re
 import logging
+import re
+import shutil
+import subprocess
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-from bs4 import BeautifulSoup
-from ddgs import DDGS   # pip install duckduckgo-search
 
-# ─────────────────────────────────────────────
+try:
+    from bs4 import BeautifulSoup
+except ImportError:
+    BeautifulSoup = None
+
+try:
+    from ddgs import DDGS
+except ImportError:
+    # Compatibility for environments created from older OCTOPUS requirements.
+    try:
+        from duckduckgo_search import DDGS
+    except ImportError:
+        DDGS = None
+
 # HTTP SESSION SETUP (Resilience)
-# ─────────────────────────────────────────────
 
 def get_resilient_session() -> requests.Session:
     """
@@ -35,18 +48,18 @@ def get_resilient_session() -> requests.Session:
 session = get_resilient_session()
 
 
-# ─────────────────────────────────────────────
 # DDG SEARCH
-# ─────────────────────────────────────────────
 
 def web_search(query: str, max_results: int = 5) -> str:
     """
     Search DuckDuckGo with HARD TIMEOUT.
-    v3.2: Wrapped in threading timeout to prevent hanging.
+    Uses a worker-thread timeout to prevent hanging.
     """
     import threading
 
     print(f"  [*] Searching: {query}")
+    if DDGS is None:
+        return "[!] Search dependency unavailable. Install the 'ddgs' package."
     result_container = [None]
 
     def _do_search():
@@ -75,14 +88,10 @@ def web_search(query: str, max_results: int = 5) -> str:
     return result_container[0]
 
 
-# ─────────────────────────────────────────────
-# CVE SPECIFIC SEARCH (ENHANCED v3.0)
-# ─────────────────────────────────────────────
-
 def search_cve(cve_id: str) -> str:
     """
     Search for a specific CVE.
-    v3.2: FAST — DDG + NVD only. Removed MITRE (too slow/blocks).
+    Uses DDG and NVD; MITRE is excluded because it is slow and often blocks.
     Total max time: ~20s.
     """
     print(f"  [*] Looking up {cve_id}...")
@@ -181,14 +190,10 @@ def search_fix(vuln_name: str) -> str:
     return web_search(query, max_results=3)
 
 
-# ─────────────────────────────────────────────
-# PAGE FETCHER (v3.0 — scrapling-enhanced)
-# ─────────────────────────────────────────────
-
 def fetch_page(url: str, max_chars: int = 3000, use_scrapling: bool = False) -> str:
     """
     Fetch a URL and return extracted plain text.
-    v3.0: Can use scrapling for JS-heavy pages.
+    Can use Scrapling for JavaScript-heavy pages.
     Strips all HTML tags. Truncated to max_chars for LLM context.
     """
     # Try scrapling first if requested
@@ -198,6 +203,8 @@ def fetch_page(url: str, max_chars: int = 3000, use_scrapling: bool = False) -> 
             return scrapling_result
 
     # Standard requests fallback
+    if BeautifulSoup is None:
+        return "[!] Page parsing dependency unavailable. Install 'beautifulsoup4'."
     try:
         resp = session.get(url, timeout=10)  # Was 15s, reduced to prevent blocking
         resp.raise_for_status()
@@ -211,7 +218,7 @@ def fetch_page(url: str, max_chars: int = 3000, use_scrapling: bool = False) -> 
         text = soup.get_text(separator="\n", strip=True)
 
         # collapse blank lines
-        lines = [l for l in text.splitlines() if l.strip()]
+        lines = [line for line in text.splitlines() if line.strip()]
         clean = "\n".join(lines)
 
         if len(clean) > max_chars:
@@ -244,7 +251,7 @@ def _fetch_with_scrapling(url: str, max_chars: int = 3000) -> str:
             text = body.text(separator="\n", strip=True) if body else page.text()
 
             # Clean up
-            lines = [l for l in text.splitlines() if l.strip()]
+            lines = [line for line in text.splitlines() if line.strip()]
             clean = "\n".join(lines)
 
             if len(clean) > max_chars:
@@ -255,16 +262,11 @@ def _fetch_with_scrapling(url: str, max_chars: int = 3000) -> str:
             return None
     except ImportError:
         return None
-    except Exception as e:
+    except Exception:
         return None
 
 
-# ─────────────────────────────────────────────
 # TOOL DISPATCH HANDLER
-# ─────────────────────────────────────────────
-
-import subprocess
-import shutil
 
 def search_searchsploit(query: str) -> str:
     """
@@ -297,7 +299,7 @@ def search_searchsploit(query: str) -> str:
 
 def handle_search_dispatch(query: str) -> str:
     """
-    v7.0: Smarter routing. Detects 'service + version' and checks searchsploit first.
+    Detects 'service + version' and checks searchsploit first.
     Also handles CVEs and specific PoC requests.
     """
     query = query.strip()
@@ -306,9 +308,10 @@ def handle_search_dispatch(query: str) -> str:
     cve_pattern = re.compile(r'CVE-\d{4}-\d{4,7}', re.IGNORECASE)
     cve_match = cve_pattern.search(query)
     if cve_match:
-        # v7.0: searchsploit for CVEs is often faster/better than web search
+        # Local searchsploit lookup is generally faster than a web search.
         cve_id = cve_match.group()
-        import subprocess, shutil
+        import shutil
+        import subprocess
         if shutil.which("searchsploit"):
             try:
                 res = subprocess.run(["searchsploit", "--cve", cve_id], capture_output=True, text=True, timeout=10)
@@ -326,7 +329,8 @@ def handle_search_dispatch(query: str) -> str:
     # If the query looks like a service version, hit searchsploit BEFORE web search
     version_pattern = re.compile(r'^[a-zA-Z0-9\-\_]+\s+\d+\.\d+')
     if version_pattern.search(query):
-        import subprocess, shutil
+        import shutil
+        import subprocess
         if shutil.which("searchsploit"):
             try:
                 res = subprocess.run(["searchsploit", query], capture_output=True, text=True, timeout=10)
@@ -337,7 +341,7 @@ def handle_search_dispatch(query: str) -> str:
 
     # 4. Exploit / PoC keywords — target github and recent years
     if any(word in query.lower() for word in ["exploit", "poc", "payload", "rce", "lfi", "sqli"]):
-        # v7.0: Bias towards recent GitHub PoCs
+        # Prefer recent GitHub PoCs.
         from datetime import datetime
         year = datetime.now().year
         enhanced_query = f"{query} exploit OR poc site:github.com ({year} OR {year-1} OR {year-2})"
@@ -351,9 +355,7 @@ def handle_search_dispatch(query: str) -> str:
     return web_search(query, max_results=5)
 
 
-# ─────────────────────────────────────────────
 # QUICK TEST
-# ─────────────────────────────────────────────
 
 if __name__ == "__main__":
     print("[ search.py test ]\n")

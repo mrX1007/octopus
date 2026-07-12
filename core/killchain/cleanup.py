@@ -3,13 +3,6 @@
 Stage 9: Stealth cleanup and anti-forensics.
 """
 
-import os
-import re
-import time
-import socket
-import shutil
-import subprocess
-import concurrent.futures
 
 try:
     import paramiko
@@ -17,7 +10,7 @@ except ImportError:
     paramiko = None
 
 try:
-    from config import CFG, find_wordlist, find_all_wordlists
+    from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
     def find_wordlist(cat): return ""
@@ -36,16 +29,14 @@ C_MAGENTA = "\033[95m"
 C_RESET  = "\033[0m"
 
 
-# ═══════════════════════════════════════════════
 # PARAMIKO SSH HELPERS (shared across stages)
-# ═══════════════════════════════════════════════
 
 
 def stealth_cleanup(host: str, user: str, password: str, port: int = 22) -> str:
     """
     Stage 9: Remove ALL forensic traces from the target.
     Clears logs, history, planted files, and SSH artifacts.
-    v7.0: Essential for remaining undetected after assessment.
+    Intended for authorized post-assessment artifact cleanup.
     """
     print(f"\n  {C_MAGENTA}{'─' * 55}{C_RESET}")
     print(f"  {C_MAGENTA}  STAGE 9 — STEALTH CLEANUP: {user}@{host}{C_RESET}")
@@ -160,7 +151,7 @@ def stealth_cleanup(host: str, user: str, password: str, port: int = 22) -> str:
                 print(f" {C_YELLOW}✗ ({e}){C_RESET}")
 
         # Summary
-        output += f"[CLEANUP RESULTS]\n"
+        output += "[CLEANUP RESULTS]\n"
         output += f"  Successfully cleaned: {len(cleaned)}/{len(_CLEANUP_COMMANDS)}\n"
         for item in cleaned:
             output += f"    ✓ {item}\n"
@@ -178,5 +169,3 @@ def stealth_cleanup(host: str, user: str, password: str, port: int = 22) -> str:
         print(f"\n    {C_GREEN}[+] Cleanup session closed.{C_RESET}")
 
     return output
-
-

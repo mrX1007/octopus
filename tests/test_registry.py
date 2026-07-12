@@ -3,11 +3,12 @@
 
 import os
 import sys
+
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.tools.registry import tool, get_tool, list_tools, build_menu, _REGISTRY
+from core.tools.registry import _REGISTRY, build_menu, get_tool, list_tools, tool
 
 
 @pytest.fixture(autouse=True)

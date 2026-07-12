@@ -6,25 +6,37 @@ Extracted from octopus.py for cleaner architecture.
 All UI primitives live here.
 """
 
-import os
-import sys
 import atexit
 import logging
+import os
 import readline
+import sys
 
 __all__ = [
-    "banner", "divider", "prompt", "success", "warn", "error", "info",
-    "confirm", "run_with_spinner", "print_rich_table", "print_results_table",
-    "print_reporting_sections", "setup_readline", "console", "RICH_AVAILABLE",
+    "RICH_AVAILABLE",
+    "banner",
+    "confirm",
+    "console",
+    "divider",
+    "error",
+    "info",
+    "print_reporting_sections",
+    "print_results_table",
+    "print_rich_table",
+    "prompt",
+    "run_with_spinner",
+    "setup_readline",
+    "success",
+    "warn",
 ]
 
 # ─── Rich Console (graceful fallback) ───
 try:
+    from rich import print as rprint
     from rich.console import Console
     from rich.panel import Panel
-    from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
     from rich.table import Table as RichTable
-    from rich import print as rprint
     RICH_AVAILABLE = True
     console = Console()
 except ImportError:
@@ -38,10 +50,7 @@ except ImportError:
 
 import re as _re
 
-
-# ─────────────────────────────────────────────
 # BANNER
-# ─────────────────────────────────────────────
 
 def banner(version: str = "1.0.0"):
     """Print the OCTOPUS ASCII banner."""
@@ -63,9 +72,7 @@ def banner(version: str = "1.0.0"):
 """)
 
 
-# ─────────────────────────────────────────────
 # HELPERS
-# ─────────────────────────────────────────────
 
 def divider(label=""):
     """Print a horizontal divider with optional label."""
@@ -110,9 +117,7 @@ def confirm(question: str) -> bool:
     return ans == "y"
 
 
-# ─────────────────────────────────────────────
 # READLINE TAB COMPLETION + HISTORY
-# ─────────────────────────────────────────────
 
 _HISTORY_FILE = os.path.expanduser("~/.octopus_history")
 
@@ -163,9 +168,7 @@ def setup_readline():
     atexit.register(readline.write_history_file, _HISTORY_FILE)
 
 
-# ─────────────────────────────────────────────
 # RICH PROGRESS HELPERS
-# ─────────────────────────────────────────────
 
 def run_with_spinner(description: str, func, *args, **kwargs):
     """Run a function with a Rich spinner. Falls back to plain output."""
@@ -198,12 +201,10 @@ def print_rich_table(title: str, columns: list, rows: list):
         print(f"\033[96m{header}\033[0m")
         print(f"  {'─' * (len(columns) * 15)}")
         for row in rows:
-            print("  " + "".join(f"{str(c):<15}" for c in row))
+            print("  " + "".join(f"{c!s:<15}" for c in row))
 
 
-# ─────────────────────────────────────────────
 # RESULTS TABLE
-# ─────────────────────────────────────────────
 
 def _truncate(value, limit=250):
     text = str(value or "")
@@ -218,13 +219,13 @@ def print_reporting_sections(result: dict):
     """Print deterministic reporting blocks shared by all CLI entry points."""
     outcome = result.get("outcome_summary") or []
     if outcome:
-        print(f"\n  \033[95m[ FINAL OUTCOME ]\033[0m")
+        print("\n  \033[95m[ FINAL OUTCOME ]\033[0m")
         for line in outcome:
             print(f"  \033[95m  •\033[0m {_truncate(line, 300)}")
 
     access_findings = result.get("access_findings") or []
     if access_findings:
-        print(f"\n  \033[91m[ ACCESS FINDINGS ]\033[0m")
+        print("\n  \033[91m[ ACCESS FINDINGS ]\033[0m")
         for item in access_findings[:8]:
             print(
                 f"  \033[91m  •\033[0m {item.get('severity', 'INFO')}: "
@@ -236,12 +237,12 @@ def print_reporting_sections(result: dict):
 
     risk_explanation = result.get("risk_explanation")
     if risk_explanation:
-        print(f"\n  \033[95m[ RISK EXPLANATION ]\033[0m")
+        print("\n  \033[95m[ RISK EXPLANATION ]\033[0m")
         print(f"  \033[95m  •\033[0m {_truncate(risk_explanation, 300)}")
 
     finding_groups = result.get("finding_groups") or []
     if finding_groups:
-        print(f"\n  \033[93m[ FINDING STATUS ]\033[0m")
+        print("\n  \033[93m[ FINDING STATUS ]\033[0m")
         for group in finding_groups[:10]:
             print(
                 f"  \033[93m  •\033[0m {group.get('module')} "
@@ -262,7 +263,7 @@ def print_reporting_sections(result: dict):
 
     attack_path = result.get("attack_path") or []
     if attack_path:
-        print(f"\n  \033[95m[ ATTACK PATH ]\033[0m")
+        print("\n  \033[95m[ ATTACK PATH ]\033[0m")
         for idx, step in enumerate(attack_path[:10], 1):
             print(
                 f"  \033[95m  {idx}.\033[0m {step.get('stage')}: "
@@ -271,7 +272,7 @@ def print_reporting_sections(result: dict):
 
     remediations = result.get("remediations") or []
     if remediations:
-        print(f"\n  \033[92m[ REMEDIATION ]\033[0m")
+        print("\n  \033[92m[ REMEDIATION ]\033[0m")
         for item in remediations[:10]:
             print(f"  \033[92m  •\033[0m {item.get('service', 'unknown')}: {_truncate(item.get('recommendation'), 240)}")
 
@@ -319,7 +320,7 @@ def print_results_table(result: dict):
         print(f"  {rc}RISK LEVEL: {risk}\033[0m")
         print(f"{'═'*70}")
         if vulns:
-            print(f"\n  \033[91m[ VULNERABILITIES FOUND ]\033[0m")
+            print("\n  \033[91m[ VULNERABILITIES FOUND ]\033[0m")
             print(f"  {'─'*66}")
             print(f"  {'SEVERITY':<12} {'PORT':<10} {'SERVICE':<20} {'NAME'}")
             print(f"  {'─'*66}")
@@ -330,12 +331,12 @@ def print_results_table(result: dict):
                 print(f"  {sc}{sev:<12}\033[0m {v['port'][:8]:<10} {v['service'][:18]:<20} {v['vuln_name'][:30]}")
             print(f"  {'─'*66}")
         else:
-            print(f"  \033[92m[ No vulnerabilities parsed ]\033[0m")
+            print("  \033[92m[ No vulnerabilities parsed ]\033[0m")
 
     print_reporting_sections(result)
 
     if facts:
-        print(f"\n  \033[96m[ CONFIRMED INTELLIGENCE ]\033[0m")
+        print("\n  \033[96m[ CONFIRMED INTELLIGENCE ]\033[0m")
         for f in facts:
             clean = _re.sub(r'<thought>.*?</thought>', '', str(f), flags=_re.DOTALL).strip()
             clean_lines = []

@@ -1,5 +1,5 @@
 """
-OCTOPUS v11 — PowerShell Stager & Dropper Generator.
+PowerShell stager and dropper generator.
 
 Generates various PowerShell-based delivery mechanisms:
   - IEX download cradle (in-memory execution)
@@ -14,12 +14,10 @@ payload (Python implant or shellcode) from the C2 server.
 
 import base64
 import logging
-import os
 import random
 import secrets
 import string
 import textwrap
-from typing import List, Optional
 
 logger = logging.getLogger("octopus.c2.implants.powershell")
 
@@ -461,7 +459,7 @@ def _rand_var_vbs(min_len: int = 4, max_len: int = 8) -> str:
     return name
 
 
-def _split_url_for_obfuscation(url: str) -> List[str]:
+def _split_url_for_obfuscation(url: str) -> list[str]:
     """Split a URL into random-length parts for string obfuscation.
 
     Breaking up URLs prevents static analysis tools from extracting
@@ -473,7 +471,7 @@ def _split_url_for_obfuscation(url: str) -> List[str]:
     Returns:
         List of URL fragment strings.
     """
-    parts: List[str] = []
+    parts: list[str] = []
     i = 0
     while i < len(url):
         chunk_size = random.randint(3, 10)

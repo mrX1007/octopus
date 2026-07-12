@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import re
-from typing import List
 
 from .common import BaseParser, Fact, fact, tool_lower
 
@@ -9,11 +8,11 @@ from .common import BaseParser, Fact, fact, tool_lower
 class ASMParser(BaseParser):
     family = "asm"
 
-    def parse(self, tool_name: str, raw_output: str, session_id: str) -> List[Fact]:
+    def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
         tool = tool_lower(tool_name)
         if not any(marker in tool for marker in ("subfinder", "amass", "dnsx", "httpx", "naabu", "tlsx", "wayback", "gau")):
             return []
-        facts: List[Fact] = []
+        facts: list[Fact] = []
         for line in (raw_output or "").splitlines():
             line = line.strip()
             if not line or line.startswith("["):

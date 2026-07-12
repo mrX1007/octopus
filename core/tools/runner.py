@@ -4,57 +4,90 @@ Main tool dispatcher, interactive tool selector, and command execution.
 Extracted from tools.py.
 """
 
-import subprocess
+import concurrent.futures
+import contextlib
+import inspect
+import ipaddress
+import logging
 import os
 import re
-import concurrent.futures
-import logging
+import shlex
+import signal
+import subprocess
+import sys
+from typing import Any, Optional
 from urllib.parse import urlparse
 
-# ─────────────────────────────────────────────
-# IMPORTS FROM SHARED BASE (breaks circular deps)
-# ─────────────────────────────────────────────
-from core.tools.base import (
-    run_tool, ToolResult, _fmt_elapsed, _nuclei_live_summary,
-    C_RESET, C_RED,
+from core.execution import (
+    ExecutionContext,
+    ExecutionPolicy,
+    ToolInvocation,
+    current_execution_context,
+    redact_sensitive_command,
 )
 
-# ─────────────────────────────────────────────
+# IMPORTS FROM SHARED BASE (breaks circular deps)
+from core.tools.base import (
+    ToolResult,
+    _fmt_elapsed,
+    _nuclei_live_summary,
+    get_tool_config,
+)
+
 # IMPORTS FROM SIBLING MODULES
-# ─────────────────────────────────────────────
 from core.tools.exploit_tools import (
     get_best_creds_for_target,
-    _is_internal_ip, run_bruteforce, run_web_login_bruteforce,
+    run_bruteforce,
     run_jmx2rce_scan,
-)
-from core.tools.recon_tools import (
-    run_nmap, run_whois, run_whatweb, run_curl_headers,
-    run_dig, run_sslscan, run_ffuf, run_enum4linux,
-    run_smbclient, run_wpscan, run_sqlmap, run_nikto,
-    run_scrapling_fetch,
-    run_ssh_user_enum, run_ftp_anonymous_check, run_smtp_probe,
+    run_web_login_bruteforce,
 )
 from core.tools.post_tools import (
-    _run_ssh_session_interactive, _run_killchain_stage,
-    _run_killchain_interactive, _run_waf_detect,
-    _run_shodan_interactive, _run_shodan_host,
-    _run_shodan_vulns, _run_shodan_range,
+    _run_cpanel_exploit,
     _run_crack_hashes,
-    _run_cpanel_exploit, _run_shardbrowser_osint,
+    _run_killchain_interactive,
+    _run_killchain_stage,
+    _run_shardbrowser_osint,
+    _run_shodan_host,
+    _run_shodan_interactive,
+    _run_shodan_range,
+    _run_shodan_vulns,
+    _run_ssh_session_interactive,
+    _run_waf_detect,
     run_default_recon,
+)
+from core.tools.recon_tools import (
+    run_curl_headers,
+    run_dig,
+    run_enum4linux,
+    run_ffuf,
+    run_ftp_anonymous_check,
+    run_nikto,
+    run_nmap,
+    run_scrapling_fetch,
+    run_smbclient,
+    run_smtp_probe,
+    run_sqlmap,
+    run_ssh_user_enum,
+    run_sslscan,
+    run_whatweb,
+    run_whois,
+    run_wpscan,
 )
 from core.tools.targeting import (
     detect_web_ports_from_nmap as _detect_web_ports_from_nmap,
+)
+from core.tools.targeting import (
     nmap_has_any_open_port as _nmap_has_any_open_port,
-    nmap_service_looks_web as _nmap_service_looks_web,
+)
+from core.tools.targeting import (
     target_looks_domain as _target_looks_domain,
+)
+from core.tools.targeting import (
     web_urls_from_ports as _web_urls_from_ports,
 )
 
-# ─────────────────────────────────────────────
 # TOOLS MENU — used by interactive_tool_run()
 # and run_single_tool()
-# ─────────────────────────────────────────────
 TOOLS_MENU = {
     "1":  ("nmap",               run_nmap),
     "2":  ("whois",              run_whois),
@@ -90,7 +123,7 @@ TOOLS_MENU = {
     "32": ("shodan range",       lambda t: _run_shodan_range(t)),
     "33": ("cpanel exploit",     lambda t: _run_cpanel_exploit(t)),
     "34": ("shardbrowser",       lambda t: _run_shardbrowser_osint(t)),
-    # ── v9.0: Active Directory ──
+    # Active Directory
     "35": ("AD enumerate",       lambda t: _run_ad_tool("enum", t)),
     "36": ("AS-REP Roast",       lambda t: _run_ad_tool("asrep", t)),
     "37": ("Kerberoast",         lambda t: _run_ad_tool("kerberoast", t)),
@@ -98,11 +131,11 @@ TOOLS_MENU = {
     "39": ("Pass-the-Hash",      lambda t: _run_ad_tool("pth", t)),
     "40": ("PsExec",             lambda t: _run_ad_tool("psexec", t)),
     "41": ("WMIExec",            lambda t: _run_ad_tool("wmiexec", t)),
-    # ── v9.0: Pivoting ──
+    # Pivoting
     "42": ("SOCKS proxy",        lambda t: _run_pivot_tool("socks", t)),
     "43": ("port forward",       lambda t: _run_pivot_tool("forward", t)),
     "44": ("network recon",      lambda t: _run_pivot_tool("netinfo", t)),
-    # ── v9.0: C2 Implants ──
+    # C2 implants
     "45": ("build Go implant",   lambda t: _run_c2_build("go", t)),
     "46": ("build Py implant",   lambda t: _run_c2_build("python", t)),
     "47": ("build PS stager",    lambda t: _run_c2_build("powershell", t)),
@@ -111,9 +144,34 @@ TOOLS_MENU = {
     "50": ("SMTP probe",         run_smtp_probe),
 }
 
+_MENU_POLICY_NAMES = {
+    "18": "ssh_session",
+    "19": "killchain_vuln_assess",
+    "20": "killchain_exploit",
+    "21": "killchain_privesc",
+    "22": "killchain_persist",
+    "23": "killchain_lateral",
+    "24": "killchain_exfil",
+    "25": "killchain_full",
+    "27": "killchain_cleanup",
+    "33": "cpanel_exploit",
+    "36": "asrep_roast",
+    "37": "kerberoast",
+    "38": "dcsync",
+    "39": "pass_the_hash",
+    "40": "psexec",
+    "41": "wmiexec",
+    "42": "socks_proxy",
+    "43": "port_forward",
+    "45": "build_go_implant",
+    "46": "build_python_implant",
+    "47": "build_ps_stager",
+    "48": "dns_c2_listener",
+}
+
 
 def _run_registered_extended_tool(results: dict, plan_lines: list[str], tool_name: str,
-                                  target: str, result_key: str = None) -> None:
+                                  target: str, result_key: Optional[str] = None) -> None:
     from core.tools.registry import get_tool
     tool_def = get_tool(tool_name)
     label = result_key or tool_name
@@ -125,6 +183,19 @@ def _run_registered_extended_tool(results: dict, plan_lines: list[str], tool_nam
         deps = ",".join(tool_def.requires or []) or "dependency"
         plan_lines.append(f"skip {label}: unavailable:{deps}")
         results[label] = f"[N MODE] {tool_name} skipped: unavailable dependency: {deps}"
+        return
+    context = current_execution_context()
+    invocation = ToolInvocation(
+        executable=tool_name,
+        argv=(tool_name, target),
+        raw_command=f"{tool_name} {target}",
+        registered_name=tool_def.name,
+        targets=(target,),
+    )
+    decision = _EXECUTION_POLICY.authorize_registered(invocation, context)
+    if not decision.allowed:
+        plan_lines.append(f"skip {label}: policy_denied:{decision.reason}")
+        results[label] = _execution_denied(decision.reason, context.request_id)
         return
     try:
         plan_lines.append(f"run {label}: {tool_name} {target}")
@@ -152,6 +223,19 @@ def _run_registered_extended_tools_concurrent(results: dict, plan_lines: list[st
             deps = ",".join(tool_def.requires or []) or "dependency"
             plan_lines.append(f"skip {label}: unavailable:{deps}")
             results[label] = f"[X MODE] {tool_name} skipped: unavailable dependency: {deps}"
+            continue
+        context = current_execution_context()
+        invocation = ToolInvocation(
+            executable=tool_name,
+            argv=(tool_name, target),
+            raw_command=f"{tool_name} {target}",
+            registered_name=tool_def.name,
+            targets=(target,),
+        )
+        decision = _EXECUTION_POLICY.authorize_registered(invocation, context)
+        if not decision.allowed:
+            plan_lines.append(f"skip {label}: policy_denied:{decision.reason}")
+            results[label] = _execution_denied(decision.reason, context.request_id)
             continue
         plan_lines.append(f"run {label}: {tool_name} {target}")
         prepared.append((label, tool_name, target, tool_def.func))
@@ -262,9 +346,7 @@ def _web_fingerprint(results: dict, url: str) -> str:
     for line in text.splitlines():
         stripped = line.strip()
         low = stripped.lower()
-        if re.match(r"^http/\d", low):
-            tokens.append(re.sub(r"\s+", " ", low))
-        elif low.startswith(("server:", "x-powered-by:", "location:")):
+        if re.match(r"^http/\d", low) or low.startswith(("server:", "x-powered-by:", "location:")):
             tokens.append(re.sub(r"\s+", " ", low))
     for pattern in (
         r"HTTPServer\[([^\]]+)\]",
@@ -376,7 +458,7 @@ def _run_exhaustive_applicable_coverage(target: str, results: dict) -> dict:
         web_ports = ["80"]
     web_urls = _web_urls_from_ports(target, web_ports) if has_web else []
 
-    print(f"\n  [*] X mode: exhaustive safe/applicable coverage...")
+    print("\n  [*] X mode: exhaustive safe/applicable coverage...")
 
     if _target_looks_domain(target):
         for tool_name in ("subfinder", "amass_enum", "dnsx", "wayback_urls", "gau_urls"):
@@ -447,17 +529,31 @@ def _run_exhaustive_applicable_coverage(target: str, results: dict) -> dict:
     results["x_mode_plan"] = "\n".join(plan_lines)
     return results
 
-# ─────────────────────────────────────────────
 # INDIVIDUAL TOOLS
-# ─────────────────────────────────────────────
 
 
 
-def run_single_tool(tool_key: str, target: str) -> str:
+def run_single_tool(
+    tool_key: str,
+    target: str,
+    execution_context: Optional[ExecutionContext] = None,
+) -> str:
     """Run one tool by its menu key. Used by AI tool dispatch."""
     if tool_key in TOOLS_MENU:
         name, func = TOOLS_MENU[tool_key]
-        return func(target)
+        context = _execution_context_or_current(execution_context)
+        policy_name = _MENU_POLICY_NAMES.get(tool_key, name.replace(" ", "_"))
+        invocation = ToolInvocation(
+            executable=f"menu:{tool_key}",
+            argv=(f"menu:{tool_key}", target),
+            raw_command=f"menu:{tool_key} {target}",
+            registered_name=policy_name,
+            targets=(target,),
+        )
+        decision = _EXECUTION_POLICY.authorize_registered(invocation, context)
+        if not decision.allowed:
+            return _execution_denied(decision.reason, context.request_id)
+        return _bounded_tool_result(func(target), context)
     return f"[!] Unknown tool key: {tool_key}"
 
 
@@ -475,37 +571,93 @@ def format_recon_for_llm(results: dict) -> str:
     return output
 
 
+_EXECUTION_POLICY = ExecutionPolicy()
+_NETWORK_PARAMETER_NAMES = {"target", "target_ip", "host", "url"}
+
+
+def _execution_context_or_current(
+    execution_context: Optional[ExecutionContext] = None,
+) -> ExecutionContext:
+    return execution_context or current_execution_context()
+
+
+def _execution_denied(reason: str, request_id: str) -> str:
+    return f"[!] Execution denied: {reason} (request_id={request_id})"
+
+
+def _redact_command(command: str) -> str:
+    return redact_sensitive_command(command)
+
+
+def _truncate_output_text(value: str, max_output_bytes: int) -> str:
+    raw = (value or "").encode("utf-8", "replace")
+    if len(raw) <= max_output_bytes:
+        return value
+    marker = f"\n[OUTPUT LIMIT] truncated at {max_output_bytes} bytes"
+    marker_bytes = marker.encode("utf-8")
+    kept = raw[:max(0, max_output_bytes - len(marker_bytes))]
+    return kept.decode("utf-8", "ignore") + marker
+
+
+def _bounded_tool_result(result: Any, context: ExecutionContext):
+    if isinstance(result, ToolResult):
+        result.stdout = _truncate_output_text(result.stdout, context.max_output_bytes)
+        result.stderr = _truncate_output_text(result.stderr, context.max_output_bytes)
+        result.command = _redact_command(result.command)
+        return result
+    return _truncate_output_text(str(result), context.max_output_bytes)
+
+
+def _bound_network_targets(func, positional_args: list, kwargs: dict) -> tuple[str, ...]:
+    try:
+        bound = inspect.signature(func).bind_partial(*positional_args, **kwargs)
+    except (TypeError, ValueError):
+        return ()
+    values = []
+    for name in _NETWORK_PARAMETER_NAMES:
+        value = bound.arguments.get(name)
+        if isinstance(value, str) and value and value not in values:
+            values.append(value)
+    return tuple(values)
+
+
 
 # ── PYTHON REPL (Dynamic Script Execution) ──
-def run_python_repl(code: str) -> str:
-    import sys
-    from io import StringIO
-    import traceback
+def run_python_repl(
+    code: str,
+    execution_context: Optional[ExecutionContext] = None,
+) -> str:
+    """Run isolated Python only for an explicitly approved operator context."""
+    context = _execution_context_or_current(execution_context)
+    decision = _EXECUTION_POLICY.authorize_python_repl(code, context)
+    if not decision.allowed:
+        return _execution_denied(decision.reason, context.request_id)
+    result = _execute_process(
+        [sys.executable, "-I", "-c", code],
+        context=context,
+        tool="python_repl",
+        timeout=context.max_runtime_seconds,
+        shell=False,
+        display_command="python -I -c [APPROVED CODE]",
+    )
+    return str(result)
 
-    old_stdout = sys.stdout
-    redirected_output = sys.stdout = StringIO()
-
-    try:
-        # Use exec to run the code
-        exec(code, {})
-        output = redirected_output.getvalue()
-    except Exception as e:
-        output = redirected_output.getvalue() + "\n[!] REPL Error:\n" + traceback.format_exc()
-    finally:
-        sys.stdout = old_stdout
-
-    return output
 
 
-
-def run_tool_by_command(command_str: str) -> str:
+def run_tool_by_command(
+    command_str: str,
+    execution_context: Optional[ExecutionContext] = None,
+) -> str:
     """
     Called by LLM tool dispatch when AI writes [TOOL: nmap -sV 1.2.3.4].
     Splits the string and runs it safely.
-    v3.2: Comprehensive hallucination handling — catches fake tools, wrong syntax.
-    v12.0: Dynamic dispatch using the tool registry and structured argument parsing.
+    Handles invalid tool names and syntax through structured registry dispatch.
     """
-    parts = command_str.strip().split()
+    context = _execution_context_or_current(execution_context)
+    try:
+        parts = shlex.split(command_str.strip(), posix=True)
+    except ValueError:
+        return _execution_denied("invalid_quoting", context.request_id)
     if not parts:
         return "[!] Empty command."
 
@@ -513,10 +665,18 @@ def run_tool_by_command(command_str: str) -> str:
 
     # ── HELPER: Extract clean IP from 'IP:PORT' or 'http://IP:PORT/path' ──
     def _extract_ip(s):
-        s = s.replace("http://", "").replace("https://", "")
-        s = s.split("/")[0]  # remove path
-        s = s.split(":")[0]  # remove port
-        return s
+        raw = str(s or "").strip()
+        try:
+            return str(ipaddress.ip_address(raw.strip("[]")))
+        except ValueError:
+            pass
+        try:
+            parsed = urlparse(raw if "://" in raw else f"//{raw}")
+            if parsed.hostname:
+                return parsed.hostname
+        except ValueError:
+            pass
+        return raw.split("/", 1)[0]
 
     # ── BLOCK: Hallucinated/fake tools → return helpful error ──
     _FAKE_TOOLS = {
@@ -541,8 +701,7 @@ def run_tool_by_command(command_str: str) -> str:
         target_hint = _extract_ip(parts[1]) if len(parts) > 1 else "TARGET"
         return f"[!] '{parts[0]}' is NOT a real tool. AI: Use correct syntax: {hint.replace('IP', target_hint)}"
 
-    from core.tools.registry import get_tool, list_tools
-    import inspect
+    from core.tools.registry import get_tool
 
     alias_token_count = 1
     tool_def = get_tool(cmd_lower)
@@ -554,27 +713,21 @@ def run_tool_by_command(command_str: str) -> str:
             alias_token_count = 2
 
     if not tool_def:
-        # Fallback to pure shell command if not registered and not destructive
-        blocked = ["rm", "dd", "mkfs", "shutdown", "reboot", "wget", "chmod"]
-        if parts[0] in blocked:
-            return f"[!] Blocked command: {parts[0]}"
-
-        # If the command looks like a shell command but might be a typo'd tool
-        available_tools = ", ".join([t.name for t in list_tools()])
-        print(f"  [93m[!] Tool '{cmd_lower}' not found in registry. Running as raw command.[0m")
-        # return f"[!] Tool '{cmd_lower}' not found. Available tools: {available_tools}"
-        from core.tools.base import run_tool
-        return run_tool(parts)
+        decision = _EXECUTION_POLICY.authorize_command(command_str, context)
+        return _execution_denied(decision.reason, context.request_id)
 
     def parse_args_for_tool(cmd_string: str, t_def):
-        p_parts = cmd_string.strip().split()
+        try:
+            p_parts = shlex.split(cmd_string.strip(), posix=True)
+        except ValueError:
+            return [], {}
         if not p_parts:
             return [], {}
         args = p_parts[alias_token_count:]
         sig = inspect.signature(t_def.func)
         params = list(sig.parameters.values())
         kwargs = {}
-        positional_args = []
+        positional_args: list[Any] = []
 
         # NMAP specific garbage stripping logic ported over
         if t_def.name == "nmap" and args:
@@ -612,6 +765,31 @@ def run_tool_by_command(command_str: str) -> str:
                     continue
                 clean_terms.append(p.strip('"').strip("'"))
             return [" ".join(clean_terms)], {}
+
+        if t_def.name == "curl_headers" and args:
+            value_flags = {
+                "-A", "--user-agent", "-H", "--header", "--max-time",
+                "--connect-timeout", "--proxy", "-x",
+            }
+            target = None
+            skip_next = False
+            for arg in args:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if arg in value_flags:
+                    skip_next = True
+                    continue
+                if arg.startswith(("http://", "https://")):
+                    target = arg
+                    break
+                if not arg.startswith("-"):
+                    target = arg
+            return [target or args[-1]], {}
+
+        if t_def.name == "enum4linux" and args:
+            target = next((arg for arg in reversed(args) if not arg.startswith("-")), args[-1])
+            return [target], {}
 
         url_preserving_tools = {
             "browser_surface_analysis",
@@ -726,57 +904,74 @@ def run_tool_by_command(command_str: str) -> str:
                     break
             return [target or args[0]], {}
 
-        for i, p in enumerate(params):
-            if p.name in ['target', 'target_ip', 'host', 'url', 'filepath']:
+        for parameter in params:
+            if parameter.name in ['target', 'target_ip', 'host', 'url', 'filepath']:
                 if args:
                     raw_arg = args.pop(0)
-                    if p.name == "url" or t_def.name in url_preserving_tools:
+                    if parameter.name == "url" or t_def.name in url_preserving_tools:
                         positional_args.append(raw_arg)
                     else:
                         positional_args.append(_extract_ip(raw_arg))
-                elif p.default != inspect.Parameter.empty:
-                    kwargs[p.name] = p.default
-            elif p.name in ['query', 'recon_data', 'cmd', 'command', 'action', 'options', 'options_str']:
+                elif parameter.default != inspect.Parameter.empty:
+                    kwargs[parameter.name] = parameter.default
+            elif parameter.name in ['query', 'recon_data', 'cmd', 'command', 'action', 'options', 'options_str']:
                 if args:
                     positional_args.append(' '.join(args))
                     args = []
-                elif p.default != inspect.Parameter.empty:
-                    kwargs[p.name] = p.default
-            elif p.name in ['extra_flags', 'opts']:
+                elif parameter.default != inspect.Parameter.empty:
+                    kwargs[parameter.name] = parameter.default
+            elif parameter.name in ['extra_flags', 'opts']:
                 if args:
                     positional_args.append(args)
                     args = []
-                elif p.default != inspect.Parameter.empty:
-                    kwargs[p.name] = p.default
-            elif p.name in ['user', 'pwd', 'password']:
+                elif parameter.default != inspect.Parameter.empty:
+                    kwargs[parameter.name] = parameter.default
+            elif parameter.name in ['user', 'pwd', 'password']:
                 if args:
                     positional_args.append(args.pop(0))
-                elif p.default != inspect.Parameter.empty:
-                    kwargs[p.name] = p.default
+                elif parameter.default != inspect.Parameter.empty:
+                    kwargs[parameter.name] = parameter.default
             else:
                 if args:
                     positional_args.append(args.pop(0))
-                elif p.default != inspect.Parameter.empty:
-                    kwargs[p.name] = p.default
+                elif parameter.default != inspect.Parameter.empty:
+                    kwargs[parameter.name] = parameter.default
         if args:
             positional_args.extend(args)
         return positional_args, kwargs
 
-    # Explicit debugging
-    print(f"  [94m[*] Dispatching tool: {tool_def.name} (via {cmd_lower})[0m")
     try:
         p_args, p_kwargs = parse_args_for_tool(command_str, tool_def)
-        print(f"      -> Args: {p_args}, Kwargs: {p_kwargs}")
-        return tool_def.func(*p_args, **p_kwargs)
+        invocation = ToolInvocation(
+            executable=parts[0].lower(),
+            argv=tuple(parts),
+            raw_command=command_str,
+            registered_name=tool_def.name,
+            targets=_bound_network_targets(tool_def.func, p_args, p_kwargs),
+        )
+        decision = _EXECUTION_POLICY.authorize_registered(invocation, context)
+        if not decision.allowed:
+            return _execution_denied(decision.reason, context.request_id)
+        print(f"  [94m[*] Dispatching registered tool: {tool_def.name}[0m")
+        logging.info(
+            "registered_tool_dispatch tool=%s request_id=%s argument_count=%d",
+            tool_def.name,
+            context.request_id,
+            max(0, len(parts) - alias_token_count),
+        )
+        result = tool_def.func(*p_args, **p_kwargs)
+        return _bounded_tool_result(result, context)
     except Exception as e:
-        import traceback
-        return f"[!] Error executing tool '{tool_def.name}': {e}\\n{traceback.format_exc()}"
+        logging.exception(
+            "Registered tool failed tool=%s request_id=%s",
+            tool_def.name,
+            context.request_id,
+        )
+        return f"[!] Error executing tool '{tool_def.name}': {e}"
 
 
 
-# ─────────────────────────────────────────────
 # INTERACTIVE TOOL SELECTOR (called from CLI)
-# ─────────────────────────────────────────────
 
 def interactive_tool_run(target: str) -> str:
     """
@@ -791,6 +986,12 @@ def interactive_tool_run(target: str) -> str:
     print("  [x] Run EVERYTHING applicable (safe/deep + gated report)")
 
     choice = input("\nChoice(s) e.g. 1 2 4 or a: ").strip().lower()
+    interactive_context = ExecutionContext.operator(
+        actor="interactive_cli",
+        approval_id=f"interactive-menu:{choice or 'empty'}",
+        target_scope=(target,),
+        allow_active_tools=True,
+    )
 
     if choice == "a":
         results = run_default_recon(target)
@@ -799,7 +1000,7 @@ def interactive_tool_run(target: str) -> str:
     if choice == "x":
         results = run_default_recon(target)
         results = _run_exhaustive_applicable_coverage(target, results)
-        print(f"\n  [*] Phase 3: Kill chain vulnerability assessment...")
+        print("\n  [*] Phase 3: Kill chain vulnerability assessment...")
         try:
             from core.killchain import vuln_assess
             recon_blob = format_recon_for_llm(results)
@@ -848,14 +1049,14 @@ def interactive_tool_run(target: str) -> str:
                 phase1_futures[executor.submit(run_nikto, target)] = "nikto"
                 phase1_futures[executor.submit(run_web_login_bruteforce, target)] = "web_login_brute"
 
-                # v4.0: Scrape EACH web port individually
+                # Scrape each web port independently.
                 for wp in web_ports_detected:
                     proto = "https" if wp in ("443", "8443", "1443") else "http"
                     scrape_url = f"{proto}://{target}:{wp}" if wp not in ("80", "443") else f"{proto}://{target}"
                     phase1_futures[executor.submit(run_scrapling_fetch, scrape_url)] = f"scrapling_port{wp}"
                     print(f"    [*] Scrapling: {scrape_url}")
 
-                # v5.0: nikto only on primary port 80 — running 3+ instances
+                # Run Nikto only on the primary port to avoid duplicate instances.
                 # was blocking the agent for 15+ minutes with timeouts
                 # Non-standard ports are covered by scrapling + nmap scripts
             else:
@@ -883,7 +1084,7 @@ def interactive_tool_run(target: str) -> str:
                     if tool_name == "ssh_user_enum":
                         result_str = str(result)
                         if "UNRELIABLE" in result_str:
-                            print(f"  [!] SSH user enum results UNRELIABLE (server patched) — using defaults")
+                            print("  [!] SSH user enum results UNRELIABLE (server patched) — using defaults")
                         elif "VALID USER" in result_str:
                             import re as _re
                             for m in _re.finditer(r'[✓]\s+(\S+)', result_str):
@@ -901,7 +1102,7 @@ def interactive_tool_run(target: str) -> str:
                 results["ssh_bruteforce"] = f"[!] ssh_bruteforce error: {exc}"
 
         # ── PHASE 2.5: Registry-aware safe/deep coverage ─────────
-        print(f"\n  [*] Phase 2.5: Registry-aware safe/deep coverage...")
+        print("\n  [*] Phase 2.5: Registry-aware safe/deep coverage...")
         if _target_looks_domain(target):
             for tool_name in ("subfinder", "amass_enum", "dnsx", "wayback_urls", "gau_urls"):
                 _run_registered_extended_tool(results, n_mode_plan, tool_name, target)
@@ -940,8 +1141,8 @@ def interactive_tool_run(target: str) -> str:
         n_mode_plan.append("secrets/code/cloud: not_applicable:requires_local_repo_or_cloud_provider_context")
         results["n_mode_plan"] = "\n".join(n_mode_plan)
 
-        # ── PHASE 3 (v4.0): Vulnerability Assessment ──
-        print(f"\n  [*] Phase 3: Kill chain vulnerability assessment...")
+        # Phase 3: vulnerability assessment
+        print("\n  [*] Phase 3: Kill chain vulnerability assessment...")
         try:
             from core.killchain import vuln_assess
             recon_blob = format_recon_for_llm(results)
@@ -956,225 +1157,225 @@ def interactive_tool_run(target: str) -> str:
     combined = {}
     for key in choice.split():
         if key in TOOLS_MENU:
-            name, func = TOOLS_MENU[key]
+            name, _func = TOOLS_MENU[key]
             print(f"\n[*] Running {name}...")
-            combined[name] = func(target)
+            combined[name] = run_single_tool(key, target, interactive_context)
         else:
             print(f"[!] Unknown option: {key}")
 
     return format_recon_for_llm(combined)
 
 
-# ─────────────────────────────────────────────
-# ARBITRARY COMMAND RUNNER (ENHANCED v3.0)
-# ─────────────────────────────────────────────
+# TYPED COMMAND RUNNER + EXPLICIT MANAGED SHELL
 
-def run_arbitrary_cmd(cmd_str: str) -> str:
-    """
-    Allows AI to run generic bash commands, with smart timeouts and safety checks.
-    Uses shell=True to support pipes and complex arguments.
-    v3.0: Smart timeout per command type.
-    """
-    parts = cmd_str.strip().split()
-    if not parts:
-        return "[!] Empty command."
-
-    # strict blacklist
-    blacklist = ["rm", "dd", "mkfs", "shutdown", "reboot", "poweroff", "init", "mv"]
-    if parts[0] in blacklist or any(b in f" {cmd_str} " for b in [" rm ", " dd ", " mkfs "]):
-        return f"[!] Command blocked for safety: {cmd_str}"
-
-    # v5.0: Block external commands targeting internal IPs
-    # AI sometimes runs enum4linux/nmap against internal IPs discovered inside a target
-    _EXTERNAL_NETWORK_TOOLS = {"enum4linux", "nmap", "nikto", "hydra", "smbclient",
-                                "curl", "wget", "sqlmap", "wpscan", "masscan", "gobuster"}
-    if parts[0].lower() in _EXTERNAL_NETWORK_TOOLS and len(parts) >= 2:
-        for arg in parts[1:]:
-            clean_ip = arg.replace("http://", "").replace("https://", "").split("/")[0].split(":")[0]
-            if _is_internal_ip(clean_ip):
-                print(f"  {C_RED}[!] BLOCKED: {clean_ip} is internal — cannot reach from outside{C_RESET}")
-                return (
-                    f"[!] BLOCKED: {clean_ip} is a private/internal IP. "
-                    f"You CANNOT run {parts[0]} against it from outside.\n"
-                    f"AI: Use [TOOL: network_recon COMPROMISED_HOST] or an explicit gated pivot tool. "
-                    f"Do not invent arbitrary ssh_exec scans."
-                )
-
-    # Smart timeout based on command type
-    tool = parts[0].lower()
-
-    # Prefer the decorator registry for internal OCTOPUS tools. Without this,
-    # task-map commands such as killchain_privesc/plugin/ssh_session are treated
-    # as shell binaries and fail with "command not found".
+def _terminate_process_group(proc: subprocess.Popen) -> None:
     try:
-        from core.tools.registry import get_tool
-        two_word = f"{parts[0].lower()} {parts[1].lower()}" if len(parts) >= 2 else ""
-        if get_tool(tool) or (two_word and get_tool(two_word)):
-            return run_tool_by_command(cmd_str)
-    except Exception as _exc:
-        logging.debug(f"Suppressed in runner.py: {_exc}")
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (AttributeError, ProcessLookupError, PermissionError, OSError):
+        with contextlib.suppress(ProcessLookupError, OSError):
+            proc.kill()
 
-    if tool in {"bruteforce", "bruteforce_ssh", "bruteforce_ftp", "web_login_bruteforce"}:
-        return run_tool_by_command(cmd_str)
 
-    try:
-        from core.tools.base import get_tool_config
-        nuclei_timeout = max(0, int(get_tool_config("nuclei").get("timeout", 1200)))
-    except Exception:
-        nuclei_timeout = 1200
+def _execute_process(
+    command,
+    *,
+    context: ExecutionContext,
+    tool: str,
+    timeout: int,
+    shell: bool,
+    display_command: str,
+) -> ToolResult:
+    """Execute one authorized process with wall-time and output-byte limits."""
+    import threading
+    import time
 
-    timeout_map = {
-        "telnet":     10,   # Was 300! Telnet should be quick banner grab only
-        "ssh":        15,   # SSH connection test
-        "ftp":        15,   # FTP anonymous test
-        "nc":         10,   # Netcat — dangerous for hanging
-        "netcat":     10,
-        "ping":       15,   # Quick ping test
-        "curl":       30,   # HTTP request
-        "wget":       30,
-        "hydra":      300,  # Bruteforce needs time
-        "nmap":       300,  # Scanning needs time
-        "masscan":    120,  # Fast scanner
-        "nikto":      300,
-        "sqlmap":     300,
-        "wpscan":     180,
-        "gobuster":   120,
-        "ffuf":       120,
-        "enum4linux": 150,
-        "smbclient":  45,
-        "msfconsole": 300,
-        "searchsploit": 30,
-        "jmx2rce":    60,   # Tomcat JMX exploit
-        "nuclei":     nuclei_timeout,  # Template scanner
-        "nxc":        60,   # NetExec/CrackMapExec
-        "crackmapexec": 60,
-    }
-    timeout = timeout_map.get(tool, 120)
-
-    # Prevent interactive commands from hanging the agent
-    if tool == "ssh" and "-o BatchMode=yes" not in cmd_str:
-        cmd_str = cmd_str.replace("ssh ", "ssh -o BatchMode=yes -o StrictHostKeyChecking=no ", 1)
-    elif tool == "ftp":
-        # Wrap ftp in a timeout wrapper since ftp itself is interactive
-        cmd_str = f"echo 'quit' | timeout {timeout} {cmd_str}"
-    elif tool == "telnet":
-        # Wrap telnet with timeout — it doesn't have its own
-        cmd_str = f"timeout {timeout} {cmd_str}"
-    elif tool == "msfconsole":
-        # v7.0: Block direct msfconsole calls — they bypass our module correction map
-        # AI should use [MSF:] tag instead
-        return (
-            "[!] DO NOT call msfconsole directly via [CMD:].\n"
-            "Use [MSF: module_path | RHOSTS=IP] instead — it validates modules and prevents hangs.\n"
-            "AI: Reformat your request as [MSF: exploit/path | RHOSTS=IP RPORT=PORT]"
-        )
-    elif tool == "hydra":
-        # v7.0: Block hydra — use [TOOL: bruteforce service IP] instead
-        return (
-            "[!] DO NOT call hydra directly.\n"
-            "Use [TOOL: bruteforce ssh IP] or [TOOL: bruteforce ftp IP] instead.\n"
-            "The built-in bruteforce uses stealth paramiko transport reuse."
-        )
-
-    print(f"  [*] Executing generic CMD: {cmd_str}")
-
-    import time, threading
-
-    lines = []
+    output_chunks = []
+    status_lines = []
+    output_bytes = 0
+    output_limited = False
     start_time = time.time()
-    _exit_code = -1
-    unlimited = (timeout == 0)
-
-    # Dynamic heartbeat (same logic as run_tool)
-    if unlimited or timeout > 300:
-        heartbeat_interval = 60
-    else:
-        heartbeat_interval = 30
+    exit_code = -1
+    timeout = max(1, min(int(timeout), int(context.max_runtime_seconds)))
+    heartbeat_interval = 60 if timeout > 300 else 30
+    redacted_command = _redact_command(display_command)
+    print(f"  [*] Executing authorized {'shell' if shell else 'command'}: {redacted_command}")
 
     try:
+        # S603: argv/shell mode reached this helper only after ExecutionPolicy
+        # authorization; managed-shell access additionally needs operator approval.
         proc = subprocess.Popen(
-            cmd_str, shell=True,
+            command,
+            shell=shell,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
+            text=False,
+            bufsize=0,
+            start_new_session=True,
         )
 
-        def _read():
-            for line in proc.stdout:
-                line = line.rstrip('\n')
-                lines.append(line)
+        def _read() -> None:
+            nonlocal output_bytes, output_limited
+            if proc.stdout is None:
+                return
+            while True:
+                chunk = proc.stdout.read(4096)
+                if not chunk:
+                    break
+                remaining = context.max_output_bytes - output_bytes
+                if len(chunk) >= remaining:
+                    if remaining > 0:
+                        output_chunks.append(chunk[:remaining])
+                        output_bytes += remaining
+                    output_limited = True
+                    status_lines.append(
+                        f"[OUTPUT LIMIT] process killed at {context.max_output_bytes} bytes"
+                    )
+                    _terminate_process_group(proc)
+                    break
+                output_bytes += len(chunk)
+                output_chunks.append(chunk)
+                rendered_chunk = chunk.decode("utf-8", "replace")
                 if tool == "nuclei":
-                    rendered = _nuclei_live_summary(line)
-                    if rendered:
-                        elapsed = int(time.time() - start_time)
-                        print(f"      [{elapsed}s] {rendered[:160]}")
+                    for line in rendered_chunk.splitlines():
+                        rendered = _nuclei_live_summary(line)
+                        if rendered:
+                            elapsed = int(time.time() - start_time)
+                            print(f"      [{elapsed}s] {rendered[:160]}")
                     continue
-                # Show important lines live
-                if any(kw in line.lower() for kw in [
-                    "host:", "login:", "password", "found", "valid",
-                    "[ssh]", "[22]", "[80]", "success", "open",
-                    "vuln", "error", "complete", "[+]", "session"
-                ]):
+                if any(keyword in rendered_chunk.lower() for keyword in (
+                    "host:", "found", "valid", "success", "open",
+                    "vuln", "error", "complete", "[+]", "session",
+                )):
                     elapsed = int(time.time() - start_time)
-                    print(f"      [{elapsed}s] {line[:140]}")
+                    preview = _redact_command(rendered_chunk.replace("\n", " "))[:140]
+                    print(f"      [{elapsed}s] {preview}")
 
         reader = threading.Thread(target=_read, daemon=True)
         reader.start()
-
+        timed_out = False
         while reader.is_alive():
-            reader.join(timeout=heartbeat_interval)
-            elapsed = int(time.time() - start_time)
-            if not unlimited and elapsed > timeout:
-                proc.kill()
-                proc.wait()
+            reader.join(timeout=min(heartbeat_interval, 1))
+            elapsed_float = time.time() - start_time
+            elapsed = int(elapsed_float)
+            if elapsed_float >= timeout:
+                timed_out = True
+                _terminate_process_group(proc)
                 reader.join(timeout=2)
-                lines.append(f"[PARTIAL OUTPUT - {tool} - {len(lines)} lines captured before timeout]")
-                lines.append(f"[TIMEOUT] {tool} killed after {_fmt_elapsed(timeout)}")
-                print(f"      [TIMEOUT] {tool} killed after {_fmt_elapsed(timeout)}")
+                status_lines.append(f"[TIMEOUT] {tool} killed after {_fmt_elapsed(timeout)}")
                 break
-            if reader.is_alive():
-                if unlimited:
-                    print(f"      [♻ {tool} running... {_fmt_elapsed(elapsed)} | no time limit]")
-                else:
-                    print(f"      [♻ {tool} running... {_fmt_elapsed(elapsed)} / {_fmt_elapsed(timeout)} max]")
+            if reader.is_alive() and elapsed and elapsed % heartbeat_interval == 0:
+                print(
+                    f"      [♻ {tool} running... {_fmt_elapsed(elapsed)} / "
+                    f"{_fmt_elapsed(timeout)} max]"
+                )
 
-        proc.wait(timeout=5)
-        _exit_code = proc.returncode or 0
-
-    except Exception as e:
-        _duration = time.time() - start_time
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _terminate_process_group(proc)
+            proc.wait(timeout=5)
+        if proc.stdout is not None:
+            proc.stdout.close()
+        exit_code = proc.returncode if proc.returncode is not None else -1
+        if timed_out and exit_code == 0:
+            exit_code = -1
+        if output_limited and exit_code == 0:
+            exit_code = -1
+    except Exception as exc:
+        duration = time.time() - start_time
         return ToolResult(
-            tool_name=tool, command=cmd_str, stdout=f"[!] Command failed: {e}",
-            stderr=str(e), exit_code=-1, duration=_duration)
-
-    output = "\n".join(lines)
-    _duration = time.time() - start_time
-
-    if not output.strip():
-        return ToolResult(
-            tool_name=tool, command=cmd_str, stdout="[!] Command returned no output.",
-            exit_code=_exit_code, duration=_duration)
-
-    # Truncate for AI context
-    if len(lines) > 240:
-        head = lines[:80]
-        tail = lines[-200:]
-        output = (
-            f"[... truncated middle {len(lines) - len(head) - len(tail)} lines ...]\n"
-            + "\n".join(head)
-            + "\n[... middle omitted ...]\n"
-            + "\n".join(tail)
+            tool_name=tool,
+            command=redacted_command,
+            stdout=f"[!] Command failed: {exc}",
+            stderr=str(exc),
+            exit_code=-1,
+            duration=duration,
         )
 
+    output = b"".join(output_chunks).decode("utf-8", "replace").rstrip("\n")
+    if status_lines:
+        output = "\n".join(part for part in (output, *status_lines) if part)
+    duration = time.time() - start_time
+    if not output.strip():
+        output = "[!] Command returned no output."
+    output = _truncate_output_text(output, context.max_output_bytes)
     return ToolResult(
-        tool_name=tool, command=cmd_str, stdout=output,
-        exit_code=_exit_code, duration=_duration)
+        tool_name=tool,
+        command=redacted_command,
+        stdout=output,
+        exit_code=exit_code,
+        duration=duration,
+    )
 
 
-# ─────────────────────────────────────────────
-# v9.0: AD TOOL HANDLERS
-# ─────────────────────────────────────────────
+def _tool_timeout(tool: str, context: ExecutionContext) -> int:
+    try:
+        nuclei_timeout = max(1, int(get_tool_config("nuclei").get("timeout", 1200)))
+    except Exception:
+        nuclei_timeout = 1200
+    timeout_map = {
+        "rustscan": 300,
+        "nuclei": nuclei_timeout,
+    }
+    return min(timeout_map.get(tool, 120), context.max_runtime_seconds)
+
+
+def run_managed_shell(cmd_str: str, execution_context: ExecutionContext) -> ToolResult:
+    """Run shell syntax only when an operator supplied approval and capability."""
+    context = _execution_context_or_current(execution_context)
+    decision = _EXECUTION_POLICY.authorize_shell(cmd_str, context)
+    if not decision.allowed:
+        return ToolResult(
+            tool_name="shell",
+            command="[DENIED]",
+            stdout=_execution_denied(decision.reason, context.request_id),
+            exit_code=-1,
+        )
+    tool = decision.invocation.executable if decision.invocation else "shell"
+    # S604: shell=True is intentional only at this approved managed-shell boundary.
+    return _execute_process(
+        cmd_str,
+        context=context,
+        tool=tool,
+        timeout=_tool_timeout(tool, context),
+        shell=True,
+        display_command=cmd_str,
+    )
+
+
+def run_arbitrary_cmd(
+    cmd_str: str,
+    execution_context: Optional[ExecutionContext] = None,
+) -> str:
+    """Dispatch a typed command; shell syntax needs explicit operator approval.
+
+    This name is retained for compatibility. Automatic callers no longer get
+    arbitrary process execution: registered tools are invoked through their
+    typed Python functions, one compatibility binary is argv-only allowlisted,
+    and every unknown command fails closed.
+    """
+    context = _execution_context_or_current(execution_context)
+    decision = _EXECUTION_POLICY.authorize_command(cmd_str, context)
+    if not decision.allowed:
+        return _execution_denied(decision.reason, context.request_id)
+    invocation = decision.invocation
+    if invocation is None:
+        return _execution_denied("missing_typed_invocation", context.request_id)
+    if invocation.uses_shell:
+        return run_managed_shell(cmd_str, context)
+    if invocation.registered_name:
+        return run_tool_by_command(cmd_str, context)
+    return _execute_process(
+        list(invocation.argv),
+        context=context,
+        tool=invocation.executable,
+        timeout=_tool_timeout(invocation.executable, context),
+        shell=False,
+        display_command=shlex.join(invocation.argv),
+    )
+
+
+# AD TOOL HANDLERS
 
 def _creds_to_dict(creds, service: str = "") -> dict:
     """Normalize legacy tuple credentials to the dict shape AD modules expect."""
@@ -1215,7 +1416,6 @@ def _run_ad_tool(action: str, target: str) -> str:
         if not creds["user"]:
             creds = _creds_to_dict(get_best_creds_for_target(target, "ssh"), "ssh")
         user = creds.get("user", "")
-        password = creds.get("password", "")
 
         if action == "enum":
             from core.killchain.ad.enumeration import run_ad_enum
@@ -1235,7 +1435,7 @@ def _run_ad_tool(action: str, target: str) -> str:
             return dcsync(target, creds)
         elif action == "pth":
             from core.killchain.ad.credential import pass_the_hash
-            nthash = input(f"\033[36m  NT Hash: \033[0m").strip()
+            nthash = input("\033[36m  NT Hash: \033[0m").strip()
             if not nthash:
                 return "[!] Pass-the-Hash requires an NT hash."
             return pass_the_hash(target, user or "Administrator", nthash, domain=creds.get("domain", ""))
@@ -1258,9 +1458,7 @@ def _run_ad_tool(action: str, target: str) -> str:
         return f"[!] AD {action} failed: {e}"
 
 
-# ─────────────────────────────────────────────
-# v9.0: PIVOT TOOL HANDLERS
-# ─────────────────────────────────────────────
+# PIVOT TOOL HANDLERS
 
 def _run_pivot_tool(action: str, target: str) -> str:
     """Dispatch pivoting tools."""
@@ -1276,7 +1474,7 @@ def _run_pivot_tool(action: str, target: str) -> str:
             return "[!] Pivoting requires SSH credentials. Find credentials first."
 
         try:
-            import paramiko
+            import paramiko  # type: ignore[import-untyped]
         except ImportError:
             return "[!] paramiko not installed. Fix: pip install paramiko"
 
@@ -1287,13 +1485,13 @@ def _run_pivot_tool(action: str, target: str) -> str:
 
         if action == "socks":
             from core.killchain.pivot import setup_socks_proxy
-            local_port = int(input(f"\033[36m  Local SOCKS port [1080]: \033[0m").strip() or "1080")
+            local_port = int(input("\033[36m  Local SOCKS port [1080]: \033[0m").strip() or "1080")
             return setup_socks_proxy(ssh, local_port=local_port)
         elif action == "forward":
             from core.killchain.pivot import setup_local_forward
-            local_port = int(input(f"\033[36m  Local port: \033[0m").strip() or "8080")
-            remote_host = input(f"\033[36m  Remote host [127.0.0.1]: \033[0m").strip() or "127.0.0.1"
-            remote_port = int(input(f"\033[36m  Remote port: \033[0m").strip() or "80")
+            local_port = int(input("\033[36m  Local port: \033[0m").strip() or "8080")
+            remote_host = input("\033[36m  Remote host [127.0.0.1]: \033[0m").strip() or "127.0.0.1"
+            remote_port = int(input("\033[36m  Remote port: \033[0m").strip() or "80")
             return setup_local_forward(ssh, local_port, remote_host, remote_port)
         elif action == "netinfo":
             from core.killchain.pivot import get_network_info
@@ -1306,9 +1504,7 @@ def _run_pivot_tool(action: str, target: str) -> str:
         return f"[!] Pivot {action} failed: {e}"
 
 
-# ─────────────────────────────────────────────
-# v9.0: C2 BUILD HANDLERS
-# ─────────────────────────────────────────────
+# C2 BUILD HANDLERS
 
 def _run_c2_build(build_type: str, target: str) -> str:
     """Dispatch C2 implant build tools."""
@@ -1316,14 +1512,16 @@ def _run_c2_build(build_type: str, target: str) -> str:
     logger = logging.getLogger("octopus.runner.c2")
 
     try:
-        c2_url = input(f"\033[36m  C2 URL [http://127.0.0.1:8443]: \033[0m").strip() or "http://127.0.0.1:8443"
+        c2_url = input("\033[36m  C2 URL [http://127.0.0.1:8443]: \033[0m").strip() or "http://127.0.0.1:8443"
 
         if build_type == "go":
             # Existing garble builder
             from core.c2.builder import build_implant
-            goos = input(f"\033[36m  Target OS [linux]: \033[0m").strip() or "linux"
-            goarch = input(f"\033[36m  Target Arch [amd64]: \033[0m").strip() or "amd64"
-            return build_implant(c2_urls=[c2_url], target_os=goos, target_arch=goarch)
+            goos = input("\033[36m  Target OS [linux]: \033[0m").strip() or "linux"
+            goarch = input("\033[36m  Target Arch [amd64]: \033[0m").strip() or "amd64"
+            return build_implant(
+                c2_urls=[c2_url], os_target=goos, arch_target=goarch
+            )
 
         elif build_type == "python":
             from core.c2.implants.python_implant import generate_python_implant
@@ -1336,12 +1534,9 @@ def _run_c2_build(build_type: str, target: str) -> str:
             return f"[+] Python implant generated: {out_path}\n    Size: {len(code)} bytes\n    C2: {c2_url}"
 
         elif build_type == "powershell":
-            from core.c2.implants.powershell_stager import generate_ps_stager, generate_ps_encoded
-            method = input(f"\033[36m  Method (iex/encoded) [iex]: \033[0m").strip() or "iex"
-            if method == "encoded":
-                code = generate_ps_encoded(c2_url)
-            else:
-                code = generate_ps_stager(c2_url, method="iex")
+            from core.c2.implants.powershell_stager import generate_ps_encoded, generate_ps_stager
+            method = input("\033[36m  Method (iex/encoded) [iex]: \033[0m").strip() or "iex"
+            code = generate_ps_encoded(c2_url) if method == "encoded" else generate_ps_stager(c2_url, method="iex")
             out_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
                                     "data", f"stager_{target.replace('.', '_')}.ps1")
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -1351,10 +1546,10 @@ def _run_c2_build(build_type: str, target: str) -> str:
 
         elif build_type == "dns":
             from core.c2.channels.dns import DNSChannel
-            domain = input(f"\033[36m  DNS C2 domain: \033[0m").strip()
+            domain = input("\033[36m  DNS C2 domain: \033[0m").strip()
             if not domain:
                 return "[!] DNS C2 requires a domain name."
-            channel = DNSChannel(domain)
+            _channel = DNSChannel(domain)
             return f"[+] DNS C2 channel configured for: {domain}\n    Use channel.start_listener() to begin receiving beacons."
 
         else:
@@ -1366,9 +1561,7 @@ def _run_c2_build(build_type: str, target: str) -> str:
         return f"[!] C2 build failed: {e}"
 
 
-# ─────────────────────────────────────────────
 # QUICK TEST
-# ─────────────────────────────────────────────
 
 if __name__ == "__main__":
     target = input("Enter test target (IP or domain): ").strip()

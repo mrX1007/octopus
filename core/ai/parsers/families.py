@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-from typing import Iterable, List
+from collections.abc import Iterable
+from typing import Optional
 
 from .ad import ADParser
 from .api import APIParser
@@ -19,7 +20,7 @@ from .web import WebParser
 
 
 class ParserFamilyPipeline:
-    def __init__(self, parsers: Iterable[BaseParser] = None):
+    def __init__(self, parsers: Optional[Iterable[BaseParser]] = None):
         self.parsers = list(parsers or [
             NmapParser(),
             WebParser(),
@@ -36,8 +37,8 @@ class ParserFamilyPipeline:
             CodeParser(),
         ])
 
-    def parse(self, tool_name: str, raw_output: str, session_id: str) -> List[Fact]:
-        facts: List[Fact] = []
+    def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
+        facts: list[Fact] = []
         for parser in self.parsers:
             facts.extend(parser.parse(tool_name, raw_output, session_id))
         return facts

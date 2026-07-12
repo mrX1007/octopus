@@ -2,7 +2,6 @@
 
 import json
 import re
-from typing import List
 
 from .common import BaseParser, Fact, fact, tool_lower
 
@@ -10,10 +9,10 @@ from .common import BaseParser, Fact, fact, tool_lower
 class SecretsParser(BaseParser):
     family = "secrets"
 
-    def parse(self, tool_name: str, raw_output: str, session_id: str) -> List[Fact]:
+    def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
         if not any(marker in tool_lower(tool_name) for marker in ("gitleaks", "trufflehog")):
             return []
-        facts: List[Fact] = []
+        facts: list[Fact] = []
         for line in (raw_output or "").splitlines():
             line = line.strip()
             if not line:

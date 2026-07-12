@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 
-import os
 import logging
-import re
-import time
+import os
 import socket
-import shutil
-import subprocess
-import concurrent.futures
+import time
 
 try:
     import paramiko
@@ -15,7 +11,7 @@ except ImportError:
     paramiko = None
 
 try:
-    from config import CFG, find_wordlist, find_all_wordlists
+    from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
     def find_wordlist(cat): return ""
@@ -32,21 +28,19 @@ C_MAGENTA = "\033[95m"
 C_RESET  = "\033[0m"
 
 
-# ═══════════════════════════════════════════════
 # PARAMIKO SSH HELPERS (shared across stages)
-# ═══════════════════════════════════════════════
 
 
 def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: int = 15):
     """Connect via paramiko. Returns (client, error_str).
-    v8.1: Supports key-based auth (password='__KEY_AUTH__') and auto-fallback."""
+    Supports key-based authentication via the ``__KEY_AUTH__`` marker."""
     if paramiko is None:
         return None, "paramiko not installed"
 
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-    # v8.1: Key-based auth
+    # Key-based authentication.
     if password == "__KEY_AUTH__":
         key_path = os.path.expanduser("~/.ssh/id_rsa")
         if os.path.isfile(key_path):
@@ -80,7 +74,7 @@ def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: i
             logging.debug(f"Suppressed in ssh_helpers.py: {_exc}")
         return client, None
     except paramiko.AuthenticationException:
-        # v8.1: Auto-fallback to key auth for root
+        # Fall back to key authentication for root.
         if user == "root":
             key_path = os.path.expanduser("~/.ssh/id_rsa")
             if os.path.isfile(key_path):
@@ -108,7 +102,7 @@ def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: i
 
 def _ssh_exec(client, cmd: str, timeout: int = 30) -> str:
     """Execute command on SSH client. Returns stdout+stderr.
-    v5.0: Incremental channel.recv() loop — prevents deadlock when
+    Uses an incremental ``channel.recv()`` loop to prevent deadlock when
     stdout buffer fills before command exits (e.g. large find output).
     """
     try:
@@ -124,7 +118,7 @@ def _ssh_exec(client, cmd: str, timeout: int = 30) -> str:
         start_time = time.time()
         # Read incrementally while command runs — no deadlock
         while not channel.exit_status_ready():
-            # v7.0: Hard wall-clock timeout to prevent infinite loops
+            # Enforce a wall-clock timeout even when the SSH library stalls.
             if time.time() - start_time > timeout:
                 channel.close()
                 partial = b"".join(stdout_chunks).decode("utf-8", errors="replace")
@@ -146,7 +140,7 @@ def _ssh_exec(client, cmd: str, timeout: int = 30) -> str:
         out = b"".join(stdout_chunks).decode("utf-8", errors="replace")
         err = b"".join(stderr_chunks).decode("utf-8", errors="replace")
 
-        # v5.0: Filter binary/non-printable content
+        # Filter binary and non-printable content.
         def _filter_bin(text):
             if not text:
                 return text
@@ -182,14 +176,7 @@ def _is_port_open(host: str, port: int, timeout: int = 5) -> bool:
     sock.settimeout(timeout)
     try:
         return sock.connect_ex((host, port)) == 0
-    except Exception as e:
+    except Exception:
         return False
     finally:
         sock.close()
-
-
-# ═══════════════════════════════════════════════
-# STAGE 1: VULNERABILITY ASSESSMENT
-# ═══════════════════════════════════════════════
-
-

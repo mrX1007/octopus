@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
 
+import copy
 import os
+from typing import Optional
+
 import yaml
 
-# ─────────────────────────────────────────────
-# LOAD .env FILE (before anything else)
-# ─────────────────────────────────────────────
+# Load .env before constructing defaults.
 try:
     from dotenv import load_dotenv
     # Search for .env in: 1) script dir  2) cwd  3) home dir
@@ -24,11 +25,7 @@ try:
 except ImportError:
     pass  # python-dotenv not installed — env vars still work via os.environ
 
-# ─────────────────────────────────────────────
-# LOCATE CONFIG FILE
-# ─────────────────────────────────────────────
-
-# Priority: 1) env var  2) same directory as this script  3) ~/.octopus/config.yaml
+# Config locations are ordered from highest to lowest priority.
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_PATHS = [
     os.environ.get("OCTOPUS_CONFIG", ""),
@@ -45,10 +42,6 @@ def _find_config() -> str:
     return ""
 
 
-# ─────────────────────────────────────────────
-# DEFAULTS (used if config.yaml missing or incomplete)
-# ─────────────────────────────────────────────
-
 DEFAULTS = {
     "db": {
         "host": "localhost",
@@ -61,7 +54,7 @@ DEFAULTS = {
         "model": os.environ.get("OCTOPUS_OLLAMA_MODEL", "octopus-qwen"),
         "max_tokens": 4096,
         "json_max_tokens": 1536,
-        "temperature": 0.4,       # v7.0: lowered for deterministic tool selection
+        "temperature": 0.4,
         "json_temperature": 0.15,
         "top_p": 0.9,
         "timeout": 1200,
@@ -83,7 +76,7 @@ DEFAULTS = {
         "auto_scan": False,
         "save_results": True,
         "results_dir": "/tmp/octopus_shodan",
-        "auto_pipeline": True,    # v8.0: auto-feed results into killchain
+        "auto_pipeline": True,
     },
     "hash_cracker": {
         "preferred": "hashcat",   # hashcat (GPU) or john (CPU)
@@ -114,7 +107,7 @@ DEFAULTS = {
         "ssh_wait_w": 15,
         "cooldown_between_tiers": 10,
     },
-    "strategy": {                  # v7.0: strategic configuration
+    "strategy": {
         "prefer_stealth": True,
         "max_bruteforce_time": 600,
         "auto_killchain": True,
@@ -144,7 +137,7 @@ DEFAULTS = {
         "parallel_tools": 8,
         "max_director_loops": 10,
     },
-    "reporting": {                 # v7.0: reporting configuration
+    "reporting": {
         "auto_export": False,
         "include_raw_output": False,
         "cvss_scoring": True,
@@ -153,6 +146,7 @@ DEFAULTS = {
         "reports": "~/OCTOPUS/reports",
         "logs": "~/OCTOPUS/logs",
         "checkpoints": "/tmp",
+        "secrets": "data/secrets.db",
     },
     "wordlists": {
         "passwords": [
@@ -208,24 +202,45 @@ DEFAULTS = {
 }
 
 
-# ─────────────────────────────────────────────
-# DEEP MERGE
-# ─────────────────────────────────────────────
+def _matches_default_type(value, default) -> bool:
+    """Return whether a configured value is compatible with a known default."""
+    if isinstance(default, bool):
+        return isinstance(value, bool)
+    if isinstance(default, int):
+        return isinstance(value, int) and not isinstance(value, bool)
+    if isinstance(default, float):
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(default, str):
+        return isinstance(value, str)
+    if isinstance(default, list):
+        if not isinstance(value, list):
+            return False
+        if default:
+            exemplar = default[0]
+            return all(_matches_default_type(item, exemplar) for item in value)
+        return True
+    if isinstance(default, dict):
+        return isinstance(value, dict)
+    return isinstance(value, type(default))
+
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    """Recursively merge override into base. Override wins on conflict."""
-    result = base.copy()
+    """Merge a mapping into a detached copy, retaining valid known-key types."""
+    if not isinstance(base, dict) or not isinstance(override, dict):
+        raise TypeError("configuration base and override must be mappings")
+    result = copy.deepcopy(base)
     for key, value in override.items():
-        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
-            result[key] = _deep_merge(result[key], value)
+        if key in base and isinstance(base[key], dict):
+            if isinstance(value, dict):
+                result[key] = _deep_merge(base[key], value)
+        elif key in base:
+            if _matches_default_type(value, base[key]):
+                result[key] = copy.deepcopy(value)
         else:
-            result[key] = value
+            # Unknown extension keys have no schema, but must still be detached.
+            result[key] = copy.deepcopy(value)
     return result
 
-
-# ─────────────────────────────────────────────
-# LOAD CONFIG
-# ─────────────────────────────────────────────
 
 def load_config() -> dict:
     """Load config.yaml and merge with defaults. Returns final config dict."""
@@ -233,30 +248,31 @@ def load_config() -> dict:
 
     if config_path:
         try:
-            with open(config_path, "r") as f:
-                user_config = yaml.safe_load(f) or {}
+            with open(config_path) as f:
+                user_config = yaml.safe_load(f)
+            if user_config is None:
+                user_config = {}
+            if not isinstance(user_config, dict):
+                raise TypeError("the top-level YAML value must be a mapping")
             cfg = _deep_merge(DEFAULTS, user_config)
         except Exception as e:
             print(f"\033[93m[!] Failed to load {config_path}: {e}. Using defaults.\033[0m")
-            cfg = DEFAULTS.copy()
+            cfg = copy.deepcopy(DEFAULTS)
     else:
         print("\033[93m[!] No config.yaml found. Using built-in defaults.\033[0m")
-        cfg = DEFAULTS.copy()
+        cfg = copy.deepcopy(DEFAULTS)
 
-    # Expand ~ in all path values
-    if "paths" in cfg:
+    if isinstance(cfg.get("paths"), dict):
         for key, val in cfg["paths"].items():
             if isinstance(val, str):
                 cfg["paths"][key] = os.path.expanduser(val)
 
-    # ── ENV VAR OVERRIDES (highest priority: .env / os.environ → config) ──
-    # Database
+    # Environment values take precedence over YAML.
     cfg["db"]["host"]     = os.environ.get("OCTOPUS_DB_HOST", cfg["db"]["host"])
     cfg["db"]["user"]     = os.environ.get("OCTOPUS_DB_USER", cfg["db"]["user"])
     cfg["db"]["password"] = os.environ.get("OCTOPUS_DB_PASS", cfg["db"]["password"])
     cfg["db"]["database"] = os.environ.get("OCTOPUS_DB_NAME", cfg["db"]["database"])
 
-    # Ollama (already handled via DEFAULTS, but allow explicit override)
     if os.environ.get("OCTOPUS_OLLAMA_URL"):
         cfg["ollama"]["url"] = os.environ["OCTOPUS_OLLAMA_URL"]
     if os.environ.get("OCTOPUS_OLLAMA_MODEL"):
@@ -265,11 +281,7 @@ def load_config() -> dict:
     return cfg
 
 
-# ─────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────
-
-def find_wordlist(category: str, cfg: dict = None) -> str:
+def find_wordlist(category: str, cfg: Optional[dict] = None) -> str:
     """
     Find the first existing wordlist file from a category.
     Categories: 'passwords', 'usernames', 'web_dirs', 'dns', 'snmp',
@@ -279,40 +291,60 @@ def find_wordlist(category: str, cfg: dict = None) -> str:
     """
     if cfg is None:
         cfg = CFG
-    paths = cfg.get("wordlists", {}).get(category, [])
+    if not isinstance(cfg, dict):
+        return ""
+    wordlists = cfg.get("wordlists", {})
+    if not isinstance(wordlists, dict):
+        return ""
+    paths = wordlists.get(category, [])
+    if not isinstance(paths, (list, tuple)):
+        return ""
     for p in paths:
+        if not isinstance(p, str):
+            continue
         expanded = os.path.expanduser(p)
         if os.path.isfile(expanded):
             return expanded
     return ""
 
 
-def find_all_wordlists(category: str, cfg: dict = None) -> list:
+def find_all_wordlists(category: str, cfg: Optional[dict] = None) -> list:
     """
     Find ALL existing wordlist files from a category.
     Returns list of existing paths.
     """
     if cfg is None:
         cfg = CFG
-    paths = cfg.get("wordlists", {}).get(category, [])
+    if not isinstance(cfg, dict):
+        return []
+    wordlists = cfg.get("wordlists", {})
+    if not isinstance(wordlists, dict):
+        return []
+    paths = wordlists.get(category, [])
+    if not isinstance(paths, (list, tuple)):
+        return []
     found = []
     for p in paths:
+        if not isinstance(p, str):
+            continue
         expanded = os.path.expanduser(p)
         if os.path.isfile(expanded):
             found.append(expanded)
     return found
 
 
-def get_tool_config(tool_name: str, cfg: dict = None) -> dict:
+def get_tool_config(tool_name: str, cfg: Optional[dict] = None) -> dict:
     """Get tool-specific config dict. Returns empty dict if not configured."""
     if cfg is None:
         cfg = CFG
-    return cfg.get("tools", {}).get(tool_name, {})
+    if not isinstance(cfg, dict):
+        return {}
+    tools = cfg.get("tools", {})
+    if not isinstance(tools, dict):
+        return {}
+    value = tools.get(tool_name, {})
+    return value if isinstance(value, dict) else {}
 
-
-# ─────────────────────────────────────────────
-# SECRET ACCESSOR
-# ─────────────────────────────────────────────
 
 def get_secret(key: str, default: str = "") -> str:
     """
@@ -320,11 +352,9 @@ def get_secret(key: str, default: str = "") -> str:
     Useful for API keys, passwords, tokens that should NOT be in yaml.
     Usage: get_secret("SHODAN_API_KEY")
     """
-    # 1. Environment variable (highest priority)
     env_val = os.environ.get(key, "")
     if env_val:
         return env_val
-    # 2. Config yaml mapping
     _SECRET_MAP = {
         "SHODAN_API_KEY": ("shodan", "api_key"),
         "OCTOPUS_DB_PASS": ("db", "password"),
@@ -332,37 +362,27 @@ def get_secret(key: str, default: str = "") -> str:
     }
     if key in _SECRET_MAP:
         section, subkey = _SECRET_MAP[key]
-        val = CFG.get(section, {}).get(subkey, "")
+        section_cfg = CFG.get(section, {})
+        val = section_cfg.get(subkey, "") if isinstance(section_cfg, dict) else ""
         if val:
             return val
     return default
 
 
-# ─────────────────────────────────────────────
-# MODULE-LEVEL SINGLETON
-# ─────────────────────────────────────────────
-
 CFG = load_config()
 
 
-# ─────────────────────────────────────────────
-# SELF-TEST
-# ─────────────────────────────────────────────
-
 if __name__ == "__main__":
-    import json
     print("\033[91m    OCTOPUS — Config Loader\033[0m")
     print(f"\033[90m    Config file: {_find_config() or 'NONE (using defaults)'}\033[0m\n")
 
-    # Show key settings
     print(f"  DB:          {CFG['db']['host']} / {CFG['db']['database']}")
     print(f"  Ollama:      {CFG['ollama']['model']} @ {CFG['ollama']['url']}")
     print(f"  Reports:     {CFG['paths']['reports']}")
     print(f"  Logs:        {CFG['paths']['logs']}")
     print(f"  Checkpoints: {CFG['paths']['checkpoints']}")
 
-    # Show wordlist availability
-    print(f"\n  \033[96m[ WORDLIST AVAILABILITY ]\033[0m")
+    print("\n  \033[96m[ WORDLIST AVAILABILITY ]\033[0m")
     for cat in CFG["wordlists"]:
         total = len(CFG["wordlists"][cat])
         found = len(find_all_wordlists(cat))
@@ -371,8 +391,7 @@ if __name__ == "__main__":
         first_short = os.path.basename(first) if first else "—"
         print(f"    {cat:<22} {status:<20} primary: {first_short}")
 
-    # Show tool configs
-    print(f"\n  \033[96m[ TOOL TIMEOUTS ]\033[0m")
+    print("\n  \033[96m[ TOOL TIMEOUTS ]\033[0m")
     for tool, tcfg in CFG.get("tools", {}).items():
         timeout = tcfg.get("timeout", "?")
         print(f"    {tool:<18} {timeout}s")

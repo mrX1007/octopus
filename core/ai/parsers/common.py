@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 
-from typing import Any, Dict, List
+from typing import Any
 
-
-Fact = Dict[str, Any]
+Fact = dict[str, Any]
 
 
 def fact(fact_type: str, value: str, confidence: int, session_id: str) -> Fact:
@@ -26,5 +25,5 @@ def raw_lower(raw_output: str) -> str:
 class BaseParser:
     family = "base"
 
-    def parse(self, tool_name: str, raw_output: str, session_id: str) -> List[Fact]:
+    def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
         return []

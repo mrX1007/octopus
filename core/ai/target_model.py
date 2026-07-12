@@ -2,11 +2,12 @@
 
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any
 from urllib.parse import urlparse, urlunparse
+
 from core.ai.asset_graph import AssetGraph
-from core.ai.surface_state import SurfaceState
 from core.ai.risk_analysis import RiskAnalyzer
+from core.ai.surface_state import SurfaceState
 
 
 class TargetModel:
@@ -32,22 +33,22 @@ class TargetModel:
         "tool_unavailable:",
     )
 
-    def __init__(self, scan_id: str, target: str, facts: List[Dict[str, Any]]):
+    def __init__(self, scan_id: str, target: str, facts: list[dict[str, Any]]):
         self.scan_id = scan_id
         self.target = target
         self.host = self._target_host(target)
         self.facts = facts or []
 
     @classmethod
-    def from_facts(cls, scan_id: str, target: str, facts: List[Dict[str, Any]]) -> "TargetModel":
+    def from_facts(cls, scan_id: str, target: str, facts: list[dict[str, Any]]) -> "TargetModel":
         return cls(scan_id, target, facts)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         services = self._services()
         endpoints = self._endpoints()
         internal_services = self._internal_services()
         check_results = self._check_results()
-        model = {
+        model: dict[str, Any] = {
             "target": self.target,
             "host": self.host,
             "assets": self._assets(),
@@ -74,8 +75,8 @@ class TargetModel:
         model["risk_analysis"] = RiskAnalyzer(model).to_dict()
         return model
 
-    def _assets(self) -> Dict[str, List[str]]:
-        buckets = {
+    def _assets(self) -> dict[str, list[str]]:
+        buckets: dict[str, list[str]] = {
             "domains": [],
             "ips": [],
             "urls": [],
@@ -83,7 +84,7 @@ class TargetModel:
             "services": [],
             "dns_records": [],
         }
-        mapping = {
+        mapping: dict[str, str] = {
             "asset_domain": "domains",
             "asset_ip": "ips",
             "asset_url": "urls",
@@ -91,9 +92,9 @@ class TargetModel:
             "asset_service": "services",
             "asset_dns_record": "dns_records",
         }
-        seen = {key: set() for key in buckets}
+        seen: dict[str, set[str]] = {key: set() for key in buckets}
         for fact in self.facts:
-            bucket = mapping.get(fact.get("type"))
+            bucket = mapping.get(str(fact.get("type") or ""))
             if not bucket:
                 continue
             value = str(fact.get("value", "")).strip()
@@ -103,7 +104,7 @@ class TargetModel:
             buckets[bucket].append(value)
         return buckets
 
-    def _services(self) -> List[Dict[str, Any]]:
+    def _services(self) -> list[dict[str, Any]]:
         services = []
         seen = set()
         for fact in self.facts:
@@ -119,7 +120,7 @@ class TargetModel:
             services.append(parsed)
         return services
 
-    def _endpoints(self) -> List[Dict[str, Any]]:
+    def _endpoints(self) -> list[dict[str, Any]]:
         endpoints = []
         seen = set()
         for fact in self.facts:
@@ -135,7 +136,7 @@ class TargetModel:
             endpoints.append(endpoint)
         return endpoints
 
-    def _credentials(self) -> List[Dict[str, Any]]:
+    def _credentials(self) -> list[dict[str, Any]]:
         credentials = []
         for fact in self.facts:
             if fact.get("type") not in {"credential", "credential_material", "hash_material"}:
@@ -154,7 +155,7 @@ class TargetModel:
             })
         return credentials
 
-    def _api(self) -> Dict[str, List[Dict[str, Any]]]:
+    def _api(self) -> dict[str, list[dict[str, Any]]]:
         endpoints = []
         notes = []
         for fact in self.facts:
@@ -173,7 +174,7 @@ class TargetModel:
                 notes.append({"value": value, "confidence": fact.get("confidence", 100)})
         return {"endpoints": endpoints, "security_notes": notes}
 
-    def _web_app(self) -> Dict[str, List[Dict[str, Any]]]:
+    def _web_app(self) -> dict[str, list[dict[str, Any]]]:
         notes = []
         js_routes = []
         proxy_findings = []
@@ -199,24 +200,24 @@ class TargetModel:
             "jwt": jwt,
         }
 
-    def _security_findings(self) -> Dict[str, List[Dict[str, Any]]]:
-        buckets = {
+    def _security_findings(self) -> dict[str, list[dict[str, Any]]]:
+        buckets: dict[str, list[dict[str, Any]]] = {
             "nuclei": [],
             "secrets": [],
             "code": [],
             "cloud": [],
         }
-        mapping = {
+        mapping: dict[str, str] = {
             "nuclei_finding": "nuclei",
             "secret_finding": "secrets",
             "code_finding": "code",
             "cloud_finding": "cloud",
         }
         for fact in self.facts:
-            bucket = mapping.get(fact.get("type"))
+            bucket = mapping.get(str(fact.get("type") or ""))
             if not bucket:
                 continue
-            item = {
+            item: dict[str, Any] = {
                 "value": str(fact.get("value", "")),
                 "confidence": fact.get("confidence", 100),
                 "sources": fact.get("sources") or ([fact.get("source")] if fact.get("source") else []),
@@ -232,8 +233,8 @@ class TargetModel:
             buckets[bucket].append(item)
         return buckets
 
-    def _active_directory(self) -> Dict[str, Any]:
-        buckets = {
+    def _active_directory(self) -> dict[str, Any]:
+        buckets: dict[str, Any] = {
             "domains": [],
             "objects": [],
             "counts": {},
@@ -250,13 +251,13 @@ class TargetModel:
             "credential_material": [],
             "domain_hash_dumps": [],
         }
-        count_types = {
+        count_types: dict[str, str] = {
             "ad_users": "users",
             "ad_groups": "groups",
             "ad_computers": "computers",
             "ad_gpos": "gpos",
         }
-        list_mapping = {
+        list_mapping: dict[str, str] = {
             "ad_domain": "domains",
             "ad_object": "objects",
             "ad_high_value_object": "high_value_objects",
@@ -272,9 +273,11 @@ class TargetModel:
             "credential_material": "credential_material",
             "domain_hash_dump": "domain_hash_dumps",
         }
-        seen = {name: set() for name in buckets if isinstance(buckets[name], list)}
+        seen: dict[str, set[str]] = {
+            name: set() for name in buckets if isinstance(buckets[name], list)
+        }
         for fact in self.facts:
-            ftype = fact.get("type")
+            ftype = str(fact.get("type") or "")
             value = str(fact.get("value", "")).strip()
             if not value:
                 continue
@@ -297,7 +300,7 @@ class TargetModel:
             buckets[bucket].append(item)
         return buckets
 
-    def _access(self) -> Dict[str, Any]:
+    def _access(self) -> dict[str, Any]:
         values = [str(f.get("value", "")).lower() for f in self.facts]
         return {
             "ssh_authenticated": any(v.startswith("ssh_login_success:") or v == "ssh_authenticated" for v in values),
@@ -317,7 +320,7 @@ class TargetModel:
             ],
         }
 
-    def _network_graph(self) -> Dict[str, Any]:
+    def _network_graph(self) -> dict[str, Any]:
         nodes = []
         edges = []
         seen_nodes = set()
@@ -339,7 +342,7 @@ class TargetModel:
                 edges.append(parsed)
         return {"nodes": nodes, "edges": edges}
 
-    def _internal_services(self) -> List[Dict[str, Any]]:
+    def _internal_services(self) -> list[dict[str, Any]]:
         services = []
         seen = set()
         for fact in self.facts:
@@ -365,7 +368,7 @@ class TargetModel:
             })
         return services
 
-    def _internal_service_reachability(self, fact: Dict[str, Any]) -> str:
+    def _internal_service_reachability(self, fact: dict[str, Any]) -> str:
         sources = [str(fact.get("source", ""))]
         sources.extend(str(source) for source in fact.get("sources", []) or [])
         source_text = " ".join(sources).lower()
@@ -375,7 +378,7 @@ class TargetModel:
             return "pivot"
         return "unknown"
 
-    def _check_results(self) -> List[Dict[str, Any]]:
+    def _check_results(self) -> list[dict[str, Any]]:
         results = []
         seen = set()
         for fact in self.facts:
@@ -405,12 +408,12 @@ class TargetModel:
 
     def _typed_facts(
         self,
-        services: List[Dict[str, Any]],
-        endpoints: List[Dict[str, Any]],
-        internal_services: List[Dict[str, Any]],
-        check_results: List[Dict[str, Any]],
-        security_findings: Dict[str, List[Dict[str, Any]]],
-    ) -> Dict[str, Any]:
+        services: list[dict[str, Any]],
+        endpoints: list[dict[str, Any]],
+        internal_services: list[dict[str, Any]],
+        check_results: list[dict[str, Any]],
+        security_findings: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, Any]:
         findings = []
         for bucket, items in (security_findings or {}).items():
             for item in items or []:
@@ -429,14 +432,16 @@ class TargetModel:
 
     def _coverage(
         self,
-        services: List[Dict[str, Any]],
-        endpoints: List[Dict[str, Any]],
-        internal_services: List[Dict[str, Any]],
-        check_results: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        checks_by_scope: Dict[tuple, Dict[str, Dict[str, Any]]] = {}
+        services: list[dict[str, Any]],
+        endpoints: list[dict[str, Any]],
+        internal_services: list[dict[str, Any]],
+        check_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        checks_by_scope: dict[tuple, dict[str, dict[str, Any]]] = {}
         for result in check_results:
-            scope = result.get("scope") if isinstance(result.get("scope"), dict) else {}
+            scope: dict[str, Any] = (
+                result["scope"] if isinstance(result.get("scope"), dict) else {}
+            )
             scope_type = str(scope.get("type") or result.get("scope_type") or "").strip().lower()
             scope_value = str(scope.get("value") or result.get("scope_value") or "").strip()
             if not scope_type or not scope_value:
@@ -486,7 +491,7 @@ class TargetModel:
             "gaps": gaps,
         }
 
-    def _coverage_checks(self, checks: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    def _coverage_checks(self, checks: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
         covered = {}
         for kind, result in sorted((checks or {}).items()):
             covered[kind] = {
@@ -502,8 +507,8 @@ class TargetModel:
         surface_type: str,
         surface_id: str,
         expected: tuple,
-        checks: Dict[str, Dict[str, Any]],
-    ) -> List[Dict[str, str]]:
+        checks: dict[str, dict[str, Any]],
+    ) -> list[dict[str, str]]:
         gaps = []
         degraded = {"timeout", "partial", "failed", "completed_empty", "skipped"}
         for check in expected:
@@ -531,7 +536,7 @@ class TargetModel:
             return self._canonical_url(value)
         return value.strip().lower()
 
-    def _service_scope_value(self, service: Dict[str, Any]) -> str:
+    def _service_scope_value(self, service: dict[str, Any]) -> str:
         host = str(service.get("host") or self.host).lower()
         proto = str(service.get("proto") or "tcp").lower()
         return f"{host}:{int(service.get('port') or 0)}/{proto}"
@@ -557,7 +562,7 @@ class TargetModel:
             netloc = f"{netloc}:{port}"
         return urlunparse((parsed.scheme.lower(), netloc, parsed.path or "/", "", parsed.query, "")).rstrip("/")
 
-    def _negative_facts(self) -> List[Dict[str, Any]]:
+    def _negative_facts(self) -> list[dict[str, Any]]:
         negatives = []
         for fact in self.facts:
             ftype = str(fact.get("type", ""))
@@ -571,7 +576,7 @@ class TargetModel:
                 })
         return negatives
 
-    def _unknowns(self, services: List[Dict[str, Any]], endpoints: List[Dict[str, Any]]) -> Dict[str, str]:
+    def _unknowns(self, services: list[dict[str, Any]], endpoints: list[dict[str, Any]]) -> dict[str, str]:
         service_names = " ".join(s.get("service", "") for s in services).lower()
         web_known = bool(endpoints) or any(marker in service_names for marker in ("http", "nginx", "apache", "tomcat"))
         return {
@@ -601,7 +606,7 @@ class TargetModel:
             return "confirmed_absent"
         return "unknown"
 
-    def _parse_port_fact(self, value: str) -> Dict[str, Any]:
+    def _parse_port_fact(self, value: str) -> dict[str, Any]:
         match = re.match(r"(\d+)/(tcp|udp)\s+\(([^)]*)\)(?:\s+\[(.*?)\])?", value.strip(), re.IGNORECASE)
         if not match:
             return {}
@@ -615,7 +620,7 @@ class TargetModel:
             "state": "confirmed_present",
         }
 
-    def _parse_endpoint_fact(self, value: str) -> Dict[str, Any]:
+    def _parse_endpoint_fact(self, value: str) -> dict[str, Any]:
         try:
             parsed = json.loads(value)
             url = str(parsed.get("url", "")).strip()
@@ -648,7 +653,7 @@ class TargetModel:
             "state": "confirmed_present",
         }
 
-    def _parse_secret_finding(self, value: str) -> Dict[str, Any]:
+    def _parse_secret_finding(self, value: str) -> dict[str, Any]:
         parts = value.split(":", 3)
         if len(parts) < 4:
             return {
@@ -672,7 +677,7 @@ class TargetModel:
             "exposure_scope": scope,
         }
 
-    def _parse_cloud_finding(self, value: str) -> Dict[str, Any]:
+    def _parse_cloud_finding(self, value: str) -> dict[str, Any]:
         item = self._parse_severity_finding(value, ("severity", "check_id", "resource"))
         check_id = item.get("check_id", "").lower()
         provider = "unknown"
@@ -687,7 +692,7 @@ class TargetModel:
         item["provider"] = provider
         return item
 
-    def _parse_severity_finding(self, value: str, fields: tuple) -> Dict[str, Any]:
+    def _parse_severity_finding(self, value: str, fields: tuple) -> dict[str, Any]:
         parts = value.split(":", len(fields) - 1)
         parsed = {}
         for idx, field in enumerate(fields):

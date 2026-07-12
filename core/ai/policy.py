@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from typing import Any, Dict, List
+from typing import Any, ClassVar
 
 
 class DeterministicPolicy:
@@ -10,7 +10,7 @@ class DeterministicPolicy:
     by current facts, surface states and automation flags.
     """
 
-    CATEGORY_TASKS = {
+    CATEGORY_TASKS: ClassVar[dict[str, set[str]]] = {
         "asm": {"asm_discovery", "asm_http_probe", "asm_dns_resolution", "asm_port_discovery", "asm_url_discovery"},
         "web": {"web_application_mapping", "web_vulnerability_testing", "web_app_deep_testing", "web_content_discovery", "browser_surface_analysis", "template_verification"},
         "api": {"api_security_testing"},
@@ -20,7 +20,7 @@ class DeterministicPolicy:
         "code": {"code_security_assessment"},
     }
 
-    def validate_goal(self, proposed_goal: str, context: Dict[str, Any], goal_history: List[str]) -> Dict[str, str]:
+    def validate_goal(self, proposed_goal: str, context: dict[str, Any], goal_history: list[str]) -> dict[str, str]:
         required = context.get("next_required_capability")
         if required and required != "conclude":
             return {
@@ -31,9 +31,9 @@ class DeterministicPolicy:
             return {"goal": "conclude", "reason": "goal_already_attempted_without_state_change"}
         return {"goal": proposed_goal or "conclude", "reason": "accepted"}
 
-    def validate_plan(self, plan: List[Dict[str, Any]], context: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def validate_plan(self, plan: list[dict[str, Any]], context: dict[str, Any]) -> list[dict[str, Any]]:
         surface_states = (context.get("target_model") or {}).get("surface_states") or {}
-        filtered: List[Dict[str, Any]] = []
+        filtered: list[dict[str, Any]] = []
         seen = set()
         for step in plan or []:
             task = step.get("task")
@@ -54,7 +54,7 @@ class DeterministicPolicy:
                 return category
         return ""
 
-    def _allowed_by_state(self, task: str, context: Dict[str, Any]) -> bool:
+    def _allowed_by_state(self, task: str, context: dict[str, Any]) -> bool:
         state = context.get("state", "initial_recon")
         policy = context.get("automation_policy") or {}
         if task in {"establish_persistence", "payload_generation"}:

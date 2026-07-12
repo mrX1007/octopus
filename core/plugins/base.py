@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Plugin SDK v2 — Full lifecycle, versioning, capabilities, and events.
+Plugin SDK with lifecycle, versioning, capabilities, and events.
 
 Every OCTOPUS module (exploit, recon, post-exploit, evasion, OSINT)
 inherits from OctopusPlugin and gets:
@@ -11,14 +11,10 @@ inherits from OctopusPlugin and gets:
   - Cross-plugin event handling
 """
 
-from typing import Dict, Any, List, Set, Optional
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, ClassVar, Optional
 
-
-# ═══════════════════════════════════════════════
-# ENUMS
-# ═══════════════════════════════════════════════
 
 class PluginType(Enum):
     RECON = "recon"
@@ -43,10 +39,6 @@ class KillChainStage(Enum):
     CLEANUP = 9
 
 
-# ═══════════════════════════════════════════════
-# RESULT TYPES
-# ═══════════════════════════════════════════════
-
 @dataclass
 class CheckResult:
     """Result of a vulnerability check (non-destructive probe)."""
@@ -61,11 +53,11 @@ class CheckResult:
 class PluginResult:
     """Result of a full plugin execution."""
     success: bool = False
-    data: Dict[str, Any] = field(default_factory=dict)
+    data: dict[str, Any] = field(default_factory=dict)
     output: str = ""
-    artifacts: List[str] = field(default_factory=list)  # file paths produced
-    credentials: List[Dict[str, str]] = field(default_factory=list)
-    sessions: List[Dict[str, str]] = field(default_factory=list)
+    artifacts: list[str] = field(default_factory=list)  # file paths produced
+    credentials: list[dict[str, str]] = field(default_factory=list)
+    sessions: list[dict[str, str]] = field(default_factory=list)
     error: str = ""
 
 
@@ -77,13 +69,9 @@ class PluginContext:
     work_dir: str = "/tmp/octopus"
     knowledge_graph: Any = None    # KnowledgeGraph instance
     event_bus: Any = None          # EventBus instance
-    credentials: Dict[str, str] = field(default_factory=dict)
-    config: Dict[str, Any] = field(default_factory=dict)
+    credentials: dict[str, str] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
 
-
-# ═══════════════════════════════════════════════
-# BASE PLUGIN
-# ═══════════════════════════════════════════════
 
 class OctopusPlugin:
     """
@@ -106,28 +94,21 @@ class OctopusPlugin:
       - on_session_opened(session)
     """
 
-    # ── Identity ──
     name: str = "base_plugin"
     version: str = "0.0.0"
     author: str = ""
     description: str = "Base plugin"
 
-    # ── Classification ──
     plugin_type: PluginType = PluginType.AUXILIARY
     kill_chain_stage: KillChainStage = KillChainStage.RECON
 
-    # ── Dependencies ──
-    depends_on: List[str] = []       # other plugin names
-    requires: List[str] = []         # system tools (nmap, hydra, etc.)
-    python_deps: List[str] = []      # pip packages
+    depends_on: ClassVar[list[str]] = []       # other plugin names
+    requires: ClassVar[list[str]] = []         # system tools (nmap, hydra, etc.)
+    python_deps: ClassVar[list[str]] = []      # pip packages
 
-    # ── Capabilities ──
-    capabilities: Set[str] = set()   # "network", "file_write", "shell_exec", "root"
+    capabilities: ClassVar[set[str]] = set()   # "network", "file_write", "shell_exec", "root"
 
-    # ── Runtime ──
     _context: Optional[PluginContext] = None
-
-    # ── Lifecycle ──
 
     def setup(self, context: PluginContext) -> bool:
         """
@@ -159,21 +140,17 @@ class OctopusPlugin:
         """
         pass
 
-    # ── Cross-Plugin Events ──
-
-    def on_credential_found(self, credential: Dict[str, str]):
+    def on_credential_found(self, credential: dict[str, str]):
         """Called when ANY plugin discovers credentials."""
         pass
 
-    def on_session_opened(self, session: Dict[str, str]):
+    def on_session_opened(self, session: dict[str, str]):
         """Called when ANY plugin opens a new session (SSH, HTTP, etc.)."""
         pass
 
-    def on_vulnerability_confirmed(self, vuln: Dict[str, str]):
+    def on_vulnerability_confirmed(self, vuln: dict[str, str]):
         """Called when ANY plugin confirms a vulnerability."""
         pass
-
-    # ── Helpers ──
 
     @property
     def context(self) -> PluginContext:
@@ -181,7 +158,7 @@ class OctopusPlugin:
             return PluginContext()
         return self._context
 
-    def emit_event(self, event_type: str, data: Dict[str, Any]):
+    def emit_event(self, event_type: str, data: dict[str, Any]):
         """Emit an event to the cross-plugin event bus."""
         if self._context and self._context.event_bus:
             self._context.event_bus.emit(event_type, data, source=self.name)

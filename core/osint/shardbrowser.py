@@ -21,11 +21,11 @@ Dependencies (pip install):
   pip install -r requirements.txt
 """
 
+import logging
 import os
 import sys
 import time
-import logging
-from typing import Any, Dict, List
+from typing import Any, Optional
 
 C_GREEN  = "\033[92m"
 C_YELLOW = "\033[93m"
@@ -57,7 +57,7 @@ def _get_sdk():
             f"ShardX SDK not available: {e}\n"
             "Install deps: pip install -r requirements.txt\n"
             "SDK path: vendor/shardbrowser/sdks/python/"
-        )
+        ) from e
 
 
 class ShardBrowser:
@@ -83,13 +83,13 @@ class ShardBrowser:
         sessions = sb.multi_session(3, proxy_list=[...])
     """
 
-    def __init__(self, cache_dir: str = None, profiles_dir: str = None):
+    def __init__(self, cache_dir: Optional[str] = None, profiles_dir: Optional[str] = None):
         self._sdk = None
         self._cache_dir = cache_dir
         self._profiles_dir = profiles_dir or os.path.join(
             _PROJECT_ROOT, "data", "shardx-profiles"
         )
-        self._sessions: Dict[str, Any] = {}  # track active sessions
+        self._sessions: dict[str, Any] = {}  # track active sessions
 
     def _ensure_sdk(self):
         """Lazy-load SDK."""
@@ -101,9 +101,7 @@ class ShardBrowser:
             )
         return self._sdk
 
-    # ═══════════════════════════════════════════════
     # INSTALLATION
-    # ═══════════════════════════════════════════════
 
     def install(self) -> bool:
         """Download ShardX engine + Widevine + fingerprints from CDN."""
@@ -122,29 +120,25 @@ class ShardBrowser:
         try:
             sdk = self._ensure_sdk()
             return sdk.runtime.is_installed() if hasattr(sdk.runtime, 'is_installed') else True
-        except Exception as e:
+        except Exception:
             return False
 
-    # ═══════════════════════════════════════════════
     # PROFILES
-    # ═══════════════════════════════════════════════
 
-    def list_profiles(self, platform: str = None) -> List[str]:
+    def list_profiles(self, platform: Optional[str] = None) -> list[str]:
         """List available fingerprint profiles."""
         sdk = self._ensure_sdk()
         return sdk.list_profiles(platform=platform)
 
-    def random_profile(self, platform: str = None):
+    def random_profile(self, platform: Optional[str] = None):
         """Get a random profile, optionally filtered by platform."""
         sdk = self._ensure_sdk()
         return sdk.random_profile(platform=platform)
 
-    # ═══════════════════════════════════════════════
     # LAUNCH
-    # ═══════════════════════════════════════════════
 
     def launch_profile(self, fingerprint=None, *, platform: str = "Windows",
-                       proxy: str = None, headless: bool = False,
+                       proxy: Optional[str] = None, headless: bool = False,
                        randomize: bool = True, cdp: bool = True,
                        webrtc: str = "auto", **kwargs) -> Any:
         """
@@ -188,19 +182,17 @@ class ShardBrowser:
 
     def stop_all(self):
         """Stop all tracked sessions."""
-        for sid, sess in list(self._sessions.items()):
+        for _sid, sess in list(self._sessions.items()):
             try:
                 sess.stop()
             except Exception as _exc:
                 logging.debug(f"Suppressed in shardbrowser.py: {_exc}")
         self._sessions.clear()
 
-    # ═══════════════════════════════════════════════
     # MULTI-SESSION (multi-account)
-    # ═══════════════════════════════════════════════
 
-    def multi_session(self, count: int = 3, proxy_list: List[str] = None,
-                      platform: str = "Windows", **kwargs) -> List[Any]:
+    def multi_session(self, count: int = 3, proxy_list: Optional[list[str]] = None,
+                      platform: str = "Windows", **kwargs) -> list[Any]:
         """
         Launch multiple isolated browser sessions.
         Each gets a unique fingerprint + optional unique proxy.
@@ -229,9 +221,7 @@ class ShardBrowser:
                 print(f"  {C_RED}[!] Session {i+1}/{count} failed: {e}{C_RESET}")
         return sessions
 
-    # ═══════════════════════════════════════════════
     # PROXY VALIDATION
-    # ═══════════════════════════════════════════════
 
     def check_proxy(self, proxy_url: str) -> dict:
         """
@@ -244,12 +234,10 @@ class ShardBrowser:
         sdk = self._ensure_sdk()
         return sdk.check_proxy(proxy_url)
 
-    # ═══════════════════════════════════════════════
     # OSINT WORKFLOWS
-    # ═══════════════════════════════════════════════
 
-    def osint_target(self, target: str, engines: List[str] = None,
-                     proxy: str = None, headless: bool = True) -> dict:
+    def osint_target(self, target: str, engines: Optional[list[str]] = None,
+                     proxy: Optional[str] = None, headless: bool = True) -> dict:
         """
         OSINT research with isolated browser profiles per search engine.
         Prevents fingerprint correlation between searches.
@@ -324,8 +312,8 @@ class ShardBrowser:
 
         return results
 
-    def social_recon(self, name: str, platforms: List[str] = None,
-                     proxy: str = None) -> dict:
+    def social_recon(self, name: str, platforms: Optional[list[str]] = None,
+                     proxy: Optional[str] = None) -> dict:
         """
         Social media recon with isolated profiles per platform.
 
@@ -387,9 +375,7 @@ class ShardBrowser:
 
         return results
 
-    # ═══════════════════════════════════════════════
     # BROWSE HELPERS
-    # ═══════════════════════════════════════════════
 
     async def _browse_async(self, cdp_url: str, url: str, wait: float = 3) -> str:
         """Navigate to URL via CDP and return page content."""
@@ -426,7 +412,7 @@ class ShardBrowser:
                 ).result(timeout=30)
 
     async def screenshot_async(self, cdp_url: str, url: str,
-                                output: str = None) -> bytes:
+                                output: Optional[str] = None) -> bytes:
         """Take a full-page screenshot."""
         from patchright.async_api import async_playwright
         async with async_playwright() as pw:
@@ -444,14 +430,12 @@ class ShardBrowser:
             await browser.close()
             return data
 
-    # ═══════════════════════════════════════════════
     # AUTHENTICATED BROWSE (cookie injection)
-    # ═══════════════════════════════════════════════
 
     async def _browse_with_cookies_async(
         self, cdp_url: str, url: str,
         cookies: list, wait: float = 5,
-        screenshot_path: str = None,
+        screenshot_path: Optional[str] = None,
     ) -> dict:
         """Navigate to URL with pre-injected cookies via CDP.
 
@@ -517,8 +501,8 @@ class ShardBrowser:
 
     def browse_with_cookies(
         self, url: str, cookies: list,
-        proxy: str = None, headless: bool = True,
-        screenshot_path: str = None, wait: float = 5,
+        proxy: Optional[str] = None, headless: bool = True,
+        screenshot_path: Optional[str] = None, wait: float = 5,
     ) -> dict:
         """
         Open URL in anti-detect browser with injected cookies.
@@ -568,9 +552,7 @@ class ShardBrowser:
             except Exception as _exc:
                 logging.debug(f"Suppressed in shardbrowser.py: {_exc}")
 
-    # ═══════════════════════════════════════════════
     # STATUS
-    # ═══════════════════════════════════════════════
 
     def get_status(self) -> dict:
         """Get SDK status info."""

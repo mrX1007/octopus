@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Credential ranking helpers shared by runtime credential caches."""
 
-from typing import Optional, Sequence, Tuple
-
+from collections.abc import Sequence
+from typing import Optional
 
 KEY_AUTH_MARKER = "__KEY_AUTH__"
-Credential = Tuple[str, str]
+Credential = tuple[str, str]
 
 
 def credential_rank_key(credential: Credential) -> tuple:
@@ -36,6 +36,6 @@ def rank_credentials(credentials: Sequence[Credential]) -> list:
     return sorted(credentials, key=credential_rank_key)
 
 
-def best_credential(credentials: Sequence[Credential]) -> Tuple[Optional[str], Optional[str]]:
+def best_credential(credentials: Sequence[Credential]) -> tuple[Optional[str], Optional[str]]:
     ranked = rank_credentials(credentials)
     return ranked[0] if ranked else (None, None)

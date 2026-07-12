@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 
-import time
 import threading
-from typing import Dict, Optional
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from typing import Optional
 
 
 @dataclass
@@ -31,7 +31,7 @@ class Metrics:
     """
 
     def __init__(self):
-        self._metrics: Dict[str, MetricEntry] = {}
+        self._metrics: dict[str, MetricEntry] = {}
         self._lock = threading.Lock()
         self._start_time = time.time()
 

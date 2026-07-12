@@ -2,14 +2,15 @@
 """
 """
 
-import re
 import json
-from typing import Dict, Any, List
+import re
+from typing import Any, Optional
+
+from core.ai.asset_graph import AssetGraph
 from core.ai.fact_store import FactStore
 from core.ai.state_resolver import StateResolver
-from core.ai.target_model import TargetModel
-from core.ai.asset_graph import AssetGraph
 from core.ai.surface_state import SurfaceState
+from core.ai.target_model import TargetModel
 
 try:
     from config import CFG
@@ -47,7 +48,7 @@ class ContextBuilder:
         self.fact_store = fact_store
         self.state_resolver = state_resolver
 
-    def build_context(self, scan_id: str, host: str) -> Dict[str, Any]:
+    def build_context(self, scan_id: str, host: str) -> dict[str, Any]:
         """
         Builds a concise summary of the current state, services, and open questions.
         Example output:
@@ -83,22 +84,22 @@ class ContextBuilder:
             primary_state = "recon_completed"
 
         # Extract services from ALL port facts
-        services = set()
+        service_names: set[str] = set()
         open_ports = state.get("open_ports", [])
         for port_str in open_ports:
             port_lower = self._service_text_from_port_fact(port_str)
             for svc_name, patterns in SERVICE_PATTERNS.items():
                 if any(p in port_lower for p in patterns):
-                    services.add(svc_name)
+                    service_names.add(svc_name)
         for fact in facts:
             if fact.get("type") != "web_endpoint":
                 continue
             endpoint_text = str(fact.get("value", "")).lower()
-            services.add("http")
+            service_names.add("http")
             if '"scheme": "https"' in endpoint_text or endpoint_text.startswith("https://"):
-                services.add("https")
+                service_names.add("https")
         
-        services = sorted(services)
+        services = sorted(service_names)
 
         coverage_gaps = self._coverage_gaps(state, services, primary_state, facts, target_model, surface_states)
         coverage_details = target_model.get("coverage") or {}
@@ -139,7 +140,7 @@ class ContextBuilder:
         service, banner = match.groups()
         return f"{service or ''} {banner or ''}".strip()
 
-    def _network_graph(self, facts: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _network_graph(self, facts: list[dict[str, Any]]) -> dict[str, Any]:
         nodes = []
         edges = []
         seen_nodes = set()
@@ -162,8 +163,8 @@ class ContextBuilder:
                 edges.append(parsed)
         return {"nodes": nodes, "edges": edges}
     
-    def _infer_open_questions(self, state: Dict, services: List[str], primary_state: str,
-                              facts: List[Dict[str, Any]] = None) -> List[str]:
+    def _infer_open_questions(self, state: dict, services: list[str], primary_state: str,
+                              facts: Optional[list[dict[str, Any]]] = None) -> list[str]:
         """Infer what we still don't know based on services and state."""
         questions = []
         facts = facts or []
@@ -270,14 +271,14 @@ class ContextBuilder:
             
         return questions
 
-    def _coverage_gaps(self, state: Dict, services: List[str], primary_state: str,
-                       facts: List[Dict[str, Any]], target_model: Dict[str, Any],
-                       surface_states: Dict[str, str]) -> List[str]:
+    def _coverage_gaps(self, state: dict, services: list[str], primary_state: str,
+                       facts: list[dict[str, Any]], target_model: dict[str, Any],
+                       surface_states: dict[str, str]) -> list[str]:
         gaps = []
         service_set = set(services or [])
         web_present = (
             surface_states.get("web") == "confirmed_present"
-            or bool((target_model.get("endpoints") or []))
+            or bool(target_model.get("endpoints") or [])
             or bool(service_set.intersection({"http", "https", "cpanel", "tomcat"}))
         )
         api_present_or_unknown = surface_states.get("api") != "confirmed_absent"
@@ -336,10 +337,10 @@ class ContextBuilder:
 
         return list(dict.fromkeys(gaps))
 
-    def _fact_type_seen(self, facts: List[Dict[str, Any]], fact_type: str) -> bool:
+    def _fact_type_seen(self, facts: list[dict[str, Any]], fact_type: str) -> bool:
         return any(str(f.get("type", "")).lower() == fact_type for f in facts or [])
 
-    def _status_prefix_seen(self, facts: List[Dict[str, Any]], prefix: str) -> bool:
+    def _status_prefix_seen(self, facts: list[dict[str, Any]], prefix: str) -> bool:
         prefix = prefix.lower()
         return any(
             str(f.get("type", "")).lower() == "service_status"
@@ -347,7 +348,7 @@ class ContextBuilder:
             for f in facts or []
         )
 
-    def _source_seen(self, facts: List[Dict[str, Any]], prefixes: tuple) -> bool:
+    def _source_seen(self, facts: list[dict[str, Any]], prefixes: tuple) -> bool:
         prefixes = tuple(str(prefix).lower() for prefix in prefixes)
         for fact in facts or []:
             sources = []
@@ -361,10 +362,10 @@ class ContextBuilder:
                 return True
         return False
 
-    def _internal_hosts_seen(self, facts: List[Dict[str, Any]]) -> bool:
+    def _internal_hosts_seen(self, facts: list[dict[str, Any]]) -> bool:
         return any(str(f.get("type", "")).lower() == "internal_host" for f in facts or [])
 
-    def _internal_services_seen(self, facts: List[Dict[str, Any]]) -> bool:
+    def _internal_services_seen(self, facts: list[dict[str, Any]]) -> bool:
         if any(str(f.get("type", "")).lower() == "internal_service" for f in facts or []):
             return True
         return any(
@@ -376,7 +377,7 @@ class ContextBuilder:
     def _strategy_enabled(self, key: str, default: bool = False) -> bool:
         return bool((CFG.get("strategy") or {}).get(key, default))
 
-    def _automation_policy(self) -> Dict[str, bool]:
+    def _automation_policy(self) -> dict[str, bool]:
         strategy = CFG.get("strategy") or {}
         return {
             "auto_post_access_inventory": bool(strategy.get(
@@ -392,7 +393,7 @@ class ContextBuilder:
             "allow_active_msf": bool(strategy.get("allow_active_msf", False)),
         }
 
-    def _stage_gates(self, state: Dict) -> Dict[str, bool]:
+    def _stage_gates(self, state: dict) -> dict[str, bool]:
         return {
             "recon": bool(state.get("recon_completed")),
             "credentials": bool(state.get("credentials_found")),
@@ -404,7 +405,7 @@ class ContextBuilder:
             "cleanup": bool(state.get("cleanup_completed")),
         }
 
-    def _next_required_capability(self, primary_state: str, open_questions: List[str]) -> str:
+    def _next_required_capability(self, primary_state: str, open_questions: list[str]) -> str:
         if "service_discovery_needed" in open_questions:
             return "service_discovery"
         if "post_access_inventory_needed" in open_questions:
@@ -440,7 +441,7 @@ class ContextBuilder:
             return "conclude"
         return "conclude"
 
-    def _internal_vulnerability_gaps_seen(self, target_model: Dict[str, Any]) -> bool:
+    def _internal_vulnerability_gaps_seen(self, target_model: dict[str, Any]) -> bool:
         coverage = target_model.get("coverage") or {}
         for gap in coverage.get("gaps") or []:
             if not isinstance(gap, dict):

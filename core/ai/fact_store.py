@@ -1,17 +1,30 @@
 #!/usr/bin/env python3
 
-import os
-import time
-import sqlite3
-import json
 import hashlib
+import json
+import os
+import sqlite3
+import time
 from contextlib import contextmanager
-from typing import List, Dict, Any, Tuple
+from typing import Any, Optional
+
+from core.secrets import Redactor, SecretStore, default_secret_store_path
+
 
 class FactStore:
-    def __init__(self, db_path: str = "data/facts.db"):
+    def __init__(self, db_path: str = "data/facts.db", secret_store: Optional[SecretStore] = None):
         self.db_path = db_path
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
+        if secret_store is None:
+            if os.path.normpath(db_path) == os.path.normpath("data/facts.db"):
+                secret_path = default_secret_store_path()
+            elif db_path == ":memory:":
+                secret_path = ":memory:"
+            else:
+                secret_path = f"{db_path}.secrets"
+            secret_store = SecretStore(secret_path)
+        self.secret_store = secret_store
+        self.redactor = Redactor(secret_store)
         self._init_db()
 
     @contextmanager
@@ -42,7 +55,8 @@ class FactStore:
                     session_id TEXT NOT NULL DEFAULT 'none',
                     derived_from TEXT DEFAULT '[]',
                     evidence_hash TEXT DEFAULT '',
-                    timestamp REAL NOT NULL
+                    timestamp REAL NOT NULL,
+                    secret_refs TEXT NOT NULL DEFAULT '[]'
                 )
             ''')
             # Hypotheses Table
@@ -70,6 +84,7 @@ class FactStore:
                     session_id TEXT NOT NULL DEFAULT 'none',
                     evidence_hash TEXT DEFAULT '',
                     timestamp REAL NOT NULL,
+                    secret_refs TEXT NOT NULL DEFAULT '[]',
                     FOREIGN KEY(fact_id) REFERENCES facts(id)
                 )
             ''')
@@ -94,11 +109,72 @@ class FactStore:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_obs_scan_host ON fact_observations (scan_id, host)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_command_result_hash ON command_results (scan_id, host, output_hash)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_command_result_key ON command_results (scan_id, host, command_key)')
+            self._ensure_column(cursor, "facts", "secret_refs", "TEXT NOT NULL DEFAULT '[]'")
+            self._ensure_column(cursor, "fact_observations", "secret_refs", "TEXT NOT NULL DEFAULT '[]'")
+            self._redact_existing_rows(cursor)
             conn.commit()
+
+    def _ensure_column(self, cursor, table: str, column: str, definition: str) -> None:
+        columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in columns:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _redact_existing_rows(self, cursor) -> None:
+        """One-way migrate legacy plaintext rows before any caller can read them."""
+        for row_id, fact_type, value, source, refs_json in cursor.execute(
+            "SELECT id, type, value, source, secret_refs FROM facts"
+        ).fetchall():
+            safe_value, refs = self.redactor.redact_fact(fact_type, value)
+            safe_source = self.redactor.redact_text(source, kind="fact_source")
+            merged = tuple(dict.fromkeys(self._load_refs(refs_json) + refs))
+            if safe_value != value or safe_source != source or merged != self._load_refs(refs_json):
+                cursor.execute(
+                    "UPDATE facts SET value = ?, source = ?, secret_refs = ? WHERE id = ?",
+                    (safe_value, safe_source, json.dumps(merged), row_id),
+                )
+        for row_id, fact_type, value, source, refs_json in cursor.execute(
+            "SELECT id, type, value, source, secret_refs FROM fact_observations"
+        ).fetchall():
+            safe_value, refs = self.redactor.redact_fact(fact_type, value)
+            safe_source = self.redactor.redact_text(source, kind="fact_source")
+            merged = tuple(dict.fromkeys(self._load_refs(refs_json) + refs))
+            if safe_value != value or safe_source != source or merged != self._load_refs(refs_json):
+                cursor.execute(
+                    "UPDATE fact_observations SET value = ?, source = ?, secret_refs = ? WHERE id = ?",
+                    (safe_value, safe_source, json.dumps(merged), row_id),
+                )
+        for row_id, command in cursor.execute("SELECT id, command FROM command_results").fetchall():
+            safe_command = self.redactor.redact_text(command, kind="command")
+            if safe_command != command:
+                cursor.execute("UPDATE command_results SET command = ? WHERE id = ?", (safe_command, row_id))
+        for row_id, claim, required, source in cursor.execute(
+            "SELECT id, claim, required_evidence, source FROM hypotheses"
+        ).fetchall():
+            safe_claim = self.redactor.redact_text(claim, kind="hypothesis")
+            safe_required = self.redactor.redact_data(self._load_json_list(required))
+            safe_source = self.redactor.redact_text(source, kind="hypothesis_source")
+            required_json = json.dumps(safe_required)
+            if safe_claim != claim or required_json != required or safe_source != source:
+                cursor.execute(
+                    "UPDATE hypotheses SET claim = ?, required_evidence = ?, source = ? WHERE id = ?",
+                    (safe_claim, required_json, safe_source, row_id),
+                )
+
+    @staticmethod
+    def _load_json_list(value: Any) -> list[Any]:
+        try:
+            loaded = json.loads(value or "[]")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+        return loaded if isinstance(loaded, list) else []
+
+    @classmethod
+    def _load_refs(cls, value: Any) -> tuple[str, ...]:
+        return tuple(str(item) for item in cls._load_json_list(value) if item)
 
     def add_fact(self, scan_id: str, host: str, fact_type: str, value: str, source: str,
                  confidence: int = 100, session_id: str = 'none',
-                 derived_from: List[int] = None, evidence_hash: str = "") -> int:
+                 derived_from: Optional[list[int]] = None, evidence_hash: str = "") -> int:
         """Add a fact and return its row id.
 
         For backward compatibility this returns the existing id when the fact is
@@ -120,15 +196,20 @@ class FactStore:
 
     def add_fact_with_status(self, scan_id: str, host: str, fact_type: str, value: str, source: str,
                              confidence: int = 100, session_id: str = 'none',
-                             derived_from: List[int] = None, evidence_hash: str = "") -> Tuple[int, bool]:
+                             derived_from: Optional[list[int]] = None, evidence_hash: str = "") -> tuple[int, bool]:
         """Add a fact and return (row_id, created).
 
         The AI pipeline uses the created flag for anti-loop accounting. Without
         it, duplicates look like new facts because add_fact() returns an id for
         both new and existing rows.
         """
-        if derived_from is None: derived_from = []
+        if derived_from is None:
+            derived_from = []
+        value, secret_refs = self.redactor.redact_fact(fact_type, value)
+        source = self.redactor.redact_text(source, kind="fact_source")
+        session_id = self.redactor.redact_text(session_id, kind="session_id")
         derived_json = json.dumps(derived_from)
+        refs_json = json.dumps(secret_refs)
         now = time.time()
         evidence_hash = evidence_hash or self._evidence_hash(
             scan_id, host, fact_type, value, source, session_id
@@ -151,35 +232,42 @@ class FactStore:
                 ''', (max(int(old_confidence or 0), int(confidence or 0)), now, fact_id))
                 self._insert_observation(
                     cursor, fact_id, scan_id, host, fact_type, value,
-                    confidence, source, session_id, evidence_hash, now,
+                    confidence, source, session_id, evidence_hash, now, secret_refs,
                 )
                 conn.commit()
                 return fact_id, False
 
             cursor.execute('''
-                INSERT INTO facts (scan_id, host, type, value, confidence, source, session_id, derived_from, evidence_hash, timestamp)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (scan_id, host, fact_type, value, confidence, source, session_id, derived_json, evidence_hash, now))
+                INSERT INTO facts (
+                    scan_id, host, type, value, confidence, source, session_id,
+                    derived_from, evidence_hash, timestamp, secret_refs
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                scan_id, host, fact_type, value, confidence, source, session_id,
+                derived_json, evidence_hash, now, refs_json,
+            ))
             fact_id = cursor.lastrowid
             self._insert_observation(
                 cursor, fact_id, scan_id, host, fact_type, value,
-                confidence, source, session_id, evidence_hash, now,
+                confidence, source, session_id, evidence_hash, now, secret_refs,
             )
             conn.commit()
             return fact_id, True
 
     def _insert_observation(self, cursor, fact_id: int, scan_id: str, host: str,
                             fact_type: str, value: str, confidence: int, source: str,
-                            session_id: str, evidence_hash: str, timestamp: float) -> None:
+                            session_id: str, evidence_hash: str, timestamp: float,
+                            secret_refs: tuple[str, ...]) -> None:
         cursor.execute('''
             INSERT INTO fact_observations (
                 fact_id, scan_id, host, type, value, confidence, source,
-                session_id, evidence_hash, timestamp
+                session_id, evidence_hash, timestamp, secret_refs
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             fact_id, scan_id, host, fact_type, value, confidence, source,
-            session_id, evidence_hash, timestamp,
+            session_id, evidence_hash, timestamp, json.dumps(secret_refs),
         ))
 
     def _evidence_hash(self, scan_id: str, host: str, fact_type: str, value: str,
@@ -189,8 +277,11 @@ class FactStore:
         ))
         return hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()
             
-    def add_hypothesis(self, scan_id: str, host: str, claim: str, required_evidence: List[str], source: str) -> int:
+    def add_hypothesis(self, scan_id: str, host: str, claim: str, required_evidence: list[str], source: str) -> int:
         """Add a hypothesis to the hypotheses table."""
+        claim = self.redactor.redact_text(claim, kind="hypothesis")
+        required_evidence = self.redactor.redact_data(required_evidence)
+        source = self.redactor.redact_text(source, kind="hypothesis_source")
         req_json = json.dumps(required_evidence)
         with self._get_conn() as conn:
             cursor = conn.cursor()
@@ -201,9 +292,9 @@ class FactStore:
             conn.commit()
             return cursor.lastrowid
 
-    def get_facts(self, scan_id: str, host: str = None, fact_type: str = None, session_id: str = None) -> List[Dict[str, Any]]:
+    def get_facts(self, scan_id: str, host: Optional[str] = None, fact_type: Optional[str] = None, session_id: Optional[str] = None) -> list[dict[str, Any]]:
         """Retrieve facts matching the given criteria."""
-        query = "SELECT id, scan_id, host, type, value, confidence, source, session_id, derived_from, evidence_hash, timestamp FROM facts WHERE scan_id = ?"
+        query = "SELECT id, scan_id, host, type, value, confidence, source, session_id, derived_from, evidence_hash, timestamp, secret_refs FROM facts WHERE scan_id = ?"
         params = [scan_id]
 
         if host:
@@ -236,6 +327,7 @@ class FactStore:
                     "session_id": row[7],
                     "evidence_hash": row[9],
                     "timestamp": row[10],
+                    "secret_refs": list(self._load_refs(row[11])),
                 }]
             sources = sorted({obs["source"] for obs in observations if obs.get("source")})
             sessions = sorted({obs["session_id"] for obs in observations if obs.get("session_id")})
@@ -251,23 +343,24 @@ class FactStore:
                 "derived_from": json.loads(row[8]),
                 "evidence_hash": row[9],
                 "timestamp": row[10],
+                "secret_refs": list(self._load_refs(row[11])),
                 "observations": observations,
                 "sources": sources,
                 "sessions": sessions,
             })
         return results
 
-    def _get_observations_for_facts(self, cursor, fact_ids: List[int]) -> Dict[int, List[Dict[str, Any]]]:
+    def _get_observations_for_facts(self, cursor, fact_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
         if not fact_ids:
             return {}
         placeholders = ",".join("?" for _ in fact_ids)
         cursor.execute(f'''
-            SELECT id, fact_id, confidence, source, session_id, evidence_hash, timestamp
+            SELECT id, fact_id, confidence, source, session_id, evidence_hash, timestamp, secret_refs
             FROM fact_observations
             WHERE fact_id IN ({placeholders})
             ORDER BY timestamp ASC
         ''', fact_ids)
-        grouped: Dict[int, List[Dict[str, Any]]] = {}
+        grouped: dict[int, list[dict[str, Any]]] = {}
         for row in cursor.fetchall():
             grouped.setdefault(row[1], []).append({
                 "id": row[0],
@@ -276,10 +369,11 @@ class FactStore:
                 "session_id": row[4],
                 "evidence_hash": row[5],
                 "timestamp": row[6],
+                "secret_refs": list(self._load_refs(row[7])),
             })
         return grouped
 
-    def get_hypotheses(self, scan_id: str, host: str = None) -> List[Dict[str, Any]]:
+    def get_hypotheses(self, scan_id: str, host: Optional[str] = None) -> list[dict[str, Any]]:
         """Retrieve hypotheses matching criteria."""
         query = "SELECT id, scan_id, host, claim, required_evidence, source, timestamp FROM hypotheses WHERE scan_id = ?"
         params = [scan_id]
@@ -308,8 +402,9 @@ class FactStore:
 
     def add_command_result(self, scan_id: str, host: str, command_key: str, command: str,
                            output_hash: str, output_bytes: int = 0, parsed_facts: int = 0,
-                           new_facts: int = 0, failed: bool = False) -> Tuple[int, bool]:
+                           new_facts: int = 0, failed: bool = False) -> tuple[int, bool]:
         now = time.time()
+        command = self.redactor.redact_text(command, kind="command")
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -331,7 +426,7 @@ class FactStore:
             conn.commit()
             return cursor.lastrowid, existing is None
 
-    def get_command_results(self, scan_id: str, host: str = None) -> List[Dict[str, Any]]:
+    def get_command_results(self, scan_id: str, host: Optional[str] = None) -> list[dict[str, Any]]:
         query = '''
             SELECT id, scan_id, host, command_key, command, output_hash, output_bytes,
                    parsed_facts, new_facts, failed, timestamp
@@ -381,7 +476,7 @@ class FactStore:
             })
         return json.dumps(clean_facts, indent=2)
 
-    def get_history(self, scan_id: str) -> List[Dict[str, Any]]:
+    def get_history(self, scan_id: str) -> list[dict[str, Any]]:
         """Retrieve chronological history of facts for anti-loop and replay."""
         return self.get_facts(scan_id)
 
@@ -389,5 +484,8 @@ class FactStore:
         """Remove all facts for a given scan (used for cleanup or restart)."""
         with self._get_conn() as conn:
             cursor = conn.cursor()
+            cursor.execute("DELETE FROM fact_observations WHERE scan_id = ?", (scan_id,))
+            cursor.execute("DELETE FROM command_results WHERE scan_id = ?", (scan_id,))
+            cursor.execute("DELETE FROM hypotheses WHERE scan_id = ?", (scan_id,))
             cursor.execute("DELETE FROM facts WHERE scan_id = ?", (scan_id,))
             conn.commit()

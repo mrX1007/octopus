@@ -3,35 +3,35 @@
 import ipaddress
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any
 from urllib.parse import urlparse
 
 
 class AssetGraph:
     """Normalize facts into an asset/network graph for deterministic planning."""
 
-    def __init__(self, target: str, facts: List[Dict[str, Any]]):
+    def __init__(self, target: str, facts: list[dict[str, Any]]):
         self.target = target
         self.host = self._target_host(target)
         self.facts = facts or []
-        self.nodes: Dict[str, Dict[str, Any]] = {}
-        self.edges: Dict[str, Dict[str, Any]] = {}
+        self.nodes: dict[str, dict[str, Any]] = {}
+        self.edges: dict[str, dict[str, Any]] = {}
 
     @classmethod
-    def from_facts(cls, target: str, facts: List[Dict[str, Any]]) -> "AssetGraph":
+    def from_facts(cls, target: str, facts: list[dict[str, Any]]) -> "AssetGraph":
         graph = cls(target, facts)
         graph._build()
         return graph
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "nodes": sorted(self.nodes.values(), key=lambda n: (n.get("kind", ""), n.get("id", ""))),
             "edges": sorted(self.edges.values(), key=lambda e: (e.get("type", ""), e.get("from", ""), e.get("to", ""))),
             "summary": self.summary(),
         }
 
-    def summary(self) -> Dict[str, int]:
-        counts: Dict[str, int] = {}
+    def summary(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
         for node in self.nodes.values():
             kind = node.get("kind", "unknown")
             counts[kind] = counts.get(kind, 0) + 1
@@ -176,7 +176,7 @@ class AssetGraph:
         edge.update({k: v for k, v in attrs.items() if v not in (None, "")})
         self.edges[key] = edge
 
-    def _parse_endpoint(self, value: str) -> Dict[str, Any]:
+    def _parse_endpoint(self, value: str) -> dict[str, Any]:
         try:
             data = json.loads(value)
             url = str(data.get("url", "")).strip()

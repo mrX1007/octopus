@@ -3,13 +3,13 @@ import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import Any, Optional
 
 
 class ArtifactManager:
     """Tracks operational artifacts for precise cleanup and forensic minimization."""
 
-    def __init__(self, db_path: str = None, target_ip: str = "local"):
+    def __init__(self, db_path: Optional[str] = None, target_ip: str = "local"):
         self.target_ip = target_ip
 
         if db_path is None:
@@ -86,7 +86,7 @@ class ArtifactManager:
             """, (self.target_ip, str(pid), description, datetime.now().isoformat()))
             conn.commit()
 
-    def get_pending_cleanups(self) -> List[Dict[str, Any]]:
+    def get_pending_cleanups(self) -> list[dict[str, Any]]:
         with self._get_conn() as conn:
             rows = conn.execute(
                 "SELECT * FROM artifacts WHERE target_ip = ? AND status = 'active'",
@@ -94,7 +94,7 @@ class ArtifactManager:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_all_artifacts(self, target_ip: str = None) -> List[Dict[str, Any]]:
+    def get_all_artifacts(self, target_ip: Optional[str] = None) -> list[dict[str, Any]]:
         """Get all artifacts, optionally filtered by target."""
         with self._get_conn() as conn:
             if target_ip:

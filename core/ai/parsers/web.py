@@ -2,7 +2,6 @@
 
 import json
 import re
-from typing import List
 from urllib.parse import urlparse, urlunparse
 
 from .common import BaseParser, Fact, fact, tool_lower
@@ -11,11 +10,11 @@ from .common import BaseParser, Fact, fact, tool_lower
 class WebParser(BaseParser):
     family = "web"
 
-    def parse(self, tool_name: str, raw_output: str, session_id: str) -> List[Fact]:
+    def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
         tool = tool_lower(tool_name)
         raw = raw_output or ""
         lower = raw.lower()
-        facts: List[Fact] = []
+        facts: list[Fact] = []
         if any(marker in tool for marker in ("scrapling", "browser_surface", "katana")):
             for url in re.findall(r"\bhttps?://[^\s\"'<>]+", raw):
                 endpoint = self._endpoint(url)

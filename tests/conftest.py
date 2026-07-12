@@ -5,8 +5,9 @@ Pytest fixtures and helpers for OCTOPUS test suite.
 
 import os
 import sys
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, patch
 
 # Ensure project root is in path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -67,9 +68,13 @@ def sample_session_data():
     """Mock session data as returned by db.get_session()."""
     return {
         "history": (1, "192.168.1.100", "2026-06-15 10:00:00", "complete"),
-        "vulnerabilities": [
-            (1, 1, "CVE-2021-41773", "HIGH", "80", "http", "Path Traversal in Apache 2.4.49", "CONFIRMED", "nmap"),
-            (2, 1, "Weak SSH Config", "MEDIUM", "22", "ssh", "SSH allows password authentication", "UNCONFIRMED", "nmap"),
+        "vulns": [
+            (1, 1, "CVE-2021-41773", "HIGH", "80", "http",
+             "Path Traversal in Apache 2.4.49", "CONFIRMED", "nmap",
+             "HTTP 200 with /etc/passwd", "curl --path-as-is ...", 8.1),
+            (2, 1, "Weak SSH Config", "MEDIUM", "22", "ssh",
+             "SSH allows password authentication", "UNCONFIRMED", "nmap",
+             "password auth advertised", "ssh -o PreferredAuthentications=password", None),
         ],
         "fixes": [
             (1, 1, 1, "Upgrade Apache to >= 2.4.51", "ai"),

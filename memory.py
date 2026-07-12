@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 
 
-import os
-import json
 import logging
+import os
 from datetime import datetime
+from typing import Optional
+
+from core.secrets import Redactor, SecretStore, get_secret_store
 
 try:
     import chromadb
-    from chromadb.config import Settings
     HAS_CHROMA = True
 except ImportError:
     HAS_CHROMA = False
@@ -19,16 +20,18 @@ except ImportError:
     CFG = {"paths": {"memory": "~/OCTOPUS/memory"}}
 
 
-# v7.0: Priority categories — always returned first in recall
+# Categories promoted when priority-first recall is enabled.
 _PRIORITY_CATEGORIES = {"credentials", "root_access", "active_session"}
 
-# v7.0: Dedup similarity threshold (lower = stricter matching)
-_DEDUP_THRESHOLD = 0.15  # ChromaDB uses L2 distance — 0.15 = very similar
+# ChromaDB uses L2 distance; lower values require a closer match.
+_DEDUP_THRESHOLD = 0.15
 
 
 class VectorMemory:
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, secret_store: SecretStore = None):
         self.session_id = str(session_id)
+        self.secret_store = secret_store or get_secret_store()
+        self.redactor = Redactor(self.secret_store)
         self.enabled = HAS_CHROMA
 
         if not self.enabled:
@@ -40,10 +43,8 @@ class VectorMemory:
 
         try:
             self.client = chromadb.PersistentClient(path=mem_dir)
-            # Create a collection for this session
             self.collection_name = f"session_{self.session_id}"
 
-            # Use get_or_create to avoid errors on resume
             self.collection = self.client.get_or_create_collection(
                 name=self.collection_name,
                 metadata={"description": f"Memory for session {self.session_id}"}
@@ -53,35 +54,33 @@ class VectorMemory:
             logging.error(f"Failed to initialize ChromaDB: {e}")
             self.enabled = False
 
-    def store_finding(self, category: str, content: str, metadata: dict = None):
-        """Store a finding in the vector database.
-        v7.0: Semantic deduplication — skip if very similar content already exists."""
+    def store_finding(self, category: str, content: str, metadata: Optional[dict] = None):
+        """Store a finding unless a semantically equivalent item exists."""
         if not self.enabled:
             return False
 
         try:
-            # v7.0: Semantic dedup — check if similar content exists
-            if self._is_duplicate(content):
-                return False  # Skip duplicate
+            safe_content = self.redactor.redact_text(content, kind=f"memory:{category}")
+            safe_metadata = self.redactor.redact_data(dict(metadata or {}))
+            if self._is_duplicate(safe_content):
+                return False
 
             doc_id = f"{category}_{int(datetime.now().timestamp() * 1000)}"
-            if metadata is None:
-                metadata = {}
-            metadata["category"] = category
-            metadata["timestamp"] = datetime.now().isoformat()
+            safe_metadata["category"] = category
+            safe_metadata["timestamp"] = datetime.now().isoformat()
 
             self.collection.add(
-                documents=[content],
-                metadatas=[metadata],
+                documents=[safe_content],
+                metadatas=[safe_metadata],
                 ids=[doc_id]
             )
             return True
         except Exception as e:
-            logging.error(f"Failed to store finding in memory: {e}")
+            logging.error("Failed to store finding in memory: %s", self.redactor.redact_text(e, kind="error"))
             return False
 
     def _is_duplicate(self, content: str) -> bool:
-        """v7.0: Check if semantically similar content already exists."""
+        """Return whether semantically similar content already exists."""
         try:
             if self.collection.count() == 0:
                 return False
@@ -91,26 +90,22 @@ class VectorMemory:
                 n_results=1
             )
 
-            if (results and results.get("distances") and
-                    results["distances"][0] and
-                    results["distances"][0][0] < _DEDUP_THRESHOLD):
-                return True
-            return False
-        except Exception as e:
+            return bool(results and results.get("distances") and results["distances"][0] and results["distances"][0][0] < _DEDUP_THRESHOLD)
+        except Exception:
             return False
 
-    def recall(self, query: str, n_results: int = 5, category: str = None,
+    def recall(self, query: str, n_results: int = 5, category: Optional[str] = None,
                priority_first: bool = True) -> list:
-        """Recall top N findings relevant to the query.
-        v7.0: priority_first=True ensures credentials/root facts come first."""
+        """Recall relevant findings, optionally promoting priority categories."""
         if not self.enabled:
             return []
 
         try:
+            safe_query = self.redactor.redact_text(query, kind="memory_query")
             where_clause = {"category": category} if category else None
 
             results = self.collection.query(
-                query_texts=[query],
+                query_texts=[safe_query],
                 n_results=n_results,
                 where=where_clause
             )
@@ -122,12 +117,11 @@ class VectorMemory:
             for i, doc in enumerate(results["documents"][0]):
                 meta = results["metadatas"][0][i] if results.get("metadatas") else {}
                 recalled_items.append({
-                    "content": doc,
-                    "metadata": meta,
+                    "content": self.redactor.redact_text(doc, kind="memory_result"),
+                    "metadata": self.redactor.redact_data(meta),
                     "distance": results["distances"][0][i] if "distances" in results else 0
                 })
 
-            # v7.0: Priority sorting — credentials and root access facts first
             if priority_first:
                 recalled_items.sort(key=lambda x: (
                     0 if x["metadata"].get("category", "") in _PRIORITY_CATEGORIES else 1,
@@ -136,23 +130,24 @@ class VectorMemory:
 
             return recalled_items
         except Exception as e:
-            logging.error(f"Failed to recall from memory: {e}")
+            logging.error("Failed to recall from memory: %s", self.redactor.redact_text(e, kind="error"))
             return []
 
     def recall_by_category(self, category: str, n_results: int = 10) -> list:
-        """v7.0: Recall all items of a specific category."""
+        """Recall items from a specific category."""
         return self.recall("", n_results=n_results, category=category)
 
     def store_credential(self, service: str, host: str, user: str, password: str):
-        """v7.0: Store a credential as a high-priority memory item."""
-        content = f"CREDENTIALS FOUND: {service} {user}:{password}@{host}"
-        self.store_finding("credentials", content, {
+        """Store a credential as a high-priority memory item."""
+        secret_ref = self.redactor.protect(password, kind="credential")
+        content = f"CREDENTIALS FOUND: {service} {user}:{secret_ref}@{host}"
+        return self.store_finding("credentials", content, {
             "service": service, "host": host,
-            "user": user, "password": password
+            "user": user, "password": secret_ref
         })
 
     def store_root_access(self, host: str, user: str):
-        """v7.0: Store root access confirmation."""
+        """Store root access confirmation."""
         content = f"TARGET IS ROOTED: uid=0 access via {user}@{host}"
         self.store_finding("root_access", content, {
             "host": host, "user": user
@@ -168,11 +163,11 @@ class VectorMemory:
             if count == 0:
                 return "Memory is empty."
             return f"Memory contains {count} stored context items."
-        except Exception as e:
+        except Exception:
             return "Memory status unavailable."
 
     def clear_session(self):
-        """v7.0: Clear current session memory (for fresh start)."""
+        """Clear the current session memory."""
         if not self.enabled:
             return
         try:
@@ -182,10 +177,9 @@ class VectorMemory:
                 metadata={"description": f"Memory for session {self.session_id}"}
             )
         except Exception as e:
-            logging.error(f"Failed to clear session memory: {e}")
+            logging.error("Failed to clear session memory: %s", self.redactor.redact_text(e, kind="error"))
 
 
-# Singleton instance placeholder for the current scan
 _current_memory = None
 
 def init_memory(session_id: str) -> VectorMemory:

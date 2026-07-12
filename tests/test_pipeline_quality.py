@@ -64,6 +64,7 @@ def test_tooldef_python_dependency_gate():
 
 def test_fact_store_preserves_duplicate_fact_observations():
     import uuid
+
     from core.ai.fact_store import FactStore
 
     store = FactStore(f"/tmp/octopus_fact_provenance_{uuid.uuid4().hex}.db")
@@ -92,6 +93,7 @@ def test_fact_store_preserves_duplicate_fact_observations():
 def test_pipeline_derives_normalized_endpoint_and_network_graph_facts():
     import json
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_pipeline_derived_{uuid.uuid4().hex}.db")
@@ -130,7 +132,7 @@ def test_pipeline_runtime_zero_means_unlimited():
 
 
 def test_runner_preserves_discovered_web_page_urls_for_browser_analysis():
-    import core.tools.post_tools  # noqa: F401 - registers browser_surface_analysis
+    import core.tools.post_tools
     import core.tools.recon_tools  # noqa: F401 - registers URL-aware web tools
     from core.tools.registry import get_tool
     from core.tools.runner import run_tool_by_command
@@ -174,7 +176,7 @@ def test_runner_preserves_discovered_web_page_urls_for_browser_analysis():
 
 
 def test_runner_parses_web_scanner_target_flags_without_passing_flags_as_targets():
-    import core.tools.exploit_tools  # noqa: F401 - registers jmx2rce_scan
+    import core.tools.exploit_tools
     import core.tools.recon_tools  # noqa: F401 - registers web scanner tools
     from core.tools.registry import get_tool
     from core.tools.runner import run_tool_by_command
@@ -215,8 +217,9 @@ def test_n_mode_uses_registry_safe_deep_coverage_without_real_tools():
     import builtins
     import sys
     import types
-    import core.tools.runner as runner
+
     import core.tools.recon_tools  # noqa: F401 - registers safe/deep tools
+    import core.tools.runner as runner
     from core.tools.registry import get_tool
 
     old_input = builtins.input
@@ -306,9 +309,10 @@ def test_x_mode_runs_exhaustive_applicable_coverage_without_real_tools():
     import builtins
     import sys
     import types
-    import core.tools.runner as runner
-    import core.tools.post_tools  # noqa: F401 - registers browser_surface_analysis
+
+    import core.tools.post_tools
     import core.tools.recon_tools  # noqa: F401 - registers recon/deep tools
+    import core.tools.runner as runner
     from core.tools.registry import get_tool
 
     old_input = builtins.input
@@ -380,9 +384,10 @@ def test_x_mode_dedupes_default_heavy_web_scanners_without_dropping_distinct_por
     import builtins
     import sys
     import types
-    import core.tools.runner as runner
-    import core.tools.post_tools  # noqa: F401 - registers browser_surface_analysis
+
+    import core.tools.post_tools
     import core.tools.recon_tools  # noqa: F401 - registers recon/deep tools
+    import core.tools.runner as runner
     from core.tools.registry import get_tool
 
     old_input = builtins.input
@@ -540,6 +545,7 @@ def test_director_does_not_drift_from_vuln_assessment_to_post_exploit_without_cr
 
 def test_evidence_verifier_does_not_treat_unknown_question_as_exposure_proof():
     import uuid
+
     from core.ai.evidence import EvidenceVerifier
     from core.ai.fact_store import FactStore
 
@@ -570,6 +576,7 @@ def test_evidence_verifier_does_not_treat_unknown_question_as_exposure_proof():
 
 def test_evidence_verifier_accepts_ssh_access_aliases_from_real_facts():
     import uuid
+
     from core.ai.evidence import EvidenceVerifier
     from core.ai.fact_store import FactStore
 
@@ -594,6 +601,7 @@ def test_evidence_verifier_accepts_ssh_access_aliases_from_real_facts():
 
 def test_evidence_verifier_accepts_indexed_context_evidence_aliases():
     import uuid
+
     from core.ai.evidence import EvidenceVerifier
     from core.ai.fact_store import FactStore
 
@@ -683,6 +691,7 @@ def test_vulnerability_metadata_uses_endpoint_facts_for_confirmed_findings():
 def test_exploit_select_context_excludes_json_web_endpoint_facts():
     import json
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     host = "10.0.0.5"
@@ -781,6 +790,7 @@ def test_reporting_evidence_index_and_coverage_summarize_traceability():
 
 def test_coverage_summary_dedupes_repeated_timeout_signals():
     import json
+
     from core.ai.reporting import build_coverage_summary
 
     facts = [
@@ -816,8 +826,8 @@ def test_coverage_summary_dedupes_repeated_timeout_signals():
 
 
 def test_trace_report_records_deterministic_llm_status():
-    from core.ai.trace_report import TraceReporter
     from core.ai.fact_store import FactStore
+    from core.ai.trace_report import TraceReporter
 
     reporter = TraceReporter(FactStore("/tmp/octopus_trace_llm_status.db"))
     report = reporter.build(
@@ -841,6 +851,7 @@ def test_trace_report_records_deterministic_llm_status():
 
 def test_trace_report_text_includes_evidence_attack_path_and_remediation():
     import uuid
+
     from core.ai.fact_store import FactStore
     from core.ai.trace_report import TraceReporter
 
@@ -1077,25 +1088,6 @@ def test_internal_recon_goal_forces_single_network_task():
     assert optimized == [{"agent": "VerificationAgent", "task": "internal_network_recon"}]
 
 
-def test_legacy_agents_module_imports_current_ai_and_tool_facades(monkeypatch):
-    import agents
-    from core.ai.legacy_agents import DirectorAgent
-
-    monkeypatch.setattr(
-        agents,
-        "get_all_known_creds_for_target",
-        lambda target: {"ssh": [("root", "fixture-password")]} if target == "10.0.0.5" else {},
-    )
-
-    assert callable(agents.ask_ollama)
-    assert callable(agents.extract_tags)
-    assert callable(agents.extract_facts_from_output)
-    assert callable(agents.run_tool_by_command)
-    assert callable(agents.run_arbitrary_cmd)
-    assert DirectorAgent is agents.DirectorAgent
-    assert "ssh" in agents._build_creds_context("10.0.0.5").lower()
-
-
 def test_plugin_manager_skips_optional_import_failures_without_warning(tmp_path, caplog):
     from core.plugins.loader import PluginManager
 
@@ -1285,6 +1277,7 @@ def test_exploit_selector_handles_local_inventory_without_msf_run():
 
 def test_pipeline_feeds_known_recon_facts_into_exploit_selector():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     db_path = f"/tmp/octopus_pipeline_exploit_select_{uuid.uuid4().hex}.db"
@@ -1302,6 +1295,7 @@ def test_pipeline_feeds_known_recon_facts_into_exploit_selector():
 
 def test_pipeline_feeds_compact_state_to_exploit_selector_without_raw_recon_bits():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     db_path = f"/tmp/octopus_pipeline_exploit_select_compact_{uuid.uuid4().hex}.db"
@@ -1355,6 +1349,7 @@ def test_exploit_selector_strips_compact_state_before_regex_parsing():
 
 def test_pipeline_exploit_context_excludes_local_inventory_but_keeps_external_web_surface():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     db_path = f"/tmp/octopus_pipeline_surface_context_{uuid.uuid4().hex}.db"
@@ -1383,6 +1378,7 @@ def test_pipeline_exploit_context_excludes_local_inventory_but_keeps_external_we
 
 def test_fact_driven_actions_enrich_internal_and_web_surfaces():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     db_path = f"/tmp/octopus_pipeline_all_surface_actions_{uuid.uuid4().hex}.db"
@@ -1415,6 +1411,7 @@ def test_fact_driven_actions_enrich_internal_and_web_surfaces():
 
 def test_fact_driven_service_intelligence_runs_exploit_select_searchsploit_and_msf_check():
     import uuid
+
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -1466,6 +1463,7 @@ Services analyzed: 1
 
 def test_msf_ssh_login_success_drives_controlled_internal_inventory():
     import uuid
+
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -1541,6 +1539,7 @@ $ ip -o addr show 2>/dev/null || ip addr show 2>/dev/null
 
 def test_pipeline_runs_safe_verification_followups_from_facts():
     import uuid
+
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -1584,6 +1583,7 @@ Services analyzed: 1
 
 def test_pipeline_does_not_truncate_verification_followup_fanout_to_three():
     import uuid
+
     import config
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
@@ -1631,10 +1631,13 @@ def test_pipeline_does_not_truncate_verification_followup_fanout_to_three():
 
 def test_pipeline_runs_controlled_ssh_inventory_after_ssh_auth():
     import uuid
+
+    import config
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
     old_runner = pipeline_mod.run_arbitrary_cmd
+    old_strategy = dict(config.CFG.get("strategy", {}))
     calls = []
 
     def fake_runner(cmd):
@@ -1665,6 +1668,10 @@ $ ip -o addr show 2>/dev/null || ip addr show 2>/dev/null
 """
         return ""
 
+    config.CFG.setdefault("strategy", {}).update({
+        "active_authorized": True,
+        "authorized_targets": ["10.0.0.0/24"],
+    })
     pipeline_mod.run_arbitrary_cmd = fake_runner
     try:
         db_path = f"/tmp/octopus_pipeline_ssh_inventory_{uuid.uuid4().hex}.db"
@@ -1677,6 +1684,7 @@ $ ip -o addr show 2>/dev/null || ip addr show 2>/dev/null
         )
         facts = pipeline.fact_store.get_facts("scan-ssh-inventory", "10.0.0.5")
     finally:
+        config.CFG["strategy"] = old_strategy
         pipeline_mod.run_arbitrary_cmd = old_runner
 
     pairs = {(fact["type"], fact["value"]) for fact in facts}
@@ -1690,6 +1698,7 @@ $ ip -o addr show 2>/dev/null || ip addr show 2>/dev/null
 
 def test_pipeline_promotes_msf_run_only_after_positive_check_and_scope():
     import uuid
+
     import config
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
@@ -1744,6 +1753,7 @@ def test_pipeline_promotes_msf_run_only_after_positive_check_and_scope():
 
 def test_pipeline_does_not_promote_msf_run_outside_authorized_scope():
     import uuid
+
     import config
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
@@ -1792,14 +1802,21 @@ def test_pipeline_does_not_promote_msf_run_outside_authorized_scope():
 
 def test_pipeline_marks_missing_credential_stage_as_blocked_not_completed():
     import uuid
+
+    import config
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
     old_runner = pipeline_mod.run_arbitrary_cmd
+    old_strategy = dict(config.CFG.get("strategy", {}))
 
     def fake_runner(cmd):
         return "[!] Persistence requires valid SSH credentials for 10.0.0.5."
 
+    config.CFG.setdefault("strategy", {}).update({
+        "active_authorized": True,
+        "authorized_targets": ["10.0.0.0/24"],
+    })
     pipeline_mod.run_arbitrary_cmd = fake_runner
     try:
         db_path = f"/tmp/octopus_pipeline_blocked_{uuid.uuid4().hex}.db"
@@ -1812,6 +1829,7 @@ def test_pipeline_marks_missing_credential_stage_as_blocked_not_completed():
         )
         status = pipeline._classify_task_result(result)
     finally:
+        config.CFG["strategy"] = old_strategy
         pipeline_mod.run_arbitrary_cmd = old_runner
 
     assert status == "blocked"
@@ -1820,10 +1838,11 @@ def test_pipeline_marks_missing_credential_stage_as_blocked_not_completed():
 
 def test_context_keeps_vulnerabilities_without_recon_from_concluding():
     import uuid
+
     from core.ai.context_builder import ContextBuilder
+    from core.ai.director import DirectorLLM
     from core.ai.fact_store import FactStore
     from core.ai.state_resolver import StateResolver
-    from core.ai.director import DirectorLLM
 
     db_path = f"/tmp/octopus_context_vuln_no_recon_{uuid.uuid4().hex}.db"
     store = FactStore(db_path)
@@ -1843,6 +1862,7 @@ def test_context_keeps_vulnerabilities_without_recon_from_concluding():
 
 def test_root_access_requests_inventory_before_persistence():
     import uuid
+
     import config
     from core.ai.context_builder import ContextBuilder
     from core.ai.director import DirectorLLM
@@ -1882,6 +1902,7 @@ def test_root_access_requests_inventory_before_persistence():
 
 def test_cpanel_commands_use_discovered_panel_port():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     db_path = f"/tmp/octopus_pipeline_cpanel_port_{uuid.uuid4().hex}.db"
@@ -1903,6 +1924,7 @@ def test_cpanel_commands_use_discovered_panel_port():
 
 def test_web_mapping_commands_expand_across_discovered_http_endpoints():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     db_path = f"/tmp/octopus_pipeline_web_endpoints_{uuid.uuid4().hex}.db"
@@ -1941,6 +1963,7 @@ def test_web_mapping_commands_expand_across_discovered_http_endpoints():
 
 def test_jmx2rce_generic_scan_only_expands_with_tomcat_or_jmx_evidence():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_pipeline_jmx_context_{uuid.uuid4().hex}.db")
@@ -1960,6 +1983,7 @@ def test_jmx2rce_generic_scan_only_expands_with_tomcat_or_jmx_evidence():
 def test_web_endpoint_followups_stay_in_target_scope():
     import json
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_scope_endpoints_{uuid.uuid4().hex}.db")
@@ -1980,6 +2004,7 @@ def test_web_endpoint_followups_stay_in_target_scope():
 def test_pipeline_stores_offscope_browser_urls_as_external_not_web_endpoint():
     import json
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_store_scope_{uuid.uuid4().hex}.db")
@@ -2030,6 +2055,7 @@ def test_pipeline_stores_offscope_browser_urls_as_external_not_web_endpoint():
 def test_domain_target_allows_subdomain_but_not_external_endpoint_followups():
     import json
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_scope_domain_{uuid.uuid4().hex}.db")
@@ -2049,6 +2075,7 @@ def test_domain_target_allows_subdomain_but_not_external_endpoint_followups():
 def test_exploit_select_context_filters_offscope_web_urls():
     import json
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_exploit_context_scope_{uuid.uuid4().hex}.db")
@@ -2078,6 +2105,7 @@ def test_exploit_select_context_filters_offscope_web_urls():
 
 def test_web_content_discovery_probes_unknown_web_surface_once():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_pipeline_no_web_ffuf_{uuid.uuid4().hex}.db")
@@ -2100,6 +2128,7 @@ def test_web_content_discovery_probes_unknown_web_surface_once():
 
 def test_web_content_discovery_negative_probe_becomes_fact_not_loop():
     import uuid
+
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -2143,6 +2172,7 @@ def test_web_content_discovery_negative_probe_becomes_fact_not_loop():
 
 def test_fact_driven_actions_map_evidence_to_next_commands():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     db_path = f"/tmp/octopus_pipeline_fact_actions_{uuid.uuid4().hex}.db"
@@ -2169,6 +2199,7 @@ def test_fact_driven_actions_map_evidence_to_next_commands():
 
 def test_fact_driven_actions_add_protocol_and_db_probes():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     db_path = f"/tmp/octopus_pipeline_service_actions_{uuid.uuid4().hex}.db"
@@ -2197,6 +2228,7 @@ def test_fact_driven_actions_add_protocol_and_db_probes():
 
 def test_pipeline_runs_protocol_fact_actions_after_service_discovery():
     import uuid
+
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -2252,6 +2284,7 @@ Databases (1):
 
 def test_pipeline_runs_web_path_fact_actions_after_ffuf():
     import uuid
+
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -2291,6 +2324,7 @@ def test_pipeline_runs_web_path_fact_actions_after_ffuf():
 
 def test_fact_driven_actions_recurse_from_crawl_links_to_pages():
     import uuid
+
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -2356,6 +2390,7 @@ Forms (1):
 
 def test_post_access_inventory_facts_reenter_fact_driven_depth():
     import uuid
+
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -2413,6 +2448,7 @@ nginx version: nginx/1.14.0
 
 def test_cpanel_app_session_does_not_trigger_ssh_post_access_chain():
     import uuid
+
     from core.ai.context_builder import ContextBuilder
     from core.ai.director import DirectorLLM
     from core.ai.fact_store import FactStore
@@ -2444,6 +2480,7 @@ def test_cpanel_app_session_does_not_trigger_ssh_post_access_chain():
 
 def test_cpanel_session_on_ssh_host_is_not_treated_as_ssh_access():
     import uuid
+
     from core.ai.context_builder import ContextBuilder
     from core.ai.director import DirectorLLM
     from core.ai.fact_store import FactStore
@@ -2472,6 +2509,7 @@ def test_cpanel_session_on_ssh_host_is_not_treated_as_ssh_access():
 
 def test_context_builder_detects_web_login_and_cpanel_capabilities():
     import uuid
+
     from core.ai.context_builder import ContextBuilder
     from core.ai.fact_store import FactStore
     from core.ai.state_resolver import StateResolver
@@ -2530,6 +2568,7 @@ def test_post_exploit_task_templates_do_not_force_root_without_password():
 
 def test_credential_ranking_prefers_password_login_over_root_key_marker():
     import uuid
+
     from core.tools import exploit_tools
 
     host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
@@ -2549,6 +2588,7 @@ def test_credential_ranking_prefers_password_login_over_root_key_marker():
 
 def test_credential_lookup_merges_unified_store_and_legacy_cache():
     import uuid
+
     from core.tools import exploit_tools
 
     host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
@@ -2575,6 +2615,7 @@ def test_credential_lookup_merges_unified_store_and_legacy_cache():
 
 def test_unified_credential_store_prefers_password_over_root_key_marker():
     import uuid
+
     from core.credentials import CredentialStore
 
     host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
@@ -2598,6 +2639,7 @@ def test_ssh_exec_blocks_arbitrary_commands_by_default():
 
 def test_pipeline_syncs_root_key_fact_into_ssh_credential_cache():
     import uuid
+
     from core.ai.pipeline import AIPipeline
     from core.tools import exploit_tools
 
@@ -2617,6 +2659,7 @@ def test_pipeline_syncs_root_key_fact_into_ssh_credential_cache():
 
 def test_get_all_known_creds_reads_unified_store_and_legacy_cache():
     import uuid
+
     from core.tools import exploit_tools
 
     host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
@@ -2647,6 +2690,7 @@ def test_get_all_known_creds_reads_unified_store_and_legacy_cache():
 
 def test_pipeline_seeds_cached_ssh_creds_and_verifies_instead_of_bruteforce():
     import uuid
+
     from core.ai.pipeline import AIPipeline
     from core.tools import exploit_tools
 
@@ -2667,7 +2711,9 @@ def test_pipeline_seeds_cached_ssh_creds_and_verifies_instead_of_bruteforce():
 
     pairs = {(fact["type"], fact["value"]) for fact in facts}
     assert seeded == 1
-    assert ("credential", "support:fixture-password-123 (cached)") in pairs
+    credential_values = [value for fact_type, value in pairs if fact_type == "credential"]
+    assert any(value.startswith("support:secret://") and value.endswith(" (cached)") for value in credential_values)
+    assert "fixture-password-123" not in repr(credential_values)
     assert expanded == [f"ssh_session {host}"]
 
 
@@ -2695,6 +2741,7 @@ def test_runner_detects_all_http_like_ports_from_nmap_lines():
 
 def test_internal_hosts_from_ssh_inventory_do_not_complete_network_recon():
     import uuid
+
     from core.ai.context_builder import ContextBuilder
     from core.ai.fact_store import FactStore
     from core.ai.state_resolver import StateResolver
@@ -2727,6 +2774,7 @@ def test_internal_hosts_from_ssh_inventory_do_not_complete_network_recon():
 
 def test_network_recon_with_internal_hosts_opens_internal_service_gap():
     import uuid
+
     from core.ai.context_builder import ContextBuilder
     from core.ai.director import DirectorLLM
     from core.ai.fact_store import FactStore
@@ -2785,6 +2833,7 @@ def test_internal_service_gap_forces_probe_task():
 
 def test_internal_vulnerability_gap_is_separate_from_external_gap():
     import uuid
+
     from core.ai.context_builder import ContextBuilder
     from core.ai.fact_store import FactStore
     from core.ai.state_resolver import StateResolver
@@ -2812,6 +2861,7 @@ def test_internal_vulnerability_gap_is_separate_from_external_gap():
 def test_internal_vulnerability_gap_closes_with_internal_service_check_result():
     import json
     import uuid
+
     from core.ai.context_builder import ContextBuilder
     from core.ai.fact_store import FactStore
     from core.ai.state_resolver import StateResolver
@@ -2880,6 +2930,7 @@ def test_external_vulnerability_gap_keeps_external_task_ahead_of_internal_follow
 
 def test_pipeline_records_internal_vulnerability_check_results_from_compact_state():
     import json
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline("/tmp/octopus_internal_vuln_check_results.db")
@@ -3033,6 +3084,7 @@ def test_exploit_selector_splits_pipe_delimited_fact_context():
 
 def test_context_builder_detects_ad_surface_from_ports():
     import uuid
+
     from core.ai.context_builder import ContextBuilder
     from core.ai.fact_store import FactStore
     from core.ai.state_resolver import StateResolver
@@ -3054,6 +3106,7 @@ def test_context_builder_detects_ad_surface_from_ports():
 
 def test_shadow_harvest_does_not_skip_to_exfiltration_completed():
     import uuid
+
     from core.ai.context_builder import ContextBuilder
     from core.ai.fact_store import FactStore
     from core.ai.state_resolver import StateResolver
@@ -3089,6 +3142,7 @@ def test_shadow_harvest_does_not_skip_to_exfiltration_completed():
 
 def test_root_ssh_login_confirms_root_access_without_separate_uid_fact():
     import uuid
+
     from core.ai.context_builder import ContextBuilder
     from core.ai.fact_store import FactStore
     from core.ai.state_resolver import StateResolver
@@ -3112,6 +3166,7 @@ def test_root_ssh_login_confirms_root_access_without_separate_uid_fact():
 
 def test_explicit_exfil_stage_completion_opens_cleanup_gate():
     import uuid
+
     import config
     from core.ai.context_builder import ContextBuilder
     from core.ai.fact_store import FactStore
@@ -3171,6 +3226,7 @@ def test_vulnerability_plan_gets_ad_enrichment_for_ldap_surface():
 
 def test_replay_outputs_builds_target_model_and_snapshot_actions():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     db_path = f"/tmp/octopus_replay_target_model_{uuid.uuid4().hex}.db"
@@ -3214,6 +3270,7 @@ Links:
 
 def test_command_scheduler_skips_duplicate_and_negative_http_surface():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     db_path = f"/tmp/octopus_scheduler_negative_{uuid.uuid4().hex}.db"
@@ -3303,6 +3360,7 @@ def test_nuclei_completion_fact_blocks_bare_host_repeat_command():
 
 def test_execute_pipeline_command_records_trace_and_blocks_repeat(monkeypatch=None):
     import uuid
+
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -3364,6 +3422,7 @@ def test_director_next_required_capability_overrides_llm_suggestion():
 def test_real_app_replay_ssh_only_log_builds_state_without_web_or_msf_noise():
     import pathlib
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     fixture = pathlib.Path(__file__).parent / "fixtures" / "replay_ssh_only_real_app.log"
@@ -3380,7 +3439,9 @@ def test_real_app_replay_ssh_only_log_builds_state_without_web_or_msf_noise():
     model = context["target_model"]
 
     assert ("port_open", "22/tcp (ssh) [OpenSSH 7.4 (protocol 2.0)]") in pairs
-    assert ("credential", "support:fixture-password-123 (cached)") in pairs
+    credential_values = [value for fact_type, value in pairs if fact_type == "credential"]
+    assert any(value.startswith("support:secret://") and value.endswith(" (cached)") for value in credential_values)
+    assert "fixture-password-123" not in repr(credential_values)
     assert ("service_status", "ssh_user_enum_unreliable_or_patched") in pairs
     assert ("service_status", "msf_check_invalid_options:auxiliary/scanner/ssh/ssh_login") in pairs
     assert not any(ftype == "web_endpoint" for ftype, _value in pairs)
@@ -3425,6 +3486,7 @@ def test_registry_exposes_asm_api_secret_code_cloud_categories():
 def test_target_model_exposes_typed_check_results_and_endpoint_coverage():
     import json
     import uuid
+
     from core.ai.fact_store import FactStore
     from core.ai.target_model import TargetModel
 
@@ -3466,6 +3528,7 @@ def test_target_model_exposes_typed_check_results_and_endpoint_coverage():
 
 def test_internal_services_keep_reachability_and_typed_coverage():
     import uuid
+
     from core.ai.fact_store import FactStore
     from core.ai.target_model import TargetModel
 
@@ -3491,6 +3554,7 @@ def test_internal_services_keep_reachability_and_typed_coverage():
 def test_execute_pipeline_command_stores_running_and_timeout_check_results():
     import json
     import uuid
+
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -3527,6 +3591,7 @@ def test_execute_pipeline_command_stores_running_and_timeout_check_results():
 
 def test_llm_health_facts_are_visible_in_trace_report():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_llm_health_{uuid.uuid4().hex}.db")
@@ -3551,6 +3616,7 @@ def test_llm_health_facts_are_visible_in_trace_report():
 
 def test_pipeline_llm_dead_uses_fallback_without_new_llm_calls():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_llm_dead_fallback_{uuid.uuid4().hex}.db")
@@ -3617,6 +3683,7 @@ def test_tool_ranking_prefers_short_safe_checks_before_long_active_work():
 
 def test_msf_check_results_separate_login_check_and_active_run_modes():
     import json
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline("/tmp/octopus_msf_modes.db")
@@ -3718,6 +3785,7 @@ def test_planner_accepts_json_array_as_plan(monkeypatch):
 def test_trace_report_text_hides_machine_facts_but_keeps_human_facts():
     import json
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_trace_human_{uuid.uuid4().hex}.db")
@@ -3756,6 +3824,7 @@ def test_trace_report_text_hides_machine_facts_but_keeps_human_facts():
 
 def test_target_model_exposes_assets_api_and_security_findings():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_target_model_asm_{uuid.uuid4().hex}.db")
@@ -3803,6 +3872,7 @@ def test_target_model_exposes_assets_api_and_security_findings():
 
 def test_web_surface_actions_include_safe_nuclei_katana_and_api_imports():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_pipeline_safe_web_{uuid.uuid4().hex}.db")
@@ -3840,6 +3910,7 @@ def test_web_surface_actions_include_safe_nuclei_katana_and_api_imports():
 
 def test_target_model_exposes_web_app_security_layer():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_target_model_webapp_{uuid.uuid4().hex}.db")
@@ -3886,6 +3957,7 @@ ESC1: vulnerable template
 
 def test_asset_graph_models_interface_subnet_endpoint_and_secret():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_asset_graph_{uuid.uuid4().hex}.db")
@@ -3934,6 +4006,7 @@ def test_surface_state_and_policy_filter_confirmed_absent_tasks():
 
 def test_command_result_fingerprint_records_duplicate_outputs():
     import uuid
+
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -3961,6 +4034,7 @@ def test_command_result_fingerprint_records_duplicate_outputs():
 
 def test_target_model_risk_analysis_correlates_ad_cloud_secret_and_code():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_risk_analysis_{uuid.uuid4().hex}.db")
@@ -4015,6 +4089,7 @@ NOTE anonymous_accessible
 
 def test_trace_report_summarizes_commands_facts_and_duplicates():
     import uuid
+
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -4044,6 +4119,7 @@ def test_trace_report_summarizes_commands_facts_and_duplicates():
 
 def test_asm_parser_normalizes_dns_records_services_and_graph_edges():
     import uuid
+
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_asm_graph_{uuid.uuid4().hex}.db")
@@ -4163,6 +4239,7 @@ def test_output_parser_keeps_legacy_regex_for_legacy_killchain_outputs():
 
 def test_replay_snapshot_asserts_facts_actions_and_surface_states():
     import uuid
+
     from core.ai.replay_snapshot import ReplaySnapshot
 
     snapshot = ReplaySnapshot(f"/tmp/octopus_replay_snapshot_{uuid.uuid4().hex}.db")
@@ -4202,6 +4279,7 @@ def test_replay_snapshot_asserts_facts_actions_and_surface_states():
 def test_replay_snapshot_fixture_file_web_api():
     import pathlib
     import uuid
+
     from core.ai.replay_snapshot import ReplaySnapshot
 
     fixture = pathlib.Path(__file__).parent / "fixtures" / "replay_snapshot_web_api.json"
@@ -4313,6 +4391,7 @@ def test_director_uses_compact_llm_context(monkeypatch):
 
 def test_ollama_json_mode_disables_thinking_and_uses_structured_json(monkeypatch):
     import json as jsonlib
+
     import core.ai.ollama_client as ollama
 
     assert ollama._config_bool("false", True) is False
@@ -4350,6 +4429,7 @@ def test_ollama_json_mode_disables_thinking_and_uses_structured_json(monkeypatch
 
 def test_ollama_json_mode_retries_relaxed_when_strict_controls_are_unsupported(monkeypatch):
     import json as jsonlib
+
     import core.ai.ollama_client as ollama
 
     calls = []

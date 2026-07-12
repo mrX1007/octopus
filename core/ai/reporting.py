@@ -3,10 +3,12 @@
 
 import json
 import re
-from typing import Any, Dict, List
+from typing import Any, Optional
+
+from core.secrets import redact_data
 
 
-def build_evidence_index(facts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def build_evidence_index(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Build stable evidence records that link findings back to parsed facts."""
     evidence = []
     for idx, fact in enumerate(facts, 1):
@@ -27,13 +29,13 @@ def build_evidence_index(facts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return evidence
 
 
-def build_finding_groups(facts: List[Dict[str, Any]], state: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+def build_finding_groups(facts: list[dict[str, Any]], state: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
     """Group repeated facts into finding records with clear proof state."""
     state = state or {}
     evidence_by_fact_id = {
         fact.get("id"): f"E-{idx:03d}" for idx, fact in enumerate(facts, 1)
     }
-    groups: Dict[str, Dict[str, Any]] = {}
+    groups: dict[str, dict[str, Any]] = {}
 
     for fact in facts:
         ftype = fact.get("type")
@@ -87,22 +89,18 @@ def build_finding_groups(facts: List[Dict[str, Any]], state: Dict[str, Any] = No
     return [_finalize_group(group) for group in groups.values()]
 
 
-def build_access_findings(facts: List[Dict[str, Any]], state: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+def build_access_findings(facts: list[dict[str, Any]], state: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
     """Build access/compromise findings separately from CVE/misconfig findings."""
     state = state or {}
-    findings = []
+    findings: list[dict[str, Any]] = []
     if not state.get("root_access_confirmed"):
         return findings
 
-    evidence = []
+    evidence: list[str] = []
     for fact in facts:
         ftype = str(fact.get("type", ""))
         value = str(fact.get("value", ""))
-        if ftype == "credential" and value.startswith(("ssh_login_success:", "ssh_key_available:")):
-            evidence.append(f"{ftype}: {value}")
-        elif ftype == "service_status" and value == "ssh_authenticated":
-            evidence.append(f"{ftype}: {value}")
-        elif ftype == "system_access" and (value == "uid=0" or value == "root_access_confirmed"):
+        if (ftype == "credential" and value.startswith(("ssh_login_success:", "ssh_key_available:"))) or (ftype == "service_status" and value == "ssh_authenticated") or (ftype == "system_access" and (value == "uid=0" or value == "root_access_confirmed")):
             evidence.append(f"{ftype}: {value}")
     findings.append({
         "severity": "CRITICAL",
@@ -117,11 +115,11 @@ def build_access_findings(facts: List[Dict[str, Any]], state: Dict[str, Any] = N
     return findings
 
 
-def build_coverage_summary(facts: List[Dict[str, Any]]) -> Dict[str, Any]:
-    checked = []
-    degraded = []
+def build_coverage_summary(facts: list[dict[str, Any]]) -> dict[str, Any]:
+    checked: list[dict[str, Any]] = []
+    degraded: list[dict[str, Any]] = []
 
-    def add_degraded(item: Dict[str, Any]) -> None:
+    def add_degraded(item: dict[str, Any]) -> None:
         for existing in degraded:
             if existing.get("tool") != item.get("tool") or existing.get("status") != item.get("status"):
                 continue
@@ -138,7 +136,7 @@ def build_coverage_summary(facts: List[Dict[str, Any]]) -> Dict[str, Any]:
             item["scopes"] = [scope]
         degraded.append(item)
 
-    def add_checked(item: Dict[str, Any]) -> None:
+    def add_checked(item: dict[str, Any]) -> None:
         key = (
             item.get("status"),
             json.dumps(item.get("scope", {}), sort_keys=True),
@@ -199,7 +197,7 @@ def build_coverage_summary(facts: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-def build_attack_path(facts: List[Dict[str, Any]], state: Dict[str, Any]) -> List[Dict[str, str]]:
+def build_attack_path(facts: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, str]]:
     steps = []
     if any(f.get("type") == "credential" for f in facts):
         steps.append({"stage": "Initial access", "status": "observed", "detail": "Credential or session material present"})
@@ -220,7 +218,7 @@ def build_attack_path(facts: List[Dict[str, Any]], state: Dict[str, Any]) -> Lis
     return steps
 
 
-def build_risk_explanation(result: Dict[str, Any], access_findings: List[Dict[str, Any]]) -> str:
+def build_risk_explanation(result: dict[str, Any], access_findings: list[dict[str, Any]]) -> str:
     risk = str(result.get("risk_level", "UNKNOWN")).upper()
     if access_findings and risk == "CRITICAL":
         return (
@@ -233,10 +231,10 @@ def build_risk_explanation(result: Dict[str, Any], access_findings: List[Dict[st
 
 
 def build_remediations(
-    finding_groups: List[Dict[str, Any]],
-    facts: List[Dict[str, Any]],
-    access_findings: List[Dict[str, Any]] = None,
-) -> List[Dict[str, str]]:
+    finding_groups: list[dict[str, Any]],
+    facts: list[dict[str, Any]],
+    access_findings: Optional[list[dict[str, Any]]] = None,
+) -> list[dict[str, str]]:
     remediations = []
     if access_findings:
         remediations.append({
@@ -267,7 +265,7 @@ def build_remediations(
     return remediations
 
 
-def enrich_result_with_reporting(result: Dict[str, Any], facts: List[Dict[str, Any]], state: Dict[str, Any]) -> Dict[str, Any]:
+def enrich_result_with_reporting(result: dict[str, Any], facts: list[dict[str, Any]], state: dict[str, Any]) -> dict[str, Any]:
     evidence_index = build_evidence_index(facts)
     finding_groups = build_finding_groups(facts, state)
     access_findings = build_access_findings(facts, state)
@@ -278,10 +276,10 @@ def enrich_result_with_reporting(result: Dict[str, Any], facts: List[Dict[str, A
     result["coverage"] = build_coverage_summary(facts)
     result["attack_path"] = build_attack_path(facts, state)
     result["remediations"] = build_remediations(finding_groups, facts, access_findings)
-    return result
+    return redact_data(result)
 
 
-def _parser_name_for_fact(fact: Dict[str, Any]) -> str:
+def _parser_name_for_fact(fact: dict[str, Any]) -> str:
     source = str(fact.get("source", ""))
     if source.startswith("derived:"):
         return "derived_fact_builder"
@@ -290,7 +288,7 @@ def _parser_name_for_fact(fact: Dict[str, Any]) -> str:
     return "output_parser"
 
 
-def _new_group(module: str, service: str) -> Dict[str, Any]:
+def _new_group(module: str, service: str) -> dict[str, Any]:
     return {
         "class": module,
         "module": module,
@@ -309,7 +307,7 @@ def _new_group(module: str, service: str) -> Dict[str, Any]:
     }
 
 
-def _group_for_module(groups: Dict[str, Dict[str, Any]], module: str, service: str, facts: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _group_for_module(groups: dict[str, dict[str, Any]], module: str, service: str, facts: list[dict[str, Any]]) -> dict[str, Any]:
     module = module or "unknown"
     service = service or _service_for_module(module, facts)
     key = f"{module}:{service}"
@@ -320,7 +318,7 @@ def _group_for_module(groups: Dict[str, Dict[str, Any]], module: str, service: s
     return groups[key]
 
 
-def _finalize_group(group: Dict[str, Any]) -> Dict[str, Any]:
+def _finalize_group(group: dict[str, Any]) -> dict[str, Any]:
     verified_ports = sorted(p for p in group["verified_ports"] if p)
     candidate_ports = sorted(p for p in group["candidate_ports"] if p)
     group["ports"] = verified_ports or candidate_ports
@@ -339,14 +337,14 @@ def _finalize_group(group: Dict[str, Any]) -> Dict[str, Any]:
     return group
 
 
-def _parse_exploit_candidate(value: str) -> Dict[str, str]:
+def _parse_exploit_candidate(value: str) -> dict[str, str]:
     if value.lstrip().startswith("{"):
         return {}
     match = re.match(r"(?P<module>\S+)\s+on\s+(?P<service>[^:\s]+):(?P<port>[^\s]+)\s+\[(?P<version>.*)\]$", value)
     return match.groupdict() if match else {}
 
 
-def _parse_msf_endpoint(value: str) -> Dict[str, str]:
+def _parse_msf_endpoint(value: str) -> dict[str, str]:
     match = re.match(r"msf_check_positive:(?P<module>.+):(?P<port>\d{1,5})$", value)
     return match.groupdict() if match else {}
 
@@ -372,7 +370,7 @@ def _module_from_success(value: str) -> str:
     return cve.group(1).upper() if cve else (value or "exploit_success")
 
 
-def _service_for_module(module: str, facts: List[Dict[str, Any]]) -> str:
+def _service_for_module(module: str, facts: list[dict[str, Any]]) -> str:
     text = (module or "").lower()
     for service in ("redis", "ssh", "apache", "nginx", "tomcat", "cpanel", "mysql", "postgresql", "mongodb"):
         if service in text:
@@ -386,7 +384,7 @@ def _service_for_module(module: str, facts: List[Dict[str, Any]]) -> str:
     return "unknown"
 
 
-def _service_for_port(facts: List[Dict[str, Any]], port: str) -> str:
+def _service_for_port(facts: list[dict[str, Any]], port: str) -> str:
     for fact in facts:
         if fact.get("type") != "port_open":
             continue

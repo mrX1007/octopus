@@ -37,14 +37,14 @@ Architecture:
     └───────────────────┘
 """
 
-import os
-import sys
-import shutil
-import logging
 import importlib
 import importlib.util
+import logging
+import os
+import shutil
 from dataclasses import dataclass, field
-from typing import Callable, Optional, List, Dict
+from typing import Callable, Optional
+
 logger = logging.getLogger("octopus.registry")
 
 # ─── Tool Definition ────────────────────────────────────
@@ -119,10 +119,10 @@ def _dependency_available(dep: str) -> bool:
 def tool(
     name: str,
     *,
-    aliases: Optional[List[str]] = None,
+    aliases: Optional[list[str]] = None,
     category: str = "recon",
     description: str = "",
-    requires: Optional[List[str]] = None,
+    requires: Optional[list[str]] = None,
     needs_target: bool = True,
     menu_group: str = "",
 ):
@@ -192,7 +192,7 @@ def get_tool(name: str) -> Optional[ToolDef]:
     return None
 
 
-def list_tools(category: Optional[str] = None, available_only: bool = False) -> List[ToolDef]:
+def list_tools(category: Optional[str] = None, available_only: bool = False) -> list[ToolDef]:
     """List all registered tools, optionally filtered.
 
     Args:
@@ -217,7 +217,7 @@ def list_tools(category: Optional[str] = None, available_only: bool = False) -> 
     return sorted(tools, key=lambda t: (t.category, t.name))
 
 
-def build_menu(category: Optional[str] = None) -> Dict[int, ToolDef]:
+def build_menu(category: Optional[str] = None) -> dict[int, ToolDef]:
     """Build numbered menu dict for interactive tool selection.
 
     Args:
@@ -227,7 +227,7 @@ def build_menu(category: Optional[str] = None) -> Dict[int, ToolDef]:
         Dict mapping menu number (1-based) to ToolDef.
     """
     tools = list_tools(category=category)
-    return {i: t for i, t in enumerate(tools, 1)}
+    return dict(enumerate(tools, 1))
 
 
 def get_all_names() -> list[str]:
@@ -244,10 +244,10 @@ def get_all_names() -> list[str]:
 # ─── Plugin Discovery ───────────────────────────────────
 
 def discover_plugins(plugin_dir: Optional[str] = None) -> int:
-    """Scan plugins/ directory and import all Python modules.
+    """Discover class plugins through isolated metadata workers.
 
-    Each module is expected to use @tool() decorators which
-    auto-register tools on import.
+    Dynamic extension code is never imported into this process. Plugins are
+    invoked through the registered ``plugin`` gateway and ``PluginManager``.
 
     Args:
         plugin_dir: Path to plugins directory. Defaults to
@@ -266,31 +266,16 @@ def discover_plugins(plugin_dir: Optional[str] = None) -> int:
         logger.debug(f"Plugin directory not found: {plugin_dir}")
         return 0
 
-    loaded = 0
-    base_dir_name = os.path.basename(plugin_dir)
-    for root, dirs, files in os.walk(plugin_dir):
-        for filename in sorted(files):
-            if not filename.endswith(".py") or filename.startswith("_"):
-                continue
+    try:
+        from core.plugins.loader import PluginManager
 
-            filepath = os.path.join(root, filename)
-
-            # Construct a dynamic module name based on path
-            rel_path = os.path.relpath(filepath, plugin_dir)
-            module_name = f"{base_dir_name}." + rel_path[:-3].replace(os.sep, ".")
-
-            try:
-                spec = importlib.util.spec_from_file_location(module_name, filepath)
-                if spec and spec.loader:
-                    mod = importlib.util.module_from_spec(spec)
-                    sys.modules[module_name] = mod
-                    spec.loader.exec_module(mod)
-                    loaded += 1
-                    logger.info(f"Loaded plugin: {rel_path}")
-            except Exception as e:
-                logger.warning(f"Failed to load plugin {rel_path}: {e}")
-
-    return loaded
+        manager = PluginManager(plugin_dir)
+    except Exception as exc:
+        logger.warning("Isolated plugin discovery failed for %s: %s", plugin_dir, exc)
+        return 0
+    for skipped in manager.list_skipped_plugins():
+        logger.debug("Skipped plugin %s: %s", skipped["module"], skipped["reason"])
+    return len(manager.plugins)
 
 
 # ─── Utility ────────────────────────────────────────────

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 
+import contextlib
 import json
 import logging
-from typing import Dict, Any, List
+from typing import Any, Optional
+
 from core.ai.llm_context import compact_context_for_llm
 from core.ai.policy import DeterministicPolicy
 
-try:
+with contextlib.suppress(ImportError):
     from core.ai.ollama_client import ask_ollama
-except ImportError:
-    pass
 
 logger = logging.getLogger("octopus.director")
 
@@ -48,14 +48,13 @@ RULES:
 6. NEVER select persistence, data_exfiltration, cleanup, or active exploitation unless the matching automation_policy flag and open_question allow it.
 """
 
-    def decide_goal(self, context: Dict[str, Any], goal_history: List[str]) -> Dict[str, str]:
+    def decide_goal(self, context: dict[str, Any], goal_history: list[str]) -> dict[str, Any]:
         """Query the LLM to decide the next goal. Falls back to deterministic logic."""
 
         # Anti-loop check: same goal 3 times in a row
-        if len(goal_history) >= 3 and len(set(goal_history[-3:])) == 1:
-            if goal_history[-1] != "conclude":
-                print("\n[!] DIRECTOR LOOP DETECTED: Forcing conclusion.")
-                return {"thought": "Loop detected — same goal 3x", "goal": "conclude", "llm_status": "not_called"}
+        if len(goal_history) >= 3 and len(set(goal_history[-3:])) == 1 and goal_history[-1] != "conclude":
+            print("\n[!] DIRECTOR LOOP DETECTED: Forcing conclusion.")
+            return {"thought": "Loop detected — same goal 3x", "goal": "conclude", "llm_status": "not_called"}
 
         llm_context = compact_context_for_llm(context, role="director")
         prompt = f"""Current Context JSON:
@@ -100,18 +99,16 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
             result.update({"llm_status": "failed", "llm_error": str(e), "fallback": True})
             return result
 
-    def _validate_goal(self, goal: str, context: Dict[str, Any], goal_history: List[str]) -> str:
+    def _validate_goal(self, goal: str, context: dict[str, Any], goal_history: list[str]) -> str:
         """Validate the LLM suggestion against deterministic state gates."""
         state = context.get("state", "initial_recon")
         required = context.get("next_required_capability", "conclude")
 
-        if required and required != "conclude":
-            if (
-                self._goal_allowed_for_state(required, state)
-                and self._goal_allowed_by_policy(required, context)
-            ):
-                if goal != required:
-                    return required
+        if required and required != "conclude" and (
+            self._goal_allowed_for_state(required, state)
+            and self._goal_allowed_by_policy(required, context)
+        ) and goal != required:
+            return required
 
         if not self._goal_allowed_for_state(goal, state):
             return self._fallback_logic(context, goal_history).get("goal", "conclude")
@@ -175,7 +172,7 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
 
         return goal
 
-    def _goal_allowed_by_policy(self, goal: str, context: Dict[str, Any]) -> bool:
+    def _goal_allowed_by_policy(self, goal: str, context: dict[str, Any]) -> bool:
         policy = context.get("automation_policy") or {}
         if goal == "persistence":
             return bool(policy.get("auto_persistence", False))
@@ -226,7 +223,7 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
         }
         return goal in allowed.get(state, {"conclude"})
 
-    def _next_in_chain(self, current_goal: str, goal_history: List[str]) -> str:
+    def _next_in_chain(self, current_goal: str, goal_history: list[str]) -> str:
         """Find the next goal in the kill chain that hasn't been tried yet."""
         if current_goal not in KILL_CHAIN:
             return "conclude"
@@ -237,7 +234,7 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
                 return next_goal
         return "conclude"
 
-    def _fallback_logic(self, context: Dict[str, Any], goal_history: List[str] = None) -> Dict[str, str]:
+    def _fallback_logic(self, context: dict[str, Any], goal_history: Optional[list[str]] = None) -> dict[str, Any]:
         """Deterministic fallback that reads actual context state.
 
         v12: Uses goal_history to avoid repeating ANY goal. Progresses through
@@ -321,7 +318,7 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
 
         return {"thought": "fallback: unknown state, concluding", "goal": "conclude"}
 
-    def _pick(self, preferred: str, goal_history: List[str], reason: str) -> Dict[str, str]:
+    def _pick(self, preferred: str, goal_history: list[str], reason: str) -> dict[str, str]:
         """Pick the preferred goal, or the next untried one in the kill chain."""
         if preferred not in goal_history:
             return {"thought": f"fallback: {reason}", "goal": preferred}

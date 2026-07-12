@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import re
-from typing import List
 
 from .common import BaseParser, Fact, fact, tool_lower
 
@@ -9,10 +8,10 @@ from .common import BaseParser, Fact, fact, tool_lower
 class APIParser(BaseParser):
     family = "api"
 
-    def parse(self, tool_name: str, raw_output: str, session_id: str) -> List[Fact]:
+    def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
         tool = tool_lower(tool_name)
         raw = raw_output or ""
-        facts: List[Fact] = []
+        facts: list[Fact] = []
         if "openapi_import" in tool:
             for match in re.finditer(r"^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S+)\s+auth=(\S+)", raw, re.MULTILINE):
                 method, path, auth = match.groups()

@@ -1,4 +1,3 @@
-# OCTOPUS v11 — C2 Communication Channels
 """
 Alternative C2 transport channels.
 

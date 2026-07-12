@@ -9,11 +9,11 @@ Features:
 - Distributed worker pattern (in-memory)
 """
 
+import asyncio
 import logging
 import ssl
 import time
-import asyncio
-from typing import Dict, Any, List
+from typing import Any, Optional
 
 C_GREEN  = "\033[92m"
 C_YELLOW = "\033[93m"
@@ -23,7 +23,7 @@ C_RESET  = "\033[0m"
 
 
 class ReconTask:
-    def __init__(self, target: str, task_type: str, priority: int = 1, meta: Dict = None):
+    def __init__(self, target: str, task_type: str, priority: int = 1, meta: Optional[dict] = None):
         self.target = target
         self.task_type = task_type
         self.priority = priority
@@ -37,8 +37,8 @@ class ReconEngine:
     def __init__(self, concurrency: int = 10):
         self.concurrency = concurrency
         self.queue = asyncio.PriorityQueue()
-        self.results: Dict[str, Dict[str, Any]] = {}
-        self.state: Dict[str, Dict[str, Any]] = {}
+        self.results: dict[str, dict[str, Any]] = {}
+        self.state: dict[str, dict[str, Any]] = {}
         self.completed_tasks = 0
 
     async def _worker(self, worker_id: int):
@@ -87,7 +87,7 @@ class ReconEngine:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        stdout, stderr = await proc.communicate()
+        stdout, _stderr = await proc.communicate()
         out = stdout.decode('utf-8', errors='ignore')
         
         self.results[target]["nmap"] = out
@@ -140,15 +140,19 @@ class ReconEngine:
                     self.results[target]["banners"] = ""
                 self.results[target]["banners"] += f"[Port {port} | {svc}] {banner[:100]}...\n"
                 
-        except Exception as e:
+        except Exception:
             pass # Silent fail on timeouts
 
     def _heuristic_service_detect(self, port: int, banner: str) -> str:
         banner = banner.lower()
-        if "ssh-" in banner: return "ssh"
-        if "http/" in banner or "html" in banner: return "http"
-        if "ftp" in banner or "220" in banner[:4]: return "ftp"
-        if "mysql" in banner: return "mysql"
+        if "ssh-" in banner:
+            return "ssh"
+        if "http/" in banner or "html" in banner:
+            return "http"
+        if "ftp" in banner or "220" in banner[:4]:
+            return "ftp"
+        if "mysql" in banner:
+            return "mysql"
         return "unknown"
 
     async def _tls_fingerprint(self, target: str, port: int):
@@ -161,7 +165,7 @@ class ReconEngine:
             if "tls" not in self.results[target]:
                 self.results[target]["tls"] = ""
             self.results[target]["tls"] += f"[Port {port} TLS Cert Extracted]\n{cert_pem[:200]}...\n"
-        except Exception as e:
+        except Exception:
             pass
 
     async def _http_probe(self, target: str, port: int, is_tls: bool):
@@ -189,7 +193,8 @@ class ReconEngine:
             if "<title>" in resp.lower():
                 import re
                 match = re.search(r'<title>(.*?)</title>', resp, re.IGNORECASE | re.DOTALL)
-                if match: title = match.group(1).strip()
+                if match:
+                    title = match.group(1).strip()
             
             server = "Unknown"
             for line in resp.splitlines():
@@ -213,7 +218,7 @@ class ReconEngine:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+            stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
             self.results[target]["enum4linux"] = stdout.decode('utf-8', errors='ignore')
         except asyncio.TimeoutError:
             proc.kill()
@@ -225,7 +230,7 @@ class ReconEngine:
     # PUBLIC API
     # =========================================================================
 
-    async def run_scan(self, targets: List[str]) -> Dict[str, Dict[str, str]]:
+    async def run_scan(self, targets: list[str]) -> dict[str, dict[str, str]]:
         """Run the async recon engine against a list of targets."""
         print(f"\n{C_CYAN}[*] Initializing Async Recon Engine v9.0 for {len(targets)} target(s){C_RESET}")
         start_time = time.time()
@@ -259,7 +264,7 @@ class ReconEngine:
         return final_output
 
 # Helper to run from synchronous code
-def run_async_recon(targets: List[str], concurrency: int = 10) -> Dict[str, str]:
+def run_async_recon(targets: list[str], concurrency: int = 10) -> dict[str, str]:
     engine = ReconEngine(concurrency=concurrency)
     return asyncio.run(engine.run_scan(targets))
 

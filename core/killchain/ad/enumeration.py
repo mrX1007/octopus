@@ -17,7 +17,7 @@ import logging
 import os
 import shutil
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 # ── Logging ──────────────────────────────────────────────────────────────
 logger = logging.getLogger("octopus.killchain.ad.enumeration")
@@ -54,13 +54,11 @@ GPO_ATTRS = ["displayName", "gPCFileSysPath", "versionNumber",
              "gPCMachineExtensionNames"]
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Helper: Credential normalization
-# ═══════════════════════════════════════════════════════════════════════════
 
-def _normalize_creds(creds: Optional[Dict[str, str]]) -> Dict[str, str]:
+def _normalize_creds(creds: Optional[dict[str, str]]) -> dict[str, str]:
     """Return a dict with guaranteed keys: user, password, domain, nthash."""
-    defaults: Dict[str, str] = {
+    defaults: dict[str, str] = {
         "user": "",
         "password": "",
         "domain": "",
@@ -78,14 +76,12 @@ def _build_base_dn(domain: str) -> str:
     return ",".join(f"DC={part}" for part in domain.upper().split("."))
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Backend helpers
-# ═══════════════════════════════════════════════════════════════════════════
 
 def _ldap_search_impacket(
     target: str, base_dn: str, search_filter: str,
-    attributes: List[str], creds: Dict[str, str],
-) -> Optional[List[Dict[str, Any]]]:
+    attributes: list[str], creds: dict[str, str],
+) -> Optional[list[dict[str, Any]]]:
     """Perform an LDAP search via impacket's ``ldap`` module.
 
     Returns a list of entry dicts or ``None`` on failure.
@@ -116,14 +112,14 @@ def _ldap_search_impacket(
             searchControls=[sc],
         )
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for entry in raw:
             if not isinstance(entry, ldapasn1.SearchResultEntry):
                 continue
-            item: Dict[str, Any] = {}
+            item: dict[str, Any] = {}
             try:
                 item["dn"] = str(entry["objectName"])
-            except Exception as e:
+            except Exception:
                 item["dn"] = ""
             for attr in entry["attributes"]:
                 attr_type = str(attr["type"])
@@ -139,8 +135,8 @@ def _ldap_search_impacket(
 
 def _ldap_search_ldap3(
     target: str, base_dn: str, search_filter: str,
-    attributes: List[str], creds: Dict[str, str],
-) -> Optional[List[Dict[str, Any]]]:
+    attributes: list[str], creds: dict[str, str],
+) -> Optional[list[dict[str, Any]]]:
     """Perform an LDAP search via the ``ldap3`` library.
 
     Returns a list of entry dicts or ``None`` on failure.
@@ -171,9 +167,9 @@ def _ldap_search_ldap3(
             paged_size=1000,
         )
 
-        results: List[Dict[str, Any]] = []
+        results: list[dict[str, Any]] = []
         for entry in conn.entries:
-            item: Dict[str, Any] = {"dn": str(entry.entry_dn)}
+            item: dict[str, Any] = {"dn": str(entry.entry_dn)}
             for attr_name in attributes:
                 try:
                     val = entry[attr_name].value
@@ -209,7 +205,7 @@ def _run_cli(cmd: str, timeout: int = LDAP_TIMEOUT) -> str:
 
 def _ldap_search_cli(
     target: str, base_dn: str, search_filter: str,
-    attributes: List[str], creds: Dict[str, str],
+    attributes: list[str], creds: dict[str, str],
 ) -> str:
     """Fall back to ``ldapsearch`` CLI tool.  Returns raw text output."""
     if not shutil.which("ldapsearch"):
@@ -233,14 +229,14 @@ def _ldap_search_cli(
     return _run_cli(cmd)
 
 
-def _format_entries(entries: List[Dict[str, Any]], label: str) -> str:
+def _format_entries(entries: list[dict[str, Any]], label: str) -> str:
     """Pretty-format a list of LDAP entry dicts for output."""
     if not entries:
         return f"  No {label} found.\n"
-    lines: List[str] = []
+    lines: list[str] = []
     for entry in entries:
         name = entry.get("sAMAccountName", entry.get("displayName", entry.get("dn", "?")))
-        detail_parts: List[str] = []
+        detail_parts: list[str] = []
         for k, v in entry.items():
             if k in ("dn", "sAMAccountName"):
                 continue
@@ -252,11 +248,9 @@ def _format_entries(entries: List[Dict[str, Any]], label: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Public API
-# ═══════════════════════════════════════════════════════════════════════════
 
-def run_ad_enum(target: str, creds: Optional[Dict[str, str]] = None) -> str:
+def run_ad_enum(target: str, creds: Optional[dict[str, str]] = None) -> str:
     """Run comprehensive AD enumeration against a Domain Controller.
 
     Executes ``ldapsearch``, ``enum4linux``, and ``rpcclient`` as
@@ -310,7 +304,7 @@ def run_ad_enum(target: str, creds: Optional[Dict[str, str]] = None) -> str:
     return output
 
 
-def enumerate_users(target: str, creds: Optional[Dict[str, str]] = None) -> str:
+def enumerate_users(target: str, creds: Optional[dict[str, str]] = None) -> str:
     """Pull user list from Active Directory.
 
     Tries impacket → ldap3 → ldapsearch CLI.
@@ -348,7 +342,7 @@ def enumerate_users(target: str, creds: Optional[Dict[str, str]] = None) -> str:
     return output
 
 
-def enumerate_groups(target: str, creds: Optional[Dict[str, str]] = None) -> str:
+def enumerate_groups(target: str, creds: Optional[dict[str, str]] = None) -> str:
     """Pull group memberships from Active Directory.
 
     Args:
@@ -381,7 +375,7 @@ def enumerate_groups(target: str, creds: Optional[Dict[str, str]] = None) -> str
     return output
 
 
-def enumerate_computers(target: str, creds: Optional[Dict[str, str]] = None) -> str:
+def enumerate_computers(target: str, creds: Optional[dict[str, str]] = None) -> str:
     """List domain-joined computers from Active Directory.
 
     Args:
@@ -414,7 +408,7 @@ def enumerate_computers(target: str, creds: Optional[Dict[str, str]] = None) -> 
     return output
 
 
-def enumerate_gpo(target: str, creds: Optional[Dict[str, str]] = None) -> str:
+def enumerate_gpo(target: str, creds: Optional[dict[str, str]] = None) -> str:
     """List Group Policy Objects from Active Directory.
 
     Args:
@@ -447,7 +441,7 @@ def enumerate_gpo(target: str, creds: Optional[Dict[str, str]] = None) -> str:
     return output
 
 
-def bloodhound_ingest(target: str, creds: Optional[Dict[str, str]] = None) -> str:
+def bloodhound_ingest(target: str, creds: Optional[dict[str, str]] = None) -> str:
     """Run the BloodHound Python ingestor to collect AD relationship data.
 
     Tries the ``bloodhound`` Python package first, then falls back to

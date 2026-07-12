@@ -15,7 +15,7 @@ Usage::
 import logging
 import shutil
 import subprocess
-from typing import Dict, Optional
+from typing import Optional
 
 # ── Logging ──────────────────────────────────────────────────────────────
 logger = logging.getLogger("octopus.killchain.ad.lateral")
@@ -40,13 +40,11 @@ WINRM_SSL_PORT = 5986
 DCOM_PORT = 135
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # Internal helpers
-# ═══════════════════════════════════════════════════════════════════════════
 
-def _normalize_creds(creds: Optional[Dict[str, str]]) -> Dict[str, str]:
+def _normalize_creds(creds: Optional[dict[str, str]]) -> dict[str, str]:
     """Return a dict with guaranteed keys: user, password, domain, nthash."""
-    defaults: Dict[str, str] = {"user": "", "password": "", "domain": "", "nthash": ""}
+    defaults: dict[str, str] = {"user": "", "password": "", "domain": "", "nthash": ""}
     if creds:
         defaults.update(creds)
     return defaults
@@ -69,7 +67,7 @@ def _run_cli(cmd: str, timeout: int = CLI_TIMEOUT) -> str:
         return f"[!] Command error: {exc}"
 
 
-def _impacket_auth_string(creds: Dict[str, str]) -> str:
+def _impacket_auth_string(creds: dict[str, str]) -> str:
     """Build ``DOMAIN/user:password`` string for impacket CLI tools."""
     domain = creds["domain"]
     user = creds["user"]
@@ -79,20 +77,18 @@ def _impacket_auth_string(creds: Dict[str, str]) -> str:
     return f"{user}:{password}"
 
 
-def _impacket_hash_arg(creds: Dict[str, str]) -> str:
+def _impacket_hash_arg(creds: dict[str, str]) -> str:
     """Return ``-hashes :NTHASH`` flag if nthash is available."""
     if creds.get("nthash"):
         return f"-hashes :{creds['nthash']}"
     return ""
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # PsExec
-# ═══════════════════════════════════════════════════════════════════════════
 
 def psexec(
     target: str,
-    creds: Optional[Dict[str, str]] = None,
+    creds: Optional[dict[str, str]] = None,
     command: str = "whoami && hostname && ipconfig",
 ) -> str:
     """Execute a command via PsExec (impacket).
@@ -131,7 +127,7 @@ def psexec(
         )
         exec_output = executer.run(target)
 
-        output += f"[+] PsExec successful\n"
+        output += "[+] PsExec successful\n"
         output += f"    User:    {creds['domain']}\\{creds['user']}\n"
         output += f"    Command: {command}\n\n"
         output += f"[COMMAND OUTPUT]\n{exec_output[:5000]}\n"
@@ -157,13 +153,11 @@ def psexec(
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # WMIExec
-# ═══════════════════════════════════════════════════════════════════════════
 
 def wmiexec(
     target: str,
-    creds: Optional[Dict[str, str]] = None,
+    creds: Optional[dict[str, str]] = None,
     command: str = "whoami && hostname && ipconfig",
 ) -> str:
     """Execute a command via WMI (Windows Management Instrumentation).
@@ -202,7 +196,7 @@ def wmiexec(
         )
         exec_output = executer.run(target, target)
 
-        output += f"[+] WMIExec successful\n"
+        output += "[+] WMIExec successful\n"
         output += f"    User:    {creds['domain']}\\{creds['user']}\n"
         output += f"    Command: {command}\n\n"
         output += f"[COMMAND OUTPUT]\n{exec_output[:5000]}\n"
@@ -228,13 +222,11 @@ def wmiexec(
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # SMBExec
-# ═══════════════════════════════════════════════════════════════════════════
 
 def smbexec(
     target: str,
-    creds: Optional[Dict[str, str]] = None,
+    creds: Optional[dict[str, str]] = None,
     command: str = "whoami && hostname && ipconfig",
 ) -> str:
     """Execute a command via SMBExec.
@@ -274,7 +266,7 @@ def smbexec(
         )
         exec_output = executer.run(target, target)
 
-        output += f"[+] SMBExec successful\n"
+        output += "[+] SMBExec successful\n"
         output += f"    User:    {creds['domain']}\\{creds['user']}\n"
         output += f"    Command: {command}\n\n"
         output += f"[COMMAND OUTPUT]\n{exec_output[:5000]}\n"
@@ -300,13 +292,11 @@ def smbexec(
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # WinRM
-# ═══════════════════════════════════════════════════════════════════════════
 
 def winrm_exec(
     target: str,
-    creds: Optional[Dict[str, str]] = None,
+    creds: Optional[dict[str, str]] = None,
     command: str = "whoami && hostname && ipconfig",
 ) -> str:
     """Execute a command via Windows Remote Management (WinRM).
@@ -385,13 +375,11 @@ def winrm_exec(
     return output
 
 
-# ═══════════════════════════════════════════════════════════════════════════
 # DCOM Exec
-# ═══════════════════════════════════════════════════════════════════════════
 
 def dcom_exec(
     target: str,
-    creds: Optional[Dict[str, str]] = None,
+    creds: Optional[dict[str, str]] = None,
     command: str = "whoami && hostname && ipconfig",
 ) -> str:
     """Execute a command via DCOM (Distributed COM).

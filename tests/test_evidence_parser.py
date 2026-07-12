@@ -419,6 +419,7 @@ Internal hosts discovered: 2
 
 def test_web_endpoint_parser_normalizes_url_tool_output():
     import json
+
     from core.ai.evidence import OutputParser
 
     output = """
@@ -1019,6 +1020,7 @@ def test_manual_recon_timeout_preserves_actual_tool_names():
 
 def test_nikto_and_nuclei_statuses_create_typed_check_results():
     import json
+
     from core.ai.evidence import OutputParser
 
     output = """

@@ -15,9 +15,11 @@ Usage:
     loader_code = pk.generate_loader(keyed, "hostname")
 """
 
-import os
-import hashlib
 import base64
+import hashlib
+import os
+from typing import ClassVar
+
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from core.plugins.base import (
@@ -49,7 +51,6 @@ class PayloadKeying:
 
     def _derive_key(self, env_value: str, salt: str = "octopus_v8") -> bytes:
         """Derive AES-256 key from environment value using PBKDF2."""
-        import hashlib
         key = hashlib.pbkdf2_hmac(
             "sha256",
             env_value.encode("utf-8"),
@@ -231,8 +232,8 @@ class PayloadKeyingPlugin(OctopusPlugin):
     description = "Encrypt payload bytes so they decrypt only in a matching target environment."
     plugin_type = PluginType.EVASION
     kill_chain_stage = KillChainStage.EXPLOITATION
-    python_deps = ["cryptography"]
-    capabilities = {"crypto"}
+    python_deps: ClassVar[list[str]] = ["cryptography"]
+    capabilities: ClassVar[set[str]] = {"crypto"}
 
     def run(self, **kwargs) -> PluginResult:
         payload = kwargs.get("payload")

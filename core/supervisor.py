@@ -21,17 +21,20 @@ Architecture:
     └──────────────┘
 """
 
-import os
-import sys
-import time
-import signal
 import atexit
-import json
+import contextlib
+import errno
 import fcntl
-import threading
+import json
 import logging
+import os
+import signal
+import sys
+import tempfile
+import threading
+import time
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Callable, List
+from typing import Callable, Optional
 
 logger = logging.getLogger("octopus.supervisor")
 
@@ -45,6 +48,28 @@ STATE_FILE = os.path.join(DATA_DIR, "supervisor_state.json")
 
 # Health check interval (seconds)
 HEALTH_INTERVAL = int(os.environ.get("OCTOPUS_HEALTH_INTERVAL", "30"))
+
+
+def _atomic_write_json(path: str, payload: dict) -> None:
+    """Durably replace a JSON file without exposing a truncated state."""
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory,
+    )
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(temp_path)
+        raise
 
 
 # ─── Exceptions ──────────────────────────────────────────
@@ -65,9 +90,16 @@ class Subsystem:
     """Tracked subsystem with health check and restart capability."""
 
     __slots__ = (
-        "name", "health_fn", "start_fn", "stop_fn",
-        "status", "last_check", "last_healthy",
-        "crash_count", "max_restarts", "thread",
+        "crash_count",
+        "health_fn",
+        "last_check",
+        "last_healthy",
+        "max_restarts",
+        "name",
+        "start_fn",
+        "status",
+        "stop_fn",
+        "thread",
     )
 
     def __init__(
@@ -82,7 +114,7 @@ class Subsystem:
         self.health_fn = health_fn
         self.start_fn = start_fn
         self.stop_fn = stop_fn
-        self.status = "stopped"     # stopped | running | crashed | restarting
+        self.status = "unknown"     # unknown | stopped | running | crashed | restarting
         self.last_check = 0.0
         self.last_healthy = 0.0
         self.crash_count = 0
@@ -93,19 +125,20 @@ class Subsystem:
         """Run health check. Returns True if healthy."""
         self.last_check = time.time()
         try:
-            ok = self.health_fn()
+            ok = bool(self.health_fn())
             if ok:
                 self.status = "running"
                 self.last_healthy = time.time()
             else:
-                if self.status == "running":
-                    self.status = "crashed"
+                if self.status != "crashed":
                     self.crash_count += 1
                     logger.warning(f"[supervisor] Subsystem '{self.name}' CRASHED (count={self.crash_count})")
+                self.status = "crashed"
             return ok
         except Exception as e:
+            if self.status != "crashed":
+                self.crash_count += 1
             self.status = "crashed"
-            self.crash_count += 1
             logger.error(f"[supervisor] Health check failed for '{self.name}': {e}")
             return False
 
@@ -164,11 +197,15 @@ class Supervisor:
     def __init__(self):
         self._pid = os.getpid()
         self._lock_fd: Optional[int] = None
-        self._subsystems: Dict[str, Subsystem] = {}
+        self._subsystems: dict[str, Subsystem] = {}
         self._watchdog_thread: Optional[threading.Thread] = None
         self._running = False
         self._start_time = 0.0
-        self._shutdown_hooks: List[Callable] = []
+        self._shutdown_hooks: list[Callable] = []
+        self._state_lock = threading.RLock()
+        self._stop_lock = threading.Lock()
+        self._lifecycle = "stopped"
+        self._clean_shutdown = True
 
         # Lifecycle metrics
         self._metrics = {
@@ -183,26 +220,23 @@ class Supervisor:
     def _acquire_lock(self):
         """Acquire exclusive flock. Raises AlreadyRunningError if taken."""
         os.makedirs(os.path.dirname(LOCK_FILE) or "/tmp", exist_ok=True)
+        lock_fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
         try:
-            self._lock_fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR)
-            fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (OSError, IOError) as e:
-            # Check if the existing PID is actually alive
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
+            os.close(lock_fd)
+            if getattr(e, "errno", None) not in (errno.EACCES, errno.EAGAIN):
+                raise
             existing_pid = self._read_pid()
-            if existing_pid and self._is_pid_alive(existing_pid):
-                raise AlreadyRunningError(
-                    f"OCTOPUS already running (PID {existing_pid}). "
-                    f"Use 'octopus stop' or kill {existing_pid}."
-                )
-            else:
-                # Stale lock — force acquire
-                logger.warning("[supervisor] Stale lock detected, forcing acquisition")
-                self._force_cleanup()
-                self._lock_fd = os.open(LOCK_FILE, os.O_CREAT | os.O_RDWR)
-                fcntl.flock(self._lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            owner = f"PID {existing_pid}" if existing_pid else "another process"
+            raise AlreadyRunningError(
+                f"OCTOPUS already running ({owner}). "
+                "Use 'octopus stop' before starting another instance."
+            ) from e
+        self._lock_fd = lock_fd
 
     def _release_lock(self):
-        """Release flock and remove lock file."""
+        """Release flock while retaining the stable lock-file inode."""
         if self._lock_fd is not None:
             try:
                 fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
@@ -210,10 +244,8 @@ class Supervisor:
             except Exception as _exc:
                 logging.debug(f"Suppressed in supervisor.py: {_exc}")
             self._lock_fd = None
-        try:
-            os.remove(LOCK_FILE)
-        except FileNotFoundError:
-            pass
+        # Keep the lock file in place. Unlinking a flock path allows another
+        # process to lock a different inode while the old holder is still alive.
 
     def _write_pid(self):
         """Write current PID to file with metadata."""
@@ -224,14 +256,13 @@ class Supervisor:
             "version": "11.0",
             "hostname": os.uname().nodename,
         }
-        with open(PID_FILE, "w") as f:
-            json.dump(pid_data, f)
+        _atomic_write_json(PID_FILE, pid_data)
         logger.info(f"[supervisor] PID {self._pid} written to {PID_FILE}")
 
     def _read_pid(self) -> Optional[int]:
         """Read PID from file. Returns None if not found or invalid."""
         try:
-            with open(PID_FILE, "r") as f:
+            with open(PID_FILE) as f:
                 data = f.read().strip()
                 if data.startswith("{"):
                     return json.loads(data).get("pid")
@@ -243,7 +274,7 @@ class Supervisor:
         """Remove PID file."""
         try:
             os.remove(PID_FILE)
-            logger.info(f"[supervisor] PID file removed")
+            logger.info("[supervisor] PID file removed")
         except FileNotFoundError:
             pass
 
@@ -257,46 +288,49 @@ class Supervisor:
             return False
 
     def _force_cleanup(self):
-        """Remove stale PID and lock files."""
-        for f in [PID_FILE, LOCK_FILE]:
-            try:
-                os.remove(f)
-            except FileNotFoundError:
-                pass
+        """Remove stale PID metadata; the stable flock inode is never unlinked."""
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(PID_FILE)
 
     # ─── State Persistence ─────────────────────────────
 
     def _save_state(self):
-        """Persist supervisor state for crash recovery."""
-        os.makedirs(DATA_DIR, exist_ok=True)
-        state = {
-            "pid": self._pid,
-            "started_at": self._start_time,
-            "saved_at": time.time(),
-            "metrics": self._metrics,
-            "subsystems": {
-                name: sub.to_dict()
-                for name, sub in self._subsystems.items()
-            },
-        }
-        try:
-            with open(STATE_FILE, "w") as f:
-                json.dump(state, f, indent=2)
-        except Exception as e:
-            logger.error(f"[supervisor] Failed to save state: {e}")
+        """Persist supervisor state atomically for crash recovery."""
+        with self._state_lock:
+            state = {
+                "pid": self._pid,
+                "started_at": self._start_time,
+                "saved_at": time.time(),
+                "lifecycle": self._lifecycle,
+                "clean_shutdown": self._clean_shutdown,
+                "metrics": self._metrics.copy(),
+                "subsystems": {
+                    name: sub.to_dict()
+                    for name, sub in self._subsystems.items()
+                },
+            }
+            try:
+                _atomic_write_json(STATE_FILE, state)
+                return True
+            except Exception as e:
+                logger.error(f"[supervisor] Failed to save state: {e}")
+                return False
 
     def _load_state(self) -> Optional[dict]:
         """Load previous state for crash recovery."""
         try:
-            with open(STATE_FILE, "r") as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
+            with open(STATE_FILE) as f:
+                state = json.load(f)
+                return state if isinstance(state, dict) else None
+        except (FileNotFoundError, OSError, json.JSONDecodeError, TypeError):
             return None
 
     def get_crash_info(self) -> Optional[dict]:
         """Get info about the last crash if the previous instance didn't shut down cleanly."""
         state = self._load_state()
         if state is None:
+            return None
+        if state.get("clean_shutdown") is True and state.get("lifecycle") == "stopped":
             return None
         # If state exists and PID is dead → crash
         old_pid = state.get("pid")
@@ -328,6 +362,10 @@ class Supervisor:
             max_restarts=max_restarts,
         )
         logger.info(f"[supervisor] Registered subsystem: {name}")
+        if self._running:
+            healthy = self._subsystems[name].check()
+            if not healthy:
+                self._metrics["crashes"] += 1
 
     def unregister(self, name: str):
         """Remove a subsystem from monitoring."""
@@ -339,21 +377,25 @@ class Supervisor:
         """Background thread that monitors subsystem health."""
         logger.info(f"[supervisor] Watchdog started (interval={HEALTH_INTERVAL}s)")
         while self._running:
-            for name, sub in list(self._subsystems.items()):
+            for _name, sub in list(self._subsystems.items()):
                 if not self._running:
                     break
                 if sub.status in ("stopped",):
                     continue
 
+                was_crashed = sub.status == "crashed"
                 healthy = sub.check()
+                if not self._running:
+                    break
                 if not healthy and sub.status == "crashed":
-                    self._metrics["crashes"] += 1
-                    if sub.start_fn and sub.crash_count <= sub.max_restarts:
-                        sub.restart()
+                    if not was_crashed:
+                        self._metrics["crashes"] += 1
+                    if sub.start_fn and sub.crash_count <= sub.max_restarts and sub.restart():
                         self._metrics["restarts"] += 1
 
-            # Persist state periodically
-            self._save_state()
+            # Persist state periodically while the lifecycle is still active.
+            if self._running:
+                self._save_state()
 
             # Sleep in small increments so we can stop quickly
             for _ in range(HEALTH_INTERVAL * 2):
@@ -384,76 +426,123 @@ class Supervisor:
 
         # Acquire lock
         self._acquire_lock()
+        try:
+            # Persist an explicitly unclean/running state before background work.
+            self._start_time = time.time()
+            self._running = True
+            self._lifecycle = "running"
+            self._clean_shutdown = False
+            self._write_pid()
+            self._metrics["starts"] += 1
 
-        # Write PID
-        self._start_time = time.time()
-        self._write_pid()
+            # Eagerly check every enabled subsystem once. This avoids a false-green
+            # supervisor whose registered components remain perpetually "stopped".
+            for sub in self._subsystems.values():
+                if not sub.check():
+                    self._metrics["crashes"] += 1
+            self._save_state()
 
-        # Start watchdog
-        self._running = True
-        self._watchdog_thread = threading.Thread(
-            target=self._watchdog_loop,
-            name="octopus-watchdog",
-            daemon=True,
-        )
-        self._watchdog_thread.start()
+            # Start watchdog
+            self._watchdog_thread = threading.Thread(
+                target=self._watchdog_loop,
+                name="octopus-watchdog",
+                daemon=True,
+            )
+            self._watchdog_thread.start()
 
-        # Register cleanup
-        atexit.register(self.stop)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+            # Register cleanup
+            atexit.register(self.stop)
+            signal.signal(signal.SIGTERM, self._signal_handler)
 
-        self._metrics["starts"] += 1
-        logger.info(f"[supervisor] Started (PID={self._pid})")
+            logger.info(f"[supervisor] Started (PID={self._pid})")
 
-        # Log to event store if available
-        self._emit_event("supervisor.start", {
-            "pid": self._pid,
-            "subsystems": list(self._subsystems.keys()),
-        })
+            # Log to event store if available
+            self._emit_event("supervisor.start", {
+                "pid": self._pid,
+                "subsystems": list(self._subsystems.keys()),
+            })
+        except BaseException:
+            self._running = False
+            watchdog = self._watchdog_thread
+            if watchdog and watchdog.is_alive() and watchdog is not threading.current_thread():
+                watchdog.join(timeout=2.0)
+            self._lifecycle = "startup_failed"
+            self._clean_shutdown = False
+            self._save_state()
+            self._remove_pid()
+            self._release_lock()
+            raise
 
     def stop(self):
         """Clean shutdown: stop watchdog, cleanup PID/lock, run hooks."""
-        if not self._running:
-            return
+        with self._stop_lock:
+            if not self._running:
+                return self._clean_shutdown
 
-        self._running = False
-        logger.info("[supervisor] Shutting down...")
+            self._running = False
+            self._lifecycle = "stopping"
+            self._clean_shutdown = False
+            self._save_state()
+            logger.info("[supervisor] Shutting down...")
 
-        # Run shutdown hooks
-        for hook in self._shutdown_hooks:
-            try:
-                hook()
-            except Exception as e:
-                logger.error(f"[supervisor] Shutdown hook failed: {e}")
+            shutdown_errors = []
 
-        # Stop all subsystems
-        for name, sub in self._subsystems.items():
-            if sub.stop_fn and sub.status == "running":
+            # No watchdog write or restart may race the terminal lifecycle state.
+            watchdog = self._watchdog_thread
+            if (watchdog and watchdog.is_alive()
+                    and watchdog is not threading.current_thread()):
+                watchdog.join(timeout=max(2.0, min(float(HEALTH_INTERVAL) + 1.0, 10.0)))
+                if watchdog.is_alive():
+                    shutdown_errors.append("watchdog did not stop before timeout")
+                    logger.error("[supervisor] Watchdog did not stop before timeout")
+
+            # Run shutdown hooks
+            for hook in self._shutdown_hooks:
                 try:
-                    sub.stop_fn()
-                    logger.info(f"[supervisor] Stopped subsystem: {name}")
+                    hook()
                 except Exception as e:
-                    logger.error(f"[supervisor] Failed to stop {name}: {e}")
-            sub.status = "stopped"
+                    shutdown_errors.append(f"hook: {e}")
+                    logger.error(f"[supervisor] Shutdown hook failed: {e}")
 
-        # Update uptime
-        if self._start_time:
-            self._metrics["uptime_total"] += time.time() - self._start_time
+            # Stop every component that may still own resources, including
+            # crashed or restarting subsystems.
+            for name, sub in self._subsystems.items():
+                if sub.stop_fn and sub.status != "stopped":
+                    try:
+                        sub.stop_fn()
+                        logger.info(f"[supervisor] Stopped subsystem: {name}")
+                    except Exception as e:
+                        shutdown_errors.append(f"{name}: {e}")
+                        logger.error(f"[supervisor] Failed to stop {name}: {e}")
+                sub.status = "stopped"
 
-        # Persist final state
-        self._save_state()
+            # Update uptime
+            if self._start_time:
+                self._metrics["uptime_total"] += time.time() - self._start_time
 
-        # Cleanup files
-        self._remove_pid()
-        self._release_lock()
+            self._lifecycle = "shutdown_failed" if shutdown_errors else "stopped"
+            self._clean_shutdown = not shutdown_errors
+            state_saved = self._save_state()
+            if not state_saved:
+                self._lifecycle = "shutdown_failed"
+                self._clean_shutdown = False
 
-        # Emit event
-        self._emit_event("supervisor.stop", {
-            "pid": self._pid,
-            "uptime": time.time() - self._start_time if self._start_time else 0,
-        })
+            # Cleanup files
+            self._remove_pid()
+            self._release_lock()
 
-        logger.info("[supervisor] Shutdown complete")
+            # Emit event
+            self._emit_event("supervisor.stop", {
+                "pid": self._pid,
+                "uptime": time.time() - self._start_time if self._start_time else 0,
+                "clean": self._clean_shutdown,
+            })
+
+            if self._clean_shutdown:
+                logger.info("[supervisor] Shutdown complete")
+            else:
+                logger.error("[supervisor] Shutdown completed with errors")
+            return self._clean_shutdown
 
     def on_shutdown(self, hook: Callable):
         """Register a function to call during shutdown."""
@@ -471,17 +560,26 @@ class Supervisor:
         """Check all subsystems. Returns True if all OK."""
         if not self._running:
             return False
-        return all(
-            sub.check()
-            for sub in self._subsystems.values()
-            if sub.status != "stopped"
-        )
+        all_ok = True
+        for sub in self._subsystems.values():
+            if sub.status == "stopped":
+                all_ok = False
+                continue
+            if not sub.check():
+                all_ok = False
+        return all_ok
 
     def health_report(self) -> dict:
         """Detailed health report for all subsystems."""
         uptime = time.time() - self._start_time if self._start_time else 0
+        if not self._running:
+            status = "stopped"
+        elif any(sub.status != "running" for sub in self._subsystems.values()):
+            status = "unhealthy"
+        else:
+            status = "running"
         return {
-            "status": "running" if self._running else "stopped",
+            "status": status,
             "pid": self._pid,
             "uptime_seconds": round(uptime, 1),
             "uptime_human": str(timedelta(seconds=int(uptime))),
@@ -502,7 +600,7 @@ class Supervisor:
             if os.path.exists(os.path.dirname(db_path)):
                 es = EventStore(db_path=db_path)
                 es.append("supervisor", str(self._pid), event_type, data)
-        except Exception as e:
+        except Exception:
             pass  # Event store is optional
 
     # ─── Class Methods ─────────────────────────────────
@@ -511,12 +609,9 @@ class Supervisor:
     def is_running(cls) -> bool:
         """Check if OCTOPUS is currently running (static check)."""
         try:
-            with open(PID_FILE, "r") as f:
+            with open(PID_FILE) as f:
                 data = f.read().strip()
-                if data.startswith("{"):
-                    pid = json.loads(data).get("pid")
-                else:
-                    pid = int(data)
+                pid = json.loads(data).get("pid") if data.startswith("{") else int(data)
                 return cls._is_pid_alive(pid)
         except (FileNotFoundError, ValueError, json.JSONDecodeError):
             return False
@@ -525,7 +620,7 @@ class Supervisor:
     def get_pid(cls) -> Optional[int]:
         """Get PID of running instance."""
         try:
-            with open(PID_FILE, "r") as f:
+            with open(PID_FILE) as f:
                 data = f.read().strip()
                 if data.startswith("{"):
                     return json.loads(data).get("pid")
@@ -563,20 +658,30 @@ def _check_ollama() -> bool:
         req = urllib.request.Request(f"{url}/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status == 200
-    except Exception as e:
+    except Exception:
         return False
 
 
 def _check_database() -> bool:
     """Check if main database is accessible."""
+    conn = None
+    cursor = None
     try:
         from db import get_connection
         conn = get_connection()
-        conn.execute("SELECT 1")
-        conn.close()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
         return True
-    except Exception as e:
+    except Exception:
         return False
+    finally:
+        if cursor is not None:
+            with contextlib.suppress(Exception):
+                cursor.close()
+        if conn is not None:
+            with contextlib.suppress(Exception):
+                conn.close()
 
 
 def _check_event_store() -> bool:
@@ -585,12 +690,12 @@ def _check_event_store() -> bool:
         from core.c2.event_store import EventStore
         db_path = os.path.join(DATA_DIR, "c2.db")
         if not os.path.exists(db_path):
-            return True  # Not initialized yet is OK
+            return False
         es = EventStore(db_path=db_path)
         # Verify we can read from the stream (count() doesn't exist)
         es.read_stream(limit=1)
         return True
-    except Exception as e:
+    except Exception:
         return False
 
 
@@ -639,19 +744,19 @@ def cli():
         if pid and Supervisor._is_pid_alive(pid):
             # Read state file for details
             try:
-                with open(STATE_FILE, "r") as f:
+                with open(STATE_FILE) as f:
                     state = json.load(f)
                 uptime = time.time() - state.get("started_at", time.time())
-                print(f"Status:     RUNNING")
+                print("Status:     RUNNING")
                 print(f"PID:        {pid}")
                 print(f"Uptime:     {timedelta(seconds=int(uptime))}")
-                print(f"Subsystems:")
+                print("Subsystems:")
                 for name, sub in state.get("subsystems", {}).items():
                     status = sub.get("status", "unknown")
                     crashes = sub.get("crash_count", 0)
                     marker = "✅" if status == "running" else "❌"
                     print(f"  {marker} {name}: {status} (crashes: {crashes})")
-            except Exception as e:
+            except Exception:
                 print(f"OCTOPUS running (PID {pid}), no state file")
         else:
             print("Status: STOPPED")
@@ -669,7 +774,7 @@ def cli():
             print("OCTOPUS is not running")
             sys.exit(1)
         try:
-            with open(STATE_FILE, "r") as f:
+            with open(STATE_FILE) as f:
                 state = json.load(f)
             all_ok = True
             for name, sub in state.get("subsystems", {}).items():
@@ -679,7 +784,7 @@ def cli():
                 marker = "✅" if status == "running" else "❌"
                 print(f"  {marker} {name}: {status}")
             sys.exit(0 if all_ok else 1)
-        except Exception as e:
+        except Exception:
             print("No health data available")
             sys.exit(1)
 

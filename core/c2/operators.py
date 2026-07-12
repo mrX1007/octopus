@@ -10,14 +10,12 @@ Roles:
 Every action is recorded in the event store for audit.
 """
 
-import os
-import json
 import hashlib
+import os
 import secrets
 import sqlite3
 from contextlib import contextmanager
-from typing import Optional, Dict, Any
-
+from typing import Any, Optional
 
 ROLE_ADMIN = "admin"
 ROLE_OPERATOR = "operator"
@@ -123,7 +121,7 @@ class OperatorManager:
 
         return api_key
 
-    def authenticate(self, api_key: str) -> Optional[Dict[str, Any]]:
+    def authenticate(self, api_key: str) -> Optional[dict[str, Any]]:
         """Authenticate an operator by API key. Returns operator dict or None."""
         key_hash = _hash_api_key(api_key)
 
@@ -137,7 +135,7 @@ class OperatorManager:
             return dict(row)
         return None
 
-    def authorize(self, operator: Dict[str, Any], action: str) -> bool:
+    def authorize(self, operator: dict[str, Any], action: str) -> bool:
         """Check if operator has permission for action. Returns True/False."""
         role = operator.get("role", "")
         allowed = _PERMISSIONS.get(role, set())

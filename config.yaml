@@ -140,6 +140,7 @@ paths:
   logs: "~/OCTOPUS/logs"
   checkpoints: "/tmp"       # checkpoint files dir
   memory: "~/OCTOPUS/memory" # v7.0: ChromaDB vector memory storage
+  secrets: "data/secrets.db" # encrypted values; facts/reports keep opaque refs only
 
 # ═══════════════════════════════════════════════
 # WORDLISTS

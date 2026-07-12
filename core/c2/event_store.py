@@ -8,19 +8,27 @@ Schema designed for future migration to PostgreSQL/NATS/Kafka
 without rewriting the core.
 """
 
-import os
 import json
-import time
+import os
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
-from typing import Callable, Dict, Any, List, Optional
+from typing import Callable, Optional
 
 
 class Event:
     """Immutable event record."""
-    __slots__ = ('event_id', 'timestamp', 'aggregate_type', 'aggregate_id',
-                 'event_type', 'payload', 'causation_id', 'correlation_id')
+    __slots__ = (
+        'aggregate_id',
+        'aggregate_type',
+        'causation_id',
+        'correlation_id',
+        'event_id',
+        'event_type',
+        'payload',
+        'timestamp',
+    )
 
     def __init__(self, event_id: int, timestamp: float, aggregate_type: str,
                  aggregate_id: str, event_type: str, payload: dict,
@@ -61,7 +69,7 @@ class EventStore:
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._lock = threading.Lock()
-        self._subscribers: Dict[str, List[Callable]] = {}
+        self._subscribers: dict[str, list[Callable]] = {}
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self._init_schema()
 
@@ -118,18 +126,17 @@ class EventStore:
         ts = time.time()
         payload_json = json.dumps(payload)
 
-        with self._lock:
-            with self._get_conn() as conn:
-                cur = conn.execute("""
+        with self._lock, self._get_conn() as conn:
+            cur = conn.execute("""
                     INSERT INTO events
                         (timestamp, aggregate_type, aggregate_id,
                          event_type, payload, causation_id, correlation_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (ts, aggregate_type, aggregate_id,
-                      event_type, payload_json,
-                      causation_id, correlation_id))
-                conn.commit()
-                event_id = cur.lastrowid
+                  event_type, payload_json,
+                  causation_id, correlation_id))
+            conn.commit()
+            event_id = cur.lastrowid
 
         event = Event(
             event_id=event_id, timestamp=ts,
@@ -146,7 +153,7 @@ class EventStore:
                     aggregate_id: Optional[str] = None,
                     event_type: Optional[str] = None,
                     after_id: int = 0,
-                    limit: int = 1000) -> List[Event]:
+                    limit: int = 1000) -> list[Event]:
         """Read events from the stream with optional filters."""
         query = "SELECT * FROM events WHERE event_id > ?"
         params: list = [after_id]
