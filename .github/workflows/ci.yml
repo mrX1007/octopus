@@ -31,7 +31,7 @@ jobs:
         run: python -m mypy
 
       - name: Compile
-        run: python -m compileall -q agents.py tools.py core tests
+        run: python -m compileall -q octopus.py tools.py core modules tests
 
       - name: Tests
         run: python -m pytest -q
