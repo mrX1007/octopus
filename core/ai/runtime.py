@@ -2,37 +2,47 @@
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import json
+import subprocess
+import time
 from collections.abc import Iterable
-from dataclasses import dataclass, field
 from typing import Any, Callable
+from uuid import uuid4
 
 from core.ai.command_scheduler import CommandDecision, CommandScheduler
 from core.ai.evidence import OutputParser
 from core.ai.fact_store import FactStore
 from core.ai.trace_report import TraceReporter
-from core.execution import ExecutionContext, bind_execution_context
+from core.execution import (
+    DispatchResult,
+    ExecutionContext,
+    ExecutionResult,
+    ExecutionStatus,
+    adapt_execution_result,
+    bind_execution_context,
+)
 
 Runner = Callable[[str], Any]
 
 
-@dataclass
-class DispatchResult:
-    """One execution result with a deliberately secret-safe representation."""
+def _policy_decision_ref(decision: CommandDecision) -> str:
+    """Build a non-secret stable reference to one scheduler/policy decision."""
+    payload = {
+        "key": decision.key,
+        "action": decision.action,
+        "reason": decision.reason,
+        "prerequisite": decision.prerequisite,
+        "policy": decision.policy,
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str).encode("utf-8", "replace")
+    return f"policy://sha256/{hashlib.sha256(encoded).hexdigest()}"
 
-    decision: CommandDecision = field(repr=False)
-    output: str = field(default="", repr=False)
-    executed: bool = False
 
-    @property
-    def audit_command(self) -> str:
-        return str(self.decision.to_dict().get("command", ""))
-
-    def to_audit_dict(self) -> dict[str, Any]:
-        return {
-            "decision": self.decision.to_dict(),
-            "executed": self.executed,
-            "output_bytes": len(self.output.encode("utf-8", errors="ignore")),
-        }
+def _tool_name(command: str) -> str:
+    parts = (command or "").strip().split(maxsplit=1)
+    return parts[0] if parts else "unknown"
 
 
 class PipelineRuntime:
@@ -73,14 +83,138 @@ class PipelineRuntime:
         )
 
     def execute(self, decision: CommandDecision, context: ExecutionContext) -> DispatchResult:
+        execution_id = uuid4().hex
+        policy_ref = _policy_decision_ref(decision)
         if decision.action == "skip":
-            return DispatchResult(decision=decision, executed=False)
-        with bind_execution_context(context):
-            output = self._runner(decision.command)
-        return DispatchResult(
+            return self._normalize_result(
+                {
+                    "status": ExecutionStatus.BLOCKED,
+                    "error_class": "ExecutionBlocked",
+                    "error_message": decision.reason,
+                    "metadata": {"decision_reason": decision.reason},
+                },
+                decision=decision,
+                context=context,
+                execution_id=execution_id,
+                policy_ref=policy_ref,
+                duration=0.0,
+                executed=False,
+            )
+
+        started = time.monotonic()
+        try:
+            with bind_execution_context(context):
+                output = self._runner(decision.command)
+        except asyncio.CancelledError as exc:
+            return self._exception_result(
+                exc,
+                ExecutionStatus.CANCELLED,
+                decision,
+                context,
+                execution_id,
+                policy_ref,
+                time.monotonic() - started,
+                executed=True,
+            )
+        except (subprocess.TimeoutExpired, TimeoutError) as exc:
+            return self._exception_result(
+                exc,
+                ExecutionStatus.TIMEOUT,
+                decision,
+                context,
+                execution_id,
+                policy_ref,
+                time.monotonic() - started,
+                executed=True,
+            )
+        except FileNotFoundError as exc:
+            return self._exception_result(
+                exc,
+                ExecutionStatus.UNAVAILABLE,
+                decision,
+                context,
+                execution_id,
+                policy_ref,
+                time.monotonic() - started,
+                executed=False,
+            )
+        except Exception as exc:
+            return self._exception_result(
+                exc,
+                ExecutionStatus.FAILED,
+                decision,
+                context,
+                execution_id,
+                policy_ref,
+                time.monotonic() - started,
+                executed=True,
+            )
+        return self._normalize_result(
+            output,
             decision=decision,
-            output=str(output if output is not None else ""),
-            executed=True,
+            context=context,
+            execution_id=execution_id,
+            policy_ref=policy_ref,
+            duration=time.monotonic() - started,
+        )
+
+    def _normalize_result(
+        self,
+        value: Any,
+        *,
+        decision: CommandDecision,
+        context: ExecutionContext,
+        execution_id: str,
+        policy_ref: str,
+        duration: float,
+        executed: bool | None = None,
+    ) -> DispatchResult:
+        return adapt_execution_result(
+            value,
+            request_id=context.request_id,
+            execution_id=execution_id,
+            tool_name=_tool_name(decision.command),
+            max_output_bytes=context.max_output_bytes,
+            default_duration=duration,
+            policy_decision_ref=policy_ref,
+            executed=executed,
+            decision=decision,
+            redact_text=self.facts.redactor.redact_text,
+            redact_data=self.facts.redactor.redact_data,
+        )
+
+    def _exception_result(
+        self,
+        exc: BaseException,
+        status: ExecutionStatus,
+        decision: CommandDecision,
+        context: ExecutionContext,
+        execution_id: str,
+        policy_ref: str,
+        duration: float,
+        *,
+        executed: bool,
+    ) -> DispatchResult:
+        stdout = getattr(exc, "stdout", None)
+        if stdout is None:
+            stdout = getattr(exc, "output", "")
+        stderr = getattr(exc, "stderr", "")
+        return self._normalize_result(
+            {
+                "status": status,
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": getattr(exc, "returncode", None),
+                "error_class": type(exc).__name__,
+                "error_message": str(exc),
+                "partial": bool(stdout or stderr),
+            },
+            decision=decision,
+            context=context,
+            execution_id=execution_id,
+            policy_ref=policy_ref,
+            duration=duration,
+            executed=executed,
         )
 
     def dispatch(
@@ -93,15 +227,23 @@ class PipelineRuntime:
         decision = self.decide(command, facts, executed_keys, context)
         return self.execute(decision, context)
 
-    def parse_output(self, command: str, output: str) -> list[dict[str, Any]]:
-        return self.parser.parse_tool_output(command, output)
+    def parse_output(
+        self,
+        command: str,
+        output: str | ExecutionResult,
+    ) -> list[dict[str, Any]]:
+        if isinstance(output, ExecutionResult):
+            output_text = "\n".join(part for part in (output.stdout, output.stderr) if part)
+        else:
+            output_text = str(output)
+        return self.parser.parse_tool_output(command, output_text)
 
     def ingest_output(
         self,
         scan_id: str,
         host: str,
         command: str,
-        output: str,
+        output: str | ExecutionResult,
         *,
         source: str | None = None,
     ) -> list[dict[str, Any]]:

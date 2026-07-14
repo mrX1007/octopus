@@ -24,6 +24,8 @@ from core.execution import (
     CAP_DIRECT_BINARY,
     CAP_REGISTERED_TOOL,
     ExecutionContext,
+    ExecutionResult,
+    ExecutionStatus,
 )
 
 logger = logging.getLogger("octopus.pipeline")
@@ -967,16 +969,21 @@ class AIPipeline:
         )
         running_store = self._store_fact(scan_id, target, running_fact, audit_cmd)
         dispatch_result = self.runtime.execute(decision, execution_context)
-        output = dispatch_result.output
         self.tools_run_count += 1
         if cmd.startswith("ssh_inventory "):
             self.executed_post_access_commands.add(cmd)
-        output_str = self._output_text(output)
+        output_str = self._output_text(dispatch_result)
         output_hash = self._output_fingerprint(output_str)
-        failed = self._command_failed(output, output_str)
-        facts = self.output_parser.parse_tool_output(cmd, output_str)
+        failed = self._command_failed(dispatch_result, output_str)
+        facts = self.runtime.parse_output(cmd, dispatch_result)
         parsed_output_facts = len(facts)
-        status = self._command_check_status(cmd, output_str, failed, parsed_output_facts)
+        status = self._command_check_status(
+            cmd,
+            output_str,
+            failed,
+            parsed_output_facts,
+            dispatch_result,
+        )
         facts.extend(self._command_end_check_results(audit_cmd, target, decision.key, status, output_str, facts))
         for fact in facts:
             fact.setdefault("source", audit_cmd)
@@ -1118,7 +1125,25 @@ class AIPipeline:
             "confidence": 90 if status in {"completed", "running"} else 80,
         }
 
-    def _command_check_status(self, cmd: str, output_str: str, failed: bool, parsed_output_facts: int) -> str:
+    def _command_check_status(
+        self,
+        cmd: str,
+        output_str: str,
+        failed: bool,
+        parsed_output_facts: int,
+        execution_result: Optional[ExecutionResult] = None,
+    ) -> str:
+        if execution_result is not None:
+            status_map = {
+                ExecutionStatus.FAILED: "failed",
+                ExecutionStatus.TIMEOUT: "timeout",
+                ExecutionStatus.BLOCKED: "blocked",
+                ExecutionStatus.PARTIAL: "partial",
+                ExecutionStatus.UNAVAILABLE: "unavailable",
+                ExecutionStatus.CANCELLED: "cancelled",
+            }
+            if execution_result.status in status_map:
+                return status_map[execution_result.status]
         return self._normalized_check_status(
             cmd,
             "failed" if failed else ("completed" if parsed_output_facts else "completed_empty"),
@@ -2825,6 +2850,16 @@ class AIPipeline:
         exit_code = getattr(output, "exit_code", 0)
         if isinstance(exit_code, int) and exit_code != 0:
             return True
+        if isinstance(output, ExecutionResult):
+            if output.status in {
+                ExecutionStatus.FAILED,
+                ExecutionStatus.TIMEOUT,
+                ExecutionStatus.UNAVAILABLE,
+                ExecutionStatus.CANCELLED,
+            }:
+                return True
+            if output.status is ExecutionStatus.BLOCKED:
+                return False
 
         text = (output_str or "").lower()
         success_markers = (

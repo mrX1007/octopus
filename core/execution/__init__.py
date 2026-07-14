@@ -15,6 +15,12 @@ from core.execution.models import (
     redact_sensitive_command,
 )
 from core.execution.policy import ExecutionPolicy, validate_target
+from core.execution.results import (
+    DispatchResult,
+    ExecutionResult,
+    ExecutionStatus,
+    adapt_execution_result,
+)
 
 __all__ = [
     "CAP_ACTIVE_TOOL",
@@ -23,10 +29,14 @@ __all__ = [
     "CAP_MANAGED_SHELL",
     "CAP_PYTHON_REPL",
     "CAP_REGISTERED_TOOL",
+    "DispatchResult",
     "ExecutionContext",
     "ExecutionDecision",
     "ExecutionPolicy",
+    "ExecutionResult",
+    "ExecutionStatus",
     "ToolInvocation",
+    "adapt_execution_result",
     "bind_execution_context",
     "current_execution_context",
     "redact_sensitive_command",

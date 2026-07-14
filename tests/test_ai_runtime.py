@@ -6,8 +6,8 @@ from pathlib import Path
 
 from core.ai.command_scheduler import CommandDecision
 from core.ai.fact_store import FactStore
-from core.ai.runtime import DispatchResult, PipelineRuntime
-from core.execution import ExecutionContext
+from core.ai.runtime import PipelineRuntime
+from core.execution import ExecutionContext, ExecutionStatus
 
 
 class StubScheduler:
@@ -89,7 +89,8 @@ def test_execute_binds_context_and_hides_raw_output_from_repr(tmp_path: Path):
 
     assert result.executed
     assert calls == [decision.command]
-    assert result.output == f"output:{decision.command}"
+    assert result.output.startswith("output:tool example.com password=[REDACTED secret://")
+    assert "runtime-secret" not in result.output
     assert "runtime-secret" not in result.audit_command
     assert "runtime-secret" not in repr(result)
     assert result.to_audit_dict()["output_bytes"] == len(result.output.encode())
@@ -101,7 +102,11 @@ def test_execute_skip_never_calls_runner(tmp_path: Path):
 
     result = instance.execute(decision, execution_context())
 
-    assert result == DispatchResult(decision=decision, executed=False)
+    assert result.status is ExecutionStatus.BLOCKED
+    assert result.executed is False
+    assert result.output == ""
+    assert result.request_id
+    assert result.execution_id
     assert calls == []
     assert result.to_audit_dict()["output_bytes"] == 0
 
