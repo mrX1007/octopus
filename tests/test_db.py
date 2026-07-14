@@ -14,9 +14,15 @@ import pytest
 class TestGetConnection:
     """Test database connection management."""
 
+    @patch("db.mysql")
     @patch("db._get_db_config")
     @patch("db.MySQLConnectionPool")
-    def test_creates_pool_on_first_call(self, mock_pool_class, mock_config):
+    def test_creates_pool_on_first_call(
+        self,
+        mock_pool_class,
+        mock_config,
+        _mock_mysql,
+    ):
         import db
         db._pool = None  # Reset pool state
         mock_config.return_value = {
