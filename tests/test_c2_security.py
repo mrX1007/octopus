@@ -17,7 +17,6 @@ from core.c2.enrollment import EnrollmentAuthority
 from core.c2.implants.python_implant import generate_python_implant
 from core.c2.key_store import KeyStore
 
-
 pytestmark = [pytest.mark.contract, pytest.mark.slow]
 
 

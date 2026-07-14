@@ -138,19 +138,15 @@ class OctopusPlugin:
         Cleanup after execution.
         Remove temp files, close connections, etc.
         """
-        pass
 
     def on_credential_found(self, credential: dict[str, str]):
         """Called when ANY plugin discovers credentials."""
-        pass
 
     def on_session_opened(self, session: dict[str, str]):
         """Called when ANY plugin opens a new session (SSH, HTTP, etc.)."""
-        pass
 
     def on_vulnerability_confirmed(self, vuln: dict[str, str]):
         """Called when ANY plugin confirms a vulnerability."""
-        pass
 
     @property
     def context(self) -> PluginContext:

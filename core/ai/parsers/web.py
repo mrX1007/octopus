@@ -109,7 +109,7 @@ class WebParser(BaseParser):
         if "js_route_extract" in tool or "[js route extract" in lower:
             for line in raw.splitlines():
                 line = line.strip()
-                if not line or line.startswith("[") or line.startswith("Routes:"):
+                if not line or line.startswith(("[", "Routes:")):
                     continue
                 if line.startswith(("http://", "https://", "/")):
                     facts.append(fact("js_route", line[:300], 75, session_id))

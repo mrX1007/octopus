@@ -1316,7 +1316,7 @@ class RegexParser:
         if "js_route_extract" in tool_lower or "[js route extract" in raw_lower:
             for line in raw_output.splitlines():
                 line = line.strip()
-                if not line or line.startswith("[") or line.startswith("Routes:"):
+                if not line or line.startswith(("[", "Routes:")):
                     continue
                 if line.startswith(("http://", "https://", "/")):
                     facts.append({"type": "js_route", "value": line[:300], "confidence": 75, "session_id": session_id})

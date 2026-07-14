@@ -76,12 +76,10 @@ def _atomic_write_json(path: str, payload: dict) -> None:
 
 class AlreadyRunningError(Exception):
     """Raised when another OCTOPUS instance is already running."""
-    pass
 
 
 class SubsystemCrashError(Exception):
     """Raised when a monitored subsystem crashes."""
-    pass
 
 
 # ─── Subsystem Registry ─────────────────────────────────

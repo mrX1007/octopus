@@ -13,7 +13,6 @@ import pytest
 from core.plugins.base import CheckResult, PluginContext, PluginResult
 from core.secrets import is_secret_ref, reset_default_secret_store_for_tests
 
-
 pytestmark = pytest.mark.integration
 
 

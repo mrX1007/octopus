@@ -43,8 +43,9 @@ def test_recon_worker_captures_child_output_and_returns_data(monkeypatch):
     assert "NMAP DATA" in result["raw_scan"]
     assert "child UI output" in result["worker_output"]
     assert calls[0][1]["stdin"] is octopus.subprocess.DEVNULL
-    assert calls[0][1]["stdout"] is octopus.subprocess.PIPE
-    assert calls[0][1]["stderr"] is octopus.subprocess.PIPE
+    assert calls[0][1]["capture_output"] is True
+    assert "stdout" not in calls[0][1]
+    assert "stderr" not in calls[0][1]
 
 
 def test_parallel_recon_keeps_pipeline_prompts_and_persistence_on_main(monkeypatch):

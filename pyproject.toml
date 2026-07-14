@@ -26,10 +26,17 @@ extend-exclude = [
 
 [tool.ruff.lint]
 select = [
-    "F601",
-    "F821",
-    "F822",
-    "F823",
+    "E4",
+    "E7",
+    "E9",
+    "F",
+    "I",
+    "B",
+    "UP",
+    "SIM",
+    "C4",
+    "PIE",
+    "RUF",
 ]
 ignore = [
     "E501",
@@ -46,10 +53,15 @@ ignore_missing_imports = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 follow_imports = "skip"
+explicit_package_bases = true
 files = [
+    "core/execution",
+    "core/plugins",
+    "core/secrets.py",
+    "core/credentials.py",
     "core/tools/targeting.py",
-    "core/plugins/loader.py",
     "core/ai/runtime.py",
+    "core/ai/command_scheduler.py",
 ]
 exclude = [
     "venv/",

@@ -104,7 +104,6 @@ class Transport(ABC):
         Perform the actual HTTP request.
         Returns: {"status_code": int, "headers": dict, "body": str, "error": str}
         """
-        pass
 
     def request(self, method: str, url: str,
                 headers: Optional[dict[str, str]] = None,
