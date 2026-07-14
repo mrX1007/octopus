@@ -1,0 +1,5 @@
+# Platform-specific Python dependencies.
+#
+# The baseline has no unconditional platform-only wheel. Keep platform and
+# native tool installation in deployment profiles instead of hiding it in the
+# hermetic Python test environment.

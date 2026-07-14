@@ -14,6 +14,9 @@ from core.plugins.base import CheckResult, PluginContext, PluginResult
 from core.secrets import is_secret_ref, reset_default_secret_store_for_tests
 
 
+pytestmark = pytest.mark.integration
+
+
 @pytest.fixture(autouse=True)
 def _isolated_secret_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     reset_default_secret_store_for_tests()

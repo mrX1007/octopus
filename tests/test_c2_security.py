@@ -5,6 +5,7 @@ import os
 import struct
 import sys
 
+import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -15,6 +16,9 @@ from core.c2.db_backend import C2Database
 from core.c2.enrollment import EnrollmentAuthority
 from core.c2.implants.python_implant import generate_python_implant
 from core.c2.key_store import KeyStore
+
+
+pytestmark = [pytest.mark.contract, pytest.mark.slow]
 
 
 def test_enrollment_token_is_authenticated_expiring_and_single_use(tmp_path):

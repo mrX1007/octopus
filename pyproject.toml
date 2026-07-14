@@ -1,7 +1,16 @@
 [tool.pytest.ini_options]
-addopts = "-ra"
+addopts = "-ra --strict-markers"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+markers = [
+    "unit: hermetic in-process test with no service, subprocess, or platform dependency",
+    "contract: hermetic compatibility or serialization/protocol boundary test",
+    "integration: test crossing a process or component boundary",
+    "slow: intentionally expensive test excluded from the fast suite",
+    "external_tools: requires a separately installed scanner, browser, or service integration",
+    "mysql: requires a live MariaDB/MySQL service and the optional connector profile",
+    "platform: depends on a specific operating system or platform facility",
+]
 filterwarnings = [
     "default",
 ]

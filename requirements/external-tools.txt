@@ -1,0 +1,7 @@
+# Optional Python integrations for external services and browser tooling.
+# Native scanner binaries (nmap, nuclei, ffuf, etc.) are intentionally not
+# installed by pip and remain deployment-managed dependencies.
+scrapling>=0.2.0
+primp>=0.6.0
+shodan>=1.31.0
+patchright>=1.49.0

@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Tests for db.py — CRUD operations, connection pool, transactions."""
 
+import subprocess
+import sys
+import textwrap
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -38,6 +42,53 @@ class TestGetConnection:
         with pytest.raises(RuntimeError, match="No config"):
             db.get_connection()
         db._pool = None
+
+    @pytest.mark.contract
+    @pytest.mark.integration
+    def test_import_is_safe_without_optional_mysql_connector(self):
+        project_root = Path(__file__).resolve().parents[1]
+        script = textwrap.dedent(
+            f"""
+            import importlib.abc
+            import sys
+
+            class BlockMysql(importlib.abc.MetaPathFinder):
+                def find_spec(self, fullname, path=None, target=None):
+                    if fullname == "mysql" or fullname.startswith("mysql."):
+                        raise ModuleNotFoundError(
+                            "blocked optional mysql dependency", name=fullname
+                        )
+                    return None
+
+            sys.meta_path.insert(0, BlockMysql())
+            sys.path.insert(0, {str(project_root)!r})
+
+            import db
+
+            assert db.mysql is None
+            db._get_db_config = lambda: {{
+                "host": "localhost",
+                "user": "octopus",
+                "password": "unused",
+                "database": "octopus",
+            }}
+            try:
+                db.get_connection()
+            except RuntimeError as exc:
+                assert "requirements/mysql.txt" in str(exc)
+            else:
+                raise AssertionError("optional MySQL profile did not fail explicitly")
+            """
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
 
 
 class TestTransaction:

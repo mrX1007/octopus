@@ -13,6 +13,24 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+_TEST_TAXONOMY = {
+    "unit",
+    "contract",
+    "integration",
+    "slow",
+    "external_tools",
+    "mysql",
+    "platform",
+}
+
+
+def pytest_collection_modifyitems(items):
+    """Give otherwise-unclassified hermetic tests the explicit unit marker."""
+    for item in items:
+        if not any(item.get_closest_marker(name) for name in _TEST_TAXONOMY):
+            item.add_marker(pytest.mark.unit)
+
+
 # ─── Sample Data Fixtures ───────────────────────────────
 
 @pytest.fixture

@@ -5,8 +5,17 @@ from contextlib import contextmanager, suppress
 from datetime import datetime
 from typing import Any, Optional, TypedDict
 
-import mysql.connector
-from mysql.connector.pooling import MySQLConnectionPool
+try:
+    import mysql.connector
+    from mysql.connector.pooling import MySQLConnectionPool
+except ModuleNotFoundError as exc:
+    # MariaDB/MySQL persistence is an optional deployment profile.  Keep the
+    # module importable for unrelated unit tests and non-DB commands, while
+    # still failing explicitly when a real DB connection is requested.
+    if exc.name not in {"mysql", "mysql.connector", "mysql.connector.pooling"}:
+        raise
+    mysql = None
+    MySQLConnectionPool = None
 
 from core.secrets import redact_data, redact_text
 
@@ -56,6 +65,11 @@ def get_connection():
     global _pool
     if _pool is None:
         db_cfg = _get_db_config()
+        if mysql is None or MySQLConnectionPool is None:
+            raise RuntimeError(
+                "MySQL persistence is unavailable. Install the optional "
+                "requirements/mysql.txt dependency group."
+            )
         try:
             _pool = MySQLConnectionPool(
                 pool_name="octopus",
