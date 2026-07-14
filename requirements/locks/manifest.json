@@ -1,0 +1,345 @@
+{
+  "$schema": "manifest.schema.json",
+  "epoch": "2026-07-14T00:00:00Z",
+  "input_sha256": {
+    "requirements/dev.txt": "67ba764c72fcbad97e2bd687371c1b462dc8e3537daaaaecda95a5cfbaa494b3",
+    "requirements/external-tools.txt": "4d59d9030ceef550700be72311687db581cbc7abd0ac0de49e346c3590573e0b",
+    "requirements/mysql.txt": "ee13193d052b37794b643c026f4d0a7a686f884f2348b7f55b57ff6ea070051e",
+    "requirements/platform.txt": "f8612a8647ddd632f45fa41a33cab657c07b244ff8bae6bdf7d1b1b52bd2bbc7",
+    "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+  },
+  "locks": [
+    {
+      "input_sha256": {
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp39/runtime.txt",
+      "profile": "runtime",
+      "sha256": "1a1ab42e62f58a08f06bb6f80a3665a10596d529cf2aa330cb250ad96d812c9a",
+      "target": "cp39"
+    },
+    {
+      "input_sha256": {
+        "requirements/dev.txt": "67ba764c72fcbad97e2bd687371c1b462dc8e3537daaaaecda95a5cfbaa494b3",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp39/test.txt",
+      "profile": "test",
+      "sha256": "125f4adc54519366b673f8f63461d8044cd3939846e963d67fdc8da121d6d2a9",
+      "target": "cp39"
+    },
+    {
+      "input_sha256": {
+        "requirements/mysql.txt": "ee13193d052b37794b643c026f4d0a7a686f884f2348b7f55b57ff6ea070051e",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp39/mysql.txt",
+      "profile": "mysql",
+      "sha256": "60bf563c890bac0862ac73fde85a929ad9e4f8d065c785d424b816f82f030168",
+      "target": "cp39"
+    },
+    {
+      "input_sha256": {
+        "requirements/external-tools.txt": "4d59d9030ceef550700be72311687db581cbc7abd0ac0de49e346c3590573e0b",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp39/external-tools.txt",
+      "profile": "external-tools",
+      "sha256": "c59936f0db3d6512dc80f22817d72e2cf834c40dd3216d54a87bf42bc95722c7",
+      "target": "cp39"
+    },
+    {
+      "input_sha256": {
+        "requirements/platform.txt": "f8612a8647ddd632f45fa41a33cab657c07b244ff8bae6bdf7d1b1b52bd2bbc7",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp39/platform.txt",
+      "profile": "platform",
+      "sha256": "93197ea7ab95bbfb1fd30c94fa8cff9dd9059e89e2a1dfb85b94f5aef3946ece",
+      "target": "cp39"
+    },
+    {
+      "input_sha256": {
+        "requirements/dev.txt": "67ba764c72fcbad97e2bd687371c1b462dc8e3537daaaaecda95a5cfbaa494b3",
+        "requirements/external-tools.txt": "4d59d9030ceef550700be72311687db581cbc7abd0ac0de49e346c3590573e0b",
+        "requirements/mysql.txt": "ee13193d052b37794b643c026f4d0a7a686f884f2348b7f55b57ff6ea070051e",
+        "requirements/platform.txt": "f8612a8647ddd632f45fa41a33cab657c07b244ff8bae6bdf7d1b1b52bd2bbc7",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp39/full.txt",
+      "profile": "full",
+      "sha256": "0380754ee1b448fe945e245fbaa1156f556600685774379228df6c9770b7b63b",
+      "target": "cp39"
+    },
+    {
+      "input_sha256": {
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp310/runtime.txt",
+      "profile": "runtime",
+      "sha256": "477bde9a3d244da5ced6a8b17890772b660ec756b37780bf49f02b98f5f465f3",
+      "target": "cp310"
+    },
+    {
+      "input_sha256": {
+        "requirements/dev.txt": "67ba764c72fcbad97e2bd687371c1b462dc8e3537daaaaecda95a5cfbaa494b3",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp310/test.txt",
+      "profile": "test",
+      "sha256": "c8955d1c83ee7e8944e96b637a609141ae78eb19898c248195785b7232310f8d",
+      "target": "cp310"
+    },
+    {
+      "input_sha256": {
+        "requirements/mysql.txt": "ee13193d052b37794b643c026f4d0a7a686f884f2348b7f55b57ff6ea070051e",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp310/mysql.txt",
+      "profile": "mysql",
+      "sha256": "f0cae2ccb70f43e0332474b51bb7cf320fc5f5f96d793f0143d8df6e033240c8",
+      "target": "cp310"
+    },
+    {
+      "input_sha256": {
+        "requirements/external-tools.txt": "4d59d9030ceef550700be72311687db581cbc7abd0ac0de49e346c3590573e0b",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp310/external-tools.txt",
+      "profile": "external-tools",
+      "sha256": "293ec066acbd80a143cd226100e4e008229c44650b4c56fc050939c5ec04a129",
+      "target": "cp310"
+    },
+    {
+      "input_sha256": {
+        "requirements/platform.txt": "f8612a8647ddd632f45fa41a33cab657c07b244ff8bae6bdf7d1b1b52bd2bbc7",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp310/platform.txt",
+      "profile": "platform",
+      "sha256": "26d1696b7122de01a8853c382a16d7a63ad7f6d0f1cce94eb884a3ef9aadcec7",
+      "target": "cp310"
+    },
+    {
+      "input_sha256": {
+        "requirements/dev.txt": "67ba764c72fcbad97e2bd687371c1b462dc8e3537daaaaecda95a5cfbaa494b3",
+        "requirements/external-tools.txt": "4d59d9030ceef550700be72311687db581cbc7abd0ac0de49e346c3590573e0b",
+        "requirements/mysql.txt": "ee13193d052b37794b643c026f4d0a7a686f884f2348b7f55b57ff6ea070051e",
+        "requirements/platform.txt": "f8612a8647ddd632f45fa41a33cab657c07b244ff8bae6bdf7d1b1b52bd2bbc7",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp310/full.txt",
+      "profile": "full",
+      "sha256": "963efb6a962968338373cf07e4180e193e10162cc66cb5248792914a243faf82",
+      "target": "cp310"
+    },
+    {
+      "input_sha256": {
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp311/runtime.txt",
+      "profile": "runtime",
+      "sha256": "214ea7c035e9fde6cb27edac25c07de5c29181c70ab33da9c7eff526b7be9b64",
+      "target": "cp311"
+    },
+    {
+      "input_sha256": {
+        "requirements/dev.txt": "67ba764c72fcbad97e2bd687371c1b462dc8e3537daaaaecda95a5cfbaa494b3",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp311/test.txt",
+      "profile": "test",
+      "sha256": "c2d273e99eba3ee14fca80a029c8e7b01363ccc7cc9a6b6c3278a7f4c9f5f68f",
+      "target": "cp311"
+    },
+    {
+      "input_sha256": {
+        "requirements/mysql.txt": "ee13193d052b37794b643c026f4d0a7a686f884f2348b7f55b57ff6ea070051e",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp311/mysql.txt",
+      "profile": "mysql",
+      "sha256": "afe3ad17b800c2c04a22ab4b95940237d5137224ebfe2ae0e03d2b7ad30bea09",
+      "target": "cp311"
+    },
+    {
+      "input_sha256": {
+        "requirements/external-tools.txt": "4d59d9030ceef550700be72311687db581cbc7abd0ac0de49e346c3590573e0b",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp311/external-tools.txt",
+      "profile": "external-tools",
+      "sha256": "3d7c4dc12d6a84ad13e69b91fd964ea9d30f14391ba8fa7bc1e72d50bcc555de",
+      "target": "cp311"
+    },
+    {
+      "input_sha256": {
+        "requirements/platform.txt": "f8612a8647ddd632f45fa41a33cab657c07b244ff8bae6bdf7d1b1b52bd2bbc7",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp311/platform.txt",
+      "profile": "platform",
+      "sha256": "55862645089a4d2ea9a9c21e7a8261d1987b36551e20c0958a788ce397b9a25c",
+      "target": "cp311"
+    },
+    {
+      "input_sha256": {
+        "requirements/dev.txt": "67ba764c72fcbad97e2bd687371c1b462dc8e3537daaaaecda95a5cfbaa494b3",
+        "requirements/external-tools.txt": "4d59d9030ceef550700be72311687db581cbc7abd0ac0de49e346c3590573e0b",
+        "requirements/mysql.txt": "ee13193d052b37794b643c026f4d0a7a686f884f2348b7f55b57ff6ea070051e",
+        "requirements/platform.txt": "f8612a8647ddd632f45fa41a33cab657c07b244ff8bae6bdf7d1b1b52bd2bbc7",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp311/full.txt",
+      "profile": "full",
+      "sha256": "bedb149d8e91a2970885ba1d615ab18c4d39d7180887241f1d8db083d66e77dc",
+      "target": "cp311"
+    },
+    {
+      "input_sha256": {
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp312/runtime.txt",
+      "profile": "runtime",
+      "sha256": "96edc265684241254010051baa2923bfdeed615076d921699b993ce1a3270ec0",
+      "target": "cp312"
+    },
+    {
+      "input_sha256": {
+        "requirements/dev.txt": "67ba764c72fcbad97e2bd687371c1b462dc8e3537daaaaecda95a5cfbaa494b3",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp312/test.txt",
+      "profile": "test",
+      "sha256": "b48699c12923a7087127ab953519fa339efc9f98bae629fe5bb044ee304cd8fb",
+      "target": "cp312"
+    },
+    {
+      "input_sha256": {
+        "requirements/mysql.txt": "ee13193d052b37794b643c026f4d0a7a686f884f2348b7f55b57ff6ea070051e",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp312/mysql.txt",
+      "profile": "mysql",
+      "sha256": "ddce67b6411500880a3652310d41eeb9c3f2577cf7e661ef3f077e881421e8a8",
+      "target": "cp312"
+    },
+    {
+      "input_sha256": {
+        "requirements/external-tools.txt": "4d59d9030ceef550700be72311687db581cbc7abd0ac0de49e346c3590573e0b",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp312/external-tools.txt",
+      "profile": "external-tools",
+      "sha256": "ccce8e5776199ad0786875270913506c2a920c0c4eaa10ff3be6042481a5e27b",
+      "target": "cp312"
+    },
+    {
+      "input_sha256": {
+        "requirements/platform.txt": "f8612a8647ddd632f45fa41a33cab657c07b244ff8bae6bdf7d1b1b52bd2bbc7",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp312/platform.txt",
+      "profile": "platform",
+      "sha256": "e2ed45510609210d0c5ddf69d681f60b67058e0d6972eac7aeca7c19d7d4e51a",
+      "target": "cp312"
+    },
+    {
+      "input_sha256": {
+        "requirements/dev.txt": "67ba764c72fcbad97e2bd687371c1b462dc8e3537daaaaecda95a5cfbaa494b3",
+        "requirements/external-tools.txt": "4d59d9030ceef550700be72311687db581cbc7abd0ac0de49e346c3590573e0b",
+        "requirements/mysql.txt": "ee13193d052b37794b643c026f4d0a7a686f884f2348b7f55b57ff6ea070051e",
+        "requirements/platform.txt": "f8612a8647ddd632f45fa41a33cab657c07b244ff8bae6bdf7d1b1b52bd2bbc7",
+        "requirements/runtime.txt": "7cbcd12a231b83e46bdfcbe1e8c73830e835a66bce6414adf79cf7b690f1168c"
+      },
+      "path": "requirements/locks/linux-x86_64/cp312/full.txt",
+      "profile": "full",
+      "sha256": "dcaa0639c4eee0e0471246dec4822e31b3a1fc761e83a93c8bda57bec68e824b",
+      "target": "cp312"
+    }
+  ],
+  "policy": {
+    "allow_direct_references": false,
+    "require_hashes": true,
+    "sdist_policy": {
+      "allowlist_by_profile": {
+        "external-tools": [
+          "shodan"
+        ],
+        "full": [
+          "shodan"
+        ],
+        "mysql": [],
+        "platform": [],
+        "runtime": [],
+        "test": []
+      },
+      "default": "deny"
+    }
+  },
+  "profiles": {
+    "external-tools": [
+      "requirements/runtime.txt",
+      "requirements/external-tools.txt"
+    ],
+    "full": [
+      "requirements/runtime.txt",
+      "requirements/dev.txt",
+      "requirements/mysql.txt",
+      "requirements/external-tools.txt",
+      "requirements/platform.txt"
+    ],
+    "mysql": [
+      "requirements/runtime.txt",
+      "requirements/mysql.txt"
+    ],
+    "platform": [
+      "requirements/runtime.txt",
+      "requirements/platform.txt"
+    ],
+    "runtime": [
+      "requirements/runtime.txt"
+    ],
+    "test": [
+      "requirements/runtime.txt",
+      "requirements/dev.txt"
+    ]
+  },
+  "resolver": {
+    "index": "https://pypi.org/simple",
+    "name": "uv",
+    "version": "0.11.28"
+  },
+  "schema_version": 1,
+  "state": "resolved",
+  "targets": [
+    {
+      "implementation": "cpython",
+      "platform": "linux-x86_64",
+      "python_platform": "x86_64-manylinux_2_34",
+      "python_version": "3.9",
+      "tag": "cp39"
+    },
+    {
+      "implementation": "cpython",
+      "platform": "linux-x86_64",
+      "python_platform": "x86_64-manylinux_2_34",
+      "python_version": "3.10",
+      "tag": "cp310"
+    },
+    {
+      "implementation": "cpython",
+      "platform": "linux-x86_64",
+      "python_platform": "x86_64-manylinux_2_34",
+      "python_version": "3.11",
+      "tag": "cp311"
+    },
+    {
+      "implementation": "cpython",
+      "platform": "linux-x86_64",
+      "python_platform": "x86_64-manylinux_2_34",
+      "python_version": "3.12",
+      "tag": "cp312"
+    }
+  ]
+}

@@ -10,10 +10,10 @@ lifecycle.
 
 | Job | Contract |
 |---|---|
-| `import-smoke` | Fresh Python 3.9 environment installs only `requirements/runtime.txt`, runs `pip check`, then imports the main first-party runtime boundaries with isolated Python startup. Optional MySQL and external-tool profiles are not installed. |
-| `static-analysis` | Installs `requirements/test.txt`, then uses the repository's configured Ruff and mypy scopes and compiles first-party Python sources. |
-| `fast-tests` | Runs the hermetic unit/contract selector on Python 3.9, 3.10, 3.11, and 3.12. This matrix is the evidence needed to promote the compatibility candidates documented in `environment-matrix.md`. |
-| `full-suite` | Runs the complete suite on the certified Python 3.9 baseline with branch coverage over all first-party Python except tests, generated data, the local venv, and vendor submodules. |
+| `import-smoke` | Validates the lock manifest offline, installs only the hashed `cp39/runtime.txt` lock, runs `pip check`, then imports the main first-party runtime boundaries with isolated Python startup. Optional MySQL and external-tool profiles are not installed. |
+| `static-analysis` | Validates all locks offline, installs the hashed `cp39/test.txt` lock, then uses the repository's configured Ruff and mypy scopes and compiles first-party Python sources. |
+| `fast-tests` | Validates all locks offline, installs the matching `cp39`, `cp310`, `cp311`, or `cp312` test lock, and runs the hermetic selector on Python 3.9–3.12. |
+| `full-suite` | Validates all locks offline, installs the hashed `cp39/test.txt` lock, then runs the complete suite with branch coverage over every first-party Python file except the documented non-production trees. |
 | `c2-go` | Uses Go 1.21, rejects non-`gofmt` source, verifies downloaded modules, and runs `go test`, `go vet`, and a clean `go build` in `core/c2`. |
 | `vendor-integrity` | Recursively checks out submodules and verifies parent gitlinks, checked-out commits, clean submodule worktrees, tracked artifact paths, and SHA-256 digests. Vendor code is never imported or executed by the verifier. |
 
@@ -22,6 +22,24 @@ and checks out submodules recursively with persisted GitHub credentials
 disabled. CI has read-only repository permissions. Moving to another Ubuntu
 image requires regenerating and validating the corresponding dependency locks
 instead of silently following `ubuntu-latest`.
+
+## Python dependency lock enforcement
+
+The Linux CI installation boundary is immutable and fail-closed:
+
+1. `python scripts/lock_requirements.py validate` runs before any dependency
+   installation and checks the manifest, source-input digests, target/profile
+   matrix, lock-file digests, hash coverage, and lock policy without network
+   access;
+2. pip installs the job's target-specific file with `--require-hashes`;
+3. `pip check` verifies the installed distribution graph.
+
+The import smoke uses only `linux-x86_64/cp39/runtime.txt`. Static analysis and
+the complete suite use `linux-x86_64/cp39/test.txt`. The fast matrix maps Python
+3.9, 3.10, 3.11, and 3.12 to `cp39`, `cp310`, `cp311`, and `cp312` respectively.
+CI intentionally does not install the `full`, `external-tools`, `mysql`, or
+`platform` locks in these hermetic jobs. Range-based requirement profiles remain
+human-maintained resolver inputs; they are not used as CI installation inputs.
 
 ## Coverage regression gate
 
@@ -70,18 +88,15 @@ python -I scripts/quality/verify_vendor.py --platform all --allow-dirty
 
 CI deliberately omits `--allow-dirty`.
 
-## Known dependency-lock gap
+## Remaining dependency-lock gap
 
-Python requirement profiles still contain version ranges and are not a
-transitive hash lock. `core/c2/go.mod` pins direct module versions, but the
-repository currently has no reviewed `core/c2/go.sum`. `go mod download` and
-`go mod verify` therefore validate the modules obtained by the Linux runner,
-but they do not replace a committed checksum lock.
-
-Do not manufacture either lock from incomplete local packages. Generate and
-review Python constraints/hashes and `go.sum` on a trusted networked build host,
-then switch installs and Go commands to immutable/readonly mode in a separate
-logical change.
+The Python Linux CI gap is closed by the reviewed target-specific locks,
+offline manifest validation, and hash-required installs. Go remains unresolved:
+`core/c2/go.mod` pins direct module versions, but the repository has no reviewed
+`core/c2/go.sum`. `go mod download` and `go mod verify` validate the modules
+obtained by the Linux runner, but they do not replace a committed checksum lock.
+Generate and review `go.sum` on a trusted Go 1.21 host, then switch Go commands
+to immutable/readonly mode in a separate logical change.
 
 ## Local commands
 
@@ -89,6 +104,7 @@ logical change.
 venv/bin/python -m pytest -q tests/test_vendor_verification.py
 venv/bin/python -m ruff check scripts/quality tests/test_vendor_verification.py
 venv/bin/python -m mypy
+python scripts/lock_requirements.py validate
 venv/bin/python scripts/quality/coverage_gate.py --root . --fail-under 42.70
 python -I scripts/quality/import_smoke.py
 python -I scripts/quality/verify_vendor.py --platform all --allow-dirty
