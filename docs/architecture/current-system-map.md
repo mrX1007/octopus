@@ -88,7 +88,7 @@ decision and execution (`core/ai/runtime.py:86-94`); callers must invoke
 ### Actual production ownership
 
 `AIPipeline.__init__()` constructs one `PipelineRuntime` and exposes aliases to
-its facts, scheduler, parser, and reporter (`core/ai/pipeline.py:38-55`). No
+its facts, missions, scheduler, parser, and reporter. No
 second `PipelineRuntime` is constructed in production. The actual task command
 path calls `runtime.decide()` and `runtime.execute()`, then invokes the aliased
 parser and writes facts itself (`core/ai/pipeline.py:944-1022`). Its `_store_fact`
@@ -103,14 +103,15 @@ Consequently:
 | Context-bound command execution | `PipelineRuntime.execute()` | `AIPipeline._run_task_commands()` | no direct durable write |
 | Output parsing | `PipelineRuntime.parse_output()` | `AIPipeline` calls the shared `OutputParser` alias directly | no |
 | Fact ingestion | `PipelineRuntime.ingest_output()` | `AIPipeline._store_fact()` and explicit command-result writes | `FactStore` SQLite |
+| Mission/task lifecycle | `MissionStore` owned by `PipelineRuntime` | `ScanLifecycle` and `AIPipeline` compatibility facades | mission/task/attempt tables plus incremental provenance in FactStore SQLite |
 | Decide/execute facade | `PipelineRuntime.dispatch()` | tests/contracts; not the production scan loop | none directly |
 
-The main pipeline itself is stateful. It resets per-scan collections and
-counters in `core/ai/pipeline.py:60-87`; parses/stores initial raw output in
-`core/ai/pipeline.py:88-115`; resolves state and context, invokes director and
-planner, and enforces anti-loop checks in `core/ai/pipeline.py:174-225`; then
-runs discovery, verification, analysis, and final state resolution in
-`core/ai/pipeline.py:237-392`.
+The main pipeline itself is stateful. It resets per-run compatibility
+collections, then hydrates them from `MissionStore` and FactStore command
+records. Persisted pending/interrupted tasks are topologically drained before
+new Director/Planner decisions. The loop then parses initial input, resolves
+state/context, enforces anti-loop and budget checks, runs discovery,
+verification, and analysis, and finally resolves state.
 
 ### Pipeline read/write inventory
 
@@ -118,8 +119,8 @@ runs discovery, verification, analysis, and final state resolution in
 |---|---|---|---|
 | Initial ingest | raw reconnaissance text, parser configuration | normalized facts | `data/facts.db` by default |
 | Context construction | facts, resolved state, target, tool availability | in-memory `TargetModel`, `AssetGraph`, surface/risk context | none |
-| Mission decision | bounded facts/context and LLM response | in-memory goal/plan and decision trace | trace/report writes later |
-| Task execution | plan, tool availability, scheduler decision, `ExecutionContext` | subprocess/tool result, command-result record, facts | fact store plus tool-owned stores/files |
+| Mission decision | durable resume queue or bounded facts/context and LLM response | topologically ordered plan and decision trace; registered durable tasks | mission tables; trace/report writes later |
+| Task execution | plan, dependencies, tool availability, scheduler decision, `ExecutionContext` | subprocess/tool result, command-result record, facts, incremental attempt provenance, terminal attempt | fact and mission tables plus tool-owned stores/files |
 | Final adaptation | facts, hypotheses, resolved state | legacy result dict and evidence-backed reporting fields | MariaDB/files in `octopus.py` |
 
 The pipeline’s result adapter reads facts/hypotheses and builds legacy
@@ -454,6 +455,7 @@ corresponding completed rows after reading them
 | Data | Current owner/writer | Default location | Main readers |
 |---|---|---|---|
 | facts, observations, hypotheses, command results | `FactStore` | `data/facts.db` | pipeline, state, context, reporting, replay |
+| AI missions, planner tasks, dependencies, attempts | `MissionStore` | same SQLite file as `FactStore` | scan recovery, pipeline compatibility views, trace reporting |
 | encrypted secrets/references | `SecretStore` | `data/secrets.db` plus key file | fact redactor, credentials, memory |
 | scan/session legacy rows | `db.py` | configured MariaDB | octopus resume/report/export |
 | semantic graph | `KnowledgeGraph` | `data/knowledge.db` | credential and graph consumers |
@@ -534,7 +536,8 @@ architecture proposal.
    only its decision/execution half and directly performs parse/ingest.
 2. Strategic task mapping and executable function registration are separate
    registries with different identifiers and availability semantics.
-3. `FactStore`, MariaDB session tables, `KnowledgeGraph`, exploit intelligence,
+3. `FactStore` and `MissionStore` share a file but retain ordered, separate
+   transactions; MariaDB session tables, `KnowledgeGraph`, exploit intelligence,
    vector memory, and C2 each have independent schema/lifecycle/transaction
    boundaries.
 4. `AssetGraph` is an ephemeral facts projection; `KnowledgeGraph` is durable

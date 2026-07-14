@@ -9,11 +9,21 @@ from urllib.parse import urljoin, urlparse, urlunparse
 
 from core.ai.capability_assessment import CapabilityResolver
 from core.ai.context_builder import ContextBuilder
+from core.ai.credential_sync import RuntimeCredentialSynchronizer
 from core.ai.director import DirectorLLM
 from core.ai.evidence import EvidenceVerifier
+from core.ai.mission_store import TaskDependenciesIncomplete
+from core.ai.outcomes import InMemoryTaskOutcomeStore, TaskOutcome
+from core.ai.pipeline_telemetry import (
+    append_command_trace,
+    append_goal_trace,
+    persist_llm_health,
+    print_efficiency_report,
+)
 from core.ai.planner import MissionPlanCompiler, MissionPlanner
 from core.ai.policy import DeterministicPolicy
 from core.ai.runtime import PipelineRuntime
+from core.ai.scan_loop import ToolBudgetReached
 from core.ai.state_resolver import StateResolver
 from core.ai.task_agents import AnalysisAgent, DiscoveryAgent, VerificationAgent
 from core.ai.tool_registry import ToolRegistry
@@ -38,6 +48,7 @@ class AIPipeline:
     def __init__(self, db_path: str = "data/facts.db"):
         self.runtime = PipelineRuntime(db_path, runner=lambda command: run_arbitrary_cmd(command))
         self.fact_store = self.runtime.facts
+        self.mission_store = self.runtime.missions
         self.command_scheduler = self.runtime.scheduler
         self.state_resolver = StateResolver(self.fact_store)
         self.tool_registry = ToolRegistry()
@@ -62,6 +73,7 @@ class AIPipeline:
         self.discovery_agent = DiscoveryAgent(self.tool_registry)
         self.analysis_agent = AnalysisAgent(self.fact_store, self.context_builder)
         self.verification_agent = VerificationAgent(self.tool_registry, self.evidence_verifier)
+        self.credential_synchronizer = RuntimeCredentialSynchronizer(logger=logger)
 
         self.MAX_CONSECUTIVE_LLM_FAILURES = 3
         self._reset_runtime_state()
@@ -82,6 +94,11 @@ class AIPipeline:
         self.task_outcomes = []
         self.failed_commands = []
         self.no_fact_tasks = []
+        self.task_outcome_store = InMemoryTaskOutcomeStore(
+            self.task_outcomes,
+            self.failed_commands,
+            self.no_fact_tasks,
+        )
         self.executed_followup_commands = set()
         self.executed_active_commands = set()
         self.executed_post_access_commands = set()
@@ -94,6 +111,11 @@ class AIPipeline:
 
         # LLM health tracking
         self.consecutive_llm_failures = 0
+        self.mission_id = None
+        self._active_task_attempt_id = None
+        self._mission_was_completed = False
+        self._mission_stop_reason = ""
+        self._max_tools_budget = None
 
     def run_scan(self, scan_id: str, target: str, max_iterations: int = 0, max_tools: int = 0, max_time_minutes: int = 0, raw_scan: str = ""):
         from core.ai.scan_loop import ScanLifecycle
@@ -107,6 +129,336 @@ class AIPipeline:
             max_time_minutes,
             raw_scan,
         )
+
+    def _start_mission(self, scan_id: str, target: str):
+        """Open or recover one durable mission and rebuild compatibility views."""
+        mission = self.mission_store.open_mission(scan_id, target, recover=True)
+        self.mission_id = mission.mission_id
+        self._mission_was_completed = mission.status == "completed"
+        snapshot = self.mission_store.snapshot(mission.mission_id)
+
+        for task_record in snapshot.tasks:
+            if task_record.attempt_count:
+                self.task_history.append(f"{task_record.agent}:{task_record.task}")
+            if task_record.status == "blocked":
+                self.blocked_tasks.add(task_record.task)
+            elif task_record.status in {
+                "completed",
+                "failed",
+                "no_new_facts",
+                "skipped",
+            }:
+                self.completed_tasks.add(task_record.task)
+
+        for attempt in snapshot.attempts:
+            if attempt.outcome is None:
+                continue
+            self.task_outcome_store.record(attempt.outcome)
+        facts = self.fact_store.get_facts(scan_id, target)
+        command_results = self.fact_store.get_command_results(scan_id, target)
+        self.total_new_facts = len(facts)
+        durable_execution_ids = {
+            execution_id
+            for attempt in snapshot.attempts
+            for execution_id in attempt.execution_ids
+            if execution_id
+        }
+        durable_execution_ids.update(
+            str(result.get("execution_id"))
+            for result in command_results
+            if result.get("execution_id")
+        )
+        durable_tool_count = len(durable_execution_ids) + sum(
+            1 for result in command_results if not result.get("execution_id")
+        )
+        self.tools_run_count = max(self.tools_run_count, durable_tool_count)
+        self.executed_command_keys.update(
+            str(result.get("command_key"))
+            for result in command_results
+            if result.get("command_key")
+        )
+        for fact in facts:
+            if fact.get("type") != "check_result":
+                continue
+            try:
+                check = json.loads(str(fact.get("value") or ""))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            if isinstance(check, dict) and check.get("command_key"):
+                self.executed_command_keys.add(str(check["command_key"]))
+        return mission
+
+    def _register_mission_plan(
+        self,
+        plan: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Atomically persist planner tasks and dependency edges before execution."""
+        if not self.mission_id:
+            return plan
+        snapshot = self.mission_store.snapshot(self.mission_id)
+        records_by_key = {
+            (record.agent, record.task): record for record in snapshot.tasks
+        }
+        records_by_name = {record.task: record for record in snapshot.tasks}
+        records_by_id = {record.task_id: record for record in snapshot.tasks}
+
+        selected: list[tuple[str, str, dict[str, Any]]] = []
+        selected_by_name: dict[str, tuple[str, str]] = {}
+        for step in plan:
+            agent = str(step.get("agent") or "")
+            task = str(step.get("task") or "")
+            if not agent or not task or task in selected_by_name:
+                continue
+            existing = records_by_name.get(task)
+            effective = (
+                (existing.agent, existing.task) if existing else (agent, task)
+            )
+            selected_by_name[task] = effective
+            selected.append((effective[0], effective[1], step))
+
+        available_by_name = {
+            **{name: (record.agent, record.task) for name, record in records_by_name.items()},
+            **selected_by_name,
+        }
+        available_by_key = {
+            **{key: (record.agent, record.task) for key, record in records_by_key.items()},
+            **{value: value for value in selected_by_name.values()},
+        }
+        dependencies_by_task: dict[str, list[tuple[str, str]]] = {}
+        invalid_reasons: dict[str, list[str]] = {}
+        for _, task, step in selected:
+            raw_dependencies = step.get("depends_on") or ()
+            if isinstance(raw_dependencies, str):
+                raw_dependencies = (raw_dependencies,)
+            existing = records_by_name.get(task)
+            if not raw_dependencies and existing is not None:
+                dependencies_by_task[task] = [
+                    (records_by_id[dependency_id].agent, records_by_id[dependency_id].task)
+                    for dependency_id in existing.depends_on
+                    if dependency_id in records_by_id
+                ]
+                continue
+            resolved_dependencies: list[tuple[str, str]] = []
+            for dependency in raw_dependencies:
+                dependency_text = str(dependency)
+                dependency_identity = available_by_name.get(dependency_text)
+                if dependency_identity is None and ":" in dependency_text:
+                    dep_agent, dep_task = dependency_text.split(":", 1)
+                    dependency_identity = available_by_key.get((dep_agent, dep_task))
+                if dependency_identity is None:
+                    invalid_reasons.setdefault(task, []).append(dependency_text)
+                else:
+                    resolved_dependencies.append(dependency_identity)
+            dependencies_by_task[task] = resolved_dependencies
+
+        changed = True
+        while changed:
+            changed = False
+            for _, task, _ in selected:
+                if task in invalid_reasons:
+                    continue
+                invalid_dependencies = [
+                    dependency_task
+                    for _, dependency_task in dependencies_by_task[task]
+                    if dependency_task in invalid_reasons
+                ]
+                if invalid_dependencies:
+                    invalid_reasons[task] = invalid_dependencies
+                    changed = True
+
+        definitions: list[
+            tuple[str, str, tuple[tuple[str, str], ...]]
+        ] = []
+        blocked_reasons: dict[tuple[str, str], str] = {}
+        for agent, task, _ in selected:
+            if task in invalid_reasons:
+                reason = "unknown_dependencies:" + ",".join(
+                    sorted(dict.fromkeys(invalid_reasons[task]))
+                )
+                definitions.append((agent, task, ()))
+                blocked_reasons[(agent, task)] = reason
+            else:
+                definitions.append(
+                    (agent, task, tuple(dependencies_by_task[task]))
+                )
+
+        records = self.mission_store.register_plan(
+            self.mission_id,
+            definitions,
+            blocked_reasons=blocked_reasons,
+        )
+        if blocked_reasons:
+            persisted = self.mission_store.snapshot(self.mission_id)
+            attempts_by_task_id = {
+                attempt.task_id: attempt
+                for attempt in persisted.attempts
+                if attempt.status == "blocked"
+            }
+            for record in records:
+                if record.status != "blocked":
+                    continue
+                self.blocked_tasks.add(record.task)
+                attempt = attempts_by_task_id.get(record.task_id)
+                if attempt is not None and attempt.outcome is not None:
+                    self.task_outcome_store.record(attempt.outcome)
+        return self._ordered_mission_plan([record.task for record in records])
+
+    def _ordered_mission_plan(
+        self,
+        task_names: Optional[list[str]] = None,
+    ) -> list[dict[str, Any]]:
+        if not self.mission_id:
+            return []
+        snapshot = self.mission_store.snapshot(self.mission_id)
+        records = list(snapshot.tasks)
+        by_id = {record.task_id: record for record in records}
+        if task_names is None:
+            selected = {
+                record.task_id
+                for record in records
+                if record.status in {"pending", "interrupted"}
+            }
+        else:
+            requested = set(task_names)
+            selected = {
+                record.task_id for record in records if record.task in requested
+            }
+        order = {record.task_id: index for index, record in enumerate(records)}
+        indegree = {
+            task_id: sum(
+                1 for dependency_id in by_id[task_id].depends_on
+                if dependency_id in selected
+            )
+            for task_id in selected
+        }
+        dependents: dict[str, list[str]] = {task_id: [] for task_id in selected}
+        for task_id in selected:
+            for dependency_id in by_id[task_id].depends_on:
+                if dependency_id in selected:
+                    dependents[dependency_id].append(task_id)
+        ready = sorted(
+            (task_id for task_id, count in indegree.items() if count == 0),
+            key=order.__getitem__,
+        )
+        ordered: list[str] = []
+        while ready:
+            task_id = ready.pop(0)
+            ordered.append(task_id)
+            for dependent_id in sorted(dependents[task_id], key=order.__getitem__):
+                indegree[dependent_id] -= 1
+                if indegree[dependent_id] == 0:
+                    ready.append(dependent_id)
+                    ready.sort(key=order.__getitem__)
+        if len(ordered) != len(selected):
+            raise RuntimeError("persisted mission task dependency cycle")
+        return [
+            {"agent": by_id[task_id].agent, "task": by_id[task_id].task}
+            for task_id in ordered
+        ]
+
+    def _resumable_mission_plan(self) -> list[dict[str, Any]]:
+        """Return unfinished durable work before consulting Director or Planner."""
+        return self._ordered_mission_plan()
+
+    def _block_registered_task(self, agent: str, task: str, reason: str):
+        if not self.mission_id:
+            return None
+        attempt = self.mission_store.block_task(self.mission_id, agent, task, reason)
+        self.blocked_tasks.add(task)
+        if attempt.outcome is not None:
+            self.task_outcome_store.record(attempt.outcome)
+        return attempt
+
+    def _persist_plan_rejection(self, agent: str, task: str, reason: str) -> None:
+        if not self.mission_id or not agent or not task:
+            return
+        snapshot = self.mission_store.snapshot(self.mission_id)
+        record = next((item for item in snapshot.tasks if item.task == task), None)
+        if record is not None and record.status not in {"pending", "interrupted"}:
+            if record.status == "blocked":
+                self.blocked_tasks.add(record.task)
+            return
+        effective_agent = record.agent if record is not None else agent
+        effective_task = record.task if record is not None else task
+        records = self.mission_store.register_plan(
+            self.mission_id,
+            [(effective_agent, effective_task, ())],
+            blocked_reasons={(effective_agent, effective_task): reason},
+        )
+        blocked = records[0]
+        self.blocked_tasks.add(blocked.task)
+        persisted = self.mission_store.snapshot(self.mission_id)
+        attempt = next(
+            (
+                item for item in reversed(persisted.attempts)
+                if item.task_id == blocked.task_id and item.status == "blocked"
+            ),
+            None,
+        )
+        if attempt is not None and attempt.outcome is not None:
+            self.task_outcome_store.record(attempt.outcome)
+
+    def _terminalize_compatibility_exhausted_tasks(
+        self,
+        plan: list[dict[str, Any]],
+    ) -> None:
+        """Prevent legacy in-memory exhaustion from stranding durable pending work."""
+        if not self.mission_id:
+            return
+        snapshot = self.mission_store.snapshot(self.mission_id)
+        by_name = {record.task: record for record in snapshot.tasks}
+        for step in plan:
+            task = str(step.get("task") or "")
+            if not task or not self._task_exhausted(task):
+                continue
+            record = by_name.get(task)
+            if record is None or record.status not in {"pending", "interrupted"}:
+                continue
+            if task in self.blocked_tasks:
+                self._block_registered_task(
+                    record.agent,
+                    record.task,
+                    "compatibility_state_blocked",
+                )
+                continue
+            attempt = self.mission_store.skip_task(
+                self.mission_id,
+                record.agent,
+                record.task,
+                "compatibility_state_exhausted",
+            )
+            if attempt.outcome is not None:
+                self.task_outcome_store.record(attempt.outcome)
+
+    def _begin_task_attempt(self, agent: str, task: str):
+        if not self.mission_id:
+            return None
+        if self._active_task_attempt_id:
+            raise RuntimeError("a mission task attempt is already active")
+        try:
+            attempt = self.mission_store.begin_attempt(self.mission_id, agent, task)
+        except TaskDependenciesIncomplete as exc:
+            details = ",".join(
+                f"{task_id}:{status}" for task_id, status in exc.incomplete
+            )
+            return self._block_registered_task(
+                agent,
+                task,
+                f"dependency_unsatisfied:{details}",
+            )
+        self._active_task_attempt_id = attempt.attempt_id
+        return attempt
+
+    def _interrupt_mission(self, reason: str) -> None:
+        if self.mission_id and not self._mission_was_completed:
+            self.mission_store.interrupt_mission(self.mission_id, reason)
+        self._active_task_attempt_id = None
+
+    def _complete_mission(self, reason: str) -> None:
+        if self.mission_id and not self._mission_was_completed:
+            self.mission_store.complete_mission(self.mission_id, reason)
+            self._mission_was_completed = True
+        self._active_task_attempt_id = None
 
     def _prepare_replay_entry(
         self,
@@ -378,6 +730,14 @@ class AIPipeline:
             if task:
                 self.blocked_tasks.add(task)
             reasons = ", ".join(rejection_dict.get("blocking_reasons") or [])
+            durable_reason = str(rejection_dict.get("reason") or "capability_unavailable")
+            if reasons:
+                durable_reason += ":" + reasons
+            self._persist_plan_rejection(
+                str(rejection_dict.get("agent") or ""),
+                task,
+                durable_reason,
+            )
             print(
                 f"     [!] Planner task rejected: {task or '<unknown>'} "
                 f"({rejection_dict.get('reason')}{': ' + reasons if reasons else ''})"
@@ -787,6 +1147,12 @@ class AIPipeline:
 
     def _execute_pipeline_command(self, scan_id: str, target: str, cmd: str,
                                   fact_label: str, prefix: str) -> dict[str, Any]:
+        if (
+            self._max_tools_budget is not None
+            and self.tools_run_count >= self._max_tools_budget
+        ):
+            self._mission_stop_reason = "max_tools_reached"
+            raise ToolBudgetReached("max_tools_reached")
         execution_context = self._execution_context(scan_id, target)
         decision = self.runtime.decide(
             cmd,
@@ -811,6 +1177,11 @@ class AIPipeline:
         )
         running_store = self._store_fact(scan_id, target, running_fact, audit_cmd)
         dispatch_result = self.runtime.execute(decision, execution_context)
+        if self._active_task_attempt_id and dispatch_result.execution_id:
+            self.mission_store.record_attempt_progress(
+                self._active_task_attempt_id,
+                execution_ids=(dispatch_result.execution_id,),
+            )
         self.tools_run_count += 1
         if cmd.startswith("ssh_inventory "):
             self.executed_post_access_commands.add(cmd)
@@ -831,10 +1202,12 @@ class AIPipeline:
             fact.setdefault("source", audit_cmd)
         stored_facts = [running_fact, *list(facts)]
         command_new_facts = running_store["new_facts"]
+        command_fact_ids = list(running_store["fact_ids"])
 
         for f in facts:
             stored = self._store_fact(scan_id, target, f, audit_cmd)
             stored_facts.extend(stored["derived_facts"])
+            command_fact_ids.extend(stored["fact_ids"])
             if stored["created"] and f.get("type") != "check_result":
                 safe_fact = stored["fact"]
                 print(f"     [+] {fact_label}: {safe_fact['type']} -> {safe_fact['value']}")
@@ -874,10 +1247,16 @@ class AIPipeline:
                 "duplicate_output": not unique_output,
                 "parsed_facts": parsed_output_facts,
                 "new_facts": command_new_facts,
+                "fact_ids": list(dict.fromkeys(command_fact_ids)),
                 "fact_pairs": [(fact.get("type"), fact.get("value")) for fact in facts],
                 "check_status": status,
             },
         }
+        if self._active_task_attempt_id:
+            self.mission_store.record_attempt_progress(
+                self._active_task_attempt_id,
+                fact_ids=tuple(dict.fromkeys(command_fact_ids)),
+            )
         self._record_command_trace(decision.to_dict(), result["command_result"])
         return result
 
@@ -1099,20 +1478,22 @@ class AIPipeline:
         safe_fact["value"] = safe_value
         if secret_refs:
             safe_fact["secret_refs"] = list(secret_refs)
-        _fact_id, created = self.fact_store.add_fact_with_status(
+        fact_id, created = self.fact_store.add_fact_with_status(
             scan_id, target, safe_fact["type"], safe_fact["value"], source,
             confidence=safe_fact.get("confidence", 100),
             session_id=safe_fact.get("session_id", "none"),
         )
         new_facts = 1 if created else 0
+        fact_ids = [fact_id]
         derived_facts = self._derived_facts_from_fact(target, fact, source)
         for derived in derived_facts:
-            _derived_id, derived_created = self.fact_store.add_fact_with_status(
+            derived_id, derived_created = self.fact_store.add_fact_with_status(
                 scan_id, target, derived["type"], derived["value"], f"derived:{source}",
                 confidence=derived.get("confidence", fact.get("confidence", 80)),
                 session_id=fact.get("session_id", "none"),
-                derived_from=[_fact_id],
+                derived_from=[fact_id],
             )
+            fact_ids.append(derived_id)
             if derived_created:
                 new_facts += 1
         return {
@@ -1120,6 +1501,7 @@ class AIPipeline:
             "new_facts": new_facts,
             "derived_facts": derived_facts,
             "fact": safe_fact,
+            "fact_ids": list(dict.fromkeys(fact_ids)),
         }
 
     def _scope_normalized_fact(self, target: str, fact: dict[str, Any]) -> dict[str, Any]:
@@ -2074,66 +2456,24 @@ class AIPipeline:
 
     def _sync_runtime_credentials_from_facts(self, target: str, facts: list[dict[str, Any]]) -> None:
         """Mirror concrete SSH credentials from parsed facts into the tool cache."""
-        try:
-            from core.tools.exploit_tools import register_credential
-        except Exception as exc:
-            logger.debug("Could not sync runtime credentials: %s", exc)
-            return
-
-        host = (target or "").strip().split("://")[-1].split("/")[0].split(":")[0]
-        for fact in facts:
-            if fact.get("type") != "credential":
-                continue
-            value = str(fact.get("value", "")).strip()
-            key_match = re.match(r"ssh_key_available:([^@\s]+)@([^\s]+)", value)
-            if key_match:
-                user, cred_host = key_match.groups()
-                if cred_host == host:
-                    register_credential("ssh", host, user, "__KEY_AUTH__")
-                continue
-
-            cached_match = re.match(r"([^:\s]+):([^\s]+)\s+\(cached\)", value)
-            if cached_match and not value.startswith(("whm_session:", "cpanel_session:")):
-                user, password = cached_match.groups()
-                register_credential("ssh", host, user, password)
+        self.credential_synchronizer.sync_from_facts(target, facts)
 
     def _known_credentials_for_target(self, target: str) -> dict[str, list[tuple]]:
         """Read known credentials from the unified store/legacy cache."""
-        try:
-            from core.tools.exploit_tools import get_all_known_creds_for_target
-        except Exception as exc:
-            logger.debug("Could not read known credentials: %s", exc)
-            return {}
-        host = (target or "").strip().split("://")[-1].split("/")[0].split(":")[0]
-        return get_all_known_creds_for_target(host) or {}
+        return self.credential_synchronizer.known_for_target(target)
 
     def _seed_known_credentials(self, scan_id: str, target: str) -> int:
         """Persist cached credentials as facts so state/context can use them."""
-        host = (target or "").strip().split("://")[-1].split("/")[0].split(":")[0]
-        seeded = 0
-        for service, cred_list in self._known_credentials_for_target(host).items():
-            for user, password in cred_list:
-                if not user or not password:
-                    continue
-                if service == "ssh" and password == "__KEY_AUTH__":
-                    fact_type = "credential"
-                    fact_value = f"ssh_key_available:{user}@{host}"
-                elif service == "ssh":
-                    fact_type = "credential"
-                    fact_value = f"{user}:{password} (cached)"
-                else:
-                    fact_type = "credential"
-                    fact_value = f"{service}_credential:{user}@{host}"
-                _fid, created = self.fact_store.add_fact_with_status(
-                    scan_id, host, fact_type, fact_value, "credential_store",
-                    confidence=90,
-                    session_id="credential_store",
-                )
-                if created:
-                    seeded += 1
-                    self.total_new_facts += 1
-                    print(f"    [+] Known Credential: {service}://{user}@{host}")
-        return seeded
+        result = self.credential_synchronizer.seed_known_credentials(
+            scan_id,
+            target,
+            self.fact_store,
+            self._known_credentials_for_target(target),
+        )
+        self.total_new_facts += result.seeded
+        for announcement in result.announcements:
+            print(f"    [+] Known Credential: {announcement}")
+        return result.seeded
 
     def _run_controlled_post_access_followups(
         self, scan_id: str, target: str, facts: list[dict[str, Any]]
@@ -2654,34 +2994,43 @@ class AIPipeline:
         parsed_facts: int,
         commands: list[dict[str, Any]],
         duration: float,
+        *,
+        fact_ids: tuple[int, ...] = (),
     ):
-        outcome = {
-            "agent": agent,
-            "task": task,
-            "status": status,
-            "reason": reason,
-            "new_facts": new_facts,
-            "parsed_facts": parsed_facts,
-            "commands": commands,
-            "duration": duration,
-        }
-        self.task_outcomes.append(outcome)
-        if status == "failed":
-            self.failed_commands.extend(c["command"] for c in commands if c.get("failed"))
-        elif status == "no_new_facts":
-            self.no_fact_tasks.append(task)
+        outcome = TaskOutcome(
+            agent=agent,
+            task=task,
+            status=status,
+            reason=reason,
+            new_facts=new_facts,
+            parsed_facts=parsed_facts,
+            commands=tuple(commands),
+            duration=duration,
+        )
+        if self._active_task_attempt_id:
+            execution_ids = tuple(
+                str(command.get("execution_id"))
+                for command in commands
+                if command.get("execution_id")
+            )
+            command_fact_ids = tuple(
+                fact_id
+                for command in commands
+                for fact_id in command.get("fact_ids", ())
+            )
+            persisted = self.mission_store.complete_attempt(
+                self._active_task_attempt_id,
+                outcome,
+                execution_ids=execution_ids,
+                fact_ids=tuple(dict.fromkeys((*fact_ids, *command_fact_ids))),
+            )
+            self._active_task_attempt_id = None
+            if persisted.outcome is not None:
+                outcome = persisted.outcome
+        return self.task_outcome_store.record(outcome)
 
     def _record_goal_trace(self, loop: int, context: dict[str, Any], decision: dict[str, Any]) -> None:
-        self.goal_trace.append({
-            "loop": loop,
-            "goal": decision.get("goal", "conclude"),
-            "thought": decision.get("thought", ""),
-            "llm_status": decision.get("llm_status", ""),
-            "state": context.get("state"),
-            "next_required_capability": context.get("next_required_capability"),
-            "stage_gates": context.get("stage_gates") or {},
-            "open_questions": context.get("open_questions") or [],
-        })
+        append_goal_trace(self.goal_trace, loop, context, decision)
 
     def _record_llm_health(
         self,
@@ -2691,32 +3040,13 @@ class AIPipeline:
         result: dict[str, Any],
         loop: int,
     ) -> None:
-        status = str((result or {}).get("llm_status", "")).strip().lower()
-        if status not in {"ok", "failed", "skipped"}:
-            return
-        payload = {
-            "role": role,
-            "status": status,
-            "loop": loop,
-            "fallback": bool((result or {}).get("fallback", False)),
-        }
-        if (result or {}).get("llm_error"):
-            payload["error"] = str(result.get("llm_error"))
-        if (result or {}).get("goal"):
-            payload["goal"] = str(result.get("goal"))
-        if isinstance((result or {}).get("plan"), list):
-            payload["plan_steps"] = len(result.get("plan") or [])
-        if (result or {}).get("hypotheses") is not None:
-            payload["hypotheses"] = int(result.get("hypotheses") or 0)
-        self._store_fact(
+        persist_llm_health(
+            self._store_fact,
             scan_id,
             target,
-            {
-                "type": "llm_health",
-                "value": json.dumps(payload, sort_keys=True),
-            "confidence": 95 if status == "failed" else 80,
-        },
-            f"llm:{role}",
+            role,
+            result,
+            loop,
         )
 
     def _update_llm_failure_counter(self, result: dict[str, Any]) -> None:
@@ -2727,24 +3057,7 @@ class AIPipeline:
             self.consecutive_llm_failures = 0
 
     def _record_command_trace(self, decision: dict[str, Any], result: Optional[dict[str, Any]] = None) -> None:
-        item = {
-            "command": decision.get("command"),
-            "key": decision.get("key"),
-            "action": decision.get("action"),
-            "reason": decision.get("reason"),
-            "prerequisite": decision.get("prerequisite", ""),
-        }
-        if result:
-            item.update({
-                "failed": result.get("failed", False),
-                "output_hash": result.get("output_hash", ""),
-                "duplicate_output": result.get("duplicate_output", False),
-                "parsed_facts": result.get("parsed_facts", 0),
-                "new_facts": result.get("new_facts", 0),
-                "check_status": result.get("check_status", ""),
-                "facts": result.get("fact_pairs", []),
-            })
-        self.command_trace.append(item)
+        append_command_trace(self.command_trace, decision, result)
 
     def _print_stage_gates(self, context: dict[str, Any]):
         gates = context.get("stage_gates") or {}
@@ -2758,36 +3071,16 @@ class AIPipeline:
         print(f"[*] Stage gates: {gate_text}; next={context.get('next_required_capability', 'conclude')}")
 
     def _print_efficiency_report(self, scan_id: str, target: str, elapsed: float):
-        fact_total = len(self.fact_store.get_facts(scan_id, target))
-        failed = [o for o in self.task_outcomes if o["status"] == "failed"]
-        blocked = [o for o in self.task_outcomes if o["status"] == "blocked"]
-        no_fact = [o for o in self.task_outcomes if o["status"] == "no_new_facts"]
-
-        print(
-            f"[*] Efficiency report: tasks={len(self.task_outcomes)}, "
-            f"new_facts={self.total_new_facts}, total_facts={fact_total}, "
-            f"failed={len(failed)}, blocked={len(blocked)}, no_fact={len(no_fact)}, "
-            f"elapsed={elapsed:.1f}s"
+        print_efficiency_report(
+            scan_id,
+            target,
+            elapsed,
+            get_facts=self.fact_store.get_facts,
+            task_outcomes=self.task_outcomes,
+            total_new_facts=self.total_new_facts,
+            goal_trace=self.goal_trace,
+            command_trace=self.command_trace,
         )
-
-        if blocked:
-            preview = ", ".join(f"{o['task']}({o['reason']})" for o in blocked[:5])
-            print(f"    Blocked tasks: {preview}")
-        if failed:
-            preview = ", ".join(o["task"] for o in failed[:5])
-            print(f"    Failed tasks: {preview}")
-        if no_fact:
-            preview = ", ".join(o["task"] for o in no_fact[:5])
-            print(f"    No-fact tasks: {preview}")
-        if self.goal_trace:
-            last = self.goal_trace[-1]
-            print(
-                f"    Last goal trace: goal={last['goal']} state={last['state']} "
-                f"next={last['next_required_capability']}"
-            )
-        if self.command_trace:
-            skipped = [t for t in self.command_trace if t.get("action") == "skip"]
-            print(f"    Command trace: decisions={len(self.command_trace)}, skipped={len(skipped)}")
 
 # For testing
 if __name__ == "__main__":

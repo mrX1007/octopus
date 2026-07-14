@@ -14,6 +14,7 @@ from uuid import uuid4
 from core.ai.command_scheduler import CommandDecision, CommandScheduler
 from core.ai.evidence import OutputParser
 from core.ai.fact_store import FactStore
+from core.ai.mission_store import MissionStore
 from core.ai.trace_report import TraceReporter
 from core.execution import (
     DispatchResult,
@@ -64,6 +65,7 @@ class PipelineRuntime:
         parser: OutputParser | None = None,
     ) -> None:
         self.facts = fact_store or FactStore(db_path)
+        self.missions = MissionStore(self.facts.db_path, redactor=self.facts.redactor)
         self.scheduler = scheduler or CommandScheduler()
         self.parser = parser or OutputParser()
         self.reporter = TraceReporter(self.facts)

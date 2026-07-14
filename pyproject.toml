@@ -62,6 +62,10 @@ files = [
     "core/tools/targeting.py",
     "core/ai/runtime.py",
     "core/ai/command_scheduler.py",
+    "core/ai/credential_sync.py",
+    "core/ai/mission_store.py",
+    "core/ai/outcomes.py",
+    "core/ai/pipeline_telemetry.py",
 ]
 exclude = [
     "venv/",

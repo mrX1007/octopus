@@ -44,6 +44,7 @@ class FactStore:
     @contextmanager
     def _get_conn(self):
         conn = sqlite3.connect(self.db_path)
+        conn.execute("PRAGMA foreign_keys=ON")
         try:
             yield conn
             conn.commit()
@@ -761,9 +762,25 @@ class FactStore:
         return self.get_facts(scan_id)
 
     def clear_scan(self, scan_id: str):
-        """Remove all facts for a given scan (used for cleanup or restart)."""
+        """Remove evidence and durable mission state for a clean scan restart."""
         with self._get_conn() as conn:
             cursor = conn.cursor()
+            has_missions = cursor.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'missions'
+                """
+            ).fetchone()
+            if has_missions:
+                cursor.execute(
+                    "DELETE FROM missions WHERE scan_key = ?",
+                    (
+                        self.secret_store.keyed_digest(
+                            str(scan_id or ""),
+                            kind="mission:scan",
+                        ),
+                    ),
+                )
             cursor.execute("DELETE FROM fact_observations WHERE scan_id = ?", (scan_id,))
             cursor.execute("DELETE FROM command_results WHERE scan_id = ?", (scan_id,))
             cursor.execute("DELETE FROM hypotheses WHERE scan_id = ?", (scan_id,))

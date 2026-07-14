@@ -3,6 +3,7 @@
 
 from .capability_assessment import CapabilityAssessment, CapabilityResolver
 from .fact_store import FactStore
+from .mission_store import MissionStore
 from .ollama_client import ask_ollama
 from .pipeline import AIPipeline
 from .runtime import DispatchResult, PipelineRuntime
@@ -13,6 +14,7 @@ __all__ = [
     "CapabilityResolver",
     "DispatchResult",
     "FactStore",
+    "MissionStore",
     "PipelineRuntime",
     "ask_ollama",
 ]

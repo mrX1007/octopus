@@ -186,7 +186,7 @@ class EvidenceVerifier:
 
         add_with_status = getattr(self.fact_store, "add_fact_with_status", None)
         if add_with_status:
-            _fact_id, created = add_with_status(
+            fact_id, created = add_with_status(
                 scan_id=scan_id,
                 host=host,
                 fact_type="verified_claim",
@@ -194,7 +194,7 @@ class EvidenceVerifier:
                 source="evidence_verifier"
             )
         else:
-            self.fact_store.add_fact(
+            fact_id = self.fact_store.add_fact(
                 scan_id=scan_id,
                 host=host,
                 fact_type="verified_claim",
@@ -208,6 +208,7 @@ class EvidenceVerifier:
             "status": "accepted",
             "reason": "All required evidence verified.",
             "created": created,
+            "fact_id": fact_id,
         }
 
     def _norm(self, value: str) -> str:

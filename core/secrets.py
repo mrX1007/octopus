@@ -241,6 +241,16 @@ class SecretStore:
         """Return plaintexts already seen in this process, longest first."""
         return tuple(sorted(self._known_values.items(), key=lambda item: len(item[0]), reverse=True))
 
+    def keyed_digest(self, value: str | bytes, *, kind: str) -> str:
+        """Return a namespaced stable digest without creating a plaintext oracle."""
+        raw = value.encode("utf-8") if isinstance(value, str) else bytes(value)
+        namespace = str(kind).encode("utf-8", "replace")
+        return hmac.new(
+            self._key,
+            namespace + b"\x00" + raw,
+            hashlib.sha256,
+        ).hexdigest()
+
     def close(self) -> None:
         if self._memory_conn is not None:
             self._memory_conn.close()
