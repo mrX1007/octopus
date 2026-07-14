@@ -1,19 +1,17 @@
 #!/usr/bin/env python3
 
-import fnmatch
 import hashlib
-import ipaddress
 import json
 import logging
 import re
-import time
 from typing import Any, Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 
+from core.ai.capability_assessment import CapabilityResolver
 from core.ai.context_builder import ContextBuilder
 from core.ai.director import DirectorLLM
 from core.ai.evidence import EvidenceVerifier
-from core.ai.planner import MissionPlanner
+from core.ai.planner import MissionPlanCompiler, MissionPlanner
 from core.ai.policy import DeterministicPolicy
 from core.ai.runtime import PipelineRuntime
 from core.ai.state_resolver import StateResolver
@@ -25,7 +23,6 @@ from core.execution import (
     CAP_REGISTERED_TOOL,
     ExecutionContext,
     ExecutionResult,
-    ExecutionStatus,
 )
 
 logger = logging.getLogger("octopus.pipeline")
@@ -41,13 +38,23 @@ class AIPipeline:
     def __init__(self, db_path: str = "data/facts.db"):
         self.runtime = PipelineRuntime(db_path, runner=lambda command: run_arbitrary_cmd(command))
         self.fact_store = self.runtime.facts
-        self.state_resolver = StateResolver(self.fact_store)
-        self.context_builder = ContextBuilder(self.fact_store, self.state_resolver)
-        self.director = DirectorLLM()
         self.command_scheduler = self.runtime.scheduler
+        self.state_resolver = StateResolver(self.fact_store)
+        self.tool_registry = ToolRegistry()
+        self.capability_resolver = CapabilityResolver(
+            self.tool_registry,
+            self.command_scheduler.execution_policy,
+        )
+        self.context_builder = ContextBuilder(
+            self.fact_store,
+            self.state_resolver,
+            self.capability_resolver,
+            self._execution_context,
+        )
+        self.director = DirectorLLM()
         self.policy = DeterministicPolicy()
         self.planner = MissionPlanner()
-        self.tool_registry = ToolRegistry()
+        self.plan_compiler = MissionPlanCompiler(self.capability_resolver)
         self.output_parser = self.runtime.parser
         self.evidence_verifier = EvidenceVerifier(self.fact_store)
         self.trace_reporter = self.runtime.reporter
@@ -83,338 +90,172 @@ class AIPipeline:
         self.service_intelligence_evidence_seen = set()
         self.command_trace = []
         self.goal_trace = []
+        self.plan_rejections = []
 
         # LLM health tracking
         self.consecutive_llm_failures = 0
 
     def run_scan(self, scan_id: str, target: str, max_iterations: int = 0, max_tools: int = 0, max_time_minutes: int = 0, raw_scan: str = ""):
-        print(f"\n[*] Starting AI Pipeline for target: {target} (Scan ID: {scan_id})")
-        self._reset_runtime_state()
-        max_iterations = self._runtime_limit(max_iterations)
-        max_tools = self._runtime_limit(max_tools)
-        max_time_minutes = self._runtime_limit(max_time_minutes)
+        from core.ai.scan_loop import ScanLifecycle
 
-        # Parse initial raw scan if provided
-        if raw_scan:
-            print("[*] Parsing facts from manual tool output...")
-            facts = self.output_parser.parse_tool_output("manual_recon", raw_scan)
-            seeded = 0
-            for f in facts:
-                stored = self._store_fact(scan_id, target, f, "manual_run")
-                if stored["created"]:
-                    seeded += 1
-                    self.total_new_facts += stored["new_facts"]
-                    safe_fact = stored["fact"]
-                    print(
-                        f"    [+] Seeded: {safe_fact['type']} -> {safe_fact['value']} "
-                        f"(conf={safe_fact.get('confidence', 100)})"
-                    )
-            self._sync_runtime_credentials_from_facts(target, facts)
-            print(f"[*] Seeded {seeded} facts from manual tool output.")
-
-        credential_seeded = self._seed_known_credentials(scan_id, target)
-        if credential_seeded:
-            print(f"[*] Seeded {credential_seeded} known credential fact(s) from credential store.")
-
-        # Show available tools at startup
-        avail = self.tool_registry.get_available_tools_summary()
-        avail_list = [f"{task}: {', '.join(tools) if tools else 'NONE'}" for task, tools in avail.items() if tools]
-        print(f"[*] Available tools: {'; '.join(avail_list)}")
-        unavailable = self.tool_registry.get_unavailable_tools_summary()
-        blocked_capabilities = [
-            f"{task}({', '.join(tools)})"
-            for task, tools in unavailable.items()
-            if tools and not avail.get(task)
-        ]
-        if blocked_capabilities:
-            print(f"[*] Blocked capabilities: {'; '.join(blocked_capabilities[:8])}")
-        plugins = self.tool_registry.get_discovered_plugins_summary()
-        if plugins:
-            plugin_list = [f"{p['name']}({p['type']})" for p in plugins]
-            print(f"[*] Discovered plugins: {', '.join(plugin_list)}")
-        coverage = self.tool_registry.get_coverage_report()
-        if coverage.get("unknown"):
-            print(f"[*] Registry coverage gaps: {', '.join(coverage['unknown'])}")
-        else:
-            print(
-                f"[*] Registry coverage: {coverage['covered']}/{coverage['registered']} "
-                f"(auto={len(coverage['auto'])}, followup={len(coverage['followup'])}, "
-                f"gated={len(coverage['manual_gated'])}, legacy={len(coverage['legacy_wrappers'])})"
-            )
-
-        self.scan_start_time = time.time()
-        startup_actions = self._run_fact_driven_actions(
-            scan_id, target, self.fact_store.get_facts(scan_id, target)
+        return ScanLifecycle().run(
+            self,
+            scan_id,
+            target,
+            max_iterations,
+            max_tools,
+            max_time_minutes,
+            raw_scan,
         )
-        if startup_actions["commands"]:
-            self.total_new_facts += startup_actions["new_facts"]
-            print(
-                f"[*] Startup actions: {len(startup_actions['commands'])} command(s), "
-                f"{startup_actions['new_facts']} new fact(s)."
+
+    def _prepare_replay_entry(
+        self,
+        entry: dict[str, Any],
+    ) -> tuple[Any, str, bool, bool, str]:
+        nested_result = entry.get("result")
+        if nested_result is not None:
+            payload: Any = nested_result
+        elif any(
+            key in entry
+            for key in (
+                "schema_version",
+                "status",
+                "stdout",
+                "stderr",
+                "exit_code",
+                "partial",
+                "error",
+                "metadata",
             )
+        ):
+            payload = {
+                key: value
+                for key, value in entry.items()
+                if key not in {"tool", "command", "result"}
+            }
+        else:
+            payload = entry.get("output") or entry.get("raw_output") or ""
 
-        loop = 1
-        while max_iterations is None or loop <= max_iterations:
-            # Budget Checks
-            elapsed_minutes = (time.time() - self.scan_start_time) / 60
-            if max_time_minutes is not None and elapsed_minutes >= max_time_minutes:
-                print(f"[!] BUDGET EXCEEDED: Max time reached ({max_time_minutes} mins). Terminating.")
-                break
-            if max_tools is not None and self.tools_run_count >= max_tools:
-                print(f"[!] BUDGET EXCEEDED: Max tools run ({max_tools}). Terminating.")
-                break
+        if (
+            isinstance(payload, dict)
+            and "raw_output" in payload
+            and "stdout" not in payload
+            and "output" not in payload
+        ):
+            payload = dict(payload)
+            payload["output"] = payload.pop("raw_output")
 
-            # LLM health check
-            llm_fallback_only = self._llm_fallback_only()
-            if llm_fallback_only:
-                print(f"\n[!] LLM DEAD: {self.consecutive_llm_failures} consecutive failures. Running on fallback only.")
-                print("    Check: ollama ps / ollama logs / ollama restart")
+        payload_schema = self.runtime.validate_result_schema(payload)
+        supplied_request_id = False
+        supplied_execution_id = False
+        payload_tool = ""
+        if isinstance(payload, ExecutionResult):
+            supplied_request_id = bool(payload.request_id)
+            supplied_execution_id = bool(payload.execution_id)
+            payload_tool = payload.tool_name
+        elif isinstance(payload, dict):
+            supplied_request_id = bool(payload.get("request_id"))
+            supplied_execution_id = bool(payload.get("execution_id"))
+            payload_tool = str(payload.get("tool_name") or "")
+        return (
+            payload,
+            payload_schema,
+            supplied_request_id,
+            supplied_execution_id,
+            payload_tool,
+        )
 
-            loop_label = str(max_iterations) if max_iterations is not None else "unlimited"
-            print(f"\n{'='*50}\n[LOOP {loop}/{loop_label}]")
+    def replay_outputs(self, scan_id: str, target: str, outputs: list[dict[str, Any]]) -> dict[str, Any]:
+        """Replay legacy or canonical outputs through the existing runtime boundary."""
 
-            # 1. State Resolution & Context Building
-            self.state_resolver.resolve_state(scan_id, target)
-            context = self.context_builder.build_context(scan_id, target)
-            print(f"[*] Context: state={context['state']}, services={context['services']}, questions={context['open_questions']}")
-            self._print_stage_gates(context)
-
-            # 2. Director Goal
-            if llm_fallback_only:
-                director_res = self._director_fallback_result(context)
-            else:
-                director_res = self.director.decide_goal(context, self.goal_history)
-            goal = director_res.get("goal", "conclude")
-            thought = director_res.get("thought", "")
-            self._record_goal_trace(loop, context, director_res)
-            self._record_llm_health(scan_id, target, "director", director_res, loop)
-            if not llm_fallback_only:
-                self._update_llm_failure_counter(director_res)
-
-            print(f"[*] Director Goal: {goal}")
-            print(f"    Thought: {thought}")
-
-            self.goal_history.append(goal)
-
-            if goal == "conclude":
-                print("[+] Scan concluded by Director.")
-                break
-
-            # Anti-loop check: No new facts for 3 loops
-            current_fact_count = len(self.fact_store.get_facts(scan_id, target))
-            self.fact_history_counts.append(current_fact_count)
-            if (
-                len(self.fact_history_counts) >= 4
-                and self.fact_history_counts[-1] == self.fact_history_counts[-4]
-            ):
-                print("[!] ANTI-LOOP: No new facts for 3 loops. Terminating scan.")
-                break
-
-            # 3. Mission Planner (pass context instead of raw state)
-            if self._llm_fallback_only():
-                plan_res = self._planner_fallback_result(goal)
-            else:
-                plan_res = self.planner.create_plan(goal, context, self.task_history)
-            self._record_llm_health(scan_id, target, "planner", plan_res, loop)
-            if not self._llm_fallback_only():
-                self._update_llm_failure_counter(plan_res)
-            plan = self._extract_plan_steps(plan_res)
-            plan = self._normalize_plan(plan, goal)
-            plan = self._optimize_plan(plan, goal, context)
-
-            if not plan:
-                print(f"[!] Planner returned empty plan for goal '{goal}'. Concluding.")
-                break
-
-            print(f"[*] Planner generated {len(plan)} tasks.")
-
-            # Check if ALL tasks in this plan are already completed or blocked.
-            all_skipped = all(self._task_exhausted(step.get("task")) for step in plan)
-            if all_skipped:
-                print(f"[!] All tasks in plan already completed/blocked. Goal '{goal}' exhausted.")
-                # Don't break — let the Director pick the next goal
-                loop += 1
-                continue
-
-            # 4. Agent Execution
-            new_facts_this_loop = 0
-            for step in plan:
-                agent_name = step.get("agent")
-                task = step.get("task")
-
-                # Skip tasks that have already been completed
-                if self._task_exhausted(task):
-                    reason = "blocked" if task in self.blocked_tasks else "already completed"
-                    print(f"  -> [{agent_name}] Task: {task} - SKIPPED ({reason})")
-                    continue
-
-                print(f"  -> [{agent_name}] Task: {task}")
-                self.task_history.append(f"{agent_name}:{task}")
-                task_started = time.time()
-
-                if agent_name == "DiscoveryAgent":
-                    cmds = self.discovery_agent.execute_task(task, target)
-                    if not cmds:
-                        print(f"     [!] No tools available for '{task}'. Skipping.")
-                        self.blocked_tasks.add(task)
-                        self._record_task_outcome(agent_name, task, "blocked", "no_available_tools", 0, 0, [], time.time() - task_started)
-                        continue
-
-                    task_result = self._run_task_commands(scan_id, target, cmds, fact_label="Fact")
-                    new_facts_this_loop += task_result["new_facts"]
-                    status = self._classify_task_result(task_result)
-                    reason = task_result["reason"]
-                    if status == "blocked":
-                        self.blocked_tasks.add(task)
-                    else:
-                        self.completed_tasks.add(task)
-                    self._record_task_outcome(
-                        agent_name, task, status, reason,
-                        task_result["new_facts"], task_result["parsed_facts"],
-                        task_result["commands"], time.time() - task_started
-                    )
-
-                elif agent_name == "AnalysisAgent":
-                    if self._llm_fallback_only():
-                        print("     [!] AnalysisAgent skipped: LLM unavailable, fallback mode active")
-                        self.completed_tasks.add(task)
-                        self._record_llm_health(
-                            scan_id,
-                            target,
-                            "analysis",
-                            {
-                                "llm_status": "skipped",
-                                "llm_error": "llm_dead_fallback_only",
-                                "fallback": True,
-                                "hypotheses": 0,
-                            },
-                            loop,
-                        )
-                        self._record_task_outcome(
-                            agent_name, task, "no_new_facts", "llm_unavailable_fallback_mode",
-                            0, 0, [], time.time() - task_started
-                        )
-                        continue
-
-                    # AnalysisAgent uses LLM — track failures
-                    analysis = self.analysis_agent.analyze(scan_id, target)
-                    hypotheses = analysis.get("hypotheses", [])
-                    accepted_count = 0
-                    task_new_facts = 0
-
-                    if not hypotheses:
-                        self.consecutive_llm_failures += 1
-                        self._record_llm_health(
-                            scan_id,
-                            target,
-                            "analysis",
-                            {"llm_status": "failed", "llm_error": "returned_no_hypotheses", "fallback": False},
-                            loop,
-                        )
-                        print(f"     [!] AnalysisAgent returned 0 hypotheses (LLM failures: {self.consecutive_llm_failures})")
-                    else:
-                        self.consecutive_llm_failures = 0  # Reset on success
-                        self._record_llm_health(
-                            scan_id,
-                            target,
-                            "analysis",
-                            {"llm_status": "ok", "hypotheses": len(hypotheses)},
-                            loop,
-                        )
-
-                    for hyp in hypotheses:
-                        claim = hyp.get('claim')
-                        req_evidence = hyp.get('required_evidence', [])
-                        print(f"     [?] Hypothesis: {claim}")
-
-                        self.fact_store.add_hypothesis(scan_id, target, claim, req_evidence, "AnalysisAgent")
-
-                        verify_res = self.verification_agent.verify_hypothesis(
-                            scan_id, target, claim, req_evidence
-                        )
-                        print(f"         Status: {verify_res.get('status')} - {verify_res.get('reason')}")
-
-                        if verify_res.get('status') == 'accepted':
-                            accepted_count += 1
-                            if verify_res.get("created", True):
-                                task_new_facts += 1
-                                new_facts_this_loop += 1
-
-                    self.completed_tasks.add(task)
-                    if not hypotheses:
-                        status = "failed"
-                        reason = "analysis_returned_no_hypotheses"
-                    elif accepted_count:
-                        status = "completed"
-                        reason = f"{accepted_count}_hypotheses_accepted"
-                    else:
-                        status = "no_new_facts"
-                        reason = "hypotheses_rejected_or_duplicate"
-                    self.total_new_facts += task_new_facts
-                    self._record_task_outcome(
-                        agent_name, task, status, reason,
-                        task_new_facts, accepted_count, [], time.time() - task_started
-                    )
-
-                elif agent_name == "VerificationAgent":
-                    cmds = self.verification_agent.execute_task(task, target)
-                    if not cmds:
-                        print(f"     [!] No tools available for '{task}'. Skipping.")
-                        self.blocked_tasks.add(task)
-                        self._record_task_outcome(agent_name, task, "blocked", "no_available_tools", 0, 0, [], time.time() - task_started)
-                        continue
-                    task_result = self._run_task_commands(scan_id, target, cmds, fact_label="Verified Fact", verification=True)
-                    new_facts_this_loop += task_result["new_facts"]
-                    status = self._classify_task_result(task_result)
-                    reason = task_result["reason"]
-                    if status == "blocked":
-                        self.blocked_tasks.add(task)
-                    else:
-                        self.completed_tasks.add(task)
-                    self._record_task_outcome(
-                        agent_name, task, status, reason,
-                        task_result["new_facts"], task_result["parsed_facts"],
-                        task_result["commands"], time.time() - task_started
-                    )
-
-                else:
-                    print(f"     [!] Unknown agent '{agent_name}'. Skipping task.")
-                    self.blocked_tasks.add(task)
-                    self._record_task_outcome(agent_name, task, "blocked", "unknown_agent", 0, 0, [], time.time() - task_started)
-
-            # If this loop produced zero new facts, note it
-            if new_facts_this_loop == 0:
-                print(f"[*] Loop {loop} produced 0 new facts.")
-            loop += 1
-
-        elapsed = time.time() - self.scan_start_time
-        print(f"\n[*] Pipeline finished for {target}. ({self.tools_run_count} tools run, {elapsed:.0f}s elapsed)")
-        print(f"[*] LLM failures: {self.consecutive_llm_failures} consecutive, completed tasks: {sorted(self.completed_tasks)}")
-        self._print_efficiency_report(scan_id, target, elapsed)
-        return self.state_resolver.resolve_state(scan_id, target)
-
-    def replay_outputs(self, scan_id: str, target: str, outputs: list[dict[str, str]]) -> dict[str, Any]:
-        """Replay saved raw tool outputs through the parser and fact bus.
-
-        Each entry is {"tool": "...", "output": "..."} or
-        {"command": "...", "raw_output": "..."}.
-        """
+        prepared = [self._prepare_replay_entry(entry) for entry in (outputs or [])]
         stored = 0
         parsed = 0
-        for entry in outputs or []:
-            tool = entry.get("tool") or entry.get("command") or "replay"
-            raw_output = entry.get("output") or entry.get("raw_output") or ""
-            facts = self.output_parser.parse_tool_output(tool, raw_output)
+        execution_results: list[dict[str, Any]] = []
+        execution_context = self._execution_context(scan_id, target)
+        for index, (entry, prepared_entry) in enumerate(zip(outputs or [], prepared)):
+            (
+                payload,
+                payload_schema,
+                supplied_request_id,
+                supplied_execution_id,
+                payload_tool,
+            ) = prepared_entry
+
+            tool = str(entry.get("tool") or entry.get("command") or payload_tool or "replay")
+            canonical = self.runtime.normalize_result(
+                payload,
+                tool_name=tool,
+                max_output_bytes=execution_context.max_output_bytes,
+            )
+            output_text = self._output_text(canonical)
+            output_hash = self._output_fingerprint(output_text)
+            identity_seed = "\0".join(
+                (scan_id, target, str(index), canonical.tool_name, output_hash)
+            ).encode("utf-8", "replace")
+            identity = hashlib.sha256(identity_seed).hexdigest()
+            if not supplied_request_id:
+                canonical.request_id = f"replay-request-{identity[:32]}"
+            if not supplied_execution_id:
+                canonical.execution_id = f"replay-execution-{identity[32:]}"
+
+            facts = self.runtime.parse_output(canonical.tool_name, canonical)
             parsed += len(facts)
+            command_new_facts = 0
             for fact in facts:
-                result = self._store_fact(scan_id, target, fact, f"replay:{tool}")
+                result = self._store_fact(
+                    scan_id,
+                    target,
+                    fact,
+                    f"replay:{canonical.tool_name}",
+                )
                 stored += result["new_facts"]
+                command_new_facts += result["new_facts"]
+            failed = self._command_failed(canonical, output_text)
+            _result_id, unique_output = self.fact_store.add_command_result(
+                scan_id=scan_id,
+                host=target,
+                command_key=f"replay:{canonical.tool_name}",
+                command=canonical.tool_name,
+                output_hash=output_hash,
+                output_bytes=len(canonical.stdout.encode("utf-8", "ignore")),
+                parsed_facts=len(facts),
+                new_facts=command_new_facts,
+                failed=failed,
+                execution_result=canonical,
+            )
+            execution_results.append(
+                {
+                    "schema_version": canonical.schema_version,
+                    "input_schema_version": payload_schema,
+                    "status": canonical.status.value,
+                    "request_id": canonical.request_id,
+                    "execution_id": canonical.execution_id,
+                    "tool_name": canonical.tool_name,
+                    "policy_decision_ref": canonical.policy_decision_ref,
+                    "exit_code": canonical.exit_code,
+                    "duration": canonical.duration,
+                    "partial": canonical.partial,
+                    "executed": canonical.executed,
+                    "failed": failed,
+                    "output_hash": output_hash,
+                    "output_bytes": len(canonical.stdout.encode("utf-8", "ignore")),
+                    "stderr_bytes": len(canonical.stderr.encode("utf-8", "ignore")),
+                    "artifact_count": len(canonical.artifact_refs),
+                    "parsed_facts": len(facts),
+                    "new_facts": command_new_facts,
+                    "duplicate_output": not unique_output,
+                }
+            )
         context = self.context_builder.build_context(scan_id, target)
         return {
+            "schema_version": "1.0",
             "parsed_facts": parsed,
             "new_facts": stored,
             "context": context,
             "snapshot_actions": self.snapshot_actions(scan_id, target),
+            "execution_results": execution_results,
+            "replay_results": [dict(item) for item in execution_results],
         }
 
     def snapshot_actions(self, scan_id: str, target: str) -> list[dict[str, str]]:
@@ -509,6 +350,39 @@ class AIPipeline:
             "fallback": True,
         })
         return result
+
+    def _compile_plan(
+        self,
+        plan: list[dict[str, Any]],
+        scan_id: str,
+        target: str,
+        context: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Reject only hard provider failures before task execution.
+
+        Authorization and prerequisites remain visible on the assessment, but
+        are deliberately not cached as execution permission.  Every surviving
+        command is still reauthorized by the scheduler and runner.
+        """
+        compilation = self.plan_compiler.compile(
+            plan,
+            target=target,
+            facts=self.fact_store.get_facts(scan_id, target),
+            context=context,
+            execution_context=self._execution_context(scan_id, target),
+        )
+        for rejection in compilation.rejected:
+            rejection_dict = dict(rejection)
+            self.plan_rejections.append(rejection_dict)
+            task = self.tool_registry.canonical_task(rejection_dict.get("task", ""))
+            if task:
+                self.blocked_tasks.add(task)
+            reasons = ", ".join(rejection_dict.get("blocking_reasons") or [])
+            print(
+                f"     [!] Planner task rejected: {task or '<unknown>'} "
+                f"({rejection_dict.get('reason')}{': ' + reasons if reasons else ''})"
+            )
+        return [dict(step) for step in compilation.plan]
 
     def _normalize_plan(self, plan, goal: str = ""):
         """Normalize LLM task names before execution and history tracking."""
@@ -611,6 +485,9 @@ class AIPipeline:
             if not agent or not task:
                 continue
             if task in seen_tasks:
+                continue
+            if agent == "AnalysisAgent" and task != "analyze_vulnerabilities":
+                print(f"     [!] Dropping incompatible AnalysisAgent task: {task}")
                 continue
             if agent != "AnalysisAgent" and not self.tool_registry.has_task(task):
                 print(f"     [!] Dropping unknown planner task: {task}")
@@ -799,43 +676,7 @@ class AIPipeline:
         return sorted(normalized, key=rank)
 
     def _unmet_task_preconditions(self, preconditions: list[str], context: dict[str, Any]) -> list[str]:
-        unmet = []
-        services = set(context.get("services") or [])
-        target_model = context.get("target_model") or {}
-        surface_states = target_model.get("surface_states") or context.get("surface_states") or {}
-        access = target_model.get("access") or {}
-        internal_graph = target_model.get("internal_graph") or context.get("network_graph") or {}
-        for precondition in preconditions or []:
-            if precondition == "services" and services:
-                continue
-            if precondition == "web" and (
-                services.intersection({"http", "https", "cpanel", "tomcat"})
-                or target_model.get("endpoints")
-                or surface_states.get("web") == "confirmed_present"
-            ):
-                continue
-            if precondition == "tls" and ("https" in services or any(e.get("scheme") == "https" for e in target_model.get("endpoints") or [])):
-                continue
-            if precondition == "domain" and self._target_looks_domain(context.get("host", "")):
-                continue
-            if precondition == "ad_surface" and services.intersection({"ldap", "kerberos", "winrm", "rdp", "smb"}):
-                continue
-            if precondition == "smb" and "smb" in services:
-                continue
-            if precondition == "ssh" and "ssh" in services:
-                continue
-            if precondition == "access" and (
-                context.get("state") in {"root_access_confirmed", "persistence_established", "internal_recon_completed", "exfiltration_completed"}
-                or access.get("ssh_authenticated")
-                or access.get("root_confirmed")
-            ):
-                continue
-            if precondition == "internal_hosts" and (internal_graph.get("nodes") or target_model.get("internal_graph", {}).get("nodes")):
-                continue
-            if precondition == "internal_services" and target_model.get("internal_services"):
-                continue
-            unmet.append(precondition)
-        return unmet
+        return self.capability_resolver.missing_requirements(preconditions, context)
 
     def _plan_enrichment_limit(self) -> int:
         try:
@@ -850,8 +691,9 @@ class AIPipeline:
         return max(3, value)
 
     def _target_looks_domain(self, target: str) -> bool:
-        host = (target or "").strip().split("://")[-1].split("/", 1)[0].split(":", 1)[0]
-        return bool(re.search(r"[A-Za-z]", host) and "." in host)
+        from core.tools.targeting import target_looks_domain
+
+        return target_looks_domain(target)
 
     def _trim_low_priority_enrichment(self, plan: list[dict[str, Any]], protected: set) -> None:
         """Keep plans short while preserving critical context-specific checks."""
@@ -1008,6 +850,7 @@ class AIPipeline:
             parsed_facts=parsed_output_facts,
             new_facts=command_new_facts,
             failed=failed,
+            execution_result=dispatch_result,
         )
 
         result = {
@@ -1017,6 +860,16 @@ class AIPipeline:
             "command_result": {
                 "command": audit_cmd,
                 "failed": failed,
+                "schema_version": dispatch_result.schema_version,
+                "status": dispatch_result.status.value,
+                "partial": dispatch_result.partial,
+                "execution_id": dispatch_result.execution_id,
+                "request_id": dispatch_result.request_id,
+                "policy_decision_ref": dispatch_result.policy_decision_ref,
+                "exit_code": dispatch_result.exit_code,
+                "duration": dispatch_result.duration,
+                "output_bytes": len(dispatch_result.stdout.encode("utf-8", "ignore")),
+                "stderr_bytes": len(dispatch_result.stderr.encode("utf-8", "ignore")),
                 "output_hash": output_hash,
                 "duplicate_output": not unique_output,
                 "parsed_facts": parsed_output_facts,
@@ -1133,41 +986,25 @@ class AIPipeline:
         parsed_output_facts: int,
         execution_result: Optional[ExecutionResult] = None,
     ) -> str:
-        if execution_result is not None:
-            status_map = {
-                ExecutionStatus.FAILED: "failed",
-                ExecutionStatus.TIMEOUT: "timeout",
-                ExecutionStatus.BLOCKED: "blocked",
-                ExecutionStatus.PARTIAL: "partial",
-                ExecutionStatus.UNAVAILABLE: "unavailable",
-                ExecutionStatus.CANCELLED: "cancelled",
-            }
-            if execution_result.status in status_map:
-                return status_map[execution_result.status]
-        return self._normalized_check_status(
+        from core.execution.normalization import command_check_status
+
+        return command_check_status(
             cmd,
-            "failed" if failed else ("completed" if parsed_output_facts else "completed_empty"),
             output_str,
+            failed,
+            parsed_output_facts,
+            execution_result,
         )
 
     def _normalized_check_status(self, cmd: str, status: str, output_str: str = "") -> str:
-        text = (output_str or "").lower()
-        if self._command_tool_name(cmd) == "msf_check" and (
-            "success:" in text
-            or "appears to be vulnerable" in text
-            or "is vulnerable" in text
-        ):
-            return "completed"
-        if "msf login check skipped" in text:
-            return "skipped"
-        if "[timeout]" in text or "killed after" in text or "timed out after" in text:
-            return "timeout"
-        if "[partial output" in text and status == "completed_empty":
-            return "partial"
-        return status
+        from core.execution.normalization import normalized_check_status
+
+        return normalized_check_status(cmd, status, output_str)
 
     def _command_tool_name(self, cmd: str) -> str:
-        return (cmd or "").strip().split(None, 1)[0].lower() if (cmd or "").strip() else "tool"
+        from core.execution.normalization import command_tool_name
+
+        return command_tool_name(cmd)
 
     def _command_check_kind(self, cmd: str) -> str:
         tool = self._command_tool_name(cmd)
@@ -1233,50 +1070,19 @@ class AIPipeline:
         return {"type": "host", "value": self._target_host(target).lower()}
 
     def _canonical_check_url(self, url: str) -> str:
-        parsed = urlparse((url or "").strip())
-        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-            return (url or "").strip().rstrip("/")
-        port = parsed.port
-        netloc = parsed.hostname.lower()
-        if port and not ((parsed.scheme.lower() == "http" and port == 80) or (parsed.scheme.lower() == "https" and port == 443)):
-            netloc = f"{netloc}:{port}"
-        return urlunparse((parsed.scheme.lower(), netloc, parsed.path or "/", "", parsed.query, "")).rstrip("/")
+        from core.tools.targeting import canonical_check_url
+
+        return canonical_check_url(url)
 
     def _internal_service_scope_value(self, value: str) -> str:
-        match = re.match(r"((?:\d{1,3}\.){3}\d{1,3}):(\d{1,5})/(tcp|udp)", value or "", re.IGNORECASE)
-        if not match:
-            return ""
-        host, port, proto = match.groups()
-        return f"{host.lower()}:{int(port)}/{proto.lower()}"
+        from core.tools.targeting import internal_service_scope_value
+
+        return internal_service_scope_value(value)
 
     def _internal_service_scopes_from_compact_state(self, cmd: str) -> list[str]:
-        scopes = []
-        seen = set()
-        decoder = json.JSONDecoder()
-        for match in re.finditer(r"compact_state\s*(?:->|:)\s*", cmd or "", re.IGNORECASE):
-            payload = (cmd or "")[match.end():].lstrip()
-            try:
-                parsed, _end = decoder.raw_decode(payload)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                continue
-            if not isinstance(parsed, dict):
-                continue
-            for service in parsed.get("internal_services") or []:
-                if not isinstance(service, dict):
-                    continue
-                host = str(service.get("host") or "").strip().lower()
-                port = service.get("port")
-                proto = str(service.get("proto") or "tcp").strip().lower()
-                if not host or port in {None, ""}:
-                    continue
-                try:
-                    scope = f"{host}:{int(str(port))}/{proto}"
-                except (TypeError, ValueError):
-                    continue
-                if scope not in seen:
-                    seen.add(scope)
-                    scopes.append(scope)
-        return scopes
+        from core.tools.targeting import internal_service_scopes_from_compact_state
+
+        return internal_service_scopes_from_compact_state(cmd)
 
     def _store_fact(self, scan_id: str, target: str, fact: dict[str, Any], source: str) -> dict[str, Any]:
         """Store a parsed fact plus normalized derived facts.
@@ -1383,35 +1189,9 @@ class AIPipeline:
         return self._canonical_endpoint_value(match.group(0))
 
     def _canonical_endpoint_value(self, url: str, service: str = "", port: str = "") -> str:
-        raw = (url or "").strip()
-        if not raw:
-            return ""
-        if not re.match(r"^https?://", raw, re.IGNORECASE):
-            raw = f"http://{raw}"
-        parsed = urlparse(raw)
-        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-            return ""
-        parsed_port = parsed.port
-        if parsed_port is None:
-            parsed_port = 443 if parsed.scheme.lower() == "https" else 80
-        path = parsed.path or "/"
-        netloc = parsed.hostname.lower()
-        if not ((parsed.scheme.lower() == "http" and parsed_port == 80)
-                or (parsed.scheme.lower() == "https" and parsed_port == 443)):
-            netloc = f"{netloc}:{parsed_port}"
-        canonical_url = urlunparse((
-            parsed.scheme.lower(), netloc, path, "", parsed.query, "",
-        ))
-        return json.dumps({
-            "url": canonical_url,
-            "scheme": parsed.scheme.lower(),
-            "host": parsed.hostname.lower(),
-            "port": str(port or parsed_port),
-            "path": path,
-            "service": service or "",
-            "status": "",
-            "title": "",
-        }, sort_keys=True)
+        from core.tools.targeting import canonical_endpoint_value
+
+        return canonical_endpoint_value(url, service=service, port=port)
 
     def _network_graph_facts(self, target: str, ftype: str, value: str) -> list[dict[str, Any]]:
         host = self._target_host(target)
@@ -1483,7 +1263,10 @@ class AIPipeline:
 
     def _followup_commands_from_facts(self, facts: list[dict[str, Any]]) -> list[str]:
         """Run safe verification commands emitted by earlier tools once."""
-        commands = []
+        from core.ai.followups import ServiceFollowupRules
+
+        candidates = []
+        candidate_keys = set(self.executed_followup_commands)
         allowed_prefixes = ("msf_check ", "searchsploit ", "plugin ")
         limit = self._strategy_limit("verification_followup_commands", None)
         for fact in facts:
@@ -1496,12 +1279,19 @@ class AIPipeline:
                 continue
             if cmd.startswith("plugin ") and not any(token in cmd for token in (" scan", " check", " list")):
                 continue
-            if cmd in self.executed_followup_commands:
+            if cmd in candidate_keys:
                 continue
-            self.executed_followup_commands.add(cmd)
-            commands.append(cmd)
-            if limit is not None and len(commands) >= limit:
+            candidate_keys.add(cmd)
+            candidates.append(cmd)
+            if limit is not None and len(candidates) >= limit:
                 break
+
+        proposals = ServiceFollowupRules().propose(
+            intelligence_commands=candidates,
+            limit=limit,
+        )
+        commands = [proposal.command for proposal in proposals]
+        self.executed_followup_commands.update(commands)
         return commands
 
     def _run_fact_driven_actions(
@@ -1636,7 +1426,8 @@ class AIPipeline:
         self, scan_id: str, target: str, facts: list[dict[str, Any]]
     ) -> list[str]:
         """Map facts to safe deterministic follow-up actions."""
-        commands = []
+        from core.ai.followups import FollowupRuleFamilies
+
         all_facts = self.fact_store.get_facts(scan_id, target)
         all_pairs = {
             (str(fact.get("type", "")).lower(), str(fact.get("value", "")).lower())
@@ -1649,21 +1440,29 @@ class AIPipeline:
             self._facts_confirm_ssh_access(facts)
             or self._facts_confirm_ssh_access(all_facts)
         )
+        ssh_inventory_commands = []
         if self._auto_ssh_inventory_enabled() and not inventory_seen and (ssh_creds_available or ssh_access_confirmed):
-            commands.append(f"ssh_inventory {target}")
+            ssh_inventory_commands.append(f"ssh_inventory {target}")
 
+        cpanel_commands = []
         if self._facts_indicate_cpanel_surface(facts) and not self._cpanel_already_verified(all_pairs):
-            commands.append(f"plugin cpanel_auth_bypass {target} scan")
+            cpanel_commands.append(f"plugin cpanel_auth_bypass {target} scan")
 
-        commands.extend(self._service_intelligence_commands(scan_id, target, facts, all_pairs))
-        commands.extend(self._service_action_commands(target, facts, all_pairs))
-        commands.extend(self._web_path_action_commands(scan_id, target, facts))
-        commands.extend(self._web_link_action_commands(scan_id, target, facts))
-        commands.extend(self._web_surface_action_commands(scan_id, target, facts, all_pairs))
+        proposals = FollowupRuleFamilies().from_legacy_groups(
+            ssh_inventory_commands=ssh_inventory_commands,
+            cpanel_commands=cpanel_commands,
+            service_intelligence_commands=self._service_intelligence_commands(
+                scan_id, target, facts, all_pairs
+            ),
+            protocol_service_commands=self._service_action_commands(target, facts, all_pairs),
+            web_path_commands=self._web_path_action_commands(scan_id, target, facts),
+            web_link_api_commands=self._web_link_action_commands(scan_id, target, facts),
+            web_surface_commands=self._web_surface_action_commands(scan_id, target, facts, all_pairs),
+        )
 
         deduped = []
-        for cmd in commands:
-            cmd = self._augment_command_with_context(cmd, scan_id, target)
+        for proposal in proposals:
+            cmd = self._augment_command_with_context(proposal.command, scan_id, target)
             if cmd in self.executed_fact_action_commands:
                 continue
             self.executed_fact_action_commands.add(cmd)
@@ -2168,7 +1967,9 @@ class AIPipeline:
         return self._strategy_limit("web_link_followup_commands", None)
 
     def _target_host(self, target: str) -> str:
-        return (target or "").strip().split("://")[-1].split("/")[0].split(":")[0]
+        from core.tools.targeting import target_host
+
+        return target_host(target)
 
     def _web_surface_action_commands(
         self, scan_id: str, target: str, facts: list[dict[str, Any]], all_pairs: set
@@ -2360,15 +2161,24 @@ class AIPipeline:
         self, target: str, facts: list[dict[str, Any]]
     ) -> list[str]:
         """Run read-only SSH inventory once after confirmed SSH authentication."""
-        if not self._auto_ssh_inventory_enabled():
-            return []
-        if not self._facts_confirm_ssh_access(facts):
-            return []
-        cmd = f"ssh_inventory {target}"
-        if cmd in self.executed_post_access_commands:
-            return []
-        self.executed_post_access_commands.add(cmd)
-        return [cmd]
+        from core.ai.followups import PostAccessFollowupRules
+
+        # Preserve the legacy fact predicate while the typed rule becomes the
+        # proposal owner.  Cached credentials are intentionally insufficient on
+        # this controlled, post-verification path.
+        enabled = self._auto_ssh_inventory_enabled()
+        confirmed_facts = facts if enabled and self._facts_confirm_ssh_access(facts) else []
+        proposals = PostAccessFollowupRules().propose(
+            target,
+            confirmed_facts,
+            enabled=enabled,
+            inventory_seen=False,
+            already_executed=self.executed_post_access_commands,
+            allow_cached_credentials=False,
+        )
+        commands = [proposal.command for proposal in proposals]
+        self.executed_post_access_commands.update(commands)
+        return commands
 
     def _facts_confirm_ssh_access(self, facts: list[dict[str, Any]]) -> bool:
         for fact in facts:
@@ -2432,29 +2242,24 @@ class AIPipeline:
         self, target: str, candidates: list[str], verification_facts: list[dict[str, Any]]
     ) -> list[str]:
         """Promote msf_run only after msf_check positively verifies the same module."""
-        if not candidates or not self._active_msf_allowed(target):
+        from core.ai.followups import ActivePromotionFollowupRules
+
+        if not candidates:
+            return []
+        authorization_granted = self._active_msf_allowed(target)
+        if not authorization_granted:
             return []
 
-        positive_modules = set()
-        for fact in verification_facts:
-            if fact.get("type") != "vulnerability":
-                continue
-            value = str(fact.get("value", ""))
-            if value.startswith("msf_check_positive:"):
-                positive_modules.add(value.split(":", 1)[1])
-
-        commands = []
-        for cmd in candidates:
-            parts = cmd.split()
-            module = parts[2] if len(parts) >= 3 else ""
-            if module not in positive_modules:
-                continue
-            if cmd in self.executed_active_commands:
-                continue
-            if len(self.executed_active_commands) >= self._max_active_msf_runs():
-                break
-            self.executed_active_commands.add(cmd)
-            commands.append(cmd)
+        proposals = ActivePromotionFollowupRules().propose(
+            candidates,
+            verification_facts,
+            authorization_granted=authorization_granted,
+            max_runs=self._max_active_msf_runs(),
+            already_executed=self.executed_active_commands,
+            candidate_limit=None,
+        )
+        commands = [proposal.command for proposal in proposals]
+        self.executed_active_commands.update(commands)
         return commands
 
     def _active_msf_allowed(self, target: str) -> bool:
@@ -2477,23 +2282,9 @@ class AIPipeline:
         return max(0, int(CFG.get("strategy", {}).get("max_active_msf_runs_per_scan", 1)))
 
     def _target_in_authorized_scope(self, target: str, scopes: list[str]) -> bool:
-        if not scopes:
-            return False
-        host = (target or "").strip().split("://")[-1].split("/")[0].split(":")[0]
-        for scope in scopes:
-            scope = str(scope or "").strip()
-            if not scope:
-                continue
-            if scope in {"*", "all"}:
-                return True
-            if fnmatch.fnmatch(host, scope):
-                return True
-            try:
-                if ipaddress.ip_address(host) in ipaddress.ip_network(scope, strict=False):
-                    return True
-            except ValueError:
-                continue
-        return False
+        from core.tools.targeting import target_in_authorized_scope
+
+        return target_in_authorized_scope(target, scopes)
 
     def _expand_command_with_context(self, cmd: str, scan_id: str, target: str) -> list[str]:
         """Expand generic web commands across discovered HTTP endpoints."""
@@ -2625,59 +2416,29 @@ class AIPipeline:
         return endpoints
 
     def _endpoint_in_target_scope(self, endpoint: str, target: str) -> bool:
-        parsed = urlparse(endpoint or "")
-        endpoint_host = (parsed.hostname or "").lower()
-        target_host = self._target_host(target).lower()
-        if not endpoint_host or not target_host:
-            return False
-        if endpoint_host == target_host:
-            return True
-        try:
-            ipaddress.ip_address(target_host)
-            ipaddress.ip_address(endpoint_host)
-            return False
-        except ValueError:
-            pass
-        return endpoint_host.endswith(f".{target_host}")
+        from core.tools.targeting import endpoint_in_target_scope
+
+        return endpoint_in_target_scope(endpoint, target)
 
     def _endpoint_url_from_value(self, value: str) -> str:
-        try:
-            parsed = json.loads(value)
-        except (TypeError, ValueError, json.JSONDecodeError):
-            return value if re.match(r"^https?://", value or "", re.IGNORECASE) else ""
-        url = str(parsed.get("url", "")).strip()
-        return url if re.match(r"^https?://", url, re.IGNORECASE) else ""
+        from core.tools.targeting import endpoint_url_from_value
+
+        return endpoint_url_from_value(value)
 
     def _display_endpoint_url(self, endpoint: str) -> str:
-        parsed = urlparse(endpoint or "")
-        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-            return ""
-        if (parsed.path or "") in {"", "/"} and not parsed.query:
-            netloc = parsed.netloc.lower()
-            return f"{parsed.scheme.lower()}://{netloc}"
-        return urlunparse((
-            parsed.scheme.lower(),
-            parsed.netloc.lower(),
-            parsed.path or "/",
-            "",
-            parsed.query,
-            "",
-        ))
+        from core.tools.targeting import display_endpoint_url
+
+        return display_endpoint_url(endpoint)
 
     def _service_fact_looks_web(self, service: str, value: str = "") -> bool:
-        text = f"{service or ''} {value or ''}".lower()
-        web_markers = (
-            "http", "httpd", "web server", "nginx", "apache", "cowboy",
-            "golang net/http", "node.js", "express", "php", "wordpress",
-            "tomcat", "jetty", "gunicorn", "uwsgi", "werkzeug", "flask",
-            "django", "rails", "sinatra", "grafana", "kibana", "prometheus",
-            "cpanel", "whm",
-        )
-        return any(marker in text for marker in web_markers)
+        from core.tools.targeting import nmap_service_looks_web
+
+        return nmap_service_looks_web(service, value)
 
     def _service_fact_looks_tls(self, value: str = "") -> bool:
-        text = (value or "").lower()
-        return any(marker in text for marker in ("ssl/http", "https", "tls", "ssl ", "cpanel", "whm"))
+        from core.tools.targeting import service_fact_looks_tls
+
+        return service_fact_looks_tls(value)
 
     def _augment_command_with_context(self, cmd: str, scan_id: str, target: str) -> str:
         """Attach known recon evidence to tools that can consume it."""
@@ -2837,46 +2598,14 @@ class AIPipeline:
         return ""
 
     def _output_text(self, output: Any) -> str:
-        stdout = getattr(output, "stdout", None)
-        stderr = getattr(output, "stderr", "")
-        if stdout is not None:
-            parts = [str(stdout)]
-            if stderr:
-                parts.append(str(stderr))
-            return "\n".join(p for p in parts if p)
-        return str(output)
+        from core.execution.normalization import output_text
+
+        return output_text(output)
 
     def _command_failed(self, output: Any, output_str: str) -> bool:
-        exit_code = getattr(output, "exit_code", 0)
-        if isinstance(exit_code, int) and exit_code != 0:
-            return True
-        if isinstance(output, ExecutionResult):
-            if output.status in {
-                ExecutionStatus.FAILED,
-                ExecutionStatus.TIMEOUT,
-                ExecutionStatus.UNAVAILABLE,
-                ExecutionStatus.CANCELLED,
-            }:
-                return True
-            if output.status is ExecutionStatus.BLOCKED:
-                return False
+        from core.execution.normalization import command_failed
 
-        text = (output_str or "").lower()
-        success_markers = (
-            "[+]", "open", "connected", "login_success", "uid=0", "root access",
-            "confirmed", "cve-", "vulnerable", "exfil", "persistence", "cleanup"
-        )
-        if any(marker in text for marker in success_markers):
-            return False
-
-        failure_markers = (
-            "[!] tool not found", "[!] error", "traceback", "timed out",
-            "returned no output", "requires credentials", "connection failed",
-            "permission denied", "unknown tool", "missing dependency",
-            "no such file or directory", "psych/syntax_error",
-            "bundler/errors.rb", "rubygems/errors.rb",
-        )
-        return any(marker in text for marker in failure_markers)
+        return command_failed(output, output_str)
 
     def _classify_task_result(self, task_result: dict[str, Any]) -> str:
         commands = task_result["commands"]

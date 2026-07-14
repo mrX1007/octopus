@@ -2,13 +2,27 @@
 
 import hashlib
 import json
+import math
 import os
 import sqlite3
 import time
 from contextlib import contextmanager
 from typing import Any, Optional
 
+from core.execution.results import ExecutionResult, ExecutionStatus
 from core.secrets import Redactor, SecretStore, default_secret_store_path
+
+_COMMAND_RESULT_STATUSES = {status.value for status in ExecutionStatus} | {"legacy"}
+_FAILED_STATUSES = {
+    ExecutionStatus.FAILED.value,
+    ExecutionStatus.TIMEOUT.value,
+    ExecutionStatus.UNAVAILABLE.value,
+    ExecutionStatus.CANCELLED.value,
+}
+_MAX_COMMAND_BYTES = 16 * 1024
+_MAX_IDENTIFIER_BYTES = 4096
+_MAX_METADATA_BYTES = 64 * 1024
+_MAX_RECORDED_OUTPUT_BYTES = 100_000_000
 
 
 class FactStore:
@@ -100,6 +114,18 @@ class FactStore:
                     parsed_facts INTEGER NOT NULL DEFAULT 0,
                     new_facts INTEGER NOT NULL DEFAULT 0,
                     failed INTEGER NOT NULL DEFAULT 0,
+                    schema_version TEXT NOT NULL DEFAULT '0',
+                    status TEXT NOT NULL DEFAULT 'legacy',
+                    partial INTEGER NOT NULL DEFAULT 0,
+                    execution_id TEXT NOT NULL DEFAULT '',
+                    request_id TEXT NOT NULL DEFAULT '',
+                    policy_decision_ref TEXT NOT NULL DEFAULT '',
+                    exit_code INTEGER,
+                    duration REAL NOT NULL DEFAULT 0.0,
+                    stderr_bytes INTEGER NOT NULL DEFAULT 0,
+                    error_class TEXT NOT NULL DEFAULT '',
+                    artifact_count INTEGER NOT NULL DEFAULT 0,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
                     timestamp REAL NOT NULL
                 )
             ''')
@@ -111,6 +137,30 @@ class FactStore:
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_command_result_key ON command_results (scan_id, host, command_key)')
             self._ensure_column(cursor, "facts", "secret_refs", "TEXT NOT NULL DEFAULT '[]'")
             self._ensure_column(cursor, "fact_observations", "secret_refs", "TEXT NOT NULL DEFAULT '[]'")
+            self._ensure_column(cursor, "command_results", "schema_version", "TEXT NOT NULL DEFAULT '0'")
+            self._ensure_column(cursor, "command_results", "status", "TEXT NOT NULL DEFAULT 'legacy'")
+            self._ensure_column(cursor, "command_results", "partial", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(cursor, "command_results", "execution_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(cursor, "command_results", "request_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(
+                cursor,
+                "command_results",
+                "policy_decision_ref",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            self._ensure_column(cursor, "command_results", "exit_code", "INTEGER")
+            self._ensure_column(cursor, "command_results", "duration", "REAL NOT NULL DEFAULT 0.0")
+            self._ensure_column(cursor, "command_results", "stderr_bytes", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(cursor, "command_results", "error_class", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(cursor, "command_results", "artifact_count", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(cursor, "command_results", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+            cursor.execute(
+                """
+                UPDATE command_results
+                SET status = CASE WHEN failed = 1 THEN 'failed' ELSE 'succeeded' END
+                WHERE status = 'legacy'
+                """
+            )
             self._redact_existing_rows(cursor)
             conn.commit()
 
@@ -143,10 +193,51 @@ class FactStore:
                     "UPDATE fact_observations SET value = ?, source = ?, secret_refs = ? WHERE id = ?",
                     (safe_value, safe_source, json.dumps(merged), row_id),
                 )
-        for row_id, command in cursor.execute("SELECT id, command FROM command_results").fetchall():
+        for (
+            row_id,
+            command,
+            command_key,
+            execution_id,
+            request_id,
+            policy_ref,
+            error_class,
+            metadata_json,
+            output_hash,
+        ) in cursor.execute(
+            """
+            SELECT id, command, command_key, execution_id, request_id,
+                   policy_decision_ref, error_class, metadata_json, output_hash
+            FROM command_results
+            """
+        ).fetchall():
             safe_command = self.redactor.redact_text(command, kind="command")
-            if safe_command != command:
-                cursor.execute("UPDATE command_results SET command = ? WHERE id = ?", (safe_command, row_id))
+            safe_command_key = self.redactor.redact_text(command_key, kind="command_key")
+            safe_execution_id = self.redactor.redact_text(execution_id, kind="execution_id")
+            safe_request_id = self.redactor.redact_text(request_id, kind="request_id")
+            safe_policy_ref = self.redactor.redact_text(policy_ref, kind="policy_decision_ref")
+            safe_error_class = self.redactor.redact_text(error_class, kind="execution_error_class")
+            safe_metadata = self._metadata_json(self._load_json_value(metadata_json))
+            safe_output_hash = self._safe_output_hash(output_hash)
+            cursor.execute(
+                """
+                UPDATE command_results
+                SET command = ?, command_key = ?, execution_id = ?, request_id = ?,
+                    policy_decision_ref = ?, error_class = ?, metadata_json = ?,
+                    output_hash = ?
+                WHERE id = ?
+                """,
+                (
+                    self._bounded_text(safe_command, _MAX_COMMAND_BYTES),
+                    self._bounded_text(safe_command_key, _MAX_IDENTIFIER_BYTES),
+                    self._bounded_text(safe_execution_id, _MAX_IDENTIFIER_BYTES),
+                    self._bounded_text(safe_request_id, _MAX_IDENTIFIER_BYTES),
+                    self._bounded_text(safe_policy_ref, _MAX_IDENTIFIER_BYTES),
+                    self._bounded_text(safe_error_class, 256),
+                    safe_metadata,
+                    safe_output_hash,
+                    row_id,
+                ),
+            )
         for row_id, claim, required, source in cursor.execute(
             "SELECT id, claim, required_evidence, source FROM hypotheses"
         ).fetchall():
@@ -167,6 +258,76 @@ class FactStore:
         except (TypeError, ValueError, json.JSONDecodeError):
             return []
         return loaded if isinstance(loaded, list) else []
+
+    @staticmethod
+    def _load_json_value(value: Any) -> Any:
+        try:
+            return json.loads(value or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return {}
+
+    @staticmethod
+    def _bounded_text(value: Any, limit: int) -> str:
+        text = "" if value is None else str(value)
+        raw = text.encode("utf-8", "replace")
+        if len(raw) <= limit:
+            return text
+        return raw[:limit].decode("utf-8", "ignore")
+
+    def _metadata_json(self, value: Any) -> str:
+        safe = self.redactor.redact_data(value if isinstance(value, dict) else {"value": value})
+        safe = self._redact_metadata_keys(safe)
+        encoded = json.dumps(safe, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        encoded_bytes = encoded.encode("utf-8", "replace")
+        if len(encoded_bytes) <= _MAX_METADATA_BYTES:
+            return encoded
+        return json.dumps(
+            {
+                "metadata_original_bytes": len(encoded_bytes),
+                "metadata_truncated": True,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def _safe_output_hash(self, value: Any) -> str:
+        safe = self.redactor.redact_text(value, kind="output_hash").strip().lower()
+        if len(safe) == 64 and all(character in "0123456789abcdef" for character in safe):
+            return safe
+        return hashlib.sha256(safe.encode("utf-8", "replace")).hexdigest()
+
+    def _redact_metadata_keys(self, value: Any) -> Any:
+        """Make metadata JSON-safe while protecting keys without raw-key hashes."""
+
+        if isinstance(value, dict):
+            result: dict[str, Any] = {}
+            for raw_key, item in value.items():
+                safe_key = self._bounded_text(
+                    self.redactor.redact_text(raw_key, kind="execution_metadata_key"),
+                    512,
+                )
+                candidate = safe_key
+                ordinal = 2
+                while candidate in result:
+                    candidate = f"{safe_key}#{ordinal}"
+                    ordinal += 1
+                result[candidate] = self._redact_metadata_keys(item)
+            return result
+        if isinstance(value, (list, tuple)):
+            return [self._redact_metadata_keys(item) for item in value]
+        if isinstance(value, (set, frozenset)):
+            return [self._redact_metadata_keys(item) for item in sorted(value, key=repr)]
+        if value is None or isinstance(value, (str, bool, int, float)):
+            return value if not isinstance(value, float) or math.isfinite(value) else None
+        return self.redactor.redact_text(value, kind="execution_metadata")
+
+    @staticmethod
+    def _bounded_count(value: Any) -> int:
+        try:
+            parsed = int(value or 0)
+        except (TypeError, ValueError):
+            return 0
+        return min(_MAX_RECORDED_OUTPUT_BYTES, max(0, parsed))
 
     @classmethod
     def _load_refs(cls, value: Any) -> tuple[str, ...]:
@@ -400,11 +561,93 @@ class FactStore:
             })
         return results
 
-    def add_command_result(self, scan_id: str, host: str, command_key: str, command: str,
-                           output_hash: str, output_bytes: int = 0, parsed_facts: int = 0,
-                           new_facts: int = 0, failed: bool = False) -> tuple[int, bool]:
+    def add_command_result(
+        self,
+        scan_id: str,
+        host: str,
+        command_key: str,
+        command: str,
+        output_hash: str,
+        output_bytes: int = 0,
+        parsed_facts: int = 0,
+        new_facts: int = 0,
+        failed: bool = False,
+        *,
+        execution_result: Optional[ExecutionResult] = None,
+        schema_version: str = "0",
+        status: Optional[str] = None,
+        partial: bool = False,
+        execution_id: str = "",
+        request_id: str = "",
+        policy_decision_ref: str = "",
+        exit_code: Optional[int] = None,
+        duration: float = 0.0,
+        stderr_bytes: int = 0,
+        error_class: str = "",
+        artifact_count: int = 0,
+        metadata: Optional[dict[str, Any]] = None,
+    ) -> tuple[int, bool]:
         now = time.time()
-        command = self.redactor.redact_text(command, kind="command")
+        if execution_result is not None:
+            schema_version = execution_result.schema_version
+            status = execution_result.status.value
+            partial = execution_result.partial
+            execution_id = execution_result.execution_id
+            request_id = execution_result.request_id
+            policy_decision_ref = execution_result.policy_decision_ref
+            exit_code = execution_result.exit_code
+            duration = execution_result.duration
+            output_bytes = len(execution_result.stdout.encode("utf-8", "ignore"))
+            stderr_bytes = len(execution_result.stderr.encode("utf-8", "ignore"))
+            error_class = execution_result.error_class
+            artifact_count = len(execution_result.artifact_refs)
+            metadata = execution_result.metadata
+        normalized_status = (
+            status.value
+            if isinstance(status, ExecutionStatus)
+            else str(status or ("failed" if failed else "succeeded")).lower()
+        )
+        if normalized_status not in _COMMAND_RESULT_STATUSES:
+            raise ValueError(f"Unsupported command result status: {normalized_status}")
+        failed = normalized_status in _FAILED_STATUSES
+        try:
+            safe_duration = float(duration or 0.0)
+        except (TypeError, ValueError):
+            safe_duration = 0.0
+        if not math.isfinite(safe_duration) or safe_duration < 0:
+            safe_duration = 0.0
+        safe_exit_code: Optional[int]
+        try:
+            safe_exit_code = None if exit_code is None else int(exit_code)
+        except (TypeError, ValueError):
+            safe_exit_code = None
+        command = self._bounded_text(
+            self.redactor.redact_text(command, kind="command"),
+            _MAX_COMMAND_BYTES,
+        )
+        command_key = self._bounded_text(
+            self.redactor.redact_text(command_key, kind="command_key"),
+            _MAX_IDENTIFIER_BYTES,
+        )
+        output_hash = self._safe_output_hash(output_hash)
+        schema_version = self._bounded_text(schema_version, 32)
+        execution_id = self._bounded_text(
+            self.redactor.redact_text(execution_id, kind="execution_id"),
+            _MAX_IDENTIFIER_BYTES,
+        )
+        request_id = self._bounded_text(
+            self.redactor.redact_text(request_id, kind="request_id"),
+            _MAX_IDENTIFIER_BYTES,
+        )
+        policy_decision_ref = self._bounded_text(
+            self.redactor.redact_text(policy_decision_ref, kind="policy_decision_ref"),
+            _MAX_IDENTIFIER_BYTES,
+        )
+        error_class = self._bounded_text(
+            self.redactor.redact_text(error_class, kind="execution_error_class"),
+            256,
+        )
+        metadata_json = self._metadata_json(metadata or {})
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -416,12 +659,34 @@ class FactStore:
             cursor.execute('''
                 INSERT INTO command_results (
                     scan_id, host, command_key, command, output_hash, output_bytes,
-                    parsed_facts, new_facts, failed, timestamp
+                    parsed_facts, new_facts, failed, schema_version, status, partial,
+                    execution_id, request_id, policy_decision_ref, exit_code, duration,
+                    stderr_bytes, error_class, artifact_count, metadata_json, timestamp
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
-                scan_id, host, command_key, command, output_hash, int(output_bytes or 0),
-                int(parsed_facts or 0), int(new_facts or 0), 1 if failed else 0, now,
+                scan_id,
+                host,
+                command_key,
+                command,
+                output_hash,
+                self._bounded_count(output_bytes),
+                self._bounded_count(parsed_facts),
+                self._bounded_count(new_facts),
+                1 if failed else 0,
+                schema_version,
+                normalized_status,
+                1 if partial else 0,
+                execution_id,
+                request_id,
+                policy_decision_ref,
+                safe_exit_code,
+                safe_duration,
+                self._bounded_count(stderr_bytes),
+                error_class,
+                self._bounded_count(artifact_count),
+                metadata_json,
+                now,
             ))
             conn.commit()
             return cursor.lastrowid, existing is None
@@ -429,7 +694,9 @@ class FactStore:
     def get_command_results(self, scan_id: str, host: Optional[str] = None) -> list[dict[str, Any]]:
         query = '''
             SELECT id, scan_id, host, command_key, command, output_hash, output_bytes,
-                   parsed_facts, new_facts, failed, timestamp
+                   parsed_facts, new_facts, failed, timestamp, schema_version, status,
+                   partial, execution_id, request_id, policy_decision_ref, exit_code,
+                   duration, stderr_bytes, error_class, artifact_count, metadata_json
             FROM command_results
             WHERE scan_id = ?
         '''
@@ -437,7 +704,7 @@ class FactStore:
         if host:
             query += " AND host = ?"
             params.append(host)
-        query += " ORDER BY timestamp ASC"
+        query += " ORDER BY timestamp ASC, id ASC"
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute(query, params)
@@ -455,6 +722,19 @@ class FactStore:
                 "new_facts": row[8],
                 "failed": bool(row[9]),
                 "timestamp": row[10],
+                "schema_version": row[11],
+                "status": row[12],
+                "partial": bool(row[13]),
+                "execution_id": row[14],
+                "request_id": row[15],
+                "policy_decision_ref": row[16],
+                "exit_code": row[17],
+                "duration": row[18],
+                "stderr_bytes": row[19],
+                "error_class": row[20],
+                "artifact_count": row[21],
+                "metadata_json": row[22],
+                "metadata": self._load_json_value(row[22]),
             }
             for row in rows
         ]

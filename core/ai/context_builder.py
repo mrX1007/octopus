@@ -4,13 +4,15 @@
 
 import json
 import re
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from core.ai.asset_graph import AssetGraph
+from core.ai.capability_assessment import CapabilityResolver
 from core.ai.fact_store import FactStore
 from core.ai.state_resolver import StateResolver
 from core.ai.surface_state import SurfaceState
 from core.ai.target_model import TargetModel
+from core.execution import ExecutionContext
 
 try:
     from config import CFG
@@ -44,11 +46,28 @@ SERVICE_PATTERNS = {
 }
 
 class ContextBuilder:
-    def __init__(self, fact_store: FactStore, state_resolver: StateResolver):
+    def __init__(
+        self,
+        fact_store: FactStore,
+        state_resolver: StateResolver,
+        capability_resolver: Optional[CapabilityResolver] = None,
+        execution_context_factory: Optional[Callable[[str, str], ExecutionContext]] = None,
+    ):
         self.fact_store = fact_store
         self.state_resolver = state_resolver
+        self.capability_resolver = (
+            capability_resolver
+            if capability_resolver is not None
+            else CapabilityResolver()
+        )
+        self.execution_context_factory = execution_context_factory
 
-    def build_context(self, scan_id: str, host: str) -> dict[str, Any]:
+    def build_context(
+        self,
+        scan_id: str,
+        host: str,
+        execution_context: Optional[ExecutionContext] = None,
+    ) -> dict[str, Any]:
         """
         Builds a concise summary of the current state, services, and open questions.
         Example output:
@@ -114,7 +133,8 @@ class ContextBuilder:
         ))
         stage_gates = self._stage_gates(state)
 
-        return {
+        next_required_capability = self._next_required_capability(primary_state, open_questions)
+        context = {
             "host": host,
             "state": primary_state,
             "services": services,
@@ -125,12 +145,23 @@ class ContextBuilder:
             "coverage_details": coverage_details,
             "stage_gates": stage_gates,
             "automation_policy": self._automation_policy(),
-            "next_required_capability": self._next_required_capability(primary_state, open_questions),
+            "next_required_capability": next_required_capability,
             "network_graph": self._network_graph(facts),
             "asset_graph": asset_graph,
             "surface_states": surface_states,
             "target_model": target_model,
         }
+        if execution_context is None and self.execution_context_factory is not None:
+            execution_context = self.execution_context_factory(scan_id, host)
+        context["capability_assessment"] = self.capability_resolver.resolve(
+            next_required_capability,
+            target=host,
+            facts=facts,
+            context=context,
+            execution_context=execution_context,
+            requested=True,
+        ).to_dict()
+        return context
 
     def _service_text_from_port_fact(self, port_fact: str) -> str:
         value = (port_fact or "").lower()

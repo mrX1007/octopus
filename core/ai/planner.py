@@ -3,14 +3,76 @@
 import contextlib
 import json
 import logging
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
+from core.ai.capability_assessment import CapabilityResolver
 from core.ai.llm_context import compact_context_for_llm
+from core.execution import ExecutionContext
 
 with contextlib.suppress(ImportError):
     from core.ai.ollama_client import ask_ollama
 
 logger = logging.getLogger("octopus.planner")
+
+
+@dataclass(frozen=True)
+class PlanCompilation:
+    """Provider-checked plan plus deterministic rejection explanations."""
+
+    plan: tuple[dict[str, Any], ...]
+    rejected: tuple[dict[str, Any], ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "plan": [dict(step) for step in self.plan],
+            "rejected": [dict(item) for item in self.rejected],
+        }
+
+
+class MissionPlanCompiler:
+    """Final read-only provider gate for normalized planner output."""
+
+    def __init__(self, capability_resolver: CapabilityResolver):
+        self.capability_resolver = capability_resolver
+
+    def compile(
+        self,
+        plan: Iterable[Mapping[str, Any]],
+        *,
+        target: str,
+        facts: Iterable[Mapping[str, Any]],
+        context: Mapping[str, Any],
+        execution_context: ExecutionContext,
+    ) -> PlanCompilation:
+        fact_list = [dict(fact) for fact in facts or []]
+        accepted: list[dict[str, Any]] = []
+        rejected: list[dict[str, Any]] = []
+        for raw_step in plan or []:
+            step = dict(raw_step)
+            task = str(step.get("task", ""))
+            agent = str(step.get("agent", ""))
+            assessment = self.capability_resolver.resolve(
+                task,
+                target=target,
+                facts=fact_list,
+                context=context,
+                execution_context=execution_context,
+                agent=agent,
+                requested=True,
+            )
+            if assessment.hard_unavailable:
+                rejected.append({
+                    "agent": agent,
+                    "task": assessment.capability,
+                    "reason": f"capability_{assessment.provider_availability}",
+                    "blocking_reasons": list(assessment.blocking_reasons),
+                    "assessment": assessment.to_dict(),
+                })
+                continue
+            accepted.append(step)
+        return PlanCompilation(tuple(accepted), tuple(rejected))
 
 class MissionPlanner:
     def __init__(self):
@@ -35,7 +97,7 @@ RULES:
 1. Do NOT specify exact tools like 'nmap' or 'whatweb'. Use high-level conceptual tasks.
 2. Keep the plan focused. A maximum of 3 steps per plan.
 3. Include an AnalysisAgent step for discovery/vulnerability goals. Do NOT add AnalysisAgent for persistence, data_exfiltration, or cleanup goals.
-4. VALID TASKS ONLY: service_discovery, vulnerability_assessment, exploit_selection, metasploit_verification, web_application_mapping, browser_surface_analysis, web_vulnerability_testing, web_content_discovery, web_credential_testing, transport_security_assessment, firewall_detection, external_intelligence, browser_osint, windows_enumeration, active_directory_enumeration, kerberos_assessment, ssh_user_enumeration, credential_harvesting, hash_cracking, test_credentials, find_privesc_vectors, exploit_privesc, post_access_inventory, payload_generation, establish_persistence, internal_network_recon, internal_service_discovery, pivot_setup, lateral_movement, domain_credential_extraction, ad_remote_execution, cpanel_assessment, plugin_assessment, exfiltrate_data, stealth_cleanup.
+4. VALID TASKS ONLY: service_discovery, vulnerability_assessment, analyze_vulnerabilities, exploit_selection, metasploit_verification, web_application_mapping, browser_surface_analysis, web_vulnerability_testing, web_content_discovery, web_credential_testing, transport_security_assessment, firewall_detection, external_intelligence, browser_osint, windows_enumeration, active_directory_enumeration, kerberos_assessment, ssh_user_enumeration, credential_harvesting, hash_cracking, test_credentials, find_privesc_vectors, exploit_privesc, post_access_inventory, payload_generation, establish_persistence, internal_network_recon, internal_service_discovery, pivot_setup, lateral_movement, domain_credential_extraction, ad_remote_execution, cpanel_assessment, plugin_assessment, exfiltrate_data, stealth_cleanup.
 """
 
     def create_plan(self, goal: str, context: dict[str, Any], task_history: list[str]) -> dict[str, Any]:

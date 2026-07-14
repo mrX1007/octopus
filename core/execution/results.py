@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
 import os
@@ -166,13 +165,10 @@ def _redact_mapping_keys(value: Any, redactor: TextRedactor | None) -> Any:
             original = _as_text(raw_key)
             safe_key = _redact_text(redactor, original, kind="execution_metadata_key")
             candidate = safe_key
-            if candidate in result:
-                suffix = hashlib.sha256(original.encode("utf-8", "replace")).hexdigest()[:12]
-                candidate = f"{safe_key}#{suffix}"
-                collision = 2
-                while candidate in result:
-                    candidate = f"{safe_key}#{suffix}-{collision}"
-                    collision += 1
+            collision = 2
+            while candidate in result:
+                candidate = f"{safe_key}#{collision}"
+                collision += 1
             result[candidate] = _redact_mapping_keys(item, redactor)
         return result
     if isinstance(value, list):

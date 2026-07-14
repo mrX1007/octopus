@@ -9,10 +9,20 @@ from core.ai.pipeline import AIPipeline
 class ReplaySnapshot:
     """Run raw outputs through the pipeline and assert expected facts/actions."""
 
+    SCHEMA_VERSION = "1.0"
+    LEGACY_SCHEMA_VERSION = "0"
+
     def __init__(self, db_path: str):
         self.pipeline = AIPipeline(db_path)
 
     def run(self, spec: dict[str, Any]) -> dict[str, Any]:
+        input_schema_version = str(spec.get("schema_version") or self.LEGACY_SCHEMA_VERSION)
+        if input_schema_version not in {self.LEGACY_SCHEMA_VERSION, self.SCHEMA_VERSION}:
+            raise ValueError(
+                "Unsupported replay snapshot schema "
+                f"{input_schema_version!r}; supported: "
+                f"{self.LEGACY_SCHEMA_VERSION}, {self.SCHEMA_VERSION}"
+            )
         scan_id = spec["scan_id"]
         target = spec["target"]
         result = self.pipeline.replay_outputs(scan_id, target, spec.get("outputs", []))
@@ -43,6 +53,13 @@ class ReplaySnapshot:
                 failures.append(f"surface_state:{surface}:expected={expected_state}:actual={actual}")
 
         return {
+            "schema_version": self.SCHEMA_VERSION,
+            "input_schema_version": input_schema_version,
+            "migration": (
+                {"from": self.LEGACY_SCHEMA_VERSION, "to": self.SCHEMA_VERSION}
+                if input_schema_version == self.LEGACY_SCHEMA_VERSION
+                else None
+            ),
             "ok": not failures,
             "failures": failures,
             "result": result,

@@ -213,6 +213,29 @@ def test_plugin_and_exploit_adapters_keep_artifacts_and_redacted_metadata() -> N
     assert exploit_result.artifact_refs == ("evidence.txt",)
 
 
+def test_redacted_metadata_key_collisions_use_opaque_ordinals() -> None:
+    def redact_keys(value, *, kind="text"):
+        if kind == "execution_metadata_key":
+            return "[REDACTED-KEY]"
+        return str(value)
+
+    result = adapt_execution_result(
+        {
+            "output": "ok",
+            "metadata": {
+                "token=first-sensitive-value": "first",
+                "password=second-sensitive-value": "second",
+            },
+        },
+        request_id="req",
+        execution_id="exec",
+        tool_name="collision-test",
+        redact_text=redact_keys,
+    )
+
+    assert list(result.metadata) == ["[REDACTED-KEY]", "[REDACTED-KEY]#2"]
+
+
 def test_dict_adapter_is_json_safe_and_preserves_typed_status(tmp_path: Path) -> None:
     recursive = []
     recursive.append(recursive)
@@ -424,13 +447,11 @@ def test_parser_accepts_canonical_result_and_legacy_text_facade(tmp_path: Path) 
     )
 
     assert runtime.parse_output("fixture", result)[0]["value"] == "canonical output"
-    assert runtime.parse_output("fixture", result_with_stderr)[0]["value"] == (
-        "canonical stdout\ncanonical stderr"
-    )
+    assert runtime.parse_output("fixture", result_with_stderr)[0]["value"] == "canonical stdout"
     assert runtime.parse_output("fixture", "legacy output")[0]["value"] == "legacy output"
     assert calls == [
         ("fixture", "canonical output"),
-        ("fixture", "canonical stdout\ncanonical stderr"),
+        ("fixture", "canonical stdout"),
         ("fixture", "legacy output"),
     ]
 

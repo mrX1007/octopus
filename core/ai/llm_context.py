@@ -37,6 +37,7 @@ def compact_context_for_llm(context: dict[str, Any], role: str = "generic") -> d
         "stage_gates",
         "automation_policy",
         "next_required_capability",
+        "capability_assessment",
     ):
         if key in context:
             compact[key] = _trim_value(context[key], role)

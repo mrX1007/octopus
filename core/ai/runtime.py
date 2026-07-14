@@ -7,7 +7,7 @@ import hashlib
 import json
 import subprocess
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -25,6 +25,7 @@ from core.execution import (
 )
 
 Runner = Callable[[str], Any]
+EXECUTION_RESULT_SCHEMA_VERSION = "1.0"
 
 
 def _policy_decision_ref(decision: CommandDecision) -> str:
@@ -183,6 +184,74 @@ class PipelineRuntime:
             redact_data=self.facts.redactor.redact_data,
         )
 
+    def normalize_result(
+        self,
+        value: Any,
+        *,
+        tool_name: str,
+        max_output_bytes: int = 1_000_000,
+        request_id: str = "",
+        execution_id: str = "",
+        policy_decision_ref: str = "",
+    ) -> ExecutionResult:
+        """Normalize a replay/plugin payload through the existing runtime adapter.
+
+        Legacy values have no schema. Canonical payloads must use the current
+        execution-result schema; unknown versions fail closed instead of being
+        silently reinterpreted.
+        """
+
+        self.validate_result_schema(value)
+        raw_request_id = request_id
+        raw_execution_id = execution_id
+        raw_policy_ref = policy_decision_ref
+        if isinstance(value, Mapping):
+            raw_request_id = raw_request_id or str(value.get("request_id") or "")
+            raw_execution_id = raw_execution_id or str(value.get("execution_id") or "")
+            raw_policy_ref = raw_policy_ref or str(value.get("policy_decision_ref") or "")
+
+        def safe_identifier(raw: Any, kind: str) -> str:
+            redacted = self.facts.redactor.redact_text(raw, kind=kind)
+            encoded = redacted.encode("utf-8", "replace")
+            if len(encoded) <= 4096:
+                return redacted
+            return encoded[:4096].decode("utf-8", "ignore")
+
+        return adapt_execution_result(
+            value,
+            request_id=safe_identifier(raw_request_id, "request_id") if raw_request_id else "",
+            execution_id=safe_identifier(raw_execution_id, "execution_id") if raw_execution_id else "",
+            tool_name=safe_identifier(tool_name, "execution_tool"),
+            max_output_bytes=max_output_bytes,
+            policy_decision_ref=(
+                safe_identifier(raw_policy_ref, "policy_decision_ref") if raw_policy_ref else ""
+            ),
+            redact_text=self.facts.redactor.redact_text,
+            redact_data=self.facts.redactor.redact_data,
+        )
+
+    @staticmethod
+    def validate_result_schema(value: Any) -> str:
+        """Validate a replay payload without producing IDs or persistence side effects."""
+
+        if isinstance(value, ExecutionResult):
+            schema_version = value.schema_version
+        elif isinstance(value, Mapping):
+            schema_version = str(value.get("schema_version") or "0")
+        else:
+            schema_version = "0"
+        if schema_version not in {"0", EXECUTION_RESULT_SCHEMA_VERSION}:
+            raise ValueError(
+                "Unsupported execution result schema "
+                f"{schema_version!r}; supported: 0, {EXECUTION_RESULT_SCHEMA_VERSION}"
+            )
+        if isinstance(value, Mapping) and schema_version == EXECUTION_RESULT_SCHEMA_VERSION:
+            raw_status = value.get("status")
+            status = raw_status.value if isinstance(raw_status, ExecutionStatus) else str(raw_status or "")
+            if status not in {item.value for item in ExecutionStatus}:
+                raise ValueError(f"Unsupported canonical execution status: {status!r}")
+        return schema_version
+
     def _exception_result(
         self,
         exc: BaseException,
@@ -232,10 +301,9 @@ class PipelineRuntime:
         command: str,
         output: str | ExecutionResult,
     ) -> list[dict[str, Any]]:
-        if isinstance(output, ExecutionResult):
-            output_text = "\n".join(part for part in (output.stdout, output.stderr) if part)
-        else:
-            output_text = str(output)
+        # Diagnostics are audit-only. Parsing stderr as evidence can turn a
+        # failed tool's echoed examples into verified facts and follow-ups.
+        output_text = output.stdout if isinstance(output, ExecutionResult) else str(output)
         return self.parser.parse_tool_output(command, output_text)
 
     def ingest_output(

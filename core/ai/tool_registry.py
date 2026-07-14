@@ -663,6 +663,57 @@ class ToolRegistry:
                 available.append(binary_name)
         return available
 
+    def get_provider_statuses_for_task(self, task: str) -> list[dict[str, Any]]:
+        """Describe concrete providers for a task without invoking them.
+
+        Nested task aliases are expanded to the same leaf command templates
+        used by :meth:`get_commands_for_task`.  Availability is read from the
+        existing registry/dependency checks; this method deliberately does not
+        format credentials or dispatch a command.
+        """
+        task = self.canonical_task(task)
+        return self._provider_statuses_for_task(task, set(), task)
+
+    def _provider_statuses_for_task(
+        self,
+        task: str,
+        seen: set[str],
+        requested_task: str,
+    ) -> list[dict[str, Any]]:
+        task = self.canonical_task(task)
+        if task in seen:
+            return []
+        seen = set(seen)
+        seen.add(task)
+
+        statuses: list[dict[str, Any]] = []
+        for command_template, provider in self.task_map.get(task, []):
+            if provider in self.task_map and provider != task:
+                statuses.extend(
+                    self._provider_statuses_for_task(provider, seen, requested_task)
+                )
+                continue
+            statuses.append({
+                "task": requested_task,
+                "provider": provider,
+                "command_template": command_template,
+                "available": self._is_tool_available(provider),
+            })
+
+        deduplicated: list[dict[str, Any]] = []
+        seen_records: set[tuple[str, str, str]] = set()
+        for status in statuses:
+            key = (
+                str(status.get("task", "")),
+                str(status.get("provider", "")),
+                str(status.get("command_template", "")),
+            )
+            if key in seen_records:
+                continue
+            seen_records.add(key)
+            deduplicated.append(status)
+        return deduplicated
+
     def task_has_available_tools(self, task: str) -> bool:
         """True when at least one command can run for the task."""
         return bool(self.get_available_tools_for_task(task))
