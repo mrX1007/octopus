@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "submodules": [
+    {
+      "path": "vendor/cpanel_sniper",
+      "commit": "cc007b0b776781a4577fea34265c6498796baedb"
+    },
+    {
+      "path": "vendor/shardbrowser",
+      "commit": "700277fd0c41830a76b3220136d8d5df6f524caf"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "vendor/cpanel_sniper/bin/linux_x64/cpanel_sniper",
+      "submodule": "vendor/cpanel_sniper",
+      "platform": {
+        "os": "linux",
+        "arch": "amd64"
+      },
+      "sha256": "de25dcb568e2400894cfe8fc43993477756ad875f2de86d6cf07ea09e688f37d"
+    },
+    {
+      "path": "vendor/cpanel_sniper/bin/linux_arm64/cpanel_sniper",
+      "submodule": "vendor/cpanel_sniper",
+      "platform": {
+        "os": "linux",
+        "arch": "arm64"
+      },
+      "sha256": "6c8de7c30e6bb07fd1c995599c93cea0f3947266f0ac41b299f0ee565f18f7a8"
+    },
+    {
+      "path": "vendor/cpanel_sniper/bin/mac_intel/cpanel_sniper",
+      "submodule": "vendor/cpanel_sniper",
+      "platform": {
+        "os": "darwin",
+        "arch": "amd64"
+      },
+      "sha256": "8574fc6c9b0d7277121aaa0dc02f6444b5d13630c0c09254dda52b1191b3ff9d"
+    },
+    {
+      "path": "vendor/cpanel_sniper/bin/mac_m1_m2/cpanel_sniper",
+      "submodule": "vendor/cpanel_sniper",
+      "platform": {
+        "os": "darwin",
+        "arch": "arm64"
+      },
+      "sha256": "2dfb9dcb124096eb9aa92e1de02218e5133909d319aa9e2f9a865214e1f4cef4"
+    },
+    {
+      "path": "vendor/cpanel_sniper/bin/windows_x64/cpanel_sniper.exe",
+      "submodule": "vendor/cpanel_sniper",
+      "platform": {
+        "os": "windows",
+        "arch": "amd64"
+      },
+      "sha256": "0200b9ac9ed37e13e5ae295b65c1493cde40bb1f08df6e22b485ea5746f28a36"
+    }
+  ]
+}

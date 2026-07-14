@@ -4,34 +4,206 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+
 jobs:
-  python-checks:
-    runs-on: ubuntu-latest
+  import-smoke:
+    name: Runtime-only import smoke (Python 3.9)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout pinned dependencies
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install runtime profile only
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/runtime.txt
+          python -m pip check
+
+      - name: Import public runtime boundaries
+        run: python -I scripts/quality/import_smoke.py
+
+  static-analysis:
+    name: Configured Python quality gates
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout pinned dependencies
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install test profile
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/test.txt
+          python -m pip check
+
+      - name: Ruff (repository configuration)
+        run: python -m ruff check .
+
+      - name: Mypy (repository configuration)
+        run: python -m mypy
+
+      - name: Compile first-party Python
+        run: >-
+          python -m compileall -q
+          config.py db.py evasion.py export.py hash_cracker.py memory.py msf.py
+          octopus.py search.py shodan_module.py tools.py
+          core modules plugins scripts tests
+
+  fast-tests:
+    name: Fast hermetic suite (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9"]
-
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout pinned dependencies
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
 
-      - name: Install check dependencies
+      - name: Install hermetic test profile
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install -r requirements/test.txt
+          python -m pip check
 
-      - name: Ruff
-        run: python -m ruff check .
+      - name: Run fast unit and contract tests
+        run: >-
+          python -m pytest -q
+          -m '(unit or contract) and not slow and not external_tools and not mysql and not platform'
 
-      - name: Mypy
-        run: python -m mypy
+  full-suite:
+    name: Full suite and honest coverage gate (Python 3.9)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 50
+    steps:
+      - name: Checkout pinned dependencies
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
 
-      - name: Compile
-        run: python -m compileall -q octopus.py tools.py core modules tests
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
 
-      - name: Tests
-        run: python -m pytest -q
+      - name: Install hermetic test profile
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/test.txt
+          python -m pip check
+
+      - name: Measure the complete suite with branch coverage
+        run: |
+          python -m coverage erase
+          python -m coverage run --rcfile=quality/coverage-ci.ini -m pytest -q
+
+      - name: Enforce the complete first-party coverage denominator
+        run: >-
+          python scripts/quality/coverage_gate.py
+          --root .
+          --config quality/coverage-ci.ini
+          --fail-under 42.70
+          --xml coverage.xml
+
+  c2-go:
+    name: C2 Go build, test, vet, and format
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: core/c2
+    steps:
+      - name: Checkout pinned dependencies
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Go 1.21
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.21.x"
+          cache: false
+
+      - name: Check gofmt
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [[ -n "${unformatted}" ]]; then
+            echo "The following Go files require gofmt:"
+            echo "${unformatted}"
+            exit 1
+          fi
+
+      - name: Download and verify Go modules
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Run Go tests
+        run: go test ./...
+
+      - name: Run Go vet
+        run: go vet ./...
+
+      - name: Build C2 implant
+        run: go build -trimpath -o "${RUNNER_TEMP}/octopus-implant" .
+
+  vendor-integrity:
+    name: Pinned submodules and vendor artifact hashes
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout pinned dependencies recursively
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Verify every approved vendor artifact
+        run: python -I scripts/quality/verify_vendor.py --platform all
+
+      - name: Verify Linux AMD64 platform selection
+        run: python -I scripts/quality/verify_vendor.py --platform linux/amd64
