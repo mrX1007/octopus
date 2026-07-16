@@ -213,3 +213,19 @@ wide Ruff, the configured 50-file mypy gate, compileall, `pip check`, and
 `git diff --check`; all ten hermetic benchmark scenarios completed five
 repetitions, and the regenerated no-op/repeat comparison was byte-identical to
 the checked-in artifact.
+
+## Competitor benchmark matrix verification (2026-07-16)
+
+After the versioned external-system manifest, bounded command adapter, fair
+matrix runner, checksummed publication writer, and CLI end-to-end contracts
+were added, the complete configured suite was rerun:
+
+```text
+venv/bin/python -m pytest -q
+776 passed, 1 warning in 184.17s (0:03:04)
+```
+
+The focused benchmark suite reported `28 passed`. Repository-wide Ruff,
+compileall, `pip check`, and `git diff --check` remained clean; the configured
+mypy ratchet reported no issues across 55 source files. The single warning is
+the previously documented urllib3/LibreSSL environment warning.

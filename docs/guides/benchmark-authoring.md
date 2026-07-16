@@ -4,6 +4,13 @@ Benchmarks are deterministic, replay-first experiments. The default harness
 executes built-in in-process replays for the ten catalog categories and never
 launches an external scanner. A caller can still inject a custom runner.
 
+System-to-system experiments are a separate authorized live/integration track
+under `benchmarks/competitors/`. They use the same result aggregation contract,
+but add versioned system manifests, command adapters, fairness profiles, lab
+reset controls and a publication matrix. Do not place live competitor
+scenarios in the built-in catalog or present hermetic replay numbers as
+competitor performance.
+
 ## Scenario contract
 
 Add one JSON document under `benchmarks/scenarios/` conforming to
@@ -36,6 +43,23 @@ Adding a new category to the default catalog also requires a hermetic handler in
 for a custom integration runner should not be added to the required default
 catalog.
 
+For a competitor scenario, start from
+`benchmarks/competitors/scenarios/authorized-service-inventory.json.example`
+and publish the completed document under `benchmarks/competitors/scenarios/`.
+Use neutral actions and canonical finding IDs: product-specific commands must
+be translated inside each adapter. Pin the authorized lab snapshot and restore
+it before every repetition. Clear system state/caches, verify lab health and
+counterbalance manifest order across separate campaigns when infrastructure
+drift could systematically favor one product.
+
+Each participating system also needs a schema `1.0` manifest conforming to
+`docs/schemas/benchmark-system-v1.schema.json`. The manifest pins its exact
+version/revision, model, tools, execution mode, fairness track and command
+adapter. Adapter `argv` must contain `{scenario_path}` and `{output_path}`;
+environment passthrough lists names only and must never contain secret values.
+All manifests in one matrix must declare the same `execution_mode`: `live` and
+`replay` results are never mixed.
+
 Ablations are allowed only for toggle names explicitly passed as stable to the
 harness. Do not add a speculative ablation for behavior that cannot yet be
 enabled and disabled through a tested configuration contract.
@@ -49,6 +73,13 @@ enabled and disabled through a tested configuration contract.
 - Budgets are realistic and enforceable by the selected built-in or injected
   runner.
 - Results from different schema/tool/lab versions are not merged silently.
+- `framework_only` and `full_system` results remain separate, and only systems
+  with the same fairness profile are compared directly.
+- Live and replay execution modes remain separate.
+- The lab is reset from the same immutable snapshot before every live run.
+- Failed and invalid repetitions remain in the published result set.
+- A comparison reports per-metric values and does not declare an overall
+  winner unless a separate versioned scoring rule was declared in advance.
 - A scenario test covers schema load and the relevant behavior.
 
 Run the harness contracts with:
@@ -62,3 +93,26 @@ Run the default catalog and write reproducible artifacts with:
 ```bash
 venv/bin/python -m core.benchmarks
 ```
+
+The competitor manifest, command protocol, metrics, result layout and Git
+publication checklist are documented in
+`benchmarks/competitors/README.md`. Competitor campaigns require at least five
+repetitions for every system/scenario pair. Publish immutable inputs, all runs,
+aggregate median/variance/minimum/maximum/count, failures, execution mode,
+comparison track and fairness metadata together.
+
+Run a completed two-system campaign with:
+
+```bash
+venv/bin/python -m core.benchmarks.competitors \
+  --system-manifest benchmarks/competitors/systems/octopus.json \
+  --system-manifest benchmarks/competitors/systems/competitor-a.json \
+  --scenario-directory benchmarks/competitors/scenarios \
+  --output-directory benchmarks/competitors/results/<campaign-id> \
+  --repetitions 5 \
+  --strict
+```
+
+The output directory must not already exist. Strict mode publishes the complete
+comparison first, then exits non-zero if a run failed, was invalid or recorded
+a policy violation.

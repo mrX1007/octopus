@@ -194,3 +194,18 @@ Success: no issues found in 50 source files
 
 The two existing informational notes for untyped plugin event bodies remain;
 they are not type-check failures.
+
+## Competitor benchmark ratchet verification (2026-07-16)
+
+Adding the system-manifest, bounded command-runner, matrix/publication, and CLI
+package increased the configured mypy gate from 50 to 55 source files:
+
+```text
+venv/bin/python -m ruff check .
+All checks passed!
+
+venv/bin/python -m mypy
+Success: no issues found in 55 source files
+```
+
+No new suppression or per-file ignore was introduced.

@@ -1,0 +1,49 @@
+{
+  "$schema": "../../../docs/schemas/benchmark-system-v1.schema.json",
+  "schema_version": "1.0",
+  "system_id": "octopus-local",
+  "name": "OCTOPUS",
+  "version": "replace-with-release-version",
+  "source_revision": "replace-with-full-git-commit",
+  "execution_mode": "live",
+  "track": "framework_only",
+  "fairness_profile": {
+    "profile_id": "shared-model-tools-lab-v1",
+    "same_model": true,
+    "same_tool_versions": true,
+    "same_hardware": true,
+    "same_budgets": true,
+    "notes": "Every system in this comparison group uses the same authorized lab snapshot, model, toolchain and scenario budgets."
+  },
+  "model": {
+    "provider": "replace-with-shared-provider",
+    "name": "replace-with-shared-model",
+    "parameters": {
+      "temperature": 0,
+      "seed": 4100
+    }
+  },
+  "tool_versions": {
+    "nmap": "replace-with-pinned-version",
+    "runtime": "replace-with-pinned-version"
+  },
+  "adapter": {
+    "kind": "command",
+    "argv": [
+      "./replace-with-octopus-adapter",
+      "--scenario",
+      "{scenario_path}",
+      "--output",
+      "{output_path}"
+    ],
+    "working_directory": ".",
+    "environment_passthrough": [
+      "OCTOPUS_OLLAMA_URL",
+      "OCTOPUS_OLLAMA_MODEL"
+    ]
+  },
+  "metadata": {
+    "distribution": "local-source-checkout",
+    "publication_url": "replace-with-public-release-or-revision-url"
+  }
+}

@@ -225,7 +225,7 @@ from positive verification and final `ExecutionPolicy` authorization.
 | Knowledge graph | `core/knowledge/` | Canonical entity identity and idempotent semantic projection |
 | Plugins | `core/plugins/`, `modules/` | Class-based extension system |
 | Reporting/trace | `core/ai/report_schema.py`, `core/ai/decision_trace.py`, `export.py` | Versioned evidence report, bounded decisions/metrics and exports |
-| Benchmarks | `core/benchmarks/`, `benchmarks/scenarios/`, `benchmarks/results/` | Built-in hermetic replay runner, repeated aggregation and published comparison data |
+| Benchmarks | `core/benchmarks/`, `benchmarks/scenarios/`, `benchmarks/results/`, `benchmarks/competitors/` | Built-in hermetic replay plus a separate manifest-driven, authorized competitor matrix and published comparison data |
 | C2 | `core/c2/` | Optional daemon, implants, operators and channels |
 | OSINT/browser | `shodan_module.py`, `core/osint/shardbrowser.py` | Shodan and ShardBrowser integrations |
 
@@ -567,6 +567,47 @@ artifact includes definitions, weights, every selected task and a
 content-derived ID; the benchmark contract test regenerates it from code and
 requires exact equality.
 
+## Competitor Benchmarks
+
+Live or recorded comparisons with other systems use the separate competitor
+matrix under `benchmarks/competitors/`. The built-in hermetic figures above are
+never included in a live-system matrix or presented as competitor results.
+
+Each participating system supplies a versioned manifest that pins its release
+and source revision, `live | replay` execution mode, fairness track, model,
+tools and a shell-free command adapter. Every matrix requires at least two
+systems, one shared scenario catalog and five repetitions per system/scenario
+pair. A matrix rejects mixed execution modes, tracks or fairness profiles.
+
+Use `framework_only` when model, tools, hardware, lab snapshot and budgets are
+the same for every system. Use `full_system` for each product's recommended
+configuration and publish those differences. Both tracks require an explicitly
+authorized resettable lab for live scenarios. Restore the same snapshot and
+clear product state before every repetition.
+
+After copying and completing the `.json.example` templates, run:
+
+```bash
+./venv/bin/python -m core.benchmarks.competitors \
+  --system-manifest benchmarks/competitors/systems/octopus.json \
+  --system-manifest benchmarks/competitors/systems/competitor-a.json \
+  --scenario-directory benchmarks/competitors/scenarios \
+  --output-directory benchmarks/competitors/results/2026-07-16-framework-v1 \
+  --repetitions 5 \
+  --strict
+```
+
+The destination must be new. It contains `comparison.json`, a human-readable
+`comparison.md`, full per-system/per-scenario aggregates and `SHA256SUMS`.
+Strict mode publishes all evidence first and then exits non-zero if any run
+failed, was invalid or violated allowed actions. Results show per-metric
+medians/variance, sample counts and failures; OCTOPUS does not calculate or
+declare an overall winner by default.
+
+The manifest schema, adapter output protocol, neutral-scenario rules, fairness
+controls and Git publication checklist are in
+`benchmarks/competitors/README.md`.
+
 ## Testing
 
 Run the full test suite:
@@ -648,7 +689,8 @@ print("unknown:", report["unknown"])'
 │   └── transport/          # transport profiles and policies
 ├── modules/                # class-based plugins
 ├── benchmarks/scenarios/   # versioned replay benchmark catalog
-├── benchmarks/results/     # published deterministic comparison data
+├── benchmarks/results/     # published deterministic replay comparison data
+├── benchmarks/competitors/ # separate external-system manifests and matrices
 ├── docs/                   # architecture, schemas, guides and release controls
 ├── payloads/               # payload helpers
 ├── vendor/                 # bundled third-party integrations
@@ -711,7 +753,8 @@ The complete parser checklist is in `docs/guides/parser-authoring.md`.
   `docs/schemas/sqlite-stores-and-migrations.md`
 - Threat model: `docs/security/threat-model.md`
 - Test and benchmark architecture: `docs/quality/test-architecture.md` and
-  `docs/benchmarks/README.md`
+  `docs/benchmarks/README.md`; competitor publication protocol:
+  `benchmarks/competitors/README.md`
 - Contribution and release process: `CONTRIBUTING.md` and
   `docs/release-checklist.md`
 

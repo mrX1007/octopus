@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -86,6 +87,51 @@ def test_harness_runs_five_repetitions_and_publishes_median_variance(tmp_path):
     persisted = json.loads(destination.read_text())
     assert persisted["aggregate_id"] == aggregate.aggregate_id
     assert len(persisted["runs"]) == 5
+
+
+def test_runner_namespace_separates_system_identity_without_changing_scenario():
+    scenario = load_scenario(
+        SCENARIO_DIRECTORY / "06-clean-negative.json"
+    )
+
+    def runner(_scenario, _repetition, _seed):
+        return {
+            "status": "succeeded",
+            "actions": ["replay_negative_checks"],
+            "reported_findings": [],
+        }
+
+    first = BenchmarkHarness(
+        runner,
+        clock=lambda: 1.0,
+        run_namespace="system:first:1.0",
+        runner_metadata={"system_under_test": {"id": "first", "version": "1.0"}},
+    ).run(scenario)
+    second = BenchmarkHarness(
+        runner,
+        clock=lambda: 1.0,
+        run_namespace="system:second:1.0",
+        runner_metadata={"system_under_test": {"id": "second", "version": "1.0"}},
+    ).run(scenario)
+
+    assert first.scenario.scenario_id == second.scenario.scenario_id
+    assert first.aggregate_id != second.aggregate_id
+    assert first.runs[0].run_id != second.runs[0].run_id
+    assert first.runs[0].environment["runner"]["system_under_test"] == {
+        "id": "first",
+        "version": "1.0",
+    }
+
+    changed_lab = replace(
+        scenario,
+        lab={**scenario.lab, "version": "changed-lab-version"},
+    )
+    changed = BenchmarkHarness(
+        runner,
+        clock=lambda: 1.0,
+        run_namespace="system:first:1.0",
+    ).run(changed_lab)
+    assert changed.runs[0].run_id != first.runs[0].run_id
 
 
 def test_allowed_action_violation_invalidates_run_without_executing_fallback():

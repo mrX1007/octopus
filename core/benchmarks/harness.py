@@ -40,6 +40,8 @@ class BenchmarkHarness:
         *,
         stable_toggles: Sequence[str] = (),
         clock: Callable[[], float] = time.time,
+        run_namespace: str = "",
+        runner_metadata: Mapping[str, Any] | None = None,
     ) -> None:
         if runner is None:
             # Import lazily so custom-runner users do not pay for project
@@ -51,6 +53,11 @@ class BenchmarkHarness:
         self.runner: BenchmarkRunner = runner
         self.stable_toggles = frozenset(str(item) for item in stable_toggles)
         self.clock = clock
+        self.run_namespace = str(run_namespace or "")[:256]
+        self.runner_metadata = {
+            str(key)[:128]: _bounded_metadata(value)
+            for key, value in (runner_metadata or {}).items()
+        }
 
     def run(
         self,
@@ -155,10 +162,14 @@ class BenchmarkHarness:
             "strategy_config": dict(scenario.strategy_config),
             "budgets": dict(scenario.budgets),
         }
+        if self.runner_metadata:
+            environment["runner"] = dict(self.runner_metadata)
         run_id = _stable_id(
             "benchmark-run",
             {
+                "run_namespace": self.run_namespace,
                 "scenario_id": scenario.scenario_id,
+                "scenario_contract": scenario.to_dict(),
                 "repetition": repetition,
                 "seed": seed,
                 "status": status,
@@ -251,6 +262,26 @@ def _string_tuple(values: Any) -> tuple[str, ...]:
     if not isinstance(values, Sequence):
         return ()
     return tuple(dict.fromkeys(str(item)[:4_096] for item in values[:256] if str(item)))
+
+
+def _bounded_metadata(value: Any, *, depth: int = 0) -> Any:
+    if depth >= 4:
+        return "[depth-bounded]"
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, Mapping):
+        return {
+            str(key)[:128]: _bounded_metadata(item, depth=depth + 1)
+            for key, item in list(value.items())[:64]
+        }
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+        return [
+            _bounded_metadata(item, depth=depth + 1)
+            for item in value[:64]
+        ]
+    return str(value)[:4_096]
 
 
 def _is_number(value: Any) -> bool:

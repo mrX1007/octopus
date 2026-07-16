@@ -1,0 +1,61 @@
+"""Contracts and bounded runners for cross-system benchmarks."""
+
+from .matrix import (
+    COMPETITOR_MATRIX_SCHEMA_VERSION,
+    CompetitorMatrixResult,
+    MatrixResult,
+    publish_competitor_matrix,
+    publish_matrix,
+    render_comparison_markdown,
+    run_competitor_matrix,
+    run_matrix,
+)
+from .runner import (
+    CommandSystemRunner,
+    SystemProtocolError,
+    SystemRunnerError,
+    SystemUnavailableError,
+)
+from .schema import (
+    ALLOWED_COMMAND_PLACEHOLDERS,
+    REQUIRED_COMMAND_PLACEHOLDERS,
+    SYSTEM_EXECUTION_MODES,
+    SYSTEM_MANIFEST_SCHEMA_VERSION,
+    SYSTEM_TRACKS,
+    CommandAdapter,
+    CommandAdapterConfig,
+    CompetitorManifest,
+    CompetitorSchemaError,
+    FairnessProfile,
+    SystemManifest,
+    load_system_manifest,
+    load_system_manifests,
+)
+
+__all__ = [
+    "ALLOWED_COMMAND_PLACEHOLDERS",
+    "COMPETITOR_MATRIX_SCHEMA_VERSION",
+    "REQUIRED_COMMAND_PLACEHOLDERS",
+    "SYSTEM_EXECUTION_MODES",
+    "SYSTEM_MANIFEST_SCHEMA_VERSION",
+    "SYSTEM_TRACKS",
+    "CommandAdapter",
+    "CommandAdapterConfig",
+    "CommandSystemRunner",
+    "CompetitorManifest",
+    "CompetitorMatrixResult",
+    "CompetitorSchemaError",
+    "FairnessProfile",
+    "MatrixResult",
+    "SystemManifest",
+    "SystemProtocolError",
+    "SystemRunnerError",
+    "SystemUnavailableError",
+    "load_system_manifest",
+    "load_system_manifests",
+    "publish_competitor_matrix",
+    "publish_matrix",
+    "render_comparison_markdown",
+    "run_competitor_matrix",
+    "run_matrix",
+]
