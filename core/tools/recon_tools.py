@@ -1195,9 +1195,6 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
     all_users = list(dict.fromkeys(default_users + extended_users))
     remaining = [u for u in all_users if u not in canary_users]
 
-    valid_users = [u for u in canary_users if u not in ["support", "aaa_fake_user_m7k"]
-                   and _check_user is not None]  # placeholder — re-check below
-    # Actually rebuild from canary results
     valid_users = []
     invalid_count = 0
     error_count = 0

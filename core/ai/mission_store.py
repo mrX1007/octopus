@@ -16,7 +16,7 @@ import threading
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 from uuid import uuid4
@@ -24,10 +24,15 @@ from uuid import uuid4
 from core.ai.outcomes import TaskOutcome
 from core.secrets import Redactor, SecretStore, default_secret_store_path
 
-MISSION_LIFECYCLE_SCHEMA_VERSION = "1.0"
+MISSION_LIFECYCLE_SCHEMA_VERSION = "1.2"
+_MIGRATABLE_SCHEMA_VERSIONS = frozenset(
+    {"1.0", "1.1", MISSION_LIFECYCLE_SCHEMA_VERSION}
+)
 _MAX_IDENTIFIER_BYTES = 4096
 _MAX_REASON_BYTES = 16 * 1024
 _MAX_OUTCOME_BYTES = 4 * 1024 * 1024
+_MAX_RETRY_BUDGET = 100
+_MAX_RETRY_COMMAND_KEYS = 64
 
 
 class MissionStatus(str, Enum):
@@ -47,6 +52,17 @@ class TaskStatus(str, Enum):
     COMPLETED = "completed"
 
 
+class RetryErrorClass(str, Enum):
+    """Stable error taxonomy used by durable retry policies."""
+
+    TIMEOUT = "timeout"
+    RATE_LIMIT = "rate_limit"
+    TRANSIENT_NETWORK = "transient_network"
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
+    TOOL_UNAVAILABLE = "tool_unavailable"
+    EXECUTION_ERROR = "execution_error"
+
+
 _RETRYABLE_TASK_STATUSES = {
     TaskStatus.PENDING.value,
     TaskStatus.INTERRUPTED.value,
@@ -58,6 +74,8 @@ _OUTCOME_STATUSES = {
     TaskStatus.NO_NEW_FACTS.value,
     TaskStatus.COMPLETED.value,
 }
+
+
 class MissionStoreError(ValueError):
     """Raised when a lifecycle mutation conflicts with persisted state."""
 
@@ -71,6 +89,66 @@ class TaskDependenciesIncomplete(MissionStoreError):
             f"{task_id}:{status}" for task_id, status in self.incomplete
         )
         super().__init__(f"task dependencies are incomplete: {details}")
+
+
+class TaskRetryError(MissionStoreError):
+    """Base error for an invalid durable retry transition."""
+
+
+class TaskRetryNotAllowed(TaskRetryError):
+    """Raised when a failure class is not retryable for a task."""
+
+
+class TaskRetryBudgetExhausted(TaskRetryError):
+    """Raised when a task has consumed its explicit retry budget."""
+
+
+@dataclass(frozen=True)
+class TaskRetryPolicy:
+    """Bounded retry policy persisted with a mission task definition."""
+
+    retry_budget: int = 0
+    retryable_error_classes: tuple[RetryErrorClass, ...] = ()
+
+    def __post_init__(self) -> None:
+        if isinstance(self.retry_budget, bool) or not isinstance(self.retry_budget, int):
+            raise MissionStoreError("retry_budget must be an integer")
+        if not 0 <= self.retry_budget <= _MAX_RETRY_BUDGET:
+            raise MissionStoreError(
+                f"retry_budget must be between 0 and {_MAX_RETRY_BUDGET}"
+            )
+        try:
+            normalized = tuple(
+                dict.fromkeys(
+                    item
+                    if isinstance(item, RetryErrorClass)
+                    else RetryErrorClass(str(item))
+                    for item in self.retryable_error_classes
+                )
+            )
+        except ValueError as exc:
+            raise MissionStoreError(f"unsupported retry error class: {exc}") from exc
+        if self.retry_budget and not normalized:
+            raise MissionStoreError(
+                "a positive retry_budget requires retryable_error_classes"
+            )
+        if not self.retry_budget and normalized:
+            raise MissionStoreError(
+                "retryable_error_classes require a positive retry_budget"
+            )
+        object.__setattr__(self, "retryable_error_classes", normalized)
+
+
+@dataclass(frozen=True)
+class MissionTaskDefinition:
+    """Typed planner-task definition accepted by :meth:`register_plan`."""
+
+    agent: str
+    task: str
+    depends_on: tuple[tuple[str, str], ...] = ()
+    scope: str = ""
+    capability: str = ""
+    retry_policy: TaskRetryPolicy = field(default_factory=TaskRetryPolicy)
 
 
 @dataclass(frozen=True)
@@ -102,6 +180,12 @@ class TaskRecord:
     started_at: float | None
     finished_at: float | None
     attempt_count: int
+    scope: str = ""
+    capability: str = ""
+    retry_budget: int = 0
+    retry_count: int = 0
+    retryable_error_classes: tuple[RetryErrorClass, ...] = ()
+    last_error_class: RetryErrorClass | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +201,17 @@ class TaskAttemptRecord:
     outcome: TaskOutcome | None
     execution_ids: tuple[str, ...]
     fact_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class AttemptCompletionResult:
+    """Atomic result of terminalizing an attempt and evaluating its retry."""
+
+    attempt: TaskAttemptRecord
+    task: TaskRecord
+    retry_scheduled: bool = False
+    retry_rejection: str = ""
+    retry_command_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -249,10 +344,7 @@ class MissionStore:
                     WHERE component = 'mission_store'
                     """
                 ).fetchone()
-                if (
-                    existing
-                    and existing["version"] != MISSION_LIFECYCLE_SCHEMA_VERSION
-                ):
+                if existing and existing["version"] not in _MIGRATABLE_SCHEMA_VERSIONS:
                     raise MissionStoreError(
                         "unsupported mission lifecycle schema version: "
                         f"{existing['version']}"
@@ -294,6 +386,15 @@ class MissionStore:
                         started_at REAL,
                         finished_at REAL,
                         attempt_count INTEGER NOT NULL DEFAULT 0,
+                        scope TEXT NOT NULL DEFAULT '',
+                        scope_key TEXT NOT NULL DEFAULT '',
+                        capability TEXT NOT NULL DEFAULT '',
+                        capability_key TEXT NOT NULL DEFAULT '',
+                        retry_budget INTEGER NOT NULL DEFAULT 0,
+                        retry_count INTEGER NOT NULL DEFAULT 0,
+                        retryable_error_classes_json TEXT NOT NULL DEFAULT '[]',
+                        retry_policy_key TEXT NOT NULL DEFAULT '',
+                        last_error_class TEXT NOT NULL DEFAULT '',
                         UNIQUE(mission_id, task_key),
                         FOREIGN KEY(mission_id) REFERENCES missions(mission_id)
                             ON DELETE CASCADE
@@ -340,6 +441,21 @@ class MissionStore:
                 )
                 conn.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS mission_task_retry_commands (
+                        task_id TEXT NOT NULL,
+                        retry_number INTEGER NOT NULL,
+                        command_key TEXT NOT NULL,
+                        error_class TEXT NOT NULL,
+                        consumed_at REAL,
+                        created_at REAL NOT NULL,
+                        PRIMARY KEY(task_id, retry_number, command_key),
+                        FOREIGN KEY(task_id) REFERENCES mission_tasks(task_id)
+                            ON DELETE CASCADE
+                    )
+                    """
+                )
+                conn.execute(
+                    """
                     CREATE UNIQUE INDEX IF NOT EXISTS idx_one_running_attempt_per_task
                     ON mission_task_attempts(task_id) WHERE status = 'running'
                     """
@@ -354,6 +470,12 @@ class MissionStore:
                     """
                     CREATE INDEX IF NOT EXISTS idx_mission_attempts_status
                     ON mission_task_attempts(mission_id, status)
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_mission_retry_commands_pending
+                    ON mission_task_retry_commands(task_id, retry_number, consumed_at)
                     """
                 )
                 self._ensure_column(
@@ -378,6 +500,60 @@ class MissionStore:
                     conn,
                     "mission_tasks",
                     "reason_key",
+                    "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
+                    "mission_tasks",
+                    "scope",
+                    "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
+                    "mission_tasks",
+                    "scope_key",
+                    "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
+                    "mission_tasks",
+                    "capability",
+                    "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
+                    "mission_tasks",
+                    "capability_key",
+                    "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
+                    "mission_tasks",
+                    "retry_budget",
+                    "INTEGER NOT NULL DEFAULT 0",
+                )
+                self._ensure_column(
+                    conn,
+                    "mission_tasks",
+                    "retry_count",
+                    "INTEGER NOT NULL DEFAULT 0",
+                )
+                self._ensure_column(
+                    conn,
+                    "mission_tasks",
+                    "retryable_error_classes_json",
+                    "TEXT NOT NULL DEFAULT '[]'",
+                )
+                self._ensure_column(
+                    conn,
+                    "mission_tasks",
+                    "retry_policy_key",
+                    "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
+                    "mission_tasks",
+                    "last_error_class",
                     "TEXT NOT NULL DEFAULT ''",
                 )
                 self._ensure_column(
@@ -425,6 +601,18 @@ class MissionStore:
                         INSERT INTO mission_lifecycle_schema(component, version)
                         VALUES ('mission_store', ?)
                         """,
+                        (MISSION_LIFECYCLE_SCHEMA_VERSION,),
+                    )
+                elif existing["version"] != MISSION_LIFECYCLE_SCHEMA_VERSION:
+                    conn.execute(
+                        """
+                        UPDATE mission_lifecycle_schema SET version = ?
+                        WHERE component = 'mission_store' AND version = ?
+                        """,
+                        (MISSION_LIFECYCLE_SCHEMA_VERSION, existing["version"]),
+                    )
+                    conn.execute(
+                        "UPDATE missions SET schema_version = ?",
                         (MISSION_LIFECYCLE_SCHEMA_VERSION,),
                     )
                 current = conn.execute(
@@ -616,6 +804,10 @@ class MissionStore:
         agent: str,
         task: str,
         depends_on: Sequence[str] = (),
+        *,
+        scope: str | None = None,
+        capability: str | None = None,
+        retry_policy: TaskRetryPolicy | None = None,
     ) -> TaskRecord:
         raw_agent = str(agent or "")
         raw_task = str(task or "")
@@ -625,6 +817,7 @@ class MissionStore:
         safe_agent = self._safe_text(raw_agent, "mission_task_agent", _MAX_IDENTIFIER_BYTES)
         safe_task = self._safe_text(raw_task, "mission_task_name", _MAX_IDENTIFIER_BYTES)
         dependency_ids = tuple(sorted(dict.fromkeys(str(item) for item in depends_on)))
+        metadata = self._prepare_task_metadata(scope, capability, retry_policy)
         now = time.time()
 
         with self._transaction() as conn:
@@ -642,8 +835,12 @@ class MissionStore:
                     """
                     INSERT INTO mission_tasks(
                         task_id, mission_id, task_key, agent, task, status,
-                        reason, created_at, updated_at, attempt_count
-                    ) VALUES (?, ?, ?, ?, ?, 'pending', '', ?, ?, 0)
+                        reason, created_at, updated_at, attempt_count,
+                        scope, scope_key, capability, capability_key,
+                        retry_budget, retryable_error_classes_json,
+                        retry_policy_key
+                    ) VALUES (?, ?, ?, ?, ?, 'pending', '', ?, ?, 0,
+                              ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         task_id,
@@ -653,12 +850,21 @@ class MissionStore:
                         safe_task,
                         now,
                         now,
+                        metadata["scope"],
+                        metadata["scope_key"] or "",
+                        metadata["capability"],
+                        metadata["capability_key"] or "",
+                        metadata["retry_budget"],
+                        metadata["retryable_error_classes_json"],
+                        metadata["retry_policy_key"] or "",
                     ),
                 )
                 row = conn.execute(
                     "SELECT * FROM mission_tasks WHERE task_id = ?",
                     (task_id,),
                 ).fetchone()
+            else:
+                row = self._reconcile_task_metadata(conn, row, metadata)
 
             current_dependencies = self._dependency_ids(conn, row["task_id"])
             if row["attempt_count"] > 0 and current_dependencies != dependency_ids:
@@ -678,7 +884,7 @@ class MissionStore:
         self,
         mission_id: str,
         definitions: Sequence[
-            tuple[str, str, Sequence[tuple[str, str]]]
+            MissionTaskDefinition | tuple[str, str, Sequence[tuple[str, str]]]
         ],
         *,
         blocked_reasons: Mapping[tuple[str, str], str] | None = None,
@@ -686,7 +892,26 @@ class MissionStore:
         """Atomically register a plan and all dependency edges."""
         prepared = []
         seen_keys: set[str] = set()
-        for agent, task, dependencies in definitions:
+        for definition in definitions:
+            if isinstance(definition, MissionTaskDefinition):
+                agent = definition.agent
+                task = definition.task
+                dependencies = definition.depends_on
+                metadata = self._prepare_task_metadata(
+                    definition.scope,
+                    definition.capability,
+                    definition.retry_policy,
+                )
+            else:
+                try:
+                    agent, task, raw_dependencies = definition
+                    dependencies = tuple(raw_dependencies)
+                except (TypeError, ValueError) as exc:
+                    raise MissionStoreError(
+                        "plan definitions must be MissionTaskDefinition or "
+                        "(agent, task, dependencies) tuples"
+                    ) from exc
+                metadata = self._prepare_task_metadata(None, None, None)
             raw_agent = str(agent or "")
             raw_task = str(task or "")
             if not raw_agent or not raw_task:
@@ -714,6 +939,7 @@ class MissionStore:
                         (str(dep_agent or ""), str(dep_task or ""))
                         for dep_agent, dep_task in dependencies
                     ),
+                    metadata,
                 )
             )
         if not prepared:
@@ -749,6 +975,7 @@ class MissionStore:
                 safe_agent,
                 safe_task,
                 _,
+                metadata,
             ) in enumerate(prepared):
                 row = conn.execute(
                     """
@@ -763,8 +990,12 @@ class MissionStore:
                         """
                         INSERT INTO mission_tasks(
                             task_id, mission_id, task_key, agent, task, status,
-                            reason, created_at, updated_at, attempt_count
-                        ) VALUES (?, ?, ?, ?, ?, 'pending', '', ?, ?, 0)
+                            reason, created_at, updated_at, attempt_count,
+                            scope, scope_key, capability, capability_key,
+                            retry_budget, retryable_error_classes_json,
+                            retry_policy_key
+                        ) VALUES (?, ?, ?, ?, ?, 'pending', '', ?, ?, 0,
+                                  ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             task_id,
@@ -774,15 +1005,24 @@ class MissionStore:
                             safe_task,
                             now + (position * 0.000001),
                             now + (position * 0.000001),
+                            metadata["scope"],
+                            metadata["scope_key"] or "",
+                            metadata["capability"],
+                            metadata["capability_key"] or "",
+                            metadata["retry_budget"],
+                            metadata["retryable_error_classes_json"],
+                            metadata["retry_policy_key"] or "",
                         ),
                     )
                     row = conn.execute(
                         "SELECT * FROM mission_tasks WHERE task_id = ?",
                         (task_id,),
                     ).fetchone()
+                else:
+                    row = self._reconcile_task_metadata(conn, row, metadata)
                 rows_by_key[task_key] = row
 
-            for _, _, task_key, _, _, dependencies in prepared:
+            for _, _, task_key, _, _, dependencies, _ in prepared:
                 row = rows_by_key[task_key]
                 dependency_ids = []
                 for dep_agent, dep_task in dependencies:
@@ -824,7 +1064,7 @@ class MissionStore:
                         normalized_ids,
                     )
 
-            for raw_agent, raw_task, task_key, _, _, _ in prepared:
+            for raw_agent, raw_task, task_key, _, _, _, _ in prepared:
                 safe_reason_data = safe_blocked_reasons.get(task_key)
                 if safe_reason_data is None:
                     continue
@@ -843,7 +1083,7 @@ class MissionStore:
 
             return tuple(
                 self._task_from_row(conn, rows_by_key[task_key])
-                for _, _, task_key, _, _, _ in prepared
+                for _, _, task_key, _, _, _, _ in prepared
             )
 
     def begin_attempt(self, mission_id: str, agent: str, task: str) -> TaskAttemptRecord:
@@ -939,8 +1179,41 @@ class MissionStore:
         execution_ids: Sequence[str] = (),
         fact_ids: Sequence[int] = (),
     ) -> TaskAttemptRecord:
+        """Terminalize an attempt without requesting a retry."""
+        return self.complete_attempt_and_schedule_retry(
+            attempt_id,
+            outcome,
+            execution_ids=execution_ids,
+            fact_ids=fact_ids,
+        ).attempt
+
+    def complete_attempt_and_schedule_retry(
+        self,
+        attempt_id: str,
+        outcome: TaskOutcome,
+        execution_ids: Sequence[str] = (),
+        fact_ids: Sequence[int] = (),
+        *,
+        retry_error_class: RetryErrorClass | str | None = None,
+        retry_command_keys: Sequence[str] = (),
+    ) -> AttemptCompletionResult:
+        """Atomically terminalize an attempt and schedule an eligible retry.
+
+        A failed attempt and its retry grant are committed in one SQLite
+        transaction.  Therefore a process crash can observe either the running
+        attempt or the fully persisted terminal attempt plus bounded retry
+        allowlist, never a failed task that lost an otherwise eligible retry.
+        """
         if outcome.status not in _OUTCOME_STATUSES:
             raise MissionStoreError(f"unsupported terminal task status: {outcome.status}")
+        normalized_retry_error = (
+            self._retry_error_class(retry_error_class)
+            if retry_error_class is not None
+            else None
+        )
+        if normalized_retry_error is not None and outcome.status != TaskStatus.FAILED.value:
+            raise MissionStoreError("only failed task attempts can request a retry")
+        safe_retry_keys = self._safe_retry_command_keys(retry_command_keys)
         raw_execution_ids = tuple(
             dict.fromkeys(str(item) for item in execution_ids if str(item))
         )
@@ -965,7 +1238,7 @@ class MissionStore:
             if row is None:
                 raise MissionStoreError(f"unknown task attempt: {attempt_id}")
             task_row = conn.execute(
-                "SELECT task_key, agent, task FROM mission_tasks WHERE task_id = ?",
+                "SELECT * FROM mission_tasks WHERE task_id = ?",
                 (row["task_id"],),
             ).fetchone()
             if (
@@ -979,7 +1252,19 @@ class MissionStore:
                 row["status"] != TaskStatus.RUNNING.value
                 and row["outcome_key"] == completion_key
             ):
-                return self._attempt_from_row(row)
+                persisted_keys = self._retry_command_keys_for_row(conn, task_row)
+                retry_scheduled = bool(
+                    normalized_retry_error is not None
+                    and task_row["last_error_class"] == normalized_retry_error.value
+                    and int(task_row["retry_count"]) > 0
+                    and persisted_keys
+                )
+                return AttemptCompletionResult(
+                    attempt=self._attempt_from_row(row),
+                    task=self._task_from_row(conn, task_row),
+                    retry_scheduled=retry_scheduled,
+                    retry_command_keys=persisted_keys,
+                )
             safe_outcome = self._safe_outcome(
                 outcome,
                 agent=task_row["agent"],
@@ -1006,7 +1291,13 @@ class MissionStore:
                     and row["execution_ids_json"] == execution_json
                     and row["fact_ids_json"] == fact_json
                 ):
-                    return self._attempt_from_row(row)
+                    persisted_keys = self._retry_command_keys_for_row(conn, task_row)
+                    return AttemptCompletionResult(
+                        attempt=self._attempt_from_row(row),
+                        task=self._task_from_row(conn, task_row),
+                        retry_scheduled=bool(persisted_keys),
+                        retry_command_keys=persisted_keys,
+                    )
                 raise MissionStoreError(
                     f"attempt {attempt_id} already ended as {row['status']}"
                 )
@@ -1058,11 +1349,214 @@ class MissionStore:
                 "UPDATE missions SET updated_at = ? WHERE mission_id = ?",
                 (now, row["mission_id"]),
             )
+            retry_scheduled = False
+            retry_rejection = ""
+            if normalized_retry_error is not None:
+                task_row = conn.execute(
+                    "SELECT * FROM mission_tasks WHERE task_id = ?",
+                    (row["task_id"],),
+                ).fetchone()
+                retryable = self._load_retry_error_classes(
+                    task_row["retryable_error_classes_json"]
+                )
+                retry_count = int(task_row["retry_count"])
+                retry_budget = int(task_row["retry_budget"])
+                if normalized_retry_error not in retryable:
+                    retry_rejection = TaskRetryNotAllowed.__name__
+                elif retry_count >= retry_budget:
+                    retry_rejection = TaskRetryBudgetExhausted.__name__
+                elif not safe_retry_keys:
+                    retry_rejection = "retry_command_allowlist_empty"
+                else:
+                    next_retry = retry_count + 1
+                    conn.execute(
+                        """
+                        UPDATE mission_tasks
+                        SET status = 'pending', reason = '', reason_key = '',
+                            updated_at = ?, finished_at = NULL,
+                            retry_count = ?, last_error_class = ?
+                        WHERE task_id = ? AND status = 'failed'
+                        """,
+                        (
+                            now,
+                            next_retry,
+                            normalized_retry_error.value,
+                            row["task_id"],
+                        ),
+                    )
+                    self._insert_retry_command_grants(
+                        conn,
+                        row["task_id"],
+                        next_retry,
+                        normalized_retry_error,
+                        safe_retry_keys,
+                        now,
+                    )
+                    retry_scheduled = True
             current = conn.execute(
                 "SELECT * FROM mission_task_attempts WHERE attempt_id = ?",
                 (attempt_id,),
             ).fetchone()
-            return self._attempt_from_row(current)
+            current_task = conn.execute(
+                "SELECT * FROM mission_tasks WHERE task_id = ?",
+                (row["task_id"],),
+            ).fetchone()
+            return AttemptCompletionResult(
+                attempt=self._attempt_from_row(current),
+                task=self._task_from_row(conn, current_task),
+                retry_scheduled=retry_scheduled,
+                retry_rejection=retry_rejection,
+                retry_command_keys=safe_retry_keys if retry_scheduled else (),
+            )
+
+    def schedule_retry(
+        self,
+        mission_id: str,
+        agent: str,
+        task: str,
+        *,
+        error_class: RetryErrorClass | str,
+    ) -> TaskRecord:
+        """Transition a failed task back to pending under its durable policy.
+
+        The transition consumes one retry only after the error class and budget
+        checks pass. Repeating the same request while the retry is pending is
+        idempotent and does not consume another retry.
+        """
+        raw_agent = str(agent or "")
+        raw_task = str(task or "")
+        if not raw_agent or not raw_task:
+            raise MissionStoreError("agent and task are required")
+        normalized_error = self._retry_error_class(error_class)
+        task_key = self._task_key(raw_agent, raw_task)
+        now = time.time()
+
+        with self._transaction() as conn:
+            self._require_running_mission(conn, mission_id)
+            task_row = conn.execute(
+                """
+                SELECT * FROM mission_tasks
+                WHERE mission_id = ? AND task_key = ?
+                """,
+                (mission_id, task_key),
+            ).fetchone()
+            if task_row is None:
+                raise MissionStoreError("task must be registered before it can retry")
+
+            if (
+                task_row["status"] == TaskStatus.PENDING.value
+                and int(task_row["retry_count"]) > 0
+                and task_row["last_error_class"] == normalized_error.value
+            ):
+                return self._task_from_row(conn, task_row)
+            if task_row["status"] != TaskStatus.FAILED.value:
+                raise TaskRetryError(
+                    f"task {task_row['task_id']} cannot retry from "
+                    f"{task_row['status']}"
+                )
+
+            retryable = self._load_retry_error_classes(
+                task_row["retryable_error_classes_json"]
+            )
+            if normalized_error not in retryable:
+                raise TaskRetryNotAllowed(
+                    f"{normalized_error.value} is not retryable for "
+                    f"task {task_row['task_id']}"
+                )
+            retry_count = int(task_row["retry_count"])
+            retry_budget = int(task_row["retry_budget"])
+            if retry_count >= retry_budget:
+                raise TaskRetryBudgetExhausted(
+                    f"retry budget exhausted for task {task_row['task_id']}: "
+                    f"{retry_count}/{retry_budget}"
+                )
+
+            conn.execute(
+                """
+                UPDATE mission_tasks
+                SET status = 'pending', reason = '', reason_key = '',
+                    updated_at = ?, finished_at = NULL,
+                    retry_count = ?, last_error_class = ?
+                WHERE task_id = ? AND status = 'failed'
+                """,
+                (
+                    now,
+                    retry_count + 1,
+                    normalized_error.value,
+                    task_row["task_id"],
+                ),
+            )
+            conn.execute(
+                "UPDATE missions SET updated_at = ? WHERE mission_id = ?",
+                (now, mission_id),
+            )
+            current = conn.execute(
+                "SELECT * FROM mission_tasks WHERE task_id = ?",
+                (task_row["task_id"],),
+            ).fetchone()
+            return self._task_from_row(conn, current)
+
+    def pending_retry_command_keys(
+        self,
+        mission_id: str,
+        agent: str,
+        task: str,
+    ) -> tuple[str, ...]:
+        """Return the unconsumed allowlist for a task's current retry number."""
+        task_key = self._task_key(str(agent or ""), str(task or ""))
+        with self._connection() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM mission_tasks
+                WHERE mission_id = ? AND task_key = ?
+                """,
+                (mission_id, task_key),
+            ).fetchone()
+            if row is None:
+                raise MissionStoreError("unknown mission task")
+            return self._retry_command_keys_for_row(conn, row, pending_only=True)
+
+    def consume_retry_command(
+        self,
+        mission_id: str,
+        agent: str,
+        task: str,
+        command_key: str,
+    ) -> bool:
+        """Atomically consume one current retry grant before dispatch."""
+        safe_keys = self._safe_retry_command_keys((command_key,))
+        if not safe_keys:
+            return False
+        task_key = self._task_key(str(agent or ""), str(task or ""))
+        now = time.time()
+        with self._transaction() as conn:
+            self._require_running_mission(conn, mission_id)
+            row = conn.execute(
+                """
+                SELECT * FROM mission_tasks
+                WHERE mission_id = ? AND task_key = ?
+                """,
+                (mission_id, task_key),
+            ).fetchone()
+            if row is None:
+                raise MissionStoreError("unknown mission task")
+            if row["status"] != TaskStatus.RUNNING.value:
+                return False
+            cursor = conn.execute(
+                """
+                UPDATE mission_task_retry_commands
+                SET consumed_at = ?
+                WHERE task_id = ? AND retry_number = ? AND command_key = ?
+                  AND consumed_at IS NULL
+                """,
+                (
+                    now,
+                    row["task_id"],
+                    int(row["retry_count"]),
+                    safe_keys[0],
+                ),
+            )
+            return cursor.rowcount == 1
 
     def record_attempt_progress(
         self,
@@ -1506,6 +2000,135 @@ class MissionStore:
         if row["owner_id"] != self._owner_id:
             raise MissionStoreError("mission owner changed; stale writer is fenced")
 
+    def _prepare_task_metadata(
+        self,
+        scope: str | None,
+        capability: str | None,
+        retry_policy: TaskRetryPolicy | None,
+    ) -> dict[str, Any]:
+        if retry_policy is not None and not isinstance(retry_policy, TaskRetryPolicy):
+            raise MissionStoreError("retry_policy must be a TaskRetryPolicy")
+
+        raw_scope = None if scope is None else str(scope)
+        raw_capability = None if capability is None else str(capability)
+        safe_scope = (
+            ""
+            if raw_scope is None
+            else self._safe_text(
+                raw_scope,
+                "mission_task_scope",
+                _MAX_IDENTIFIER_BYTES,
+            )
+        )
+        safe_capability = (
+            ""
+            if raw_capability is None
+            else self._safe_text(
+                raw_capability,
+                "mission_task_capability",
+                _MAX_IDENTIFIER_BYTES,
+            )
+        )
+        policy = retry_policy or TaskRetryPolicy()
+        retryable_json = self._encode_retry_error_classes(
+            policy.retryable_error_classes
+        )
+        policy_payload = {
+            "retry_budget": policy.retry_budget,
+            "retryable_error_classes": [
+                item.value for item in policy.retryable_error_classes
+            ],
+        }
+        return {
+            "scope": safe_scope,
+            "scope_key": (
+                None
+                if raw_scope is None
+                else self._stable_key("mission_task_scope", raw_scope)
+            ),
+            "capability": safe_capability,
+            "capability_key": (
+                None
+                if raw_capability is None
+                else self._stable_key("mission_task_capability", raw_capability)
+            ),
+            "retry_budget": policy.retry_budget,
+            "retryable_error_classes_json": retryable_json,
+            "retry_policy_key": (
+                None
+                if retry_policy is None
+                else self._stable_payload_key("mission_task_retry_policy", policy_payload)
+            ),
+        }
+
+    def _reconcile_task_metadata(
+        self,
+        conn: sqlite3.Connection,
+        row: sqlite3.Row,
+        requested: Mapping[str, Any],
+    ) -> sqlite3.Row:
+        updates: dict[str, Any] = {}
+        for field_name in ("scope", "capability"):
+            requested_key = requested[f"{field_name}_key"]
+            if requested_key is None:
+                continue
+            current_key = row[f"{field_name}_key"]
+            current_value = row[field_name]
+            requested_value = requested[field_name]
+            if current_key and current_key != requested_key:
+                raise MissionStoreError(
+                    f"task {field_name} conflicts with the persisted definition"
+                )
+            if not current_key and current_value and current_value != requested_value:
+                raise MissionStoreError(
+                    f"task {field_name} conflicts with the persisted definition"
+                )
+            if not current_key:
+                updates[field_name] = requested_value
+                updates[f"{field_name}_key"] = requested_key
+
+        requested_policy_key = requested["retry_policy_key"]
+        if requested_policy_key is not None:
+            current_policy_key = row["retry_policy_key"]
+            current_classes = self._load_retry_error_classes(
+                row["retryable_error_classes_json"]
+            )
+            requested_classes = self._load_retry_error_classes(
+                requested["retryable_error_classes_json"]
+            )
+            same_policy = (
+                int(row["retry_budget"]) == int(requested["retry_budget"])
+                and current_classes == requested_classes
+            )
+            if current_policy_key and current_policy_key != requested_policy_key:
+                raise MissionStoreError(
+                    "task retry policy conflicts with the persisted definition"
+                )
+            if not current_policy_key and (
+                int(row["retry_budget"]) or current_classes
+            ) and not same_policy:
+                raise MissionStoreError(
+                    "task retry policy conflicts with the persisted definition"
+                )
+            if not current_policy_key:
+                updates["retry_budget"] = int(requested["retry_budget"])
+                updates["retryable_error_classes_json"] = requested[
+                    "retryable_error_classes_json"
+                ]
+                updates["retry_policy_key"] = requested_policy_key
+
+        if not updates:
+            return row
+        assignments = ", ".join(f"{name} = ?" for name in updates)
+        conn.execute(
+            f"UPDATE mission_tasks SET {assignments} WHERE task_id = ?",
+            (*updates.values(), row["task_id"]),
+        )
+        return conn.execute(
+            "SELECT * FROM mission_tasks WHERE task_id = ?",
+            (row["task_id"],),
+        ).fetchone()
+
     def _set_dependencies(
         self,
         conn: sqlite3.Connection,
@@ -1647,6 +2270,76 @@ class MissionStore:
             )
         )
 
+    def _safe_retry_command_keys(self, values: Sequence[str]) -> tuple[str, ...]:
+        keys = tuple(
+            dict.fromkeys(
+                self._safe_text(item, "mission_retry_command", _MAX_IDENTIFIER_BYTES)
+                for item in values
+                if str(item).strip()
+            )
+        )
+        if len(keys) > _MAX_RETRY_COMMAND_KEYS:
+            raise MissionStoreError(
+                f"retry command allowlist exceeds {_MAX_RETRY_COMMAND_KEYS} keys"
+            )
+        return keys
+
+    @staticmethod
+    def _insert_retry_command_grants(
+        conn: sqlite3.Connection,
+        task_id: str,
+        retry_number: int,
+        error_class: RetryErrorClass,
+        command_keys: Sequence[str],
+        created_at: float,
+    ) -> None:
+        for command_key in command_keys:
+            conn.execute(
+                """
+                INSERT INTO mission_task_retry_commands(
+                    task_id, retry_number, command_key,
+                    error_class, consumed_at, created_at
+                ) VALUES (?, ?, ?, ?, NULL, ?)
+                """,
+                (
+                    task_id,
+                    retry_number,
+                    command_key,
+                    error_class.value,
+                    created_at,
+                ),
+            )
+
+    @staticmethod
+    def _retry_command_keys_for_row(
+        conn: sqlite3.Connection,
+        task_row: sqlite3.Row,
+        *,
+        pending_only: bool = False,
+    ) -> tuple[str, ...]:
+        retry_number = int(task_row["retry_count"])
+        if retry_number < 1:
+            return ()
+        if pending_only:
+            rows = conn.execute(
+                """
+                SELECT command_key FROM mission_task_retry_commands
+                WHERE task_id = ? AND retry_number = ? AND consumed_at IS NULL
+                ORDER BY command_key
+                """,
+                (task_row["task_id"], retry_number),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT command_key FROM mission_task_retry_commands
+                WHERE task_id = ? AND retry_number = ?
+                ORDER BY command_key
+                """,
+                (task_row["task_id"], retry_number),
+            ).fetchall()
+        return tuple(str(row["command_key"]) for row in rows)
+
     @staticmethod
     def _safe_fact_ids(values: Sequence[int]) -> tuple[int, ...]:
         result: list[int] = []
@@ -1757,6 +2450,38 @@ class MissionStore:
         return tuple(result)
 
     @staticmethod
+    def _retry_error_class(value: RetryErrorClass | str) -> RetryErrorClass:
+        try:
+            return (
+                value
+                if isinstance(value, RetryErrorClass)
+                else RetryErrorClass(str(value))
+            )
+        except ValueError as exc:
+            raise TaskRetryNotAllowed(f"unsupported retry error class: {value}") from exc
+
+    @staticmethod
+    def _encode_retry_error_classes(
+        values: Sequence[RetryErrorClass],
+    ) -> str:
+        return json.dumps(
+            [item.value for item in values],
+            separators=(",", ":"),
+        )
+
+    @staticmethod
+    def _load_retry_error_classes(value: str) -> tuple[RetryErrorClass, ...]:
+        try:
+            loaded = json.loads(value or "[]")
+            if not isinstance(loaded, list):
+                raise TypeError("retry error classes must be a list")
+            return tuple(
+                dict.fromkeys(RetryErrorClass(str(item)) for item in loaded)
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise MissionStoreError("invalid persisted retry error classes") from exc
+
+    @staticmethod
     def _mission_from_row(row: sqlite3.Row) -> MissionRecord:
         return MissionRecord(
             mission_id=row["mission_id"],
@@ -1786,6 +2511,18 @@ class MissionStore:
             started_at=float(row["started_at"]) if row["started_at"] is not None else None,
             finished_at=float(row["finished_at"]) if row["finished_at"] is not None else None,
             attempt_count=int(row["attempt_count"]),
+            scope=row["scope"],
+            capability=row["capability"],
+            retry_budget=int(row["retry_budget"]),
+            retry_count=int(row["retry_count"]),
+            retryable_error_classes=self._load_retry_error_classes(
+                row["retryable_error_classes_json"]
+            ),
+            last_error_class=(
+                self._retry_error_class(row["last_error_class"])
+                if row["last_error_class"]
+                else None
+            ),
         )
 
     def _attempt_from_row(self, row: sqlite3.Row) -> TaskAttemptRecord:
@@ -1806,13 +2543,20 @@ class MissionStore:
 
 __all__ = [
     "MISSION_LIFECYCLE_SCHEMA_VERSION",
+    "AttemptCompletionResult",
     "MissionRecord",
     "MissionSnapshot",
     "MissionStatus",
     "MissionStore",
     "MissionStoreError",
+    "MissionTaskDefinition",
+    "RetryErrorClass",
     "TaskAttemptRecord",
     "TaskDependenciesIncomplete",
     "TaskRecord",
+    "TaskRetryBudgetExhausted",
+    "TaskRetryError",
+    "TaskRetryNotAllowed",
+    "TaskRetryPolicy",
     "TaskStatus",
 ]

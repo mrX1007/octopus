@@ -132,6 +132,13 @@ def _sigint_handler(signum, frame):
     print("\n\n\033[93m[!] Interrupted (Ctrl+C). Cleaning up...\033[0m")
     logging.warning("Interrupted by user (SIGINT)")
 
+    try:
+        from core.execution import current_execution_context
+
+        current_execution_context().cancellation.cancel("sigint")
+    except Exception as _exc:
+        logging.debug("Could not propagate cooperative SIGINT cancellation: %s", type(_exc).__name__)
+
     if _current_sl_no:
         update_session_status(_current_sl_no, "interrupted")
         print(f"\033[93m[!] Session SL# {_current_sl_no} marked as 'interrupted'.\033[0m")
@@ -146,8 +153,9 @@ def _sigint_handler(signum, frame):
             logging.debug(f"Suppressed in octopus.py: {_exc}")
 
     print("\033[91m[*] Shutting down Octopus.\033[0m\n")
-    # Avoid interpreter-shutdown crashes from concurrent.futures atexit joins.
-    os._exit(130)
+    # Let Python unwind so mission transactions, process groups, and supervisor
+    # finally blocks can persist partial state and release their resources.
+    raise KeyboardInterrupt
 
 signal.signal(signal.SIGINT, _sigint_handler)
 
@@ -1488,7 +1496,22 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
         "confirmed_facts": confirmed_facts,
         "outcome_summary": outcome_summary,
     }
-    enriched = enrich_result_with_reporting(result, facts, state)
+    command_result_reader = getattr(fact_store, "get_command_results", None)
+    command_results = (
+        command_result_reader(scan_id, target)
+        if callable(command_result_reader)
+        else []
+    )
+    enriched = enrich_result_with_reporting(
+        result,
+        facts,
+        state,
+        scan_id=scan_id,
+        target=target,
+        hypotheses=hypotheses,
+        command_results=command_results,
+        context=state,
+    )
     redactor = getattr(fact_store, "redactor", None)
     if redactor is None:
         from core.secrets import get_redactor
@@ -2388,7 +2411,7 @@ def c2_management_menu():
             if pins:
                 cmd.extend(["--pins", pins])
                 
-            subprocess.run(cmd)
+            subprocess.run(cmd, timeout=900)
             input("\n\033[90mPress Enter to continue...\033[0m")
             
         elif choice == "5":

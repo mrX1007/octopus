@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "web-api-mapping",
+  "name": "Web and API mapping",
+  "category": "web_api_mapping",
+  "lab": {"name": "octopus-replay-lab", "version": "1.0"},
+  "target": {"kind": "recorded-web-app", "version": "web-api-v1", "fixture_ref": "web-api-map-v1"},
+  "model": {"provider": "deterministic-replay", "name": "pipeline-runtime", "parameters": {"temperature": 0}},
+  "tool_versions": {"output_parser": "1.0", "target_model": "1.0"},
+  "strategy_config": {"mode": "replay", "active_authorized": false},
+  "seed": 202,
+  "budgets": {"max_tools": 10, "max_seconds": 60, "max_output_bytes": 1000000},
+  "allowed_actions": ["replay_web_mapping", "replay_api_mapping"],
+  "ground_truth": {"expected_findings": ["web_endpoint", "api_route"], "forbidden_findings": ["root_access"], "expected_status": "succeeded"},
+  "artifacts": {"inputs": ["fixture://web-api-map-v1"], "results": []},
+  "repetitions": 5,
+  "ablations": [],
+  "tags": ["replay", "web", "api"]
+}

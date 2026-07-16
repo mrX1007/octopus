@@ -29,6 +29,7 @@ import json
 import logging
 import os
 import signal
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -598,8 +599,11 @@ class Supervisor:
             if os.path.exists(os.path.dirname(db_path)):
                 es = EventStore(db_path=db_path)
                 es.append("supervisor", str(self._pid), event_type, data)
-        except Exception:
-            pass  # Event store is optional
+        except (ImportError, OSError, sqlite3.Error, TypeError, ValueError) as exc:
+            logger.debug(
+                "Optional supervisor event emission failed: %s",
+                type(exc).__name__,
+            )
 
     # ─── Class Methods ─────────────────────────────────
 

@@ -16,9 +16,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _TEST_TAXONOMY = {
     "unit",
     "contract",
+    "replay",
     "integration",
     "slow",
+    "external",
     "external_tools",
+    "security",
+    "benchmark",
     "mysql",
     "platform",
 }
@@ -138,3 +142,59 @@ paths:
     config_file = tmp_path / "config.yaml"
     config_file.write_text(config_content)
     return str(config_file)
+
+
+@pytest.fixture
+def canonical_execution_result_factory():
+    """Build canonical results without copying schema boilerplate across tests."""
+    from core.execution import ExecutionResult, ExecutionStatus
+
+    def build(
+        *,
+        status=ExecutionStatus.SUCCEEDED,
+        stdout="",
+        stderr="",
+        tool_name="fixture_tool",
+        execution_id="fixture-execution",
+        request_id="fixture-request",
+        duration=0.01,
+        partial=False,
+        metadata=None,
+    ):
+        canonical_status = ExecutionStatus(status)
+        return ExecutionResult(
+            status=canonical_status,
+            stdout=stdout,
+            stderr=stderr,
+            tool_name=tool_name,
+            execution_id=execution_id,
+            request_id=request_id,
+            duration=duration,
+            partial=partial,
+            executed=canonical_status not in {
+                ExecutionStatus.BLOCKED,
+                ExecutionStatus.UNAVAILABLE,
+            },
+            metadata=metadata or {},
+        )
+
+    return build
+
+
+@pytest.fixture
+def canonical_success_result(canonical_execution_result_factory):
+    """Representative successful canonical result."""
+    return canonical_execution_result_factory(stdout="fixture output")
+
+
+@pytest.fixture
+def canonical_partial_result(canonical_execution_result_factory):
+    """Representative partial canonical result with bounded output."""
+    from core.execution import ExecutionStatus
+
+    return canonical_execution_result_factory(
+        status=ExecutionStatus.PARTIAL,
+        stdout="partial fixture output",
+        stderr="provider stopped early",
+        partial=True,
+    )

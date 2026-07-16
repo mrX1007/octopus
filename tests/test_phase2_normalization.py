@@ -26,6 +26,8 @@ from core.tools.targeting import (
     target_in_authorized_scope,
 )
 
+pytestmark = [pytest.mark.contract, pytest.mark.security]
+
 
 class _LegacyTextResult:
     def __str__(self) -> str:

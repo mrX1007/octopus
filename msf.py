@@ -3,6 +3,7 @@
 """
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -10,7 +11,16 @@ from typing import Optional
 
 # Load config
 try:
-    from core.tools.base import get_tool_config
+    from core.execution import (
+        ExecutionCancelled,
+        current_execution_context,
+        redact_sensitive_command,
+    )
+    from core.tools.base import (
+        _bounded_process_output,
+        _terminate_process_tree,
+        get_tool_config,
+    )
 except ImportError:
     def get_tool_config(name): return {}
 
@@ -217,7 +227,7 @@ def run_msf_module(module: str, options_str: str, timeout: Optional[int] = None,
 
     print(f"  [*] MSF Module: {module}")
     print(f"  [*] MSF Options: {opts}")
-    print(f"  [*] MSF Script: {script}")
+    print(f"  [*] MSF Script: {redact_sensitive_command(script)}")
 
     try:
         import threading
@@ -226,21 +236,41 @@ def run_msf_module(module: str, options_str: str, timeout: Optional[int] = None,
         lines = []
         login_success_seen = [False]
         start = time.time()
+        context = current_execution_context()
+        output_bytes = 0
+        output_limited = [False]
+        cancel_reason = ""
+        last_heartbeat = 0
         # Reduce timeout for auxiliary (scan) modules — they shouldn't take long
         msf_timeout = min(timeout, 60) if module.startswith("auxiliary/") or mode == "check" else min(timeout, 120)
+        msf_timeout = max(1, min(msf_timeout, context.max_runtime_seconds))
 
         proc = subprocess.Popen(
             ["msfconsole", "-q", "-n", "-x", script],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1
+            bufsize=1,
+            start_new_session=(os.name == "posix"),
         )
 
         def _read():
+            nonlocal output_bytes
             try:
                 for line in proc.stdout:
                     line = line.rstrip('\n')
+                    encoded = (line + "\n").encode("utf-8", "replace")
+                    remaining = context.max_output_bytes - output_bytes
+                    if len(encoded) > remaining:
+                        if remaining > 0:
+                            lines.append(
+                                encoded[:remaining].decode("utf-8", "ignore").rstrip("\n")
+                            )
+                            output_bytes += remaining
+                        output_limited[0] = True
+                        _terminate_process_tree(proc)
+                        break
+                    output_bytes += len(encoded)
                     lines.append(line)
                     # Show important MSF lines live
                     if any(kw in line.lower() for kw in [
@@ -248,7 +278,10 @@ def run_msf_module(module: str, options_str: str, timeout: Optional[int] = None,
                         "command shell", "password", "[+]", "error", "failed"
                     ]):
                         elapsed = int(time.time() - start)
-                        print(f"      [MSF {elapsed}s] {line[:120]}")
+                        print(
+                            f"      [MSF {elapsed}s] "
+                            f"{redact_sensitive_command(line)[:120]}"
+                        )
                     if login_check_module and re.search(r"\[\+\].+\bSuccess:\s+'[^']+'", line, re.IGNORECASE):
                         login_success_seen[0] = True
             except (ValueError, OSError):
@@ -258,14 +291,16 @@ def run_msf_module(module: str, options_str: str, timeout: Optional[int] = None,
         reader.start()
 
         while reader.is_alive():
-            reader.join(timeout=15)
+            reader.join(timeout=1)
             elapsed = int(time.time() - start)
+            if context.cancellation.cancelled:
+                cancel_reason = context.cancellation.reason_code
+                _terminate_process_tree(proc)
+                reader.join(timeout=2)
+                lines.append(f"[CANCELLED] {cancel_reason}")
+                break
             if login_success_seen[0] and elapsed >= 5:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+                _terminate_process_tree(proc)
                 try:
                     proc.stdout.close()
                 except Exception as _exc:
@@ -273,12 +308,7 @@ def run_msf_module(module: str, options_str: str, timeout: Optional[int] = None,
                 lines.append("[+] MSF login check stopped after first success (CreateSession=false)")
                 break
             if elapsed > msf_timeout:
-                # Graceful kill: SIGTERM first, then SIGKILL
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
+                _terminate_process_tree(proc)
                 # Close stdout pipe to unblock reader thread
                 try:
                     proc.stdout.close()
@@ -287,14 +317,15 @@ def run_msf_module(module: str, options_str: str, timeout: Optional[int] = None,
                 lines.append(f"[!] MSF timed out after {msf_timeout}s")
                 print(f"      [TIMEOUT] MSF killed after {msf_timeout}s")
                 break
-            if reader.is_alive():
+            if reader.is_alive() and elapsed - last_heartbeat >= 15:
+                last_heartbeat = elapsed
                 print(f"      [♻ MSF running... {elapsed}s / {msf_timeout}s max]")
 
         # Wait for process cleanup with timeout
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            _terminate_process_tree(proc)
             try:
                 proc.stdout.close()
             except Exception as _exc:
@@ -312,7 +343,17 @@ def run_msf_module(module: str, options_str: str, timeout: Optional[int] = None,
             and not line.startswith("[*] Starting ")
             and "msf" not in line.lower()[:10]
         ]
-        out = "\n".join(filtered)
+        if output_limited[0]:
+            filtered.append(
+                f"[OUTPUT LIMIT] process killed at {context.max_output_bytes} bytes"
+            )
+        out = _bounded_process_output("\n".join(filtered), context.max_output_bytes)
+        if cancel_reason:
+            raise ExecutionCancelled(
+                cancel_reason,
+                stdout=out,
+                returncode=proc.returncode,
+            )
 
         # Detect errors early
         out_lower = out.lower()
@@ -321,7 +362,7 @@ def run_msf_module(module: str, options_str: str, timeout: Optional[int] = None,
         if "failed to load" in out_lower:
             return f"[!] MSF module '{module}' FAILED TO LOAD — module does NOT exist in this Metasploit installation. AI: do NOT retry '{module}' or any variation of it. Use [SEARCH:] or [SEARCHSPLOIT:] instead."
         if "optionvalidateerror" in out_lower or "failed to validate" in out_lower:
-            return f"[!] MSF module '{module}' has INVALID OPTIONS: {options_str}. AI: check required options. Do NOT retry with same options."
+            return f"[!] MSF module '{module}' has INVALID OPTIONS. AI: check required options. Do NOT retry with the same option set."
 
         res = "MSF Execution Results:\n"
         if out:
@@ -330,8 +371,11 @@ def run_msf_module(module: str, options_str: str, timeout: Optional[int] = None,
 
     except subprocess.TimeoutExpired:
         return f"[!] MSF execution timed out after {timeout} seconds."
+    except ExecutionCancelled:
+        raise
     except Exception as e:
-        return f"[!] MSF unexpected error: {e}"
+        safe_error = redact_sensitive_command(str(e))[:1024]
+        return f"[!] MSF unexpected error: {type(e).__name__}: {safe_error}"
 
 
 if __name__ == "__main__":

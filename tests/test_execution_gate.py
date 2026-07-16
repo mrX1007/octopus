@@ -1,5 +1,9 @@
 """Regression tests for the typed execution and managed-shell boundary."""
 
+import pytest
+
+pytestmark = pytest.mark.security
+
 
 def test_unknown_tool_fails_closed_without_running_binary(monkeypatch):
     import subprocess

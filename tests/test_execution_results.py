@@ -485,3 +485,13 @@ def test_pipeline_classification_and_parser_receive_canonical_result(tmp_path: P
     assert len(parser_calls) == 1
     assert isinstance(parser_calls[0][1], ExecutionResult)
     assert parser_calls[0][1].exit_code == 7
+
+
+def test_shared_canonical_result_fixtures(
+    canonical_success_result,
+    canonical_partial_result,
+) -> None:
+    assert canonical_success_result.status is ExecutionStatus.SUCCEEDED
+    assert canonical_success_result.schema_version == "1.0"
+    assert canonical_partial_result.status is ExecutionStatus.PARTIAL
+    assert canonical_partial_result.partial is True

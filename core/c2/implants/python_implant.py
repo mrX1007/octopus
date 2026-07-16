@@ -95,8 +95,8 @@ def generate_python_implant(
         beacon_interval: Seconds between beacons. Defaults to 60.
         jitter_percent: Random jitter percentage (0-50). Defaults to 20.
         server_pub_b64: Base64-encoded server X25519 public key.
-                        If empty, the implant will use a dummy key
-                        (suitable for testing only).
+                        If empty, the configured local server public key is
+                        loaded; missing/invalid key material fails generation.
 
     Returns:
         Complete Python implant source code as a string.

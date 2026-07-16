@@ -292,6 +292,8 @@ class ExecutionPolicy:
         invocation: ToolInvocation,
         context: ExecutionContext,
     ) -> ExecutionDecision:
+        if context.cancellation.cancelled:
+            return self._decision(False, "execution_cancelled", context, invocation)
         if not self._limits_valid(context):
             return self._decision(False, "invalid_resource_limits", context, invocation)
         if not context.has(CAP_REGISTERED_TOOL):
@@ -323,6 +325,8 @@ class ExecutionPolicy:
         invocation: ToolInvocation,
         context: ExecutionContext,
     ) -> ExecutionDecision:
+        if context.cancellation.cancelled:
+            return self._decision(False, "execution_cancelled", context, invocation)
         if not self._limits_valid(context):
             return self._decision(False, "invalid_resource_limits", context, invocation)
         if not context.has(CAP_DIRECT_BINARY):
@@ -357,6 +361,8 @@ class ExecutionPolicy:
             targets=shell_targets,
             uses_shell=True,
         )
+        if context.cancellation.cancelled:
+            return self._decision(False, "execution_cancelled", context, invocation)
         if not self._limits_valid(context):
             return self._decision(False, "invalid_resource_limits", context, invocation)
         if context.origin not in {"operator", "interactive_cli"}:
@@ -382,6 +388,8 @@ class ExecutionPolicy:
             argv=("python", "-I", "-c", code),
             raw_command=code,
         )
+        if context.cancellation.cancelled:
+            return self._decision(False, "execution_cancelled", context, invocation)
         if not self._limits_valid(context):
             return self._decision(False, "invalid_resource_limits", context, invocation)
         if context.origin not in {"operator", "interactive_cli"}:
@@ -397,6 +405,8 @@ class ExecutionPolicy:
         command: str,
         context: ExecutionContext,
     ) -> ExecutionDecision:
+        if context.cancellation.cancelled:
+            return self._decision(False, "execution_cancelled", context)
         try:
             invocation = parse_invocation(command)
         except InvalidInvocation as exc:

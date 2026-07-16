@@ -6,12 +6,24 @@ from enum import Enum
 
 from core.secrets import get_redactor, is_secret_ref
 
+from .identity import (
+    ENTITY_NORMALIZATION_VERSION,
+    canonical_asset,
+    canonical_credential,
+    canonical_endpoint,
+    canonical_identity,
+    canonical_service,
+    canonical_session,
+    canonical_vulnerability,
+)
+
 # NODE & EDGE TYPES
 
 class NodeType(Enum):
     ASSET = "asset"
     IDENTITY = "identity"
     CREDENTIAL = "credential"
+    ENDPOINT = "endpoint"
     SERVICE = "service"
     SESSION = "session"
     VULNERABILITY = "vulnerability"
@@ -31,6 +43,9 @@ class EdgeType(Enum):
     DISCOVERED_BY = "discovered_by"         # Any → Tool name
     HAS_IDENTITY = "has_identity"           # Asset → Identity (local users)
     PIVOTS_TO = "pivots_to"                 # Asset → Asset (lateral movement)
+    EXPOSES_ENDPOINT = "exposes_endpoint"   # Service → Endpoint
+    HAS_VULNERABILITY = "has_vulnerability" # Asset → Vulnerability
+    DISCOVERED_ASSET = "discovered_asset"   # Asset → Asset
 
 
 # NODE MODELS
@@ -48,13 +63,19 @@ class Asset:
 
     @property
     def node_id(self) -> str:
-        return f"asset:{self.ip}"
+        return canonical_asset(self.ip).entity_id
+
+    @property
+    def legacy_node_ids(self) -> tuple[str, ...]:
+        return canonical_asset(self.ip).aliases
 
     def to_dict(self) -> dict:
         return {
             "ip": self.ip, "hostname": self.hostname, "os": self.os,
             "ports": self.ports, "tags": self.tags, "rooted": self.rooted,
             "first_seen": self.first_seen,
+            "canonical_id": self.node_id,
+            "normalization_version": ENTITY_NORMALIZATION_VERSION,
         }
 
 
@@ -67,17 +88,33 @@ class Identity:
     uid: int = -1
     shell: str = ""
     groups: list[str] = field(default_factory=list)
+    host: str = ""
 
     @property
     def node_id(self) -> str:
-        prefix = f"{self.domain}\\\\" if self.domain else ""
-        return f"identity:{prefix}{self.username}"
+        return canonical_identity(
+            self.username,
+            domain=self.domain,
+            identity_type=self.identity_type,
+            host=self.host,
+        ).entity_id
+
+    @property
+    def legacy_node_ids(self) -> tuple[str, ...]:
+        return canonical_identity(
+            self.username,
+            domain=self.domain,
+            identity_type=self.identity_type,
+            host=self.host,
+        ).aliases
 
     def to_dict(self) -> dict:
         return {
             "username": self.username, "domain": self.domain,
             "identity_type": self.identity_type, "uid": self.uid,
-            "shell": self.shell, "groups": self.groups,
+            "shell": self.shell, "groups": self.groups, "host": self.host,
+            "canonical_id": self.node_id,
+            "normalization_version": ENTITY_NORMALIZATION_VERSION,
         }
 
 
@@ -98,9 +135,23 @@ class Credential:
 
     @property
     def node_id(self) -> str:
-        import hashlib
-        secret_hash = hashlib.sha256(self.secret.encode()).hexdigest()[:8]
-        return f"cred:{self.username}:{secret_hash}"
+        return canonical_credential(
+            self.username,
+            self.secret,
+            service=self.service,
+            host=self.host,
+            secret_type=self.secret_type,
+        ).entity_id
+
+    @property
+    def legacy_node_ids(self) -> tuple[str, ...]:
+        return canonical_credential(
+            self.username,
+            self.secret,
+            service=self.service,
+            host=self.host,
+            secret_type=self.secret_type,
+        ).aliases
 
     def to_dict(self) -> dict:
         return {
@@ -108,6 +159,8 @@ class Credential:
             "secret_type": self.secret_type, "source": self.source,
             "verified": self.verified, "service": self.service,
             "host": self.host,
+            "canonical_id": self.node_id,
+            "normalization_version": ENTITY_NORMALIZATION_VERSION,
         }
 
 
@@ -125,13 +178,48 @@ class Service:
 
     @property
     def node_id(self) -> str:
-        return f"svc:{self.host}:{self.port}"
+        return canonical_service(self.host, self.port, self.protocol).entity_id
+
+    @property
+    def legacy_node_ids(self) -> tuple[str, ...]:
+        return canonical_service(self.host, self.port, self.protocol).aliases
 
     def to_dict(self) -> dict:
         return {
             "host": self.host, "port": self.port, "protocol": self.protocol,
             "service_name": self.service_name, "version": self.version,
             "banner": self.banner, "state": self.state, "web_app": self.web_app,
+            "canonical_id": self.node_id,
+            "normalization_version": ENTITY_NORMALIZATION_VERSION,
+        }
+
+
+@dataclass
+class Endpoint:
+    """A canonical HTTP(S) endpoint exposed by a service."""
+
+    url: str
+    service: str = ""
+    status: str = ""
+    title: str = ""
+
+    @property
+    def node_id(self) -> str:
+        return canonical_endpoint(self.url).entity_id
+
+    @property
+    def legacy_node_ids(self) -> tuple[str, ...]:
+        return canonical_endpoint(self.url).aliases
+
+    def to_dict(self) -> dict:
+        identity = canonical_endpoint(self.url)
+        return {
+            **dict(identity.components),
+            "service": self.service,
+            "status": self.status,
+            "title": self.title,
+            "canonical_id": self.node_id,
+            "normalization_version": ENTITY_NORMALIZATION_VERSION,
         }
 
 
@@ -147,13 +235,29 @@ class Session:
 
     @property
     def node_id(self) -> str:
-        return f"sess:{self.session_id}"
+        return canonical_session(
+            self.session_id,
+            session_type=self.session_type,
+            username=self.username,
+            host=self.host,
+        ).entity_id
+
+    @property
+    def legacy_node_ids(self) -> tuple[str, ...]:
+        return canonical_session(
+            self.session_id,
+            session_type=self.session_type,
+            username=self.username,
+            host=self.host,
+        ).aliases
 
     def to_dict(self) -> dict:
         return {
             "session_id": self.session_id, "session_type": self.session_type,
             "username": self.username, "host": self.host,
             "active": self.active, "opened_at": self.opened_at,
+            "canonical_id": self.node_id,
+            "normalization_version": ENTITY_NORMALIZATION_VERSION,
         }
 
 
@@ -171,7 +275,11 @@ class Vulnerability:
 
     @property
     def node_id(self) -> str:
-        return f"vuln:{self.vuln_id}"
+        return canonical_vulnerability(self.vuln_id).entity_id
+
+    @property
+    def legacy_node_ids(self) -> tuple[str, ...]:
+        return canonical_vulnerability(self.vuln_id).aliases
 
     def to_dict(self) -> dict:
         return {
@@ -179,6 +287,8 @@ class Vulnerability:
             "severity": self.severity, "service": self.service,
             "confirmed": self.confirmed, "exploit_available": self.exploit_available,
             "description": self.description,
+            "canonical_id": self.node_id,
+            "normalization_version": ENTITY_NORMALIZATION_VERSION,
         }
 
 

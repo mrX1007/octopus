@@ -111,6 +111,28 @@ strategy:
   exploit_select_context_facts: 0 # 0/unlimited = attach all recon facts to exploit_select
   parallel_tools: 8          # max concurrent tool executions
   max_director_loops: 10     # max Director AI loops
+  mission:
+    task_retry_budget: 2     # retries after typed transient failures only
+    retryable_error_classes:
+      - timeout
+      - rate_limit
+      - transient_network
+      - provider_unavailable
+      - tool_unavailable
+    max_state_replans: 3     # bounded replans after material state transitions
+  task_scoring:
+    schema_version: "1.0"
+    # All task-ranking weights are configuration-owned. Rewards add to the
+    # score; penalties subtract from it. Set a weight to 0 to disable a factor.
+    weights:
+      information_gain: 3.0
+      coverage_value: 2.5
+      verification_value: 2.0
+      path_value: 2.0
+      cost: 1.0
+      repeat: 3.0
+      risk: 1.5
+      uncertainty: 1.5
 
 # ═══════════════════════════════════════════════
 # REPORTING (v7.0)

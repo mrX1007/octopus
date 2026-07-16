@@ -14,6 +14,8 @@ from core.ai.fact_store import FactStore
 from core.ai.trace_report import TraceReporter
 from core.secrets import Redactor, SecretStore, reset_default_secret_store_for_tests
 
+pytestmark = pytest.mark.security
+
 CANARY = "octopus-canary-password-7f39"
 
 

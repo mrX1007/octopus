@@ -15,7 +15,7 @@ from core.ai.replay_snapshot import ReplaySnapshot
 from core.ai.runtime import PipelineRuntime
 from core.execution import ExecutionContext, ExecutionResult, adapt_execution_result
 
-pytestmark = pytest.mark.contract
+pytestmark = [pytest.mark.contract, pytest.mark.replay]
 
 CANARY = "phase1c-secret-canary"
 
@@ -119,7 +119,7 @@ def test_manual_command_metadata_keys_and_hash_field_are_independently_protected
 
 def test_pipeline_persists_canonical_status_and_legacy_failed_projection(tmp_path: Path) -> None:
     pipeline = AIPipeline(str(tmp_path / "pipeline.db"))
-    pipeline.runtime.decide = lambda command, _facts, _keys, _context: CommandDecision(
+    pipeline.runtime.decide = lambda command, _facts, _keys, _context, *_retry: CommandDecision(
         command,
         "fixture-key",
         "execute",

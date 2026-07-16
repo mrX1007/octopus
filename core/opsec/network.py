@@ -45,7 +45,12 @@ class OpsecClient:
         print("[*] Compiling Go JA3 client...")
         src = os.path.join(base_dir, "ja3_client.go")
         try:
-            subprocess.run(["go", "build", "-o", go_bin, src], check=True, cwd=base_dir)
+            subprocess.run(
+                ["go", "build", "-o", go_bin, src],
+                check=True,
+                cwd=base_dir,
+                timeout=180,
+            )
         except Exception as e:
             print(f"[!] Failed to compile JA3 client: {e}")
 

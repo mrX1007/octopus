@@ -49,30 +49,39 @@ flowchart TD
     Operator["Operator / CLI"] --> Scan["New scan, history, resume, Shodan, C2"]
     Scan --> Recon["Concurrent recon and selected tools"]
     Recon --> Parser["OutputParser and parser families"]
-    Parser --> Facts["FactStore SQLite<br/>facts + observations + provenance"]
-    Facts --> Target["TargetModel<br/>assets, services, endpoints, API, access, internal graph"]
+    Parser --> Facts["FactStore SQLite<br/>facts + observations + execution provenance"]
+    Facts --> Assess["FactAssessmentStore<br/>status + rule ID + freshness/coverage"]
+    Assess --> Target["TargetModel<br/>assets, services, endpoints, API, access, internal graph"]
     Target --> Context["ContextBuilder<br/>compact LLM context + coverage gaps"]
     Context --> Director["DirectorLLM<br/>choose next goal"]
     Director --> Planner["MissionPlanner<br/>propose tasks"]
-    Planner --> Policy["Deterministic policy, scheduler and task optimizer"]
+    Planner --> Score["TaskScorer<br/>8 configured value/penalty signals"]
+    Score --> Mission["MissionStore<br/>durable task + scope + capability + retry policy"]
+    Mission --> Policy["Scheduler + ExecutionPolicy<br/>scope gate + exploit applicability"]
     Policy --> Registry["ToolRegistry and @tool implementations"]
-    Registry --> Tools["nmap, httpx, nuclei, nikto, msf_check, ssh_inventory, plugins, ..."]
+    Registry --> Tools["nmap, httpx_probe, nuclei_safe, nikto, msf_check, ssh_inventory, plugins, ..."]
     Tools --> Parser
-    Facts --> Verifier["EvidenceVerifier<br/>accept/reject claims from facts"]
+    Assess --> Verifier["EvidenceVerifier<br/>accept/reject claims from evidence chains"]
     Facts --> Actions["Fact-driven follow-ups<br/>exploit_select, searchsploit, msf_check, web checks, inventory"]
-    Actions --> Registry
-    Facts --> Report["Reporting<br/>vulnerabilities, access findings, risk explanation, trace"]
+    Actions --> Policy
+    Assess --> Report["Reporting<br/>vulnerabilities, access findings, gaps, trace"]
+    Mission -.->|material state change: bounded replan| Context
 ```
 
 The loop is intentionally hybrid:
 
-1. Tools produce raw output.
-2. Deterministic parsers extract typed facts.
-3. Facts update the target model and stage gates.
+1. Tools produce bounded execution results and raw output.
+2. Deterministic parsers extract typed facts with execution provenance.
+3. Versioned assessments and freshness/coverage policy update the target model,
+   stage gates and evidence usability without rewriting the observation.
 4. The local LLM can suggest goals and plans from compact context.
-5. Deterministic policy normalizes, gates and deduplicates actions.
-6. Follow-up tools run only when facts justify them.
-7. Reports are generated from facts, not from free-form LLM text.
+5. Configurable scoring ranks task candidates, then the durable mission store
+   persists dependencies, task scope, capability and retry policy.
+6. Deterministic scheduling and final execution authorization gate every
+   command; exploit commands also pass canonical assessment applicability.
+7. Typed transient failures can consume only the task's persisted retry budget;
+   material state changes can request only a bounded number of extra replans.
+8. Reports are generated from assessed evidence, not free-form LLM text.
 
 If the LLM returns empty or invalid output, OCTOPUS records the failure and uses
 deterministic fallback planning. The pipeline should continue from facts instead
@@ -141,22 +150,82 @@ The target model exposes missing or degraded checks. For example:
 Planner output is optimized against these gaps so the system moves toward
 unanswered questions instead of repeating tools blindly.
 
+### Durable Mission Lifecycle
+
+`core/ai/mission_store.py` owns mission lifecycle schema `1.2` in the same
+SQLite file as `FactStore`; facts remain the evidence authority. A durable task
+stores its dependencies, task-level scope, capability, status and typed retry
+policy. Attempts retain terminal outcomes plus bounded fact/execution links, so
+a restart can fence abandoned work, recover it as `interrupted` and resume
+pending tasks without treating task success as vulnerability proof.
+
+The shipped mission policy allows two retries only for configured transient
+classes: timeout, rate limit, transient network, provider unavailable and tool
+unavailable. Failure completion and the eligible `failed -> pending` retry,
+consumed budget and command-key grant commit atomically. Before a retry runs,
+`ExecutionPolicy` is evaluated again and the persisted one-use command grant is
+consumed; a retry is not a general authorization bypass.
+
+After a plan finishes, mission control compares a deterministic signature of
+state, next required capability, stage gates and assessment counts. A material
+change requests an immediate planning pass without consuming the ordinary
+iteration budget. Identical transitions are deduplicated and
+`strategy.mission.max_state_replans` bounds these extra passes (default `3`).
+
+### Configurable Task Scoring
+
+`core/ai/task_scoring.py` applies schema `1.0` configuration to eight normalized
+signals. Information gain, coverage value, verification value and path value
+are rewards; cost, repetition, risk and uncertainty are penalties. Exact ties
+use the canonical task ID. The score and every contribution are recorded for
+decision traceability, but scoring neither grants capability nor authorizes
+execution.
+
+### Assessment, Freshness And Applicability
+
+Fact assessment schema `1.1` keeps append-only `observed`, `inferred`,
+`verified` and `contradicted` judgements with stable rule IDs, reasons, evidence
+fact IDs and source execution IDs. Freshness policy `1.0` is a read-time view:
+facts expose `fresh | stale | unknown` and `complete | degraded | unknown`
+coverage without changing their stored confidence. The default maximum age is
+24 hours, with shorter bounds for access/service status and six hours for
+vulnerability facts.
+
+Automatic corroboration requires two independent keyed execution IDs whose
+latest persisted results succeeded within the configured policy window.
+Automatic contradiction additionally requires opposite assertions with the
+same scan, normalized target, fact type, semantic subject and policy window.
+Failed, partial, timed-out or unrelated evidence cannot promote or contradict
+a fact.
+
+For `exploit_select`, `msf_check` and `msf_run`, the production compatibility
+path applies the same canonical applicability rule as lifecycle action
+adapters. If matching candidate facts exist and every match is contradicted,
+stale or backed only by degraded coverage, dispatch is blocked. Unrelated facts
+do not affect the decision, and absence of a matching candidate does not block
+candidate discovery or a safe check. This evidence-usability gate is separate
+from positive verification and final `ExecutionPolicy` authorization.
+
 ## Important Components
 
 | Area | Files | Purpose |
 | --- | --- | --- |
 | CLI | `octopus.py`, `core/cli/` | Main console, scan history, Shodan flow, reports, C2 menu |
-| AI pipeline | `core/ai/pipeline.py` | Scan loop, task execution, follow-ups, trace |
+| AI pipeline | `core/ai/pipeline.py`, `core/ai/pipeline_*.py`, `core/ai/scan_loop.py`, `core/ai/runtime.py` | Public facade, decomposed mission/planning/replay/observability seams, scan lifecycle and canonical runtime I/O boundary |
+| Mission lifecycle | `core/ai/mission_store.py`, `core/ai/pipeline_mission.py`, `core/ai/scan_loop.py` | Durable scope/capability, attempts, typed retries, crash recovery and bounded state-change replans |
 | Director / Planner | `core/ai/director.py`, `core/ai/planner.py` | Local LLM goal and plan generation |
+| Task scoring | `core/ai/task_scoring.py`, `core/ai/pipeline_planning.py` | Configurable eight-signal ranking and trace explanations |
 | State and context | `core/ai/state_resolver.py`, `core/ai/context_builder.py` | Stage gates, coverage gaps, compact context |
-| Evidence | `core/ai/evidence.py`, `core/ai/parsers/` | Parsing, verification, fact normalization |
+| Evidence | `core/ai/evidence.py`, `core/ai/fact_assessment.py`, `core/ai/fact_store.py`, `core/ai/parsers/` | Parsing, provenance, versioned assessment, freshness and verification |
 | Target model | `core/ai/target_model.py` | Typed representation of the target |
 | Tool registry | `core/tools/`, `core/ai/tool_registry.py` | Registered tools and task mapping |
-| Exploit selection | `core/exploits/selector.py` | Maps services/banners to candidates and check commands |
+| Action lifecycle | `core/actions/` | Adapters, final policy authorization, provider selection and cleanup |
+| Exploit selection | `core/exploits/selector.py`, `core/ai/exploit_applicability.py` | Maps services/banners to candidates and gates unusable assessed evidence |
 | Credentials | `core/credentials.py` | Credential cache, DB sync, graph sync |
-| Knowledge graph | `core/knowledge/` | SQLite graph of assets, services, identities and vulns |
+| Knowledge graph | `core/knowledge/` | Canonical entity identity and idempotent semantic projection |
 | Plugins | `core/plugins/`, `modules/` | Class-based extension system |
-| Reporting | `core/ai/reporting.py`, `export.py` | Final outcome, PDF/export data |
+| Reporting/trace | `core/ai/report_schema.py`, `core/ai/decision_trace.py`, `export.py` | Versioned evidence report, bounded decisions/metrics and exports |
+| Benchmarks | `core/benchmarks/`, `benchmarks/scenarios/`, `benchmarks/results/` | Built-in hermetic replay runner, repeated aggregation and published comparison data |
 | C2 | `core/c2/` | Optional daemon, implants, operators and channels |
 | OSINT/browser | `shodan_module.py`, `core/osint/shardbrowser.py` | Shodan and ShardBrowser integrations |
 
@@ -167,7 +236,7 @@ OCTOPUS tools are registered through `@tool(...)` and mapped to capabilities by
 
 Common categories:
 
-- Service discovery: `nmap`, `rustscan`
+- Service discovery: `nmap`
 - External intelligence: `whois`, `dig`, `shodan`
 - Web mapping: `httpx_probe`, `whatweb`, `curl_headers`, `scrapling`,
   `browser_surface_analysis`
@@ -188,10 +257,10 @@ Common categories:
 - Gated/manual actions: `msf_run`, `ssh_exec`, `socks_proxy`, `port_forward`,
   C2 deployment and active kill-chain stages
 
-Current registry coverage:
+At this revision, the registry coverage command in Testing reports:
 
 ```text
-93/93
+covered/registered: 93/93
 unknown: []
 ```
 
@@ -219,7 +288,28 @@ strategy:
   allow_active_msf: false
   active_authorized: false
   authorized_targets: []
+  max_active_msf_runs_per_scan: 1
   allow_arbitrary_ssh_exec: false
+  mission:
+    task_retry_budget: 2
+    retryable_error_classes:
+      - timeout
+      - rate_limit
+      - transient_network
+      - provider_unavailable
+      - tool_unavailable
+    max_state_replans: 3
+  task_scoring:
+    schema_version: "1.0"
+    weights:
+      information_gain: 3.0
+      coverage_value: 2.5
+      verification_value: 2.0
+      path_value: 2.0
+      cost: 1.0
+      repeat: 3.0
+      risk: 1.5
+      uncertainty: 1.5
 ```
 
 Active Metasploit execution is only promoted when:
@@ -229,6 +319,12 @@ Active Metasploit execution is only promoted when:
 3. `strategy.allow_active_msf` is true.
 4. `strategy.active_authorized` is true.
 5. The target is inside `strategy.authorized_targets`.
+6. The per-scan `max_active_msf_runs_per_scan` limit is not exhausted.
+
+Promotion is still not dispatch authorization. Immediately before execution,
+the scheduler runs `ExecutionPolicy`; the production assessment applicability
+gate then rejects a matching candidate set when every assessment is
+contradicted, stale or coverage-degraded.
 
 ## Installation
 
@@ -360,20 +456,34 @@ OCTOPUS stores:
 
 - MariaDB scan history, findings, fixes, exploits attempted, summaries,
   credentials, Shodan results and tool results
-- `data/facts.db` for FactStore
-- `data/knowledge.db` for KnowledgeGraph
+- `data/facts.db` for facts/observations, command results, fact assessments and
+  durable mission/task/attempt state
+- `data/secrets.db` for encrypted secret values referenced opaquely by facts,
+  missions, traces and reports
+- `data/knowledge.db` for canonical KnowledgeGraph projections
+- `data/provider-telemetry.db` and `data/decision-trace.db` when those lazy
+  observability stores are used
 - `data/c2.db` for C2 state
 - `~/OCTOPUS/logs` for trace files
 - `~/OCTOPUS/reports` for exports
 
-Reports separate:
+Machine report schema `1.0` keeps nine operational classes separate:
 
-- vulnerability findings: CVEs, misconfigurations, exposed services and
-  verified scanner findings
-- access findings: confirmed SSH/app/root/session access
-- risk explanation: why the final risk level was assigned
-- coverage: completed, timed out, skipped or pending checks
-- attack path and remediation notes
+- verified vulnerabilities;
+- access findings;
+- misconfigurations;
+- observations;
+- hypotheses/CVE/exploit candidates;
+- attempted but unverified actions;
+- coverage gaps;
+- policy-blocked/degraded checks;
+- cleanup outcomes.
+
+A verified vulnerability requires a current verified assessment, evidence
+chain, source execution IDs and an assessment reason. Root/access does not
+become a vulnerability, and a CVE candidate does not become verified merely by
+appearing in tool output. Human/legacy report fields remain compatibility
+renderers.
 
 Trace artifacts:
 
@@ -381,6 +491,11 @@ Trace artifacts:
 ~/OCTOPUS/logs/trace_<scan_id>.json
 ~/OCTOPUS/logs/trace_<scan_id>.txt
 ```
+
+The JSON trace also contains bounded schema `1.0` decision events and derived
+metrics such as time to first useful/verified evidence, parser yield,
+duplicate/no-op, verification conversion, fallback/retry/timeout, resume
+success and evidence completeness.
 
 CLI trace inspection:
 
@@ -416,6 +531,42 @@ ReplaySnapshot("/tmp/octopus_snapshot.db").assert_file_ok(
 )
 ```
 
+## Hermetic Benchmarks
+
+Benchmark scenario schema `1.0` defines ten replay categories under
+`benchmarks/scenarios/`. `BenchmarkHarness()` needs no injected runner for this
+catalog: the built-in runner exercises in-process fact/assessment persistence,
+execution results, deterministic planner fallback and durable mission resume.
+It does not start a scanner, network request, model provider or external tool.
+Custom injected runners remain supported.
+
+Run all ten scenarios with at least five repetitions each and write aggregates
+under `benchmarks/results/builtin-catalog/`:
+
+```bash
+./venv/bin/python -m core.benchmarks
+```
+
+Regenerate only the published task-selection comparison:
+
+```bash
+./venv/bin/python -m core.benchmarks --comparison-only
+```
+
+The checked-in `benchmarks/results/noop-repeat-comparison-v1.json` is a
+versioned `mission-frontier-replay-v1` measurement over six recorded candidate
+frontiers with two selections per round. The legacy risk/time/cost baseline
+selected 12/12 known no-op tasks and repeated 10/12 selections (rate
+`0.833333`). The shipped eight-signal configuration selected 0/12 known no-op
+tasks and repeated 0/12 selections. Thus the measured absolute reductions are
+`1.0` for no-op rate and `0.833333` for repeated-task rate.
+
+Those numbers measure only deterministic `TaskScorer` selection on the recorded
+frontiers. They are not live-lab or external-scanner performance claims. The
+artifact includes definitions, weights, every selected task and a
+content-derived ID; the benchmark contract test regenerates it from code and
+requires exact equality.
+
 ## Testing
 
 Run the full test suite:
@@ -424,13 +575,27 @@ Run the full test suite:
 ./venv/bin/python -m pytest tests/ -q
 ```
 
-Focused parser/pipeline regression suite:
+Fast hermetic suite:
 
 ```bash
-./venv/bin/python -m pytest \
-  tests/test_evidence_parser.py \
-  tests/test_pipeline_quality.py \
-  tests/test_result_adapter.py -q
+./venv/bin/python -m pytest -q \
+  -m "not slow and not external and not external_tools and not mysql and not platform"
+```
+
+Focused replay, security and benchmark contracts:
+
+```bash
+./venv/bin/python -m pytest -q -m replay
+./venv/bin/python -m pytest -q -m security
+./venv/bin/python -m pytest -q tests/benchmark -m benchmark
+```
+
+Static and dependency checks:
+
+```bash
+./venv/bin/python -m ruff check .
+./venv/bin/python -m mypy
+./venv/bin/python -m pip check
 ```
 
 Compile check:
@@ -448,8 +613,8 @@ from core.ai.tool_registry import ToolRegistry
 from core.tools.registry import list_tools
 r = ToolRegistry()
 report = r.get_coverage_report([t.name for t in list_tools()])
-print(str(report["covered"]) + "/" + str(report["registered"]))
-print(report["unknown"])'
+print("covered/registered: " + str(report["covered"]) + "/" + str(report["registered"]))
+print("unknown:", report["unknown"])'
 ```
 
 ## Repository Layout
@@ -466,7 +631,9 @@ print(report["unknown"])'
 ├── msf.py                  # Metasploit wrapper
 ├── export.py               # PDF/report export
 ├── core/
-│   ├── ai/                 # pipeline, facts, context, LLM, parsers
+│   ├── actions/            # unified provider/action lifecycle adapters
+│   ├── ai/                 # pipeline, missions, facts, assessment, LLM, parsers
+│   ├── benchmarks/         # schema, built-in replay runner, CLI and aggregation
 │   ├── c2/                 # optional C2 daemon, implants, operators
 │   ├── cli/                # shared CLI rendering helpers
 │   ├── exploits/           # exploit selector and intelligence mapper
@@ -480,6 +647,9 @@ print(report["unknown"])'
 │   ├── tools/              # @tool implementations
 │   └── transport/          # transport profiles and policies
 ├── modules/                # class-based plugins
+├── benchmarks/scenarios/   # versioned replay benchmark catalog
+├── benchmarks/results/     # published deterministic comparison data
+├── docs/                   # architecture, schemas, guides and release controls
 ├── payloads/               # payload helpers
 ├── vendor/                 # bundled third-party integrations
 ├── data/                   # local DBs and runtime state
@@ -497,6 +667,10 @@ print(report["unknown"])'
 5. Add scheduler/gating behavior if the tool is active or scope-sensitive.
 6. Add regression tests with realistic output.
 7. Check registry coverage.
+
+For lifecycle-capable providers, follow
+`docs/guides/action-adapter-authoring.md`; the adapter wraps the provider and
+does not replace its public implementation.
 
 ### Adding a Plugin
 
@@ -518,6 +692,28 @@ avoid:
 - treating planning gaps as confirmed vulnerabilities
 - advancing stage gates without OS-level evidence
 - losing source/provenance for repeated observations
+
+The complete parser checklist is in `docs/guides/parser-authoring.md`.
+
+## Engineering Documentation
+
+- Architecture ownership and contracts:
+  `docs/architecture/current-system-map.md` and
+  `docs/architecture/contracts-and-ownership.md`
+- Mission lifecycle and task ranking:
+  `docs/architecture/mission-lifecycle.md` and
+  `docs/architecture/task-scoring.md`
+- Fact assessment, freshness and applicability:
+  `docs/architecture/fact-assessment.md`
+- Evidence reports and observability:
+  `docs/architecture/evidence-reporting-observability.md`
+- SQLite schemas and migrations:
+  `docs/schemas/sqlite-stores-and-migrations.md`
+- Threat model: `docs/security/threat-model.md`
+- Test and benchmark architecture: `docs/quality/test-architecture.md` and
+  `docs/benchmarks/README.md`
+- Contribution and release process: `CONTRIBUTING.md` and
+  `docs/release-checklist.md`
 
 ## Troubleshooting
 
@@ -572,12 +768,20 @@ compatibility wrappers. The intended quality bar is:
 
 - registered tools are mapped and observable
 - useful tool output becomes structured facts
-- planner decisions follow facts and coverage gaps
+- durable mission tasks preserve scope, capability, dependencies and typed
+  retry policy across restart
+- planner decisions follow facts and coverage gaps through configurable
+  eight-signal scoring and bounded state-change replans
+- fact judgements retain versioned assessment, freshness, evidence and
+  execution provenance; unusable matching evidence blocks exploit dispatch
 - long-running tools preserve partial findings
 - access findings are not mixed with CVE-style vulnerabilities
 - active actions require explicit scope and configuration
 - reports explain risk from evidence
-- tests cover parser regressions from real logs
+- decisions are bounded, redacted and metrically observable
+- replay benchmarks publish at least five repetitions with median/variance and
+  label deterministic task-selection measurements separately from live testing
+- tests cover critical parser, policy, recovery, projection and report branches
 
 ## License / Warranty
 

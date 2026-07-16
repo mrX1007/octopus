@@ -95,7 +95,7 @@ class KnowledgeEnricher:
                         user, pwd, source=source,
                         service="ssh", verified=True, host=target_ip)
                     self.graph.link_credential_to_asset(
-                        cred.node_id, f"asset:{target_ip}",
+                        cred.node_id, self.graph.add_asset(target_ip).node_id,
                         method="password_auth")
             return
 
@@ -103,9 +103,12 @@ class KnowledgeEnricher:
         m = re.match(r"SSH valid user confirmed: '(\S+)'", ft)
         if m:
             username = m.group(1).strip("'\"")
-            self.graph.add_identity(username, identity_type="local")
-            self.graph.link(f"asset:{target_ip}",
-                            f"identity:{username}",
+            asset = self.graph.add_asset(target_ip)
+            identity = self.graph.add_identity(
+                username, identity_type="local", host=target_ip
+            )
+            self.graph.link(asset.node_id,
+                            identity.node_id,
                             EdgeType.HAS_IDENTITY,
                             source=source)
             return
@@ -114,10 +117,12 @@ class KnowledgeEnricher:
         m = re.match(r"System user found: '(\S+)' \(UID (\d+)\)", ft)
         if m:
             username, uid = m.group(1), int(m.group(2))
-            self.graph.add_identity(username, identity_type="local",
-                                    uid=uid)
-            self.graph.link(f"asset:{target_ip}",
-                            f"identity:{username}",
+            asset = self.graph.add_asset(target_ip)
+            identity = self.graph.add_identity(
+                username, identity_type="local", host=target_ip, uid=uid
+            )
+            self.graph.link(asset.node_id,
+                            identity.node_id,
                             EdgeType.HAS_IDENTITY)
             return
 
@@ -125,10 +130,12 @@ class KnowledgeEnricher:
         m = re.match(r"System login user: '(\S+)' \(shell: (.+)\)", ft)
         if m:
             username, shell = m.group(1), m.group(2)
-            self.graph.add_identity(username, identity_type="local",
-                                    shell=shell)
-            self.graph.link(f"asset:{target_ip}",
-                            f"identity:{username}",
+            asset = self.graph.add_asset(target_ip)
+            identity = self.graph.add_identity(
+                username, identity_type="local", host=target_ip, shell=shell
+            )
+            self.graph.link(asset.node_id,
+                            identity.node_id,
                             EdgeType.HAS_IDENTITY)
             return
 

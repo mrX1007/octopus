@@ -1,8 +1,8 @@
 # OCTOPUS current system map
 
-Baseline date: 2026-07-14
+Baseline date: 2026-07-15
 
-Reference revision: `36f0677`
+Reference revision: working tree after Waves 4–6 completion
 
 This document records the architecture that exists at the reference revision.
 It is descriptive, not a target design. In particular, a class name or
@@ -50,21 +50,31 @@ The central runtime flow currently looks like this:
 ```text
 octopus.py
   -> AIPipeline.run_scan()
+     -> ScanLifecycle
      -> deterministic raw-output parsing -> FactStore
      -> StateResolver + ContextBuilder
-     -> DirectorLLM -> MissionPlanner -> task normalization
+     -> DirectorLLM -> MissionPlanner -> PipelinePlanningMixin
+     -> PipelineMissionMixin -> durable Task/TaskAttempt
      -> task agents
      -> PipelineRuntime.decide()
      -> PipelineRuntime.execute()
-     -> OutputParser directly from AIPipeline -> FactStore directly
+     -> shared OutputParser -> FactStore + FactAssessmentStore
+     -> PipelineObservabilityMixin -> outcomes/trace/retry
      -> StateResolver + report/result adaptation
   -> MariaDB row-by-row persistence -> export/trace files
 ```
 
-`PipelineRuntime` is instantiated exactly once per `AIPipeline` in production
-(`core/ai/pipeline.py:38-55`). Its declared I/O ownership is real for decision
+`PipelineRuntime` is instantiated exactly once per `AIPipeline` in production.
+Its declared I/O ownership is real for decision
 and execution, but the main pipeline currently bypasses its parsing/ingestion
 methods after execution. That distinction is detailed next.
+
+The 2,956-line baseline facade has been decomposed below a 2,400-line
+acceptance ceiling. `run_scan()` remains public; `ScanLifecycle` owns the loop,
+and mission, planning, replay, and observability behavior is composed from the
+four `Pipeline*Mixin` modules. See
+`docs/architecture/pipeline-decomposition.md` for the ownership and
+characterization contract.
 
 ## Pipeline and `PipelineRuntime` ownership
 
@@ -90,10 +100,10 @@ decision and execution (`core/ai/runtime.py:86-94`); callers must invoke
 `AIPipeline.__init__()` constructs one `PipelineRuntime` and exposes aliases to
 its facts, missions, scheduler, parser, and reporter. No
 second `PipelineRuntime` is constructed in production. The actual task command
-path calls `runtime.decide()` and `runtime.execute()`, then invokes the aliased
-parser and writes facts itself (`core/ai/pipeline.py:944-1022`). Its `_store_fact`
-helper normalizes/redacts data and calls `FactStore.add_fact_with_status()`
-directly (`core/ai/pipeline.py:1256-1292`).
+path calls `runtime.decide()` and `runtime.execute()`, then invokes the shared
+parser and writes through runtime-owned FactStore/assessment components. The
+facade's `_store_fact()` helper retains orchestration-specific normalization;
+it does not create a second repository.
 
 Consequently:
 
@@ -146,6 +156,12 @@ defined order with observation/source/session metadata
 (`core/ai/fact_store.py:295-351`). Command results are separate durable rows
 (`core/ai/fact_store.py:403-427`).
 
+The composed `FactAssessmentStore` owns a separate schema `1.1` in the same
+database. Every fact has a current observed/inferred/verified/contradicted
+assessment plus append-only history, evidence fact IDs, source execution IDs,
+and supersession. Facts remain evidence; assessments are judgements over that
+evidence. See `docs/architecture/fact-assessment.md`.
+
 Current production fact writers are bounded to these paths:
 
 - `PipelineRuntime.ingest_output()` (`core/ai/runtime.py:96-116`);
@@ -154,10 +170,11 @@ Current production fact writers are bounded to these paths:
 - `EvidenceVerifier`, which uses `add_fact_with_status()` with a compatibility
   fallback (`core/ai/evidence.py:187-204`).
 
-The store has no database uniqueness constraint over the complete canonical
-fact identity. The current select-then-insert/update implementation therefore
-provides application-level deduplication, not a database-enforced concurrent
-upsert (`core/ai/fact_store.py:197-256`).
+The canonical fact identity `(scan_id, host, type, value)` is protected by a
+unique index. Ingress takes an immediate write transaction before its
+select/insert/update, so concurrent first observations converge on one row.
+Initialization merges legacy duplicates, observations, derived references,
+mission fact links, and assessment provenance before creating the index.
 
 ### Parser chain
 
@@ -180,10 +197,12 @@ registry currently runs thirteen parser families sequentially
 
 ### State and read models
 
-`StateResolver` reads `FactStore` and derives an in-memory state snapshot; it
+`StateResolver` reads `FactStore`, excludes currently contradicted facts, and
+derives an in-memory state snapshot; it
 does not persist state (`core/ai/state_resolver.py:8-17`,
 `core/ai/state_resolver.py:21-147`). `ContextBuilder` reads that state and the
-facts, then constructs `TargetModel`, `AssetGraph`, `SurfaceState`, and the LLM
+effective facts, then constructs `TargetModel`, `AssetGraph`, `SurfaceState`, a
+fact-assessment summary, and the LLM
 context (`core/ai/context_builder.py:46-67`,
 `core/ai/context_builder.py:117-133`).
 
@@ -192,7 +211,13 @@ context (`core/ai/context_builder.py:46-67`,
 credentials, and graph/risk views from facts without writing another store
 (`core/ai/target_model.py:46-76`). `LLMContextBuilder` bounds and trims this
 material before use (`core/ai/llm_context.py:16-110`); it relies on upstream
-fact redaction rather than owning secret persistence.
+fact redaction rather than owning secret persistence. `PipelineRuntime` also
+owns one schema-`2.0` `KnowledgeGraph` and its `GraphProjectionService`.
+Committed facts are projected with normalization version `1.0`; `TargetModel`
+and `AssetGraph` reuse the same asset/service/endpoint IDs. The persistent
+graph keeps migration aliases and per-fact assessment provenance. It remains a
+projection, not an evidence writer. See
+`docs/architecture/canonical-graph.md`.
 
 ## Director, planner, scheduler, and policy
 
@@ -232,6 +257,29 @@ required interactive origin, capability, approval, scope, and destructive
 capability checks (`core/execution/policy.py:337-373`). Command lookup imports
 the tool registry lazily and returns a typed dispatch classification
 (`core/execution/policy.py:395-439`).
+
+The runtime now also exposes the versioned `core.actions` adapter boundary.
+It lazily wraps the existing decorator registry and can register concrete
+`ExploitBase`, Metasploit and isolated-plugin providers without replacing
+them. `ActionExecutor` preserves candidate/applicable/checked/attempted/
+succeeded/verified/cleanup states and re-runs `ExecutionPolicy` immediately
+before provider execution. See `docs/architecture/action-lifecycle.md`.
+
+Provider choice is a separate runtime-owned read/execute boundary. A bounded
+SQLite history ranks applicable catalog actions per capability and target
+class, while selection records both score contributions and rejection reasons.
+Fallback is limited to unavailable, timeout, or explicitly typed retryable
+failures. Partial output must be ingested before the next provider is called.
+The final `ActionExecutor` policy check is never reused from selection. See
+`docs/architecture/provider-selection.md`.
+
+Execution contexts now carry cooperative cancellation. Both canonical and
+legacy local runners enforce bounded lifetime/output and process-group cleanup;
+the MSF process path follows the same TERM/grace/KILL contract. SIGINT unwinds
+normally, partial cancelled output is persisted before the mission is
+interrupted, and repeated unavailable providers are circuit-broken. Durable
+command writes have a hashed execution idempotency key. See
+`docs/architecture/reliability-recovery.md`.
 
 The execution context model carries origin, automation, scope, capabilities,
 approval, and limits (`core/execution/models.py:63-139`). Its current legacy
@@ -325,8 +373,10 @@ Registered tool dispatch enters exploit selection through
 service probe when no reconnaissance result exists, maps observed services,
 and invokes the exploit intelligence engine (`core/exploits/selector.py:224-280`).
 The engine owns a separate SQLite database, initializes/seeds its schema, and
-queries/ranks candidates (`core/exploits/exploit_mapper.py:24-149`). Its payload
-adapter is currently simulated (`core/exploits/exploit_mapper.py:151-164`).
+queries/ranks candidates (`core/exploits/exploit_mapper.py`). Its payload
+adapter no longer invents a simulated payload: it renders only an explicit,
+bounded local template containing `__LHOST__` and `__LPORT__` after target/port
+validation.
 
 Legacy kill-chain modules remain callable from the menu and registered wrappers
 (`core/tools/runner.py:89-170`, `core/tools/post_tools.py:1156-1159`). They can
@@ -336,26 +386,27 @@ Those writes are not automatically a canonical fact or evidence observation.
 
 ## Graphs and credential projection
 
-Two graph implementations serve different purposes.
+Graph projections serve different read purposes while sharing canonical entity
+identity normalization.
 
 | Graph | Source/caller | Reads | Writes | Persistence |
 |---|---|---|---|---|
 | `core.ai.AssetGraph` | `ContextBuilder` and `TargetModel` | current facts | in-memory nodes/edges | none |
-| `core.knowledge.KnowledgeGraph` | primarily credential synchronization; optional enricher | explicit graph calls | SQLite nodes/edges | `data/knowledge.db` |
+| `core.knowledge.KnowledgeGraph` | `PipelineRuntime.graph_projector`, credential compatibility, explicit graph APIs | committed facts/assessments and compatibility inputs | versioned nodes/edges/projection ledger | `data/knowledge.db` |
 
 `AssetGraph` is rebuilt deterministically from facts
 (`core/ai/asset_graph.py:10-85`) and is attached by `ContextBuilder` and
 `TargetModel` (`core/ai/context_builder.py:65-67`,
 `core/ai/target_model.py:46-76`).
 
-`KnowledgeGraph` opens a separate WAL-enabled SQLite database, creates its own
-schema, and upserts nodes and edges (`core/knowledge/graph.py:17-152`,
-`core/knowledge/graph.py:243-258`). `CredentialStore` synchronizes credential
-metadata to it (`core/credentials.py:162-179`). `KnowledgeEnricher` can translate
-legacy result text into graph writes (`core/knowledge/enricher.py:10-46`), but no
-main scan caller currently projects every `FactStore` observation into this
-database. The persistent graph is therefore not a canonical projection of all
-facts at this revision.
+`KnowledgeGraph` schema `2.0` stores canonical nodes, aliases, edges and a
+fact/assessment/normalization projection ledger. `GraphProjectionService`
+projects committed runtime facts idempotently and carries evidence IDs,
+assessment state, first/last seen, scope/scan provenance and contradiction
+metadata. Verified-path queries default to verified edges and return evidence
+chains or missing-link explanations; inferred paths require an explicit option.
+`KnowledgeEnricher` remains an uncalled public compatibility adapter and is not
+an evidence authority.
 
 `CredentialStore` itself fans a credential write out to `SecretStore`, optional
 MariaDB, `KnowledgeGraph`, and a legacy cache (`core/credentials.py:97-191`).
@@ -364,14 +415,18 @@ Reads explicitly reveal stored secrets when returning usable credentials
 
 ## Reporting and export
 
-`core/ai/reporting.py` builds an evidence index and separates finding groups,
-including access findings, before recursively redacting the enriched result
-(`core/ai/reporting.py:11-112`, `core/ai/reporting.py:268-279`).
-`TraceReporter` reads canonical facts and command results and builds redacted
-evidence, finding, coverage, path, remediation, and trace sections
-(`core/ai/trace_report.py:16-63`); it emits text and JSON representations
-(`core/ai/trace_report.py:65-174`). `octopus.py` writes trace JSON and text below
-the configured log path (`octopus.py:208-220`).
+`core/ai/report_schema.py` owns machine report schema `1.0`. It renders nine
+bounded sections and promotes a verified vulnerability only from a current
+verified assessment with reason, evidence chain and source execution IDs.
+Access, candidates, attempted-but-unverified actions, degraded checks and
+cleanup remain distinct. `core/ai/reporting.py` attaches this projection while
+retaining legacy fields and recursively redacts the result.
+
+`TraceReporter` reads canonical facts, command results and bounded decision
+events. It emits the machine report, decision metrics schema `1.0`, and
+human/JSON trace representations. `DecisionTraceStore` persists idempotent,
+retention-bounded schema `1.0` decision events in a separate SQLite store.
+`octopus.py` writes trace JSON and text below the configured log path.
 
 MariaDB exposes a typed `SessionReport` contract (`db.py:35-42`). Export first
 normalizes that contract, including the `vulns` field and compatibility alias
@@ -455,16 +510,19 @@ corresponding completed rows after reading them
 | Data | Current owner/writer | Default location | Main readers |
 |---|---|---|---|
 | facts, observations, hypotheses, command results | `FactStore` | `data/facts.db` | pipeline, state, context, reporting, replay |
+| fact assessment history, heads, evidence/execution links | `FactAssessmentStore` | same SQLite file as `FactStore` | verifier, state/context/capability read models, graph projection, reporting |
 | AI missions, planner tasks, dependencies, attempts | `MissionStore` | same SQLite file as `FactStore` | scan recovery, pipeline compatibility views, trace reporting |
 | encrypted secrets/references | `SecretStore` | `data/secrets.db` plus key file | fact redactor, credentials, memory |
 | scan/session legacy rows | `db.py` | configured MariaDB | octopus resume/report/export |
-| semantic graph | `KnowledgeGraph` | `data/knowledge.db` | credential and graph consumers |
+| semantic graph | `KnowledgeGraph` | `data/knowledge.db` | runtime projector, verified-path and graph consumers |
+| provider selection telemetry | `ProviderTelemetryStore` | `data/provider-telemetry.db` | provider selector and fallback trace |
+| bounded decision events | `DecisionTraceStore` | `data/decision-trace.db` | trace reporter and decision metrics |
 | exploit candidate intelligence | `ExploitIntelligenceEngine` | `data/exploit_intel.db` | exploit selector |
 | C2 agents/tasks/events/operators/tokens | C2 DB/event/operator/enrollment layers | `data/c2.db` | daemon agent/operator paths |
 | C2 keys and bootstrap operator key | C2 key/operator layers | `data/keys/`, `data/default_admin.key` | C2 daemon/operators |
 | optional vector memory | `VectorMemory` | configured Chroma memory path | memory recall |
 | scan checkpoint | octopus checkpoint path | configured checkpoints path | resume |
-| evidence/decision trace | octopus/`TraceReporter` | configured logs path | operator/user |
+| rendered evidence/decision trace | octopus/`TraceReporter` | configured logs path | operator/user |
 | exported reports | export functions | configured reports path | operator/user |
 | C2 daemon log | C2 startup wrapper | `data/c2_daemon.log` | operator/user |
 | legacy kill-chain output | individual kill-chain modules | module/config-specific report/loot paths | operator/module code |
@@ -532,16 +590,19 @@ specific boundaries before narrowing exceptions.
 These are current-state facts that constrain later phases; they are not a new
 architecture proposal.
 
-1. `PipelineRuntime` owns the canonical objects, but the production loop uses
-   only its decision/execution half and directly performs parse/ingest.
+1. `PipelineRuntime` owns canonical execution/result adapters, graph projection,
+   action/provider facades, and decision trace; the characterized production
+   loop still performs some orchestration-specific fact writes through its
+   shared store/projector seam.
 2. Strategic task mapping and executable function registration are separate
    registries with different identifiers and availability semantics.
 3. `FactStore` and `MissionStore` share a file but retain ordered, separate
    transactions; MariaDB session tables, `KnowledgeGraph`, exploit intelligence,
    vector memory, and C2 each have independent schema/lifecycle/transaction
    boundaries.
-4. `AssetGraph` is an ephemeral facts projection; `KnowledgeGraph` is durable
-   but is not automatically projected from all canonical facts.
+4. `AssetGraph` and `TargetModel` are ephemeral projections;
+   `KnowledgeGraph` is a versioned durable projection with idempotent runtime
+   refresh. Legacy direct graph APIs remain compatibility seams.
 5. Main session persistence is row-by-row and direct/resume paths declare
    completion before every result write; Shodan mode uses the opposite order.
 6. Replay writes facts and therefore requires explicit store isolation.
@@ -553,6 +614,8 @@ architecture proposal.
    canonical facts/evidence path.
 10. Importing DB/C2/tool packages can mutate schemas, keys, or registries before
     the application lifecycle explicitly starts them.
+11. Machine reports and decision metrics are versioned projections, while
+    MariaDB/export presentation schemas remain compatibility consumers.
 
 This map is the baseline for contract/ownership decisions. Any later extraction
 should first preserve the call paths and durable-write semantics documented

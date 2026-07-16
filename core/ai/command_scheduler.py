@@ -18,6 +18,7 @@ class CommandDecision:
     reason: str
     prerequisite: str = ""
     policy: dict[str, Any] = field(default_factory=dict)
+    retry: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -40,6 +41,7 @@ class CommandScheduler:
         facts: Iterable[dict[str, Any]],
         executed_keys: set[str],
         execution_context: Optional[ExecutionContext] = None,
+        retry_command_keys: Iterable[str] = (),
     ) -> CommandDecision:
         context = execution_context or ExecutionContext.automatic(
             actor="command_scheduler",
@@ -47,6 +49,7 @@ class CommandScheduler:
         )
         policy_decision = self.execution_policy.authorize_command(command, context)
         key = self.command_key(command)
+        retry_allowed = key in set(retry_command_keys)
         if not policy_decision.allowed:
             return CommandDecision(
                 command,
@@ -56,7 +59,7 @@ class CommandScheduler:
                 "execution_authorization",
                 policy_decision.to_dict(),
             )
-        if key in executed_keys:
+        if key in executed_keys and not retry_allowed:
             return CommandDecision(
                 command,
                 key,
@@ -66,7 +69,10 @@ class CommandScheduler:
             )
 
         block_reason = self._negative_fact_block(command, facts)
-        if block_reason:
+        if block_reason and not self._retry_bypasses_negative_gate(
+            retry_allowed,
+            block_reason,
+        ):
             return CommandDecision(
                 command,
                 key,
@@ -80,9 +86,18 @@ class CommandScheduler:
             command,
             key,
             "execute",
-            "state_changed_or_unseen",
+            "durable_retry_command" if retry_allowed else "state_changed_or_unseen",
             policy=policy_decision.to_dict(),
+            retry=retry_allowed,
         )
+
+    @staticmethod
+    def _retry_bypasses_negative_gate(retry_allowed: bool, reason: str) -> bool:
+        """Retries bypass only timeout-derived degraded-state suppression."""
+        return retry_allowed and reason in {
+            "already_degraded:nuclei_timeout",
+            "already_degraded:nikto_timeout",
+        }
 
     def command_key(self, command: str) -> str:
         command = redact_sensitive_command(command)

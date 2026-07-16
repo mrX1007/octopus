@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "authorized-internal-discovery",
+  "name": "Internal discovery after authorized access",
+  "category": "authorized_internal_discovery",
+  "lab": {"name": "octopus-replay-lab", "version": "1.0"},
+  "target": {"kind": "recorded-private-segment", "version": "internal-v1", "fixture_ref": "internal-discovery-v1"},
+  "model": {"provider": "deterministic-replay", "name": "pipeline-runtime", "parameters": {"temperature": 0}},
+  "tool_versions": {"network_projection": "1.0", "knowledge_graph": "2.0"},
+  "strategy_config": {"mode": "replay", "authorized_access": true, "internal_scope": "fixture"},
+  "seed": 505,
+  "budgets": {"max_tools": 8, "max_seconds": 60, "max_output_bytes": 1000000},
+  "allowed_actions": ["replay_internal_inventory", "verify_internal_service"],
+  "ground_truth": {"expected_findings": ["internal_host", "internal_service"], "forbidden_findings": ["offscope_host"], "expected_status": "succeeded"},
+  "artifacts": {"inputs": ["fixture://internal-discovery-v1"], "results": []},
+  "repetitions": 5,
+  "ablations": [],
+  "tags": ["replay", "internal", "authorized"]
+}

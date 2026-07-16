@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
+import hashlib
 import ipaddress
 import json
 import re
 from typing import Any
 from urllib.parse import urlparse
+
+from core.knowledge.identity import (
+    ENTITY_NORMALIZATION_VERSION,
+    canonical_asset,
+    canonical_endpoint,
+    canonical_service,
+)
 
 
 class AssetGraph:
@@ -16,15 +26,19 @@ class AssetGraph:
         self.facts = facts or []
         self.nodes: dict[str, dict[str, Any]] = {}
         self.edges: dict[str, dict[str, Any]] = {}
+        self.aliases: dict[str, str] = {}
+        self._current_fact: dict[str, Any] | None = None
 
     @classmethod
-    def from_facts(cls, target: str, facts: list[dict[str, Any]]) -> "AssetGraph":
+    def from_facts(cls, target: str, facts: list[dict[str, Any]]) -> AssetGraph:
         graph = cls(target, facts)
         graph._build()
         return graph
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": "2.0",
+            "normalization_version": ENTITY_NORMALIZATION_VERSION,
             "nodes": sorted(self.nodes.values(), key=lambda n: (n.get("kind", ""), n.get("id", ""))),
             "edges": sorted(self.edges.values(), key=lambda e: (e.get("type", ""), e.get("from", ""), e.get("to", ""))),
             "summary": self.summary(),
@@ -44,6 +58,9 @@ class AssetGraph:
         subnets = []
         internal_hosts = []
         for fact in self.facts:
+            if str(fact.get("assessment_status") or "observed") == "contradicted":
+                continue
+            self._current_fact = fact
             ftype = fact.get("type")
             value = str(fact.get("value", "")).strip()
             if not value:
@@ -78,6 +95,8 @@ class AssetGraph:
                 self._add_cloud_resource(value)
             elif ftype == "secret_finding":
                 self._add_secret(value)
+
+        self._current_fact = None
 
         for internal_host in internal_hosts:
             for subnet in subnets:
@@ -160,21 +179,110 @@ class AssetGraph:
         secret_id = f"{secret_type}:{location}"
         self._node("secret", secret_id, secret_type=secret_type, location=location)
 
-    def _node(self, kind: str, node_id: str, **attrs: Any) -> None:
+    def _node(self, kind: str, node_id: str, **attrs: Any) -> str:
         if not node_id:
-            return
-        key = f"{kind}:{node_id}"
-        existing = self.nodes.get(key, {"kind": kind, "id": node_id})
-        existing.update({k: v for k, v in attrs.items() if v not in (None, "")})
-        self.nodes[key] = existing
+            return ""
+        canonical_id = self._canonical_node_id(kind, node_id, attrs)
+        self.aliases.setdefault(str(node_id), canonical_id)
+        existing = self.nodes.get(
+            canonical_id,
+            {
+                "kind": kind,
+                "id": canonical_id,
+                "canonical_id": canonical_id,
+                "display_id": node_id,
+                "normalization_version": ENTITY_NORMALIZATION_VERSION,
+            },
+        )
+        incoming = {
+            **attrs,
+            **self._fact_metadata(),
+        }
+        self.nodes[canonical_id] = self._merge(existing, incoming)
+        return canonical_id
 
     def _edge(self, src: str, dst: str, edge_type: str, **attrs: Any) -> None:
         if not src or not dst:
             return
-        key = json.dumps({"from": src, "to": dst, "type": edge_type}, sort_keys=True)
-        edge = {"from": src, "to": dst, "type": edge_type}
-        edge.update({k: v for k, v in attrs.items() if v not in (None, "")})
-        self.edges[key] = edge
+        canonical_src = self.aliases.get(str(src), str(src))
+        canonical_dst = self.aliases.get(str(dst), str(dst))
+        key = json.dumps(
+            {"from": canonical_src, "to": canonical_dst, "type": edge_type},
+            sort_keys=True,
+        )
+        edge = self.edges.get(
+            key,
+            {"from": canonical_src, "to": canonical_dst, "type": edge_type},
+        )
+        self.edges[key] = self._merge(edge, {**attrs, **self._fact_metadata()})
+
+    def _canonical_node_id(
+        self,
+        kind: str,
+        node_id: str,
+        attrs: dict[str, Any],
+    ) -> str:
+        try:
+            if kind in {"host", "domain"}:
+                return canonical_asset(node_id).entity_id
+            if kind == "service":
+                return canonical_service(
+                    str(attrs.get("host") or str(node_id).split(":", 1)[0]),
+                    attrs.get("port"),
+                    str(attrs.get("proto") or attrs.get("protocol") or "tcp"),
+                ).entity_id
+            if kind == "endpoint":
+                return canonical_endpoint(str(attrs.get("url") or node_id)).entity_id
+        except (TypeError, ValueError):
+            pass
+        payload = json.dumps(
+            {
+                "kind": kind,
+                "value": str(node_id).strip(),
+                "normalization_version": ENTITY_NORMALIZATION_VERSION,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(payload.encode("utf-8", "replace")).hexdigest()[:32]
+        return f"view-{kind}:v1:{digest}"
+
+    def _fact_metadata(self) -> dict[str, Any]:
+        fact = self._current_fact
+        if not fact:
+            return {}
+        assessment = fact.get("assessment")
+        assessment = assessment if isinstance(assessment, dict) else {}
+        fact_id = fact.get("id")
+        assessment_id = assessment.get("assessment_id") or fact.get("assessment_id")
+        return {
+            "fact_ids": [int(fact_id)] if fact_id is not None else [],
+            "assessment_refs": [str(assessment_id)] if assessment_id else [],
+            "assessment_status": str(
+                assessment.get("status") or fact.get("assessment_status") or "observed"
+            ),
+            "evidence_fact_ids": list(assessment.get("evidence_fact_ids") or []),
+            "source_execution_ids": list(assessment.get("source_execution_ids") or []),
+        }
+
+    @staticmethod
+    def _merge(existing: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(existing)
+        union_keys = {
+            "assessment_refs",
+            "evidence_fact_ids",
+            "fact_ids",
+            "source_execution_ids",
+        }
+        for key, value in incoming.items():
+            if value in (None, ""):
+                continue
+            if key in union_keys:
+                previous = merged.get(key) or []
+                merged[key] = list(dict.fromkeys([*previous, *(value or [])]))
+            else:
+                merged[key] = value
+        return merged
 
     def _parse_endpoint(self, value: str) -> dict[str, Any]:
         try:

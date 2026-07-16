@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "clean-negative",
+  "name": "Clean negative assessment",
+  "category": "clean_negative",
+  "lab": {"name": "octopus-replay-lab", "version": "1.0"},
+  "target": {"kind": "recorded-negative-host", "version": "negative-v1", "fixture_ref": "clean-negative-v1"},
+  "model": {"provider": "deterministic-replay", "name": "pipeline-runtime", "parameters": {"temperature": 0}},
+  "tool_versions": {"output_parser": "1.0", "evidence_report": "1.0"},
+  "strategy_config": {"mode": "replay", "active_authorized": false},
+  "seed": 606,
+  "budgets": {"max_tools": 5, "max_seconds": 45, "max_output_bytes": 500000},
+  "allowed_actions": ["replay_negative_checks"],
+  "ground_truth": {"expected_findings": [], "forbidden_findings": ["verified_vulnerability", "root_access"], "expected_status": "succeeded"},
+  "artifacts": {"inputs": ["fixture://clean-negative-v1"], "results": []},
+  "repetitions": 5,
+  "ablations": [],
+  "tags": ["replay", "negative"]
+}

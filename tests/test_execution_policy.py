@@ -24,6 +24,8 @@ from core.execution.policy import (
     parse_invocation,
 )
 
+pytestmark = pytest.mark.security
+
 
 def _context(*capabilities, scope=(), approved=False, origin="automation", **limits):
     return ExecutionContext(

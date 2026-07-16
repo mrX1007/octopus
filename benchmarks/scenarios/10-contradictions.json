@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "contradictions",
+  "name": "Contradictory evidence transition",
+  "category": "contradictions",
+  "lab": {"name": "octopus-replay-lab", "version": "1.0"},
+  "target": {"kind": "recorded-evidence-set", "version": "contradiction-v1", "fixture_ref": "contradictions-v1"},
+  "model": {"provider": "deterministic-replay", "name": "pipeline-runtime", "parameters": {"temperature": 0}},
+  "tool_versions": {"fact_assessment": "1.0", "evidence_report": "1.0"},
+  "strategy_config": {"mode": "replay", "latest_assessment_wins": true},
+  "seed": 1010,
+  "budgets": {"max_tools": 6, "max_seconds": 45, "max_output_bytes": 500000},
+  "allowed_actions": ["replay_positive_evidence", "replay_negative_control", "assess_contradiction"],
+  "ground_truth": {"expected_findings": ["candidate_contradicted"], "forbidden_findings": ["verified_vulnerability"], "expected_status": "succeeded"},
+  "artifacts": {"inputs": ["fixture://contradictions-v1"], "results": []},
+  "repetitions": 5,
+  "ablations": [],
+  "tags": ["replay", "contradiction"]
+}

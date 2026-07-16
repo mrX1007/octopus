@@ -19,6 +19,7 @@ from typing import Any, Optional
 from urllib.parse import urlparse
 
 from core.execution import (
+    ExecutionCancelled,
     ExecutionContext,
     ExecutionPolicy,
     ToolInvocation,
@@ -1168,9 +1169,31 @@ def interactive_tool_run(target: str) -> str:
 
 # TYPED COMMAND RUNNER + EXPLICIT MANAGED SHELL
 
-def _terminate_process_group(proc: subprocess.Popen) -> None:
+def _terminate_process_group(
+    proc: subprocess.Popen,
+    *,
+    grace_seconds: float = 0.75,
+) -> None:
+    if proc.poll() is not None:
+        return
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGTERM)
+        else:
+            proc.terminate()
+    except (AttributeError, ProcessLookupError, PermissionError, OSError):
+        with contextlib.suppress(ProcessLookupError, OSError):
+            proc.terminate()
+    try:
+        proc.wait(timeout=max(0.0, grace_seconds))
+        return
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        if os.name == "posix":
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
     except (AttributeError, ProcessLookupError, PermissionError, OSError):
         with contextlib.suppress(ProcessLookupError, OSError):
             proc.kill()
@@ -1193,8 +1216,11 @@ def _execute_process(
     status_lines = []
     output_bytes = 0
     output_limited = False
-    start_time = time.time()
+    start_time = time.monotonic()
     exit_code = -1
+    cancel_reason = ""
+    proc = None
+    reader = None
     timeout = max(1, min(int(timeout), int(context.max_runtime_seconds)))
     heartbeat_interval = 60 if timeout > 300 else 30
     redacted_command = _redact_command(display_command)
@@ -1210,7 +1236,7 @@ def _execute_process(
             stderr=subprocess.STDOUT,
             text=False,
             bufsize=0,
-            start_new_session=True,
+            start_new_session=(os.name == "posix"),
         )
 
         def _read() -> None:
@@ -1239,14 +1265,14 @@ def _execute_process(
                     for line in rendered_chunk.splitlines():
                         rendered = _nuclei_live_summary(line)
                         if rendered:
-                            elapsed = int(time.time() - start_time)
+                            elapsed = int(time.monotonic() - start_time)
                             print(f"      [{elapsed}s] {rendered[:160]}")
                     continue
                 if any(keyword in rendered_chunk.lower() for keyword in (
                     "host:", "found", "valid", "success", "open",
                     "vuln", "error", "complete", "[+]", "session",
                 )):
-                    elapsed = int(time.time() - start_time)
+                    elapsed = int(time.monotonic() - start_time)
                     preview = _redact_command(rendered_chunk.replace("\n", " "))[:140]
                     print(f"      [{elapsed}s] {preview}")
 
@@ -1255,8 +1281,14 @@ def _execute_process(
         timed_out = False
         while reader.is_alive():
             reader.join(timeout=min(heartbeat_interval, 1))
-            elapsed_float = time.time() - start_time
+            elapsed_float = time.monotonic() - start_time
             elapsed = int(elapsed_float)
+            if context.cancellation.cancelled:
+                cancel_reason = context.cancellation.reason_code
+                _terminate_process_group(proc)
+                reader.join(timeout=2)
+                status_lines.append(f"[CANCELLED] {cancel_reason}")
+                break
             if elapsed_float >= timeout:
                 timed_out = True
                 _terminate_process_group(proc)
@@ -1281,13 +1313,28 @@ def _execute_process(
             exit_code = -1
         if output_limited and exit_code == 0:
             exit_code = -1
+    except KeyboardInterrupt as exc:
+        context.cancellation.cancel("keyboard_interrupt")
+        if proc is not None:
+            _terminate_process_group(proc)
+        if reader is not None:
+            reader.join(timeout=2)
+        partial = b"".join(output_chunks).decode("utf-8", "replace").rstrip("\n")
+        raise ExecutionCancelled(
+            context.cancellation.reason_code,
+            stdout=partial,
+            returncode=proc.returncode if proc is not None else None,
+        ) from exc
     except Exception as exc:
-        duration = time.time() - start_time
+        if proc is not None:
+            _terminate_process_group(proc)
+        safe_error = _redact_command(str(exc))[:1024]
+        duration = time.monotonic() - start_time
         return ToolResult(
             tool_name=tool,
             command=redacted_command,
-            stdout=f"[!] Command failed: {exc}",
-            stderr=str(exc),
+            stdout=f"[!] Command failed: {type(exc).__name__}: {safe_error}",
+            stderr=safe_error,
             exit_code=-1,
             duration=duration,
         )
@@ -1295,7 +1342,13 @@ def _execute_process(
     output = b"".join(output_chunks).decode("utf-8", "replace").rstrip("\n")
     if status_lines:
         output = "\n".join(part for part in (output, *status_lines) if part)
-    duration = time.time() - start_time
+    duration = time.monotonic() - start_time
+    if cancel_reason:
+        raise ExecutionCancelled(
+            cancel_reason,
+            stdout=output,
+            returncode=exit_code,
+        )
     if not output.strip():
         output = "[!] Command returned no output."
     output = _truncate_output_text(output, context.max_output_bytes)

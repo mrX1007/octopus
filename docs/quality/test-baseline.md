@@ -167,3 +167,49 @@ python -m pytest --collect-only -q
 python -m pytest -q -m '(unit or contract) and not slow and not external_tools and not mysql and not platform'
 python -m pytest -q
 ```
+
+## Wave 6 local verification (2026-07-15)
+
+After the domain split, report/decision contracts, benchmark harness, and
+release cleanup, the complete configured suite was rerun with the repository
+virtual-environment interpreter:
+
+```bash
+venv/bin/python -m pytest -q
+```
+
+```text
+699 passed, 1 warning in 154.68s (0:02:34)
+```
+
+There were no failures or skips. The one warning is urllib3's
+`NotOpenSSLWarning` because this macOS Python 3.9.6 build links LibreSSL 2.8.3;
+it is an environment limitation, not a suppressed test failure. This result is
+a local verification snapshot and does not replace the pending clean-Linux
+evidence above.
+
+Use `venv/bin/python -m pytest`, not the copied `venv/bin/pytest` console
+script: the latter can retain an absolute shebang from the directory where the
+virtual environment was originally created.
+
+## Mission/assessment completion verification (2026-07-16)
+
+After durable typed retries, bounded state-change replanning, configurable task
+scoring, versioned assessment correctness, production exploit applicability,
+the built-in benchmark runner, and the final pipeline extraction were
+integrated, the complete configured suite was rerun:
+
+```bash
+venv/bin/python -m pytest -q
+```
+
+```text
+759 passed, 1 warning in 192.22s (0:03:12)
+```
+
+There were no failures or skips. The single warning remains the environment's
+documented urllib3/LibreSSL warning. The same worktree also passed repository-
+wide Ruff, the configured 50-file mypy gate, compileall, `pip check`, and
+`git diff --check`; all ten hermetic benchmark scenarios completed five
+repetitions, and the regenerated no-op/repeat comparison was byte-identical to
+the checked-in artifact.

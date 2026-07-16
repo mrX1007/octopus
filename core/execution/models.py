@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from uuid import uuid4
 
+from core.execution.cancellation import CancellationContext
+
 CAP_REGISTERED_TOOL = "registered_tool"
 CAP_DIRECT_BINARY = "direct_binary"
 CAP_ACTIVE_TOOL = "active_tool"
@@ -81,6 +83,11 @@ class ExecutionContext:
     request_id: str = field(default_factory=_request_id)
     max_runtime_seconds: int = 300
     max_output_bytes: int = 1_000_000
+    cancellation: CancellationContext = field(
+        default_factory=CancellationContext,
+        repr=False,
+        compare=False,
+    )
 
     @classmethod
     def automatic(
@@ -91,6 +98,7 @@ class ExecutionContext:
         origin: str = "automation",
         max_runtime_seconds: int = 300,
         max_output_bytes: int = 1_000_000,
+        cancellation: Optional[CancellationContext] = None,
     ) -> "ExecutionContext":
         return cls(
             actor=actor,
@@ -99,6 +107,7 @@ class ExecutionContext:
             capabilities=frozenset({CAP_REGISTERED_TOOL, CAP_DIRECT_BINARY}),
             max_runtime_seconds=max_runtime_seconds,
             max_output_bytes=max_output_bytes,
+            cancellation=cancellation or CancellationContext(),
         )
 
     @classmethod
@@ -114,6 +123,7 @@ class ExecutionContext:
         allow_python_repl: bool = False,
         max_runtime_seconds: int = 300,
         max_output_bytes: int = 1_000_000,
+        cancellation: Optional[CancellationContext] = None,
     ) -> "ExecutionContext":
         capabilities = {CAP_REGISTERED_TOOL, CAP_DIRECT_BINARY}
         if allow_active_tools:
@@ -133,6 +143,7 @@ class ExecutionContext:
             approval_id=approval_id,
             max_runtime_seconds=max_runtime_seconds,
             max_output_bytes=max_output_bytes,
+            cancellation=cancellation or CancellationContext(),
         )
 
     def has(self, capability: str) -> bool:

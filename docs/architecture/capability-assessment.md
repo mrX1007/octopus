@@ -34,9 +34,11 @@ The immutable assessment exposes:
 - supporting canonical FactStore IDs;
 - observation time and confidence bounds.
 
-Freshness is reported as `not_assessed` until the fact-assessment phase owns a
-versioned staleness policy. Timestamps are exposed now so later policy can be
-added without rewriting base confidence or silently inventing a TTL.
+Canonical facts carry the Fact Assessment freshness-policy version and a
+`fresh | stale | unknown` marker. Capability summaries aggregate those markers;
+an execution timeout produces `degraded`, not absence. Caller-supplied legacy
+dictionaries without freshness metadata remain `not_assessed`. This read-time
+policy never rewrites base confidence.
 
 ## Stable state vocabulary
 
@@ -54,7 +56,8 @@ Authorization decision:
 - `not_applicable`: no execution authorization is required for the in-process/control-plane flow.
 
 Evidence state uses the existing projection vocabulary
-`confirmed_present | confirmed_absent | unknown`. Missing stage gates are
+`confirmed_present | confirmed_absent | unknown`. Freshness and degraded
+coverage remain a separate summary axis. Missing stage gates are
 unknown unless a surface projection explicitly proves absence.
 
 Blocking reasons use bounded prefixes:

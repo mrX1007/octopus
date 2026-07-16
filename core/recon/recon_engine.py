@@ -13,11 +13,11 @@ import asyncio
 import logging
 import ssl
 import time
+from contextlib import suppress
 from typing import Any, Optional
 
 C_GREEN  = "\033[92m"
 C_YELLOW = "\033[93m"
-C_RED    = "\033[91m"
 C_CYAN   = "\033[96m"
 C_RESET  = "\033[0m"
 
@@ -43,16 +43,24 @@ class ReconEngine:
 
     async def _worker(self, worker_id: int):
         while True:
+            task = None
             try:
-                task: ReconTask = await self.queue.get()
+                task = await self.queue.get()
                 await self._process_task(task, worker_id)
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                print(f"  {C_RED}[!] Worker {worker_id} error on {task.task_type}: {e}{C_RESET}")
+            except Exception as exc:
+                task_type = task.task_type if task is not None else "queue_wait"
+                logging.error(
+                    "Recon worker %s failed task %s: %s",
+                    worker_id,
+                    task_type,
+                    type(exc).__name__,
+                )
             finally:
-                self.queue.task_done()
-                self.completed_tasks += 1
+                if task is not None:
+                    self.queue.task_done()
+                    self.completed_tasks += 1
 
     async def _process_task(self, task: ReconTask, worker_id: int):
         # Initialize state for new targets
@@ -118,6 +126,7 @@ class ReconEngine:
 
     async def _grab_banner(self, target: str, port: int):
         """Pure python async banner grabbing with heuristic protocol detection."""
+        writer = None
         try:
             reader, writer = await asyncio.wait_for(
                 asyncio.open_connection(target, port), timeout=3.0
@@ -127,9 +136,7 @@ class ReconEngine:
             await writer.drain()
             
             data = await asyncio.wait_for(reader.read(1024), timeout=3.0)
-            writer.close()
-            await writer.wait_closed()
-            
+
             banner = data.decode('utf-8', errors='ignore').strip()
             if banner:
                 svc = self._heuristic_service_detect(port, banner)
@@ -140,8 +147,15 @@ class ReconEngine:
                     self.results[target]["banners"] = ""
                 self.results[target]["banners"] += f"[Port {port} | {svc}] {banner[:100]}...\n"
                 
-        except Exception:
-            pass # Silent fail on timeouts
+        except (asyncio.TimeoutError, ConnectionError, OSError, UnicodeError) as exc:
+            logging.debug("Banner probe unavailable: %s", type(exc).__name__)
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+                except (asyncio.TimeoutError, ConnectionError, OSError, ssl.SSLError):
+                    logging.debug("Banner connection cleanup incomplete")
 
     def _heuristic_service_detect(self, port: int, banner: str) -> str:
         banner = banner.lower()
@@ -165,13 +179,14 @@ class ReconEngine:
             if "tls" not in self.results[target]:
                 self.results[target]["tls"] = ""
             self.results[target]["tls"] += f"[Port {port} TLS Cert Extracted]\n{cert_pem[:200]}...\n"
-        except Exception:
-            pass
+        except (OSError, ssl.SSLError, TimeoutError, ValueError) as exc:
+            logging.debug("TLS fingerprint unavailable: %s", type(exc).__name__)
 
     async def _http_probe(self, target: str, port: int, is_tls: bool):
         """Custom HTTP prober (async) capturing Server headers and titles."""
         proto = "https" if is_tls else "http"
         url = f"{proto}://{target}:{port}/"
+        writer = None
         try:
             # Minimal pure-python async HTTP GET using asyncio streams
             reader, writer = await asyncio.wait_for(
@@ -183,9 +198,7 @@ class ReconEngine:
             await writer.drain()
             
             data = await asyncio.wait_for(reader.read(4096), timeout=5.0)
-            writer.close()
-            await writer.wait_closed()
-            
+
             resp = data.decode('utf-8', errors='ignore')
             
             # Simple title extraction
@@ -206,12 +219,20 @@ class ReconEngine:
                 self.results[target]["http_enum"] = ""
             self.results[target]["http_enum"] += f"URL: {url} | Server: {server} | Title: {title}\n"
             
-        except Exception as _exc:
-            logging.debug(f"Suppressed in recon_engine.py: {_exc}")
+        except (asyncio.TimeoutError, ConnectionError, OSError, ssl.SSLError) as exc:
+            logging.debug("HTTP probe unavailable: %s", type(exc).__name__)
+        finally:
+            if writer is not None:
+                writer.close()
+                try:
+                    await asyncio.wait_for(writer.wait_closed(), timeout=1.0)
+                except (asyncio.TimeoutError, ConnectionError, OSError, ssl.SSLError):
+                    logging.debug("HTTP connection cleanup incomplete")
 
     async def _run_enum4linux(self, target: str):
         print(f"  {C_CYAN}[*] Running async enum4linux on {target}...{C_RESET}")
         cmd = ["enum4linux", "-a", target]
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -221,10 +242,15 @@ class ReconEngine:
             stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
             self.results[target]["enum4linux"] = stdout.decode('utf-8', errors='ignore')
         except asyncio.TimeoutError:
-            proc.kill()
+            if proc is not None:
+                with suppress(ProcessLookupError):
+                    proc.kill()
+                await proc.communicate()
             self.results[target]["enum4linux"] = "[!] enum4linux timed out."
-        except Exception as e:
-            self.results[target]["enum4linux"] = f"[!] enum4linux error: {e}"
+        except (OSError, ValueError) as exc:
+            self.results[target]["enum4linux"] = (
+                f"[!] enum4linux error: {type(exc).__name__}"
+            )
 
     # =========================================================================
     # PUBLIC API

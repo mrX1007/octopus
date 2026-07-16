@@ -12,27 +12,25 @@ from core.ai.context_builder import ContextBuilder
 from core.ai.credential_sync import RuntimeCredentialSynchronizer
 from core.ai.director import DirectorLLM
 from core.ai.evidence import EvidenceVerifier
-from core.ai.mission_store import TaskDependenciesIncomplete
-from core.ai.outcomes import InMemoryTaskOutcomeStore, TaskOutcome
-from core.ai.pipeline_telemetry import (
-    append_command_trace,
-    append_goal_trace,
-    persist_llm_health,
-    print_efficiency_report,
-)
+from core.ai.exploit_applicability import assess_exploit_command
+from core.ai.outcomes import InMemoryTaskOutcomeStore
+from core.ai.pipeline_mission import PipelineMissionMixin
+from core.ai.pipeline_observability import PipelineObservabilityMixin
+from core.ai.pipeline_planning import PipelinePlanningMixin
+from core.ai.pipeline_replay import PipelineReplayMixin
 from core.ai.planner import MissionPlanCompiler, MissionPlanner
 from core.ai.policy import DeterministicPolicy
 from core.ai.runtime import PipelineRuntime
 from core.ai.scan_loop import ToolBudgetReached
 from core.ai.state_resolver import StateResolver
 from core.ai.task_agents import AnalysisAgent, DiscoveryAgent, VerificationAgent
+from core.ai.task_scoring import TaskScorer
 from core.ai.tool_registry import ToolRegistry
 from core.execution import (
-    CAP_ACTIVE_TOOL,
-    CAP_DIRECT_BINARY,
-    CAP_REGISTERED_TOOL,
-    ExecutionContext,
+    CancellationContext,
+    ExecutionCancelled,
     ExecutionResult,
+    ExecutionStatus,
 )
 
 logger = logging.getLogger("octopus.pipeline")
@@ -42,13 +40,21 @@ try:
     from tools import run_arbitrary_cmd
 except ImportError:
     def run_arbitrary_cmd(cmd: str) -> str:
-        return f"[Mock output for {cmd}]"
+        raise FileNotFoundError("OCTOPUS tool runtime is unavailable")
 
-class AIPipeline:
+class AIPipeline(
+    PipelineMissionMixin,
+    PipelinePlanningMixin,
+    PipelineReplayMixin,
+    PipelineObservabilityMixin,
+):
     def __init__(self, db_path: str = "data/facts.db"):
         self.runtime = PipelineRuntime(db_path, runner=lambda command: run_arbitrary_cmd(command))
         self.fact_store = self.runtime.facts
+        self.fact_assessments = self.runtime.assessments
         self.mission_store = self.runtime.missions
+        self.knowledge_graph = self.runtime.knowledge_graph
+        self.graph_projector = self.runtime.graph_projector
         self.command_scheduler = self.runtime.scheduler
         self.state_resolver = StateResolver(self.fact_store)
         self.tool_registry = ToolRegistry()
@@ -66,8 +72,15 @@ class AIPipeline:
         self.policy = DeterministicPolicy()
         self.planner = MissionPlanner()
         self.plan_compiler = MissionPlanCompiler(self.capability_resolver)
+        from config import CFG
+
+        self.task_scorer = TaskScorer.from_config(CFG)
         self.output_parser = self.runtime.parser
-        self.evidence_verifier = EvidenceVerifier(self.fact_store)
+        self.evidence_verifier = EvidenceVerifier(
+            self.fact_store,
+            self.fact_assessments,
+            self.graph_projector,
+        )
         self.trace_reporter = self.runtime.reporter
 
         self.discovery_agent = DiscoveryAgent(self.tool_registry)
@@ -77,6 +90,30 @@ class AIPipeline:
 
         self.MAX_CONSECUTIVE_LLM_FAILURES = 3
         self._reset_runtime_state()
+
+    @property
+    def action_catalog(self):
+        return self.runtime.action_catalog
+
+    @property
+    def action_executor(self):
+        return self.runtime.action_executor
+
+    @property
+    def provider_telemetry(self):
+        return self.runtime.provider_telemetry
+
+    @property
+    def provider_selector(self):
+        return self.runtime.provider_selector
+
+    @property
+    def provider_fallback_executor(self):
+        return self.runtime.provider_fallback_executor
+
+    @property
+    def decision_trace(self):
+        return self.runtime.decision_trace
 
     def _reset_runtime_state(self):
         """Reset per-scan control-plane counters without touching persisted facts."""
@@ -108,14 +145,30 @@ class AIPipeline:
         self.command_trace = []
         self.goal_trace = []
         self.plan_rejections = []
+        self.retry_scheduled_tasks = set()
+        self._active_retry_command_keys = set()
+        self._state_replan_count = 0
+        self._state_replan_signatures = set()
 
         # LLM health tracking
         self.consecutive_llm_failures = 0
         self.mission_id = None
         self._active_task_attempt_id = None
+        self._active_task_name = ""
+        self._active_task_agent = ""
         self._mission_was_completed = False
+        self._mission_was_resumed = False
         self._mission_stop_reason = ""
         self._max_tools_budget = None
+        self._current_scan_id = ""
+        self._current_target = ""
+        self._last_decision_state = ""
+        self.cancellation = CancellationContext()
+
+    def cancel(self, reason: str = "operator_request") -> bool:
+        """Request cooperative cancellation of the active scan."""
+
+        return self.cancellation.cancel(reason)
 
     def run_scan(self, scan_id: str, target: str, max_iterations: int = 0, max_tools: int = 0, max_time_minutes: int = 0, raw_scan: str = ""):
         from core.ai.scan_loop import ScanLifecycle
@@ -129,949 +182,6 @@ class AIPipeline:
             max_time_minutes,
             raw_scan,
         )
-
-    def _start_mission(self, scan_id: str, target: str):
-        """Open or recover one durable mission and rebuild compatibility views."""
-        mission = self.mission_store.open_mission(scan_id, target, recover=True)
-        self.mission_id = mission.mission_id
-        self._mission_was_completed = mission.status == "completed"
-        snapshot = self.mission_store.snapshot(mission.mission_id)
-
-        for task_record in snapshot.tasks:
-            if task_record.attempt_count:
-                self.task_history.append(f"{task_record.agent}:{task_record.task}")
-            if task_record.status == "blocked":
-                self.blocked_tasks.add(task_record.task)
-            elif task_record.status in {
-                "completed",
-                "failed",
-                "no_new_facts",
-                "skipped",
-            }:
-                self.completed_tasks.add(task_record.task)
-
-        for attempt in snapshot.attempts:
-            if attempt.outcome is None:
-                continue
-            self.task_outcome_store.record(attempt.outcome)
-        facts = self.fact_store.get_facts(scan_id, target)
-        command_results = self.fact_store.get_command_results(scan_id, target)
-        self.total_new_facts = len(facts)
-        durable_execution_ids = {
-            execution_id
-            for attempt in snapshot.attempts
-            for execution_id in attempt.execution_ids
-            if execution_id
-        }
-        durable_execution_ids.update(
-            str(result.get("execution_id"))
-            for result in command_results
-            if result.get("execution_id")
-        )
-        durable_tool_count = len(durable_execution_ids) + sum(
-            1 for result in command_results if not result.get("execution_id")
-        )
-        self.tools_run_count = max(self.tools_run_count, durable_tool_count)
-        self.executed_command_keys.update(
-            str(result.get("command_key"))
-            for result in command_results
-            if result.get("command_key")
-        )
-        for fact in facts:
-            if fact.get("type") != "check_result":
-                continue
-            try:
-                check = json.loads(str(fact.get("value") or ""))
-            except (TypeError, ValueError, json.JSONDecodeError):
-                continue
-            if isinstance(check, dict) and check.get("command_key"):
-                self.executed_command_keys.add(str(check["command_key"]))
-        return mission
-
-    def _register_mission_plan(
-        self,
-        plan: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        """Atomically persist planner tasks and dependency edges before execution."""
-        if not self.mission_id:
-            return plan
-        snapshot = self.mission_store.snapshot(self.mission_id)
-        records_by_key = {
-            (record.agent, record.task): record for record in snapshot.tasks
-        }
-        records_by_name = {record.task: record for record in snapshot.tasks}
-        records_by_id = {record.task_id: record for record in snapshot.tasks}
-
-        selected: list[tuple[str, str, dict[str, Any]]] = []
-        selected_by_name: dict[str, tuple[str, str]] = {}
-        for step in plan:
-            agent = str(step.get("agent") or "")
-            task = str(step.get("task") or "")
-            if not agent or not task or task in selected_by_name:
-                continue
-            existing = records_by_name.get(task)
-            effective = (
-                (existing.agent, existing.task) if existing else (agent, task)
-            )
-            selected_by_name[task] = effective
-            selected.append((effective[0], effective[1], step))
-
-        available_by_name = {
-            **{name: (record.agent, record.task) for name, record in records_by_name.items()},
-            **selected_by_name,
-        }
-        available_by_key = {
-            **{key: (record.agent, record.task) for key, record in records_by_key.items()},
-            **{value: value for value in selected_by_name.values()},
-        }
-        dependencies_by_task: dict[str, list[tuple[str, str]]] = {}
-        invalid_reasons: dict[str, list[str]] = {}
-        for _, task, step in selected:
-            raw_dependencies = step.get("depends_on") or ()
-            if isinstance(raw_dependencies, str):
-                raw_dependencies = (raw_dependencies,)
-            existing = records_by_name.get(task)
-            if not raw_dependencies and existing is not None:
-                dependencies_by_task[task] = [
-                    (records_by_id[dependency_id].agent, records_by_id[dependency_id].task)
-                    for dependency_id in existing.depends_on
-                    if dependency_id in records_by_id
-                ]
-                continue
-            resolved_dependencies: list[tuple[str, str]] = []
-            for dependency in raw_dependencies:
-                dependency_text = str(dependency)
-                dependency_identity = available_by_name.get(dependency_text)
-                if dependency_identity is None and ":" in dependency_text:
-                    dep_agent, dep_task = dependency_text.split(":", 1)
-                    dependency_identity = available_by_key.get((dep_agent, dep_task))
-                if dependency_identity is None:
-                    invalid_reasons.setdefault(task, []).append(dependency_text)
-                else:
-                    resolved_dependencies.append(dependency_identity)
-            dependencies_by_task[task] = resolved_dependencies
-
-        changed = True
-        while changed:
-            changed = False
-            for _, task, _ in selected:
-                if task in invalid_reasons:
-                    continue
-                invalid_dependencies = [
-                    dependency_task
-                    for _, dependency_task in dependencies_by_task[task]
-                    if dependency_task in invalid_reasons
-                ]
-                if invalid_dependencies:
-                    invalid_reasons[task] = invalid_dependencies
-                    changed = True
-
-        definitions: list[
-            tuple[str, str, tuple[tuple[str, str], ...]]
-        ] = []
-        blocked_reasons: dict[tuple[str, str], str] = {}
-        for agent, task, _ in selected:
-            if task in invalid_reasons:
-                reason = "unknown_dependencies:" + ",".join(
-                    sorted(dict.fromkeys(invalid_reasons[task]))
-                )
-                definitions.append((agent, task, ()))
-                blocked_reasons[(agent, task)] = reason
-            else:
-                definitions.append(
-                    (agent, task, tuple(dependencies_by_task[task]))
-                )
-
-        records = self.mission_store.register_plan(
-            self.mission_id,
-            definitions,
-            blocked_reasons=blocked_reasons,
-        )
-        if blocked_reasons:
-            persisted = self.mission_store.snapshot(self.mission_id)
-            attempts_by_task_id = {
-                attempt.task_id: attempt
-                for attempt in persisted.attempts
-                if attempt.status == "blocked"
-            }
-            for record in records:
-                if record.status != "blocked":
-                    continue
-                self.blocked_tasks.add(record.task)
-                attempt = attempts_by_task_id.get(record.task_id)
-                if attempt is not None and attempt.outcome is not None:
-                    self.task_outcome_store.record(attempt.outcome)
-        return self._ordered_mission_plan([record.task for record in records])
-
-    def _ordered_mission_plan(
-        self,
-        task_names: Optional[list[str]] = None,
-    ) -> list[dict[str, Any]]:
-        if not self.mission_id:
-            return []
-        snapshot = self.mission_store.snapshot(self.mission_id)
-        records = list(snapshot.tasks)
-        by_id = {record.task_id: record for record in records}
-        if task_names is None:
-            selected = {
-                record.task_id
-                for record in records
-                if record.status in {"pending", "interrupted"}
-            }
-        else:
-            requested = set(task_names)
-            selected = {
-                record.task_id for record in records if record.task in requested
-            }
-        order = {record.task_id: index for index, record in enumerate(records)}
-        indegree = {
-            task_id: sum(
-                1 for dependency_id in by_id[task_id].depends_on
-                if dependency_id in selected
-            )
-            for task_id in selected
-        }
-        dependents: dict[str, list[str]] = {task_id: [] for task_id in selected}
-        for task_id in selected:
-            for dependency_id in by_id[task_id].depends_on:
-                if dependency_id in selected:
-                    dependents[dependency_id].append(task_id)
-        ready = sorted(
-            (task_id for task_id, count in indegree.items() if count == 0),
-            key=order.__getitem__,
-        )
-        ordered: list[str] = []
-        while ready:
-            task_id = ready.pop(0)
-            ordered.append(task_id)
-            for dependent_id in sorted(dependents[task_id], key=order.__getitem__):
-                indegree[dependent_id] -= 1
-                if indegree[dependent_id] == 0:
-                    ready.append(dependent_id)
-                    ready.sort(key=order.__getitem__)
-        if len(ordered) != len(selected):
-            raise RuntimeError("persisted mission task dependency cycle")
-        return [
-            {"agent": by_id[task_id].agent, "task": by_id[task_id].task}
-            for task_id in ordered
-        ]
-
-    def _resumable_mission_plan(self) -> list[dict[str, Any]]:
-        """Return unfinished durable work before consulting Director or Planner."""
-        return self._ordered_mission_plan()
-
-    def _block_registered_task(self, agent: str, task: str, reason: str):
-        if not self.mission_id:
-            return None
-        attempt = self.mission_store.block_task(self.mission_id, agent, task, reason)
-        self.blocked_tasks.add(task)
-        if attempt.outcome is not None:
-            self.task_outcome_store.record(attempt.outcome)
-        return attempt
-
-    def _persist_plan_rejection(self, agent: str, task: str, reason: str) -> None:
-        if not self.mission_id or not agent or not task:
-            return
-        snapshot = self.mission_store.snapshot(self.mission_id)
-        record = next((item for item in snapshot.tasks if item.task == task), None)
-        if record is not None and record.status not in {"pending", "interrupted"}:
-            if record.status == "blocked":
-                self.blocked_tasks.add(record.task)
-            return
-        effective_agent = record.agent if record is not None else agent
-        effective_task = record.task if record is not None else task
-        records = self.mission_store.register_plan(
-            self.mission_id,
-            [(effective_agent, effective_task, ())],
-            blocked_reasons={(effective_agent, effective_task): reason},
-        )
-        blocked = records[0]
-        self.blocked_tasks.add(blocked.task)
-        persisted = self.mission_store.snapshot(self.mission_id)
-        attempt = next(
-            (
-                item for item in reversed(persisted.attempts)
-                if item.task_id == blocked.task_id and item.status == "blocked"
-            ),
-            None,
-        )
-        if attempt is not None and attempt.outcome is not None:
-            self.task_outcome_store.record(attempt.outcome)
-
-    def _terminalize_compatibility_exhausted_tasks(
-        self,
-        plan: list[dict[str, Any]],
-    ) -> None:
-        """Prevent legacy in-memory exhaustion from stranding durable pending work."""
-        if not self.mission_id:
-            return
-        snapshot = self.mission_store.snapshot(self.mission_id)
-        by_name = {record.task: record for record in snapshot.tasks}
-        for step in plan:
-            task = str(step.get("task") or "")
-            if not task or not self._task_exhausted(task):
-                continue
-            record = by_name.get(task)
-            if record is None or record.status not in {"pending", "interrupted"}:
-                continue
-            if task in self.blocked_tasks:
-                self._block_registered_task(
-                    record.agent,
-                    record.task,
-                    "compatibility_state_blocked",
-                )
-                continue
-            attempt = self.mission_store.skip_task(
-                self.mission_id,
-                record.agent,
-                record.task,
-                "compatibility_state_exhausted",
-            )
-            if attempt.outcome is not None:
-                self.task_outcome_store.record(attempt.outcome)
-
-    def _begin_task_attempt(self, agent: str, task: str):
-        if not self.mission_id:
-            return None
-        if self._active_task_attempt_id:
-            raise RuntimeError("a mission task attempt is already active")
-        try:
-            attempt = self.mission_store.begin_attempt(self.mission_id, agent, task)
-        except TaskDependenciesIncomplete as exc:
-            details = ",".join(
-                f"{task_id}:{status}" for task_id, status in exc.incomplete
-            )
-            return self._block_registered_task(
-                agent,
-                task,
-                f"dependency_unsatisfied:{details}",
-            )
-        self._active_task_attempt_id = attempt.attempt_id
-        return attempt
-
-    def _interrupt_mission(self, reason: str) -> None:
-        if self.mission_id and not self._mission_was_completed:
-            self.mission_store.interrupt_mission(self.mission_id, reason)
-        self._active_task_attempt_id = None
-
-    def _complete_mission(self, reason: str) -> None:
-        if self.mission_id and not self._mission_was_completed:
-            self.mission_store.complete_mission(self.mission_id, reason)
-            self._mission_was_completed = True
-        self._active_task_attempt_id = None
-
-    def _prepare_replay_entry(
-        self,
-        entry: dict[str, Any],
-    ) -> tuple[Any, str, bool, bool, str]:
-        nested_result = entry.get("result")
-        if nested_result is not None:
-            payload: Any = nested_result
-        elif any(
-            key in entry
-            for key in (
-                "schema_version",
-                "status",
-                "stdout",
-                "stderr",
-                "exit_code",
-                "partial",
-                "error",
-                "metadata",
-            )
-        ):
-            payload = {
-                key: value
-                for key, value in entry.items()
-                if key not in {"tool", "command", "result"}
-            }
-        else:
-            payload = entry.get("output") or entry.get("raw_output") or ""
-
-        if (
-            isinstance(payload, dict)
-            and "raw_output" in payload
-            and "stdout" not in payload
-            and "output" not in payload
-        ):
-            payload = dict(payload)
-            payload["output"] = payload.pop("raw_output")
-
-        payload_schema = self.runtime.validate_result_schema(payload)
-        supplied_request_id = False
-        supplied_execution_id = False
-        payload_tool = ""
-        if isinstance(payload, ExecutionResult):
-            supplied_request_id = bool(payload.request_id)
-            supplied_execution_id = bool(payload.execution_id)
-            payload_tool = payload.tool_name
-        elif isinstance(payload, dict):
-            supplied_request_id = bool(payload.get("request_id"))
-            supplied_execution_id = bool(payload.get("execution_id"))
-            payload_tool = str(payload.get("tool_name") or "")
-        return (
-            payload,
-            payload_schema,
-            supplied_request_id,
-            supplied_execution_id,
-            payload_tool,
-        )
-
-    def replay_outputs(self, scan_id: str, target: str, outputs: list[dict[str, Any]]) -> dict[str, Any]:
-        """Replay legacy or canonical outputs through the existing runtime boundary."""
-
-        prepared = [self._prepare_replay_entry(entry) for entry in (outputs or [])]
-        stored = 0
-        parsed = 0
-        execution_results: list[dict[str, Any]] = []
-        execution_context = self._execution_context(scan_id, target)
-        for index, (entry, prepared_entry) in enumerate(zip(outputs or [], prepared)):
-            (
-                payload,
-                payload_schema,
-                supplied_request_id,
-                supplied_execution_id,
-                payload_tool,
-            ) = prepared_entry
-
-            tool = str(entry.get("tool") or entry.get("command") or payload_tool or "replay")
-            canonical = self.runtime.normalize_result(
-                payload,
-                tool_name=tool,
-                max_output_bytes=execution_context.max_output_bytes,
-            )
-            output_text = self._output_text(canonical)
-            output_hash = self._output_fingerprint(output_text)
-            identity_seed = "\0".join(
-                (scan_id, target, str(index), canonical.tool_name, output_hash)
-            ).encode("utf-8", "replace")
-            identity = hashlib.sha256(identity_seed).hexdigest()
-            if not supplied_request_id:
-                canonical.request_id = f"replay-request-{identity[:32]}"
-            if not supplied_execution_id:
-                canonical.execution_id = f"replay-execution-{identity[32:]}"
-
-            facts = self.runtime.parse_output(canonical.tool_name, canonical)
-            parsed += len(facts)
-            command_new_facts = 0
-            for fact in facts:
-                result = self._store_fact(
-                    scan_id,
-                    target,
-                    fact,
-                    f"replay:{canonical.tool_name}",
-                )
-                stored += result["new_facts"]
-                command_new_facts += result["new_facts"]
-            failed = self._command_failed(canonical, output_text)
-            _result_id, unique_output = self.fact_store.add_command_result(
-                scan_id=scan_id,
-                host=target,
-                command_key=f"replay:{canonical.tool_name}",
-                command=canonical.tool_name,
-                output_hash=output_hash,
-                output_bytes=len(canonical.stdout.encode("utf-8", "ignore")),
-                parsed_facts=len(facts),
-                new_facts=command_new_facts,
-                failed=failed,
-                execution_result=canonical,
-            )
-            execution_results.append(
-                {
-                    "schema_version": canonical.schema_version,
-                    "input_schema_version": payload_schema,
-                    "status": canonical.status.value,
-                    "request_id": canonical.request_id,
-                    "execution_id": canonical.execution_id,
-                    "tool_name": canonical.tool_name,
-                    "policy_decision_ref": canonical.policy_decision_ref,
-                    "exit_code": canonical.exit_code,
-                    "duration": canonical.duration,
-                    "partial": canonical.partial,
-                    "executed": canonical.executed,
-                    "failed": failed,
-                    "output_hash": output_hash,
-                    "output_bytes": len(canonical.stdout.encode("utf-8", "ignore")),
-                    "stderr_bytes": len(canonical.stderr.encode("utf-8", "ignore")),
-                    "artifact_count": len(canonical.artifact_refs),
-                    "parsed_facts": len(facts),
-                    "new_facts": command_new_facts,
-                    "duplicate_output": not unique_output,
-                }
-            )
-        context = self.context_builder.build_context(scan_id, target)
-        return {
-            "schema_version": "1.0",
-            "parsed_facts": parsed,
-            "new_facts": stored,
-            "context": context,
-            "snapshot_actions": self.snapshot_actions(scan_id, target),
-            "execution_results": execution_results,
-            "replay_results": [dict(item) for item in execution_results],
-        }
-
-    def snapshot_actions(self, scan_id: str, target: str) -> list[dict[str, str]]:
-        """Return the deterministic next actions without executing them."""
-        facts = self.fact_store.get_facts(scan_id, target)
-        executed_fact_actions = set(self.executed_fact_action_commands)
-        service_evidence_seen = set(self.service_intelligence_evidence_seen)
-        try:
-            commands = self._fact_driven_action_commands(scan_id, target, facts)
-        finally:
-            self.executed_fact_action_commands = executed_fact_actions
-            self.service_intelligence_evidence_seen = service_evidence_seen
-        decisions = []
-        all_facts = self.fact_store.get_facts(scan_id, target)
-        execution_context = self._execution_context(scan_id, target)
-        for command in commands:
-            decision = self.runtime.decide(command, all_facts, self.executed_command_keys, execution_context)
-            decisions.append(decision.to_dict())
-        return decisions
-
-    def trace_report(self, scan_id: str, target: str) -> dict[str, Any]:
-        context = self.context_builder.build_context(scan_id, target)
-        return self.trace_reporter.build(
-            scan_id,
-            target,
-            goal_trace=self.goal_trace,
-            command_trace=self.command_trace,
-            task_outcomes=self.task_outcomes,
-            context=context,
-        )
-
-    def trace_report_text(self, scan_id: str, target: str) -> str:
-        return self.trace_reporter.to_text(self.trace_report(scan_id, target))
-
-    def _runtime_limit(self, value):
-        if value is None:
-            return None
-        if isinstance(value, str) and value.strip().lower() in {"", "0", "-1", "none", "unlimited", "false"}:
-            return None
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return None
-        return None if parsed <= 0 else parsed
-
-    def _execution_context(self, scan_id: str, target: str) -> ExecutionContext:
-        """Bind automatic commands to the current scan target and origin."""
-        try:
-            from config import CFG
-        except ImportError:
-            CFG = {}
-        strategy = CFG.get("strategy", {})
-        active_authorized = bool(strategy.get("active_authorized", False)) and self._target_in_authorized_scope(
-            target, strategy.get("authorized_targets", [])
-        )
-        if active_authorized:
-            return ExecutionContext(
-                actor=f"scan:{scan_id}",
-                origin="ai_pipeline",
-                target_scope=(target,),
-                capabilities=frozenset({
-                    CAP_REGISTERED_TOOL,
-                    CAP_DIRECT_BINARY,
-                    CAP_ACTIVE_TOOL,
-                }),
-                approved=True,
-                approval_id=f"config:active_authorized:{scan_id}",
-            )
-        return ExecutionContext.automatic(
-            target_scope=(target,),
-            actor=f"scan:{scan_id}",
-            origin="ai_pipeline",
-        )
-
-    def _llm_fallback_only(self) -> bool:
-        return self.consecutive_llm_failures >= self.MAX_CONSECUTIVE_LLM_FAILURES
-
-    def _director_fallback_result(self, context: dict[str, Any]) -> dict[str, Any]:
-        result = self.director._fallback_logic(context, self.goal_history)
-        result.update({
-            "llm_status": "skipped",
-            "llm_error": "llm_dead_fallback_only",
-            "fallback": True,
-        })
-        return result
-
-    def _planner_fallback_result(self, goal: str) -> dict[str, Any]:
-        result = self.planner._fallback_logic(goal)
-        result.update({
-            "llm_status": "skipped",
-            "llm_error": "llm_dead_fallback_only",
-            "fallback": True,
-        })
-        return result
-
-    def _compile_plan(
-        self,
-        plan: list[dict[str, Any]],
-        scan_id: str,
-        target: str,
-        context: dict[str, Any],
-    ) -> list[dict[str, Any]]:
-        """Reject only hard provider failures before task execution.
-
-        Authorization and prerequisites remain visible on the assessment, but
-        are deliberately not cached as execution permission.  Every surviving
-        command is still reauthorized by the scheduler and runner.
-        """
-        compilation = self.plan_compiler.compile(
-            plan,
-            target=target,
-            facts=self.fact_store.get_facts(scan_id, target),
-            context=context,
-            execution_context=self._execution_context(scan_id, target),
-        )
-        for rejection in compilation.rejected:
-            rejection_dict = dict(rejection)
-            self.plan_rejections.append(rejection_dict)
-            task = self.tool_registry.canonical_task(rejection_dict.get("task", ""))
-            if task:
-                self.blocked_tasks.add(task)
-            reasons = ", ".join(rejection_dict.get("blocking_reasons") or [])
-            durable_reason = str(rejection_dict.get("reason") or "capability_unavailable")
-            if reasons:
-                durable_reason += ":" + reasons
-            self._persist_plan_rejection(
-                str(rejection_dict.get("agent") or ""),
-                task,
-                durable_reason,
-            )
-            print(
-                f"     [!] Planner task rejected: {task or '<unknown>'} "
-                f"({rejection_dict.get('reason')}{': ' + reasons if reasons else ''})"
-            )
-        return [dict(step) for step in compilation.plan]
-
-    def _normalize_plan(self, plan, goal: str = ""):
-        """Normalize LLM task names before execution and history tracking."""
-        normalized = []
-        for step in self._coerce_plan_steps(plan):
-            if not isinstance(step, dict):
-                continue
-            task = (
-                step.get("task")
-                or step.get("tool")
-                or step.get("action")
-                or step.get("name")
-                or self._task_from_planner_command(step.get("command", ""))
-            )
-            agent = step.get("agent") or self._agent_for_task(task, goal)
-            if not agent or not task:
-                continue
-            task_key = (task or "").strip().lower().replace("-", "_").replace(" ", "_")
-            if goal == "privilege_escalation" and task_key in {"verify_exploit", "exploit", "run_exploit"}:
-                task = "exploit_privesc"
-            elif goal == "data_exfiltration" and task_key in {
-                "directory_bruteforce", "dir_bruteforce", "find_sensitive_files",
-                "data_discovery", "discover_data", "enumerate_files"
-            }:
-                task = "exfiltrate_data"
-            normalized.append({
-                **step,
-                "agent": agent,
-                "task": self.tool_registry.canonical_task(task),
-            })
-        return normalized
-
-    def _extract_plan_steps(self, plan_res: dict[str, Any]) -> list[dict[str, Any]]:
-        if not isinstance(plan_res, dict):
-            return self._coerce_plan_steps(plan_res)
-        if isinstance(plan_res.get("plan"), (list, dict)):
-            return self._coerce_plan_steps(plan_res.get("plan"))
-        return self._coerce_plan_steps(plan_res)
-
-    def _coerce_plan_steps(self, raw_plan) -> list[dict[str, Any]]:
-        if isinstance(raw_plan, list):
-            return [step for step in raw_plan if isinstance(step, dict)]
-        if not isinstance(raw_plan, dict):
-            return []
-        for key in ("plan", "tasks", "actions", "steps"):
-            nested = raw_plan.get(key)
-            if isinstance(nested, list):
-                return [step for step in nested if isinstance(step, dict)]
-            if isinstance(nested, dict):
-                return self._coerce_plan_steps(nested)
-        if any(key in raw_plan for key in ("agent", "task", "tool", "action", "name", "command")):
-            return [raw_plan]
-        return []
-
-    def _task_from_planner_command(self, command: str) -> str:
-        return (command or "").strip().split(None, 1)[0]
-
-    def _agent_for_task(self, task: str, goal: str = "") -> str:
-        canonical = self.tool_registry.canonical_task(task)
-        if canonical in {
-            "post_access_inventory",
-            "find_privesc_vectors",
-            "exploit_privesc",
-            "internal_network_recon",
-            "internal_service_discovery",
-            "metasploit_verification",
-            "establish_persistence",
-            "pivot_setup",
-            "lateral_movement",
-            "exfiltrate_data",
-            "stealth_cleanup",
-        }:
-            return "VerificationAgent"
-        if canonical == "analyze_vulnerabilities":
-            return "AnalysisAgent"
-        if goal in {"post_access_inventory", "internal_reconnaissance", "data_exfiltration", "cleanup", "persistence"}:
-            return "VerificationAgent"
-        return "DiscoveryAgent"
-
-    def _optimize_plan(self, plan, goal: str, context: dict[str, Any]):
-        """Apply deterministic guardrails around LLM plans.
-
-        The LLM is useful for flexible planning, but the kill-chain state is the
-        source of truth. Once access is confirmed, post-exploitation goals should
-        not drift back into scanning or generic analysis.
-        """
-        state = context.get("state", "initial_recon")
-        forced_plan = self._post_exploit_plan(goal, state, context)
-        if forced_plan is not None:
-            if plan != forced_plan:
-                tasks = ", ".join(step["task"] for step in forced_plan)
-                print(f"[*] Plan optimized for state={state}, goal={goal}: {tasks}")
-            return forced_plan
-
-        optimized = []
-        seen_tasks = set()
-        for step in plan:
-            agent = step.get("agent")
-            task = self.tool_registry.canonical_task(step.get("task"))
-            if not agent or not task:
-                continue
-            if task in seen_tasks:
-                continue
-            if agent == "AnalysisAgent" and task != "analyze_vulnerabilities":
-                print(f"     [!] Dropping incompatible AnalysisAgent task: {task}")
-                continue
-            if agent != "AnalysisAgent" and not self.tool_registry.has_task(task):
-                print(f"     [!] Dropping unknown planner task: {task}")
-                continue
-            seen_tasks.add(task)
-            optimized.append({**step, "task": task})
-
-        return self._enrich_plan(optimized, goal, context)
-
-
-    def _post_exploit_plan(self, goal: str, state: str, context: Optional[dict[str, Any]] = None):
-        context = context or {}
-        open_questions = set(context.get("open_questions") or [])
-        post_states = {"root_access_confirmed", "persistence_established", "internal_recon_completed", "exfiltration_completed"}
-        if goal == "post_access_inventory" and state in post_states:
-            return [{"agent": "VerificationAgent", "task": "post_access_inventory"}]
-        if goal == "persistence" and state in post_states:
-            if not self._strategy_enabled("auto_persistence", False):
-                return []
-            plan = []
-            if self._strategy_enabled("auto_payload_generation", False):
-                plan.append({"agent": "VerificationAgent", "task": "payload_generation"})
-            plan.append({"agent": "VerificationAgent", "task": "establish_persistence"})
-            return plan
-        if goal == "internal_reconnaissance" and state in post_states:
-            if not self._strategy_enabled("auto_internal_recon", True):
-                return []
-            if "internal_service_assessment_pending" in open_questions:
-                return [{"agent": "VerificationAgent", "task": "internal_service_discovery"}]
-            return [{"agent": "VerificationAgent", "task": "internal_network_recon"}]
-        if goal == "data_exfiltration" and state in post_states:
-            if not self._strategy_enabled("auto_data_exfil", False):
-                return []
-            return [{"agent": "VerificationAgent", "task": "exfiltrate_data"}]
-        if goal == "cleanup" and state in post_states:
-            if not self._strategy_enabled("auto_cleanup", False):
-                return []
-            return [{"agent": "VerificationAgent", "task": "stealth_cleanup"}]
-        return None
-
-    def _task_exhausted(self, task: str) -> bool:
-        task = self.tool_registry.canonical_task(task)
-        return task in self.completed_tasks or task in self.blocked_tasks
-
-    def _enrich_plan(self, plan, goal: str, context: dict[str, Any]):
-        """Add one high-value context-specific task when the plan has room."""
-        services = set(context.get("services") or [])
-        open_questions = set(context.get("open_questions") or [])
-        target_model = context.get("target_model") or {}
-        surface_states = target_model.get("surface_states") or context.get("surface_states") or {}
-        assets = target_model.get("assets") or {}
-        explicit_coverage = "coverage_gaps" in context
-        coverage_gaps = set(context.get("coverage_gaps") or context.get("open_questions") or [])
-        candidates = []
-        critical_candidates = set()
-        if goal == "vulnerability_assessment":
-            if "external_vulnerability_assessment_pending" in coverage_gaps:
-                candidates.append("vulnerability_assessment")
-            if "internal_vulnerability_assessment_pending" in coverage_gaps:
-                if "external_vulnerability_assessment_pending" not in coverage_gaps:
-                    candidates.append("exploit_selection")
-                candidates.append("internal_service_discovery")
-            if surface_states.get("asm") != "confirmed_present" and self._target_looks_domain(context.get("host", "")):
-                candidates.append("asm_discovery")
-            if "cpanel_auth_bypass_unknown" in open_questions:
-                candidates.append("cpanel_assessment")
-                critical_candidates.add("cpanel_assessment")
-            if services.intersection({"http", "https"}) or coverage_gaps.intersection({
-                "web_mapping_pending", "web_app_deep_testing_pending",
-                "web_content_discovery_pending", "template_verification_pending",
-                "api_security_testing_pending",
-            }):
-                if "web_mapping_pending" in coverage_gaps or services.intersection({"http", "https"}):
-                    candidates.append("web_application_mapping")
-                if "web_app_deep_testing_pending" in coverage_gaps or not explicit_coverage:
-                    candidates.append("web_app_deep_testing")
-                if "web_content_discovery_pending" in coverage_gaps or not explicit_coverage:
-                    candidates.append("web_content_discovery")
-                if "template_verification_pending" in coverage_gaps or not explicit_coverage:
-                    candidates.append("template_verification")
-                candidates.append("web_vulnerability_testing")
-                if "api_security_testing_pending" in coverage_gaps or surface_states.get("api") != "confirmed_absent":
-                    candidates.append("api_security_testing")
-            if "https" in services:
-                candidates.append("transport_security_assessment")
-            if "smb" in services:
-                candidates.append("windows_enumeration")
-            if services.intersection({"ldap", "kerberos", "winrm", "rdp"}):
-                candidates.append("active_directory_enumeration")
-                candidates.append("ad_security_review")
-            if assets.get("urls") and surface_states.get("web") == "confirmed_present":
-                candidates.append("template_verification")
-            if surface_states.get("cloud") == "unknown" and assets.get("domains"):
-                candidates.append("cloud_security_assessment")
-        elif goal == "credential_harvesting":
-            if services.intersection({"ldap", "kerberos", "winrm", "rdp", "smb"}):
-                candidates.append("active_directory_enumeration")
-                candidates.append("kerberos_assessment")
-            if "web_credentials_unknown" in context.get("open_questions", []):
-                candidates.append("web_credential_testing")
-            if "ssh" in services:
-                candidates.append("ssh_user_enumeration")
-            if "smb" in services:
-                candidates.append("windows_enumeration")
-        elif goal == "internal_reconnaissance":
-            if "internal_network_recon_pending" in coverage_gaps:
-                candidates.append("internal_network_recon")
-            if "internal_service_assessment_pending" in coverage_gaps:
-                candidates.append("internal_service_discovery")
-
-        if not candidates:
-            return plan
-
-        present = {step.get("task") for step in plan}
-        enriched = list(plan)
-        short_specialized_vuln_plan = (
-            goal == "vulnerability_assessment"
-            and len(plan) <= 3
-            and "cpanel_assessment" in candidates
-        )
-        for task in self._rank_candidate_tasks(candidates, context, critical_candidates):
-            task = self.tool_registry.canonical_task(task)
-            if short_specialized_vuln_plan and "cpanel_assessment" in present and task in {
-                "web_vulnerability_testing",
-                "web_app_deep_testing",
-                "template_verification",
-                "api_security_testing",
-            }:
-                continue
-            is_critical = task in critical_candidates
-            if len(enriched) >= self._plan_enrichment_limit() and not is_critical:
-                break
-            if task in present or self._task_exhausted(task):
-                continue
-            if not self.tool_registry.task_has_available_tools(task):
-                continue
-            insert_at = next(
-                (idx for idx, step in enumerate(enriched) if step.get("agent") != "DiscoveryAgent"),
-                len(enriched),
-            )
-            enriched.insert(insert_at, {"agent": "DiscoveryAgent", "task": task})
-            present.add(task)
-            print(f"[*] Plan enriched with {task} from context services={sorted(services)}")
-            if (short_specialized_vuln_plan and task == "cpanel_assessment") or len(enriched) > self._plan_enrichment_limit():
-                self._trim_low_priority_enrichment(enriched, protected={task})
-
-        if goal == "vulnerability_assessment" and "external_vulnerability_assessment_pending" in coverage_gaps:
-            enriched.sort(key=lambda step: 0 if step.get("task") == "vulnerability_assessment" else 1)
-
-        return self.policy.validate_plan(enriched, context)
-
-    def _rank_candidate_tasks(self, candidates: list[str], context: dict[str, Any], critical_candidates: Optional[set] = None) -> list[str]:
-        critical_candidates = {self.tool_registry.canonical_task(t) for t in (critical_candidates or set())}
-        seen = set()
-        normalized = []
-        for task in candidates or []:
-            canonical = self.tool_registry.canonical_task(task)
-            if canonical in seen:
-                continue
-            seen.add(canonical)
-            normalized.append(canonical)
-
-        risk_order = {
-            "passive": 0,
-            "safe": 1,
-            "check_only": 2,
-            "post_access_read": 3,
-            "local_build": 3,
-            "active": 4,
-            "post_access_change": 5,
-            "unknown": 6,
-        }
-        time_order = {"short": 0, "medium": 1, "long": 2}
-
-        def rank(task: str):
-            profile = self.tool_registry.task_profile(task)
-            unmet = self._unmet_task_preconditions(profile.get("preconditions") or [], context)
-            return (
-                0 if task in critical_candidates else 1,
-                len(unmet),
-                risk_order.get(str(profile.get("risk", "unknown")), 6),
-                time_order.get(str(profile.get("time", "medium")), 1),
-                int(profile.get("cost", 5) or 5),
-            )
-
-        return sorted(normalized, key=rank)
-
-    def _unmet_task_preconditions(self, preconditions: list[str], context: dict[str, Any]) -> list[str]:
-        return self.capability_resolver.missing_requirements(preconditions, context)
-
-    def _plan_enrichment_limit(self) -> int:
-        try:
-            from config import CFG
-        except ImportError:
-            CFG = {}
-        raw = (CFG.get("strategy") or {}).get("plan_enrichment_limit", 8)
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            return 8
-        return max(3, value)
-
-    def _target_looks_domain(self, target: str) -> bool:
-        from core.tools.targeting import target_looks_domain
-
-        return target_looks_domain(target)
-
-    def _trim_low_priority_enrichment(self, plan: list[dict[str, Any]], protected: set) -> None:
-        """Keep plans short while preserving critical context-specific checks."""
-        low_priority = [
-            "web_application_mapping",
-            "web_vulnerability_testing",
-            "transport_security_assessment",
-            "windows_enumeration",
-        ]
-        for task in low_priority:
-            if task in protected:
-                continue
-            for idx, step in enumerate(plan):
-                if step.get("task") == task:
-                    plan.pop(idx)
-                    return
-        if len(plan) > 3:
-            plan.pop(-2)
 
     def _run_task_commands(self, scan_id: str, target: str, cmds: list[str], fact_label: str, verification: bool = False) -> dict[str, Any]:
         new_facts = 0
@@ -1147,6 +257,8 @@ class AIPipeline:
 
     def _execute_pipeline_command(self, scan_id: str, target: str, cmd: str,
                                   fact_label: str, prefix: str) -> dict[str, Any]:
+        self._current_scan_id = str(scan_id)
+        self._current_target = str(target)
         if (
             self._max_tools_budget is not None
             and self.tools_run_count >= self._max_tools_budget
@@ -1154,12 +266,41 @@ class AIPipeline:
             self._mission_stop_reason = "max_tools_reached"
             raise ToolBudgetReached("max_tools_reached")
         execution_context = self._execution_context(scan_id, target)
+        current_facts = self.fact_store.get_facts(scan_id, target)
         decision = self.runtime.decide(
             cmd,
-            self.fact_store.get_facts(scan_id, target),
+            current_facts,
             self.executed_command_keys,
             execution_context,
+            self._active_retry_command_keys,
         )
+        if decision.action == "execute":
+            assessment = assess_exploit_command(cmd, current_facts)
+            if not assessment.applicable:
+                decision.action = "skip"
+                decision.reason = "assessment_blocked:" + ",".join(
+                    assessment.missing_requirements
+                )
+                decision.prerequisite = "canonical_fact_assessment"
+                decision.retry = False
+        if decision.action == "execute" and decision.retry:
+            consumed = bool(
+                self.mission_id
+                and self._active_task_agent
+                and self._active_task_name
+                and self.mission_store.consume_retry_command(
+                    self.mission_id,
+                    self._active_task_agent,
+                    self._active_task_name,
+                    decision.key,
+                )
+            )
+            if consumed:
+                self._active_retry_command_keys.discard(decision.key)
+            else:
+                decision.action = "skip"
+                decision.reason = "retry_command_grant_unavailable"
+                decision.retry = False
         audit_decision = decision.to_dict()
         audit_cmd = audit_decision["command"]
         if decision.action == "skip":
@@ -1177,6 +318,13 @@ class AIPipeline:
         )
         running_store = self._store_fact(scan_id, target, running_fact, audit_cmd)
         dispatch_result = self.runtime.execute(decision, execution_context)
+        if dispatch_result.execution_id:
+            for running_fact_id in running_store["fact_ids"]:
+                self.fact_assessments.attach_source_executions(
+                    int(running_fact_id),
+                    (dispatch_result.execution_id,),
+                )
+            self.runtime.project_fact_ids(running_store["fact_ids"])
         if self._active_task_attempt_id and dispatch_result.execution_id:
             self.mission_store.record_attempt_progress(
                 self._active_task_attempt_id,
@@ -1204,8 +352,17 @@ class AIPipeline:
         command_new_facts = running_store["new_facts"]
         command_fact_ids = list(running_store["fact_ids"])
 
+        source_execution_ids = (
+            (dispatch_result.execution_id,) if dispatch_result.execution_id else ()
+        )
         for f in facts:
-            stored = self._store_fact(scan_id, target, f, audit_cmd)
+            stored = self._store_fact(
+                scan_id,
+                target,
+                f,
+                audit_cmd,
+                source_execution_ids=source_execution_ids,
+            )
             stored_facts.extend(stored["derived_facts"])
             command_fact_ids.extend(stored["fact_ids"])
             if stored["created"] and f.get("type") != "check_result":
@@ -1224,6 +381,11 @@ class AIPipeline:
             new_facts=command_new_facts,
             failed=failed,
             execution_result=dispatch_result,
+            idempotency_key=(
+                f"execution:{dispatch_result.execution_id}"
+                if dispatch_result.execution_id
+                else ""
+            ),
         )
 
         result = {
@@ -1239,6 +401,7 @@ class AIPipeline:
                 "execution_id": dispatch_result.execution_id,
                 "request_id": dispatch_result.request_id,
                 "policy_decision_ref": dispatch_result.policy_decision_ref,
+                "error_class": dispatch_result.error_class,
                 "exit_code": dispatch_result.exit_code,
                 "duration": dispatch_result.duration,
                 "output_bytes": len(dispatch_result.stdout.encode("utf-8", "ignore")),
@@ -1258,6 +421,8 @@ class AIPipeline:
                 fact_ids=tuple(dict.fromkeys(command_fact_ids)),
             )
         self._record_command_trace(decision.to_dict(), result["command_result"])
+        if dispatch_result.status is ExecutionStatus.CANCELLED:
+            raise ExecutionCancelled("provider_cancelled")
         return result
 
     def _skipped_command_result(self, cmd: str, reason: str) -> dict[str, Any]:
@@ -1463,7 +628,15 @@ class AIPipeline:
 
         return internal_service_scopes_from_compact_state(cmd)
 
-    def _store_fact(self, scan_id: str, target: str, fact: dict[str, Any], source: str) -> dict[str, Any]:
+    def _store_fact(
+        self,
+        scan_id: str,
+        target: str,
+        fact: dict[str, Any],
+        source: str,
+        *,
+        source_execution_ids: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
         """Store a parsed fact plus normalized derived facts.
 
         The canonical fact remains deduplicated; repeated sightings are kept by
@@ -1482,6 +655,7 @@ class AIPipeline:
             scan_id, target, safe_fact["type"], safe_fact["value"], source,
             confidence=safe_fact.get("confidence", 100),
             session_id=safe_fact.get("session_id", "none"),
+            source_execution_ids=source_execution_ids,
         )
         new_facts = 1 if created else 0
         fact_ids = [fact_id]
@@ -1492,10 +666,12 @@ class AIPipeline:
                 confidence=derived.get("confidence", fact.get("confidence", 80)),
                 session_id=fact.get("session_id", "none"),
                 derived_from=[fact_id],
+                source_execution_ids=source_execution_ids,
             )
             fact_ids.append(derived_id)
             if derived_created:
                 new_facts += 1
+        self.runtime.project_fact_ids(fact_ids)
         return {
             "created": created,
             "new_facts": new_facts,
@@ -2946,141 +2122,6 @@ class AIPipeline:
         from core.execution.normalization import command_failed
 
         return command_failed(output, output_str)
-
-    def _classify_task_result(self, task_result: dict[str, Any]) -> str:
-        commands = task_result["commands"]
-        parsed_facts = task_result["parsed_facts"]
-        if self._has_blocked_stage_fact(commands):
-            return "blocked"
-        if commands and all(c.get("skipped") for c in commands):
-            return "skipped"
-        if commands and all(c["failed"] for c in commands) and parsed_facts == 0:
-            return "failed"
-        if parsed_facts == 0:
-            return "no_new_facts"
-        return "completed"
-
-    def _command_result_reason(self, command_results: list[dict[str, Any]], parsed_facts: int, new_facts: int) -> str:
-        if not command_results:
-            return "no_commands"
-        if self._has_blocked_stage_fact(command_results):
-            return "missing_credentials_or_manual_gate"
-        if command_results and all(c.get("skipped") for c in command_results):
-            reasons = sorted({str(c.get("skip_reason", "skipped")) for c in command_results})
-            return "all_commands_skipped:" + ",".join(reasons[:3])
-        failed_count = sum(1 for c in command_results if c["failed"])
-        if failed_count == len(command_results) and parsed_facts == 0:
-            return "all_commands_failed"
-        if parsed_facts == 0:
-            return "commands_ran_but_no_facts"
-        if new_facts == 0:
-            return "facts_seen_but_already_known"
-        return f"{new_facts}_new_facts"
-
-    def _has_blocked_stage_fact(self, command_results: list[dict[str, Any]]) -> bool:
-        for command in command_results:
-            for ftype, value in command.get("fact_pairs", []):
-                if ftype == "stage_status" and str(value).endswith(":blocked_missing_credentials"):
-                    return True
-        return False
-
-    def _record_task_outcome(
-        self,
-        agent: str,
-        task: str,
-        status: str,
-        reason: str,
-        new_facts: int,
-        parsed_facts: int,
-        commands: list[dict[str, Any]],
-        duration: float,
-        *,
-        fact_ids: tuple[int, ...] = (),
-    ):
-        outcome = TaskOutcome(
-            agent=agent,
-            task=task,
-            status=status,
-            reason=reason,
-            new_facts=new_facts,
-            parsed_facts=parsed_facts,
-            commands=tuple(commands),
-            duration=duration,
-        )
-        if self._active_task_attempt_id:
-            execution_ids = tuple(
-                str(command.get("execution_id"))
-                for command in commands
-                if command.get("execution_id")
-            )
-            command_fact_ids = tuple(
-                fact_id
-                for command in commands
-                for fact_id in command.get("fact_ids", ())
-            )
-            persisted = self.mission_store.complete_attempt(
-                self._active_task_attempt_id,
-                outcome,
-                execution_ids=execution_ids,
-                fact_ids=tuple(dict.fromkeys((*fact_ids, *command_fact_ids))),
-            )
-            self._active_task_attempt_id = None
-            if persisted.outcome is not None:
-                outcome = persisted.outcome
-        return self.task_outcome_store.record(outcome)
-
-    def _record_goal_trace(self, loop: int, context: dict[str, Any], decision: dict[str, Any]) -> None:
-        append_goal_trace(self.goal_trace, loop, context, decision)
-
-    def _record_llm_health(
-        self,
-        scan_id: str,
-        target: str,
-        role: str,
-        result: dict[str, Any],
-        loop: int,
-    ) -> None:
-        persist_llm_health(
-            self._store_fact,
-            scan_id,
-            target,
-            role,
-            result,
-            loop,
-        )
-
-    def _update_llm_failure_counter(self, result: dict[str, Any]) -> None:
-        status = str((result or {}).get("llm_status", "")).strip().lower()
-        if status == "failed":
-            self.consecutive_llm_failures += 1
-        elif status == "ok":
-            self.consecutive_llm_failures = 0
-
-    def _record_command_trace(self, decision: dict[str, Any], result: Optional[dict[str, Any]] = None) -> None:
-        append_command_trace(self.command_trace, decision, result)
-
-    def _print_stage_gates(self, context: dict[str, Any]):
-        gates = context.get("stage_gates") or {}
-        if not gates:
-            return
-        ordered = [
-            "recon", "credentials", "root", "post_access_inventory",
-            "persistence", "internal_recon", "exfiltration", "cleanup",
-        ]
-        gate_text = ", ".join(f"{name}={'yes' if gates.get(name) else 'no'}" for name in ordered)
-        print(f"[*] Stage gates: {gate_text}; next={context.get('next_required_capability', 'conclude')}")
-
-    def _print_efficiency_report(self, scan_id: str, target: str, elapsed: float):
-        print_efficiency_report(
-            scan_id,
-            target,
-            elapsed,
-            get_facts=self.fact_store.get_facts,
-            task_outcomes=self.task_outcomes,
-            total_new_facts=self.total_new_facts,
-            goal_trace=self.goal_trace,
-            command_trace=self.command_trace,
-        )
 
 # For testing
 if __name__ == "__main__":

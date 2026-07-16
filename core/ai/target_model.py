@@ -8,6 +8,12 @@ from urllib.parse import urlparse, urlunparse
 from core.ai.asset_graph import AssetGraph
 from core.ai.risk_analysis import RiskAnalyzer
 from core.ai.surface_state import SurfaceState
+from core.knowledge.identity import (
+    ENTITY_NORMALIZATION_VERSION,
+    canonical_asset,
+    canonical_endpoint,
+    canonical_service,
+)
 
 
 class TargetModel:
@@ -37,7 +43,11 @@ class TargetModel:
         self.scan_id = scan_id
         self.target = target
         self.host = self._target_host(target)
-        self.facts = facts or []
+        self.facts = [
+            fact
+            for fact in (facts or [])
+            if str(fact.get("assessment_status") or "observed") != "contradicted"
+        ]
 
     @classmethod
     def from_facts(cls, scan_id: str, target: str, facts: list[dict[str, Any]]) -> "TargetModel":
@@ -51,6 +61,8 @@ class TargetModel:
         model: dict[str, Any] = {
             "target": self.target,
             "host": self.host,
+            "asset_id": canonical_asset(self.host).entity_id if self.host else "",
+            "normalization_version": ENTITY_NORMALIZATION_VERSION,
             "assets": self._assets(),
             "services": services,
             "endpoints": endpoints,
@@ -117,6 +129,7 @@ class TargetModel:
             if key in seen:
                 continue
             seen.add(key)
+            parsed.update(self._fact_identity_metadata(fact))
             services.append(parsed)
         return services
 
@@ -133,6 +146,7 @@ class TargetModel:
             if key in seen:
                 continue
             seen.add(key)
+            endpoint.update(self._fact_identity_metadata(fact))
             endpoints.append(endpoint)
         return endpoints
 
@@ -357,7 +371,13 @@ class TargetModel:
             if key in seen:
                 continue
             seen.add(key)
+            try:
+                canonical_id = canonical_service(host, port, proto).entity_id
+            except ValueError:
+                continue
             services.append({
+                "canonical_id": canonical_id,
+                "normalization_version": ENTITY_NORMALIZATION_VERSION,
                 "host": host,
                 "port": int(port),
                 "proto": proto.lower(),
@@ -365,6 +385,7 @@ class TargetModel:
                 "state": "confirmed_present",
                 "reachable_via": self._internal_service_reachability(fact),
                 "sources": fact.get("sources") or ([fact.get("source")] if fact.get("source") else []),
+                **self._fact_identity_metadata(fact),
             })
         return services
 
@@ -611,7 +632,13 @@ class TargetModel:
         if not match:
             return {}
         port, proto, service, banner = match.groups()
+        try:
+            identity = canonical_service(self.host, port, proto)
+        except ValueError:
+            return {}
         return {
+            "canonical_id": identity.entity_id,
+            "normalization_version": ENTITY_NORMALIZATION_VERSION,
             "host": self.host,
             "port": int(port),
             "proto": proto.lower(),
@@ -641,7 +668,13 @@ class TargetModel:
             url_parts.query,
             "",
         ))
+        try:
+            identity = canonical_endpoint(canonical_url)
+        except ValueError:
+            return {}
         return {
+            "canonical_id": identity.entity_id,
+            "normalization_version": ENTITY_NORMALIZATION_VERSION,
             "url": canonical_url,
             "scheme": url_parts.scheme.lower(),
             "host": url_parts.hostname.lower(),
@@ -651,6 +684,23 @@ class TargetModel:
             "status": parsed.get("status", ""),
             "title": parsed.get("title", ""),
             "state": "confirmed_present",
+        }
+
+    def _fact_identity_metadata(self, fact: dict[str, Any]) -> dict[str, Any]:
+        assessment = fact.get("assessment")
+        assessment = assessment if isinstance(assessment, dict) else {}
+        return {
+            "fact_ids": [int(fact["id"])] if fact.get("id") is not None else [],
+            "assessment_refs": (
+                [str(assessment.get("assessment_id"))]
+                if assessment.get("assessment_id")
+                else []
+            ),
+            "assessment_status": str(
+                assessment.get("status") or fact.get("assessment_status") or "observed"
+            ),
+            "evidence_fact_ids": list(assessment.get("evidence_fact_ids") or []),
+            "source_execution_ids": list(assessment.get("source_execution_ids") or []),
         }
 
     def _parse_secret_finding(self, value: str) -> dict[str, Any]:

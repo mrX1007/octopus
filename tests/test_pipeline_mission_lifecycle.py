@@ -279,6 +279,73 @@ def test_max_iterations_and_tool_budget_interrupt_missions(tmp_path):
     assert tool_snapshot.mission.reason == "max_tools_reached"
 
 
+def test_material_state_change_gets_only_the_configured_extra_planner_pass(
+    tmp_path,
+):
+    def configured(name: str, maximum: int) -> AIPipeline:
+        pipeline = _configure_scan(
+            AIPipeline(str(tmp_path / f"{name}.db")),
+            goals=("service_discovery", "conclude"),
+        )
+        _install_fake_execution(pipeline, f"exec-{name}")
+        contexts = iter(
+            (
+                {
+                    "state": "initial_recon",
+                    "services": [],
+                    "open_questions": ["service_inventory"],
+                    "stage_gates": {},
+                    "next_required_capability": "service_discovery",
+                },
+                {
+                    "state": "recon_completed",
+                    "services": ["ssh"],
+                    "open_questions": [],
+                    "stage_gates": {"recon": True},
+                    "next_required_capability": "vulnerability_assessment",
+                },
+            )
+        )
+        last_context = {}
+
+        def build_context(_scan_id, _target):
+            nonlocal last_context
+            last_context = next(contexts, last_context)
+            return dict(last_context)
+
+        pipeline.context_builder = SimpleNamespace(build_context=build_context)
+        pipeline._max_state_replans = lambda: maximum
+        return pipeline
+
+    enabled = configured("state-replan-enabled", 1)
+    enabled.run_scan("scan-state-replan-enabled", TARGET, max_iterations=1)
+
+    enabled_snapshot = enabled.mission_store.snapshot(enabled.mission_id)
+    assert enabled_snapshot.mission.status == "completed"
+    assert enabled_snapshot.mission.reason == "director_concluded"
+    assert enabled._state_replan_count == 1
+    assert len(
+        enabled.decision_trace.list_events(
+            scan_id="scan-state-replan-enabled",
+            event_type="state_replan_requested",
+        )
+    ) == 1
+
+    disabled = configured("state-replan-disabled", 0)
+    disabled.run_scan("scan-state-replan-disabled", TARGET, max_iterations=1)
+
+    disabled_snapshot = disabled.mission_store.snapshot(disabled.mission_id)
+    assert disabled_snapshot.mission.status == "interrupted"
+    assert disabled_snapshot.mission.reason == "max_iterations_reached"
+    assert disabled._state_replan_count == 0
+    assert len(
+        disabled.decision_trace.list_events(
+            scan_id="scan-state-replan-disabled",
+            event_type="state_replan_rejected",
+        )
+    ) == 1
+
+
 def test_director_conclude_completes_mission(tmp_path):
     pipeline = _configure_scan(
         AIPipeline(str(tmp_path / "conclude.db")),
@@ -310,9 +377,19 @@ def test_analysis_attempt_links_verified_claim_fact_id(tmp_path):
     pipeline.analysis_agent = SimpleNamespace(
         analyze=lambda _scan_id, _target: {
             "hypotheses": [
-                {"claim": "evidence-backed claim", "required_evidence": []}
+                {
+                    "claim": "ssh_service_active",
+                    "required_evidence": ["ssh_service_active"],
+                }
             ]
         }
+    )
+    pipeline.fact_store.add_fact(
+        "scan-analysis-provenance",
+        TARGET,
+        "port_open",
+        "22/tcp (ssh)",
+        "fixture",
     )
 
     pipeline.run_scan("scan-analysis-provenance", TARGET, max_iterations=2)

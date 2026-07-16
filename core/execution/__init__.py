@@ -1,5 +1,10 @@
 """Execution boundary shared by the AI scheduler and tool runner."""
 
+from core.execution.cancellation import (
+    CancellationContext,
+    ExecutionCancelled,
+    cancellation_reason_code,
+)
 from core.execution.models import (
     CAP_ACTIVE_TOOL,
     CAP_DESTRUCTIVE_SHELL,
@@ -29,7 +34,9 @@ __all__ = [
     "CAP_MANAGED_SHELL",
     "CAP_PYTHON_REPL",
     "CAP_REGISTERED_TOOL",
+    "CancellationContext",
     "DispatchResult",
+    "ExecutionCancelled",
     "ExecutionContext",
     "ExecutionDecision",
     "ExecutionPolicy",
@@ -38,6 +45,7 @@ __all__ = [
     "ToolInvocation",
     "adapt_execution_result",
     "bind_execution_context",
+    "cancellation_reason_code",
     "current_execution_context",
     "redact_sensitive_command",
     "validate_target",

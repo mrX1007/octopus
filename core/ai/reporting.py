@@ -5,6 +5,10 @@ import json
 import re
 from typing import Any, Optional
 
+from core.ai.report_schema import (
+    EVIDENCE_REPORT_SCHEMA_VERSION,
+    build_evidence_report,
+)
 from core.secrets import redact_data
 
 
@@ -14,8 +18,14 @@ def build_evidence_index(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for idx, fact in enumerate(facts, 1):
         observations = fact.get("observations") or []
         sources = fact.get("sources") or ([fact.get("source")] if fact.get("source") else [])
+        assessment = fact.get("assessment") or {}
         evidence.append({
             "evidence_id": f"E-{idx:03d}",
+            "evidence_ref": (
+                f"evidence://fact/{fact.get('id')}"
+                if fact.get("id") is not None
+                else f"evidence://index/{idx}"
+            ),
             "fact_id": fact.get("id"),
             "fact_type": fact.get("type"),
             "fact_value": fact.get("value"),
@@ -25,6 +35,12 @@ def build_evidence_index(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "parsed_by": _parser_name_for_fact(fact),
             "confidence": fact.get("confidence", 100),
             "observations": len(observations) or 1,
+            "assessment_ref": assessment.get("assessment_id") or fact.get("assessment_id"),
+            "assessment_status": assessment.get("status") or fact.get("assessment_status", "observed"),
+            "assessment_reason": assessment.get("reason", ""),
+            "assessment_confidence": assessment.get("confidence", fact.get("confidence", 100)),
+            "evidence_fact_ids": list(assessment.get("evidence_fact_ids") or []),
+            "source_execution_ids": list(assessment.get("source_execution_ids") or []),
         })
     return evidence
 
@@ -48,6 +64,7 @@ def build_finding_groups(facts: list[dict[str, Any]], state: Optional[dict[str, 
             group["candidate"] = True
             group["candidate_ports"].add(parsed["port"])
             group["evidence_ids"].add(evidence_by_fact_id.get(fact.get("id"), ""))
+            _attach_assessment(group, fact)
         elif ftype == "verification_command":
             module = _module_from_msf_command(value)
             if not module:
@@ -55,6 +72,7 @@ def build_finding_groups(facts: list[dict[str, Any]], state: Optional[dict[str, 
             group = _group_for_module(groups, module, _service_for_module(module, facts), facts)
             group["verification_commands"].append(value)
             group["evidence_ids"].add(evidence_by_fact_id.get(fact.get("id"), ""))
+            _attach_assessment(group, fact)
         elif ftype == "active_command":
             module = _module_from_msf_command(value)
             if not module:
@@ -64,27 +82,40 @@ def build_finding_groups(facts: list[dict[str, Any]], state: Optional[dict[str, 
             group = _group_for_module(groups, module, _service_for_module(module, facts), facts)
             group["active_commands"].append(value)
             group["evidence_ids"].add(evidence_by_fact_id.get(fact.get("id"), ""))
+            _attach_assessment(group, fact)
         elif ftype == "vulnerability" and value.startswith("msf_check_positive:"):
             module = value.split(":", 1)[1]
             group = _group_for_module(groups, module, _service_for_module(module, facts), facts)
             group["verification"] = "positive"
-            group["verified"] = True
+            group["verified"] = group["verified"] or _fact_is_verified(
+                fact,
+                legacy_default=True,
+            )
             group["evidence_ids"].add(evidence_by_fact_id.get(fact.get("id"), ""))
+            _attach_assessment(group, fact)
         elif ftype == "vulnerability_endpoint" and value.startswith("msf_check_positive:"):
             parsed = _parse_msf_endpoint(value)
             if not parsed:
                 continue
             group = _group_for_module(groups, parsed["module"], _service_for_port(facts, parsed["port"]), facts)
-            group["verified"] = True
+            group["verified"] = group["verified"] or _fact_is_verified(
+                fact,
+                legacy_default=True,
+            )
             group["verification"] = "positive"
             group["verified_ports"].add(parsed["port"])
             group["evidence_ids"].add(evidence_by_fact_id.get(fact.get("id"), ""))
+            _attach_assessment(group, fact)
         elif ftype == "exploit_success":
             module = _module_from_success(value)
             group = _group_for_module(groups, module, _service_for_module(module, facts), facts)
             group["exploited"] = True
-            group["impact_confirmed"] = True
+            group["impact_confirmed"] = group["impact_confirmed"] or _fact_is_verified(
+                fact,
+                legacy_default=True,
+            )
             group["evidence_ids"].add(evidence_by_fact_id.get(fact.get("id"), ""))
+            _attach_assessment(group, fact)
 
     return [_finalize_group(group) for group in groups.values()]
 
@@ -96,12 +127,27 @@ def build_access_findings(facts: list[dict[str, Any]], state: Optional[dict[str,
     if not state.get("root_access_confirmed"):
         return findings
 
-    evidence: list[str] = []
+    supporting_facts: list[dict[str, Any]] = []
     for fact in facts:
         ftype = str(fact.get("type", ""))
         value = str(fact.get("value", ""))
-        if (ftype == "credential" and value.startswith(("ssh_login_success:", "ssh_key_available:"))) or (ftype == "service_status" and value == "ssh_authenticated") or (ftype == "system_access" and (value == "uid=0" or value == "root_access_confirmed")):
-            evidence.append(f"{ftype}: {value}")
+        if (
+            (ftype == "credential" and value.startswith(("ssh_login_success:", "ssh_key_available:")))
+            or (ftype == "service_status" and value == "ssh_authenticated")
+            or (ftype == "system_access" and value in {"uid=0", "root_access_confirmed"})
+            or (ftype == "verified_claim" and value == "root_access_confirmed")
+        ):
+            supporting_facts.append(fact)
+    canonical_assessments = any(_has_assessment(fact) for fact in supporting_facts)
+    if canonical_assessments:
+        supporting_facts = [fact for fact in supporting_facts if _fact_is_verified(fact)]
+        if not supporting_facts:
+            return findings
+    evidence = [
+        f"{fact.get('type', '')}: {fact.get('value', '')}"
+        for fact in supporting_facts
+    ]
+    assessments = [fact.get("assessment") or {} for fact in supporting_facts]
     findings.append({
         "severity": "CRITICAL",
         "name": "Root access confirmed on target",
@@ -110,6 +156,22 @@ def build_access_findings(facts: list[dict[str, Any]], state: Optional[dict[str,
         "verified": True,
         "impact_confirmed": True,
         "evidence": list(dict.fromkeys(evidence))[:8],
+        "assessment_refs": list(dict.fromkeys(
+            str(item.get("assessment_id"))
+            for item in assessments
+            if item.get("assessment_id")
+        )),
+        "assessment_reasons": list(dict.fromkeys(
+            str(item.get("reason"))
+            for item in assessments
+            if item.get("reason")
+        )),
+        "source_execution_ids": list(dict.fromkeys(
+            str(execution_id)
+            for item in assessments
+            for execution_id in item.get("source_execution_ids") or []
+            if execution_id
+        )),
         "detail": "Root-level access was verified independently of CVE-style vulnerability parsing.",
     })
     return findings
@@ -265,7 +327,19 @@ def build_remediations(
     return remediations
 
 
-def enrich_result_with_reporting(result: dict[str, Any], facts: list[dict[str, Any]], state: dict[str, Any]) -> dict[str, Any]:
+def enrich_result_with_reporting(
+    result: dict[str, Any],
+    facts: list[dict[str, Any]],
+    state: dict[str, Any],
+    *,
+    scan_id: str = "",
+    target: str = "",
+    hypotheses: Optional[list[dict[str, Any]]] = None,
+    command_results: Optional[list[dict[str, Any]]] = None,
+    command_trace: Optional[list[dict[str, Any]]] = None,
+    action_reports: Optional[list[Any]] = None,
+    context: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     evidence_index = build_evidence_index(facts)
     finding_groups = build_finding_groups(facts, state)
     access_findings = build_access_findings(facts, state)
@@ -276,7 +350,79 @@ def enrich_result_with_reporting(result: dict[str, Any], facts: list[dict[str, A
     result["coverage"] = build_coverage_summary(facts)
     result["attack_path"] = build_attack_path(facts, state)
     result["remediations"] = build_remediations(finding_groups, facts, access_findings)
+    result["fact_assessments"] = _assessment_summary(facts)
+    result["report_schema_version"] = EVIDENCE_REPORT_SCHEMA_VERSION
+    result["machine_report"] = build_evidence_report(
+        scan_id or str(facts[0].get("scan_id") if facts else ""),
+        target or str(facts[0].get("host") if facts else ""),
+        facts,
+        evidence_index=evidence_index,
+        state=state,
+        hypotheses=hypotheses or [],
+        command_results=command_results or [],
+        command_trace=command_trace or [],
+        action_reports=action_reports or [],
+        coverage=result["coverage"],
+        context=context or state,
+    )
     return redact_data(result)
+
+
+def _has_assessment(fact: dict[str, Any]) -> bool:
+    return bool(fact.get("assessment") or fact.get("assessment_id"))
+
+
+def _assessment_status(fact: dict[str, Any]) -> str:
+    assessment = fact.get("assessment") or {}
+    return str(assessment.get("status") or fact.get("assessment_status") or "observed")
+
+
+def _fact_is_verified(
+    fact: dict[str, Any],
+    *,
+    legacy_default: bool = False,
+) -> bool:
+    if not _has_assessment(fact):
+        return legacy_default
+    return _assessment_status(fact) == "verified"
+
+
+def _attach_assessment(group: dict[str, Any], fact: dict[str, Any]) -> None:
+    assessment = fact.get("assessment") or {}
+    status = _assessment_status(fact)
+    if status == "contradicted":
+        group["contradicted"] = True
+        group["verified"] = False
+        group["impact_confirmed"] = False
+    assessment_id = assessment.get("assessment_id") or fact.get("assessment_id")
+    if assessment_id:
+        group["assessment_refs"].add(str(assessment_id))
+    if assessment.get("reason"):
+        group["assessment_reasons"].add(str(assessment["reason"]))
+    for execution_id in assessment.get("source_execution_ids") or []:
+        if execution_id:
+            group["source_execution_ids"].add(str(execution_id))
+
+
+def _assessment_summary(facts: list[dict[str, Any]]) -> dict[str, Any]:
+    statuses = ("observed", "inferred", "verified", "contradicted")
+    return {
+        "schema_version": "1.0",
+        "counts": {
+            status: sum(1 for fact in facts if _assessment_status(fact) == status)
+            for status in statuses
+        },
+        "verified_fact_ids": [
+            int(fact["id"])
+            for fact in facts
+            if fact.get("id") is not None and _assessment_status(fact) == "verified"
+        ],
+        "contradicted_fact_ids": [
+            int(fact["id"])
+            for fact in facts
+            if fact.get("id") is not None and _assessment_status(fact) == "contradicted"
+        ],
+    }
 
 
 def _parser_name_for_fact(fact: dict[str, Any]) -> str:
@@ -298,11 +444,15 @@ def _new_group(module: str, service: str) -> dict[str, Any]:
         "verification": "not_run",
         "exploited": False,
         "impact_confirmed": False,
+        "contradicted": False,
         "candidate_ports": set(),
         "verified_ports": set(),
         "verification_commands": [],
         "active_commands": [],
         "evidence_ids": set(),
+        "assessment_refs": set(),
+        "assessment_reasons": set(),
+        "source_execution_ids": set(),
         "severity": "INFO",
     }
 
@@ -326,6 +476,12 @@ def _finalize_group(group: dict[str, Any]) -> dict[str, Any]:
     group["evidence_ids"] = sorted(eid for eid in group["evidence_ids"] if eid)
     group["verification_commands"] = list(dict.fromkeys(group["verification_commands"]))
     group["active_commands"] = list(dict.fromkeys(group["active_commands"]))
+    group["assessment_refs"] = sorted(group["assessment_refs"])
+    group["assessment_reasons"] = sorted(group["assessment_reasons"])
+    group["source_execution_ids"] = sorted(group["source_execution_ids"])
+    if group["contradicted"]:
+        group["verified"] = False
+        group["impact_confirmed"] = False
     if group["impact_confirmed"]:
         group["severity"] = "CRITICAL"
     elif group["verified"]:

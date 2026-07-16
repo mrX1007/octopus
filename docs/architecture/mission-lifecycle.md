@@ -1,6 +1,6 @@
 # Durable mission and task lifecycle
 
-Snapshot date: 2026-07-14
+Snapshot date: 2026-07-15
 
 `MissionStore` is the control-plane authority for AI mission, planner-task, and
 task-attempt state. It uses the same SQLite database file as `FactStore`, but
@@ -10,19 +10,29 @@ protocol domain.
 ## Identity and schema
 
 The additive schema is owned by `core.ai.mission_store` and declares version
-`1.0` in `mission_lifecycle_schema`. It does not use SQLite `user_version`, so
+`1.2` in `mission_lifecycle_schema`. It does not use SQLite `user_version`, so
 it can coexist with the existing FactStore tables.
+
+Opening a `1.0` or `1.1` store performs one transactional, additive migration: the new
+task columns are added with compatibility defaults, existing mission rows are
+advanced to `1.2`, and the component version is updated only after all schema
+work succeeds. Unknown versions still fail closed before lifecycle tables are
+created or changed.
 
 - `missions` has one opaque `mission_id`; a keyed digest of the raw scan ID is
   the unique lookup identity, while the bounded/redacted scan ID is display
   data only.
 - `mission_tasks` has one opaque `task_id` and a unique
-  `(mission_id, hash(agent, task))` definition.
+  `(mission_id, hash(agent, task))` definition. Each row also persists bounded,
+  redacted task-level `scope` and `capability`, plus its retry budget, consumed
+  retry count, retryable error classes, and last scheduled error class.
 - `mission_task_dependencies` stores same-mission task dependencies with
   foreign keys.
 - `mission_task_attempts` has one opaque `attempt_id` and a monotonic
   `(task_id, attempt_number)` identity. A partial unique index permits at most
   one running attempt per task.
+- `mission_task_retry_commands` stores the bounded command-key allowlist for
+  each consumed task retry number and whether each grant has been consumed.
 
 Task outcomes store the existing legacy-compatible `TaskOutcome` shape after
 redaction. Execution IDs and FactStore fact IDs are persisted separately as
@@ -45,10 +55,57 @@ a conflicting completion or later interruption fails closed.
 Task and attempt states preserve the current pipeline vocabulary:
 `pending`, `running`, `interrupted`, `blocked`, `skipped`, `failed`,
 `no_new_facts`, and `completed`. A new attempt may start from `pending` or
-`interrupted`; `failed` is terminal until the typed retry-policy phase adds an
-explicit retry transition. Dependencies must be `completed` or
-`no_new_facts`. A mission cannot complete while any task remains `pending`,
-`running`, or `interrupted`.
+`interrupted`. Dependencies must be `completed` or `no_new_facts`. A mission
+cannot complete while any task remains `pending`, `running`, or `interrupted`.
+
+`failed` is terminal unless the task was registered with an explicit
+`TaskRetryPolicy`. The pipeline calls
+`complete_attempt_and_schedule_retry(..., retry_error_class=...,
+retry_command_keys=...)`: terminal attempt data, the `failed → pending`
+transition, one consumed budget unit, and the bounded command allowlist commit
+in the same transaction. A crash therefore cannot leave a committed eligible
+failure without its retry grant. Non-allowlisted and exhausted retries remain
+terminal with stable rejection reasons. The lower-level
+`schedule_retry(..., error_class=...)` transition remains for control-plane
+callers and preserves its typed exceptions and idempotency. Crash recovery from
+`interrupted` remains separate and does not consume a failure retry.
+
+At retry dispatch, the scheduler re-runs `ExecutionPolicy` first. An
+unconsumed grant may bypass the ordinary duplicate-command gate and only the
+matching nuclei/nikto timeout-degraded suppression; completed checks, confirmed
+negative surface facts, and every other state/policy gate still apply. The
+grant is atomically consumed before the runner call, so a retry number can
+execute each allowlisted failed command at most once. Pending grants are read
+from SQLite when a task begins after restart rather than reconstructed from
+process memory.
+
+After a registered plan finishes, the pipeline compares a deterministic state
+signature (resolved state, next capability, stage gates, and assessment
+counts) with the signature used to plan it. A material transition requests an
+immediate planner pass without consuming the caller's ordinary iteration
+budget. Identical transitions are deduplicated, and
+`strategy.mission.max_state_replans` bounds the extra passes; after exhaustion
+the normal iteration and stop rules resume. Every accepted or rejected request
+is recorded in the decision trace.
+
+The typed registration surfaces are:
+
+- `register_task(..., scope=..., capability=..., retry_policy=...)`;
+- `register_plan()` with either legacy `(agent, task, dependencies)` tuples or
+  `MissionTaskDefinition` values;
+- `TaskRetryPolicy(retry_budget=N,
+  retryable_error_classes=(RetryErrorClass.TIMEOUT, ...))`;
+- `schedule_retry(mission_id, agent, task, error_class=...)`;
+- `complete_attempt_and_schedule_retry(..., retry_error_class=...,
+  retry_command_keys=...)` for the atomic pipeline transition;
+- `pending_retry_command_keys(...)` and `consume_retry_command(...)` for the
+  durable dispatch allowlist.
+
+Omitting optional metadata on a repeated legacy registration preserves the
+stored definition. Repeating matching typed metadata is idempotent. A
+conflicting scope, capability, or retry policy fails closed; empty migrated
+fields may be populated once so recovered `1.0`/`1.1` tasks can adopt the typed
+definition.
 
 ## Crash recovery and idempotency
 
@@ -73,11 +130,17 @@ outcome plus the same execution/fact IDs returns the terminal record, while a
 conflicting second completion raises `MissionStoreError`. Keyed hashes of the
 raw terminal reason/outcome make this idempotency stable even when the redactor
 learns another secret between the original write and its replay.
+`complete_attempt_and_schedule_retry()` preserves that completion idempotency
+while committing the eligible retry transition and grants in the same
+transaction.
 
 The scan plan is registered before task execution. On resume, `AIPipeline`
 topologically drains every persisted `pending`/`interrupted` task before asking
-Director or Planner for new work. A terminally unsatisfied dependency produces
-a durable `blocked` outcome instead of aborting the mission. The pipeline also
+Director or Planner for new work. A dependent remains pending while any
+prerequisite is `pending`, `running`, or `interrupted`; only a terminally
+unsatisfied dependency produces a durable `blocked` outcome. Resumable steps
+reuse the stored dependency, scope, capability, and retry policy instead of
+recomputing them from current configuration. The pipeline also
 rebuilds its legacy `completed_tasks`, `blocked_tasks`, `task_outcomes`,
 failure/no-fact indexes, fact count, executed command keys, and tool count from
 the durable snapshot, running check facts, and FactStore command records. The public report
@@ -110,7 +173,8 @@ restart cannot fast-return through stale completed state.
 
 - Mission status is not execution authorization. Every command still reaches
   `ExecutionPolicy` immediately before dispatch.
-- Task success is not vulnerability verification. Fact assessment owns that
-  distinction in the next roadmap phase.
+- Task success is not vulnerability verification. The implemented
+  `FactAssessmentStore` owns that distinction; mission state only links its
+  evidence and assessment references.
 - C2 task IDs, scan-session rows in MariaDB, evidence session IDs, and remote
   session IDs are not interchangeable with mission task IDs.

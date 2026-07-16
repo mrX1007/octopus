@@ -167,13 +167,14 @@ class CredentialStore:
             from core.knowledge import KnowledgeGraph
             kg = KnowledgeGraph()
             # Ensure asset exists
-            kg.add_asset(target)
+            asset = kg.add_asset(target)
             # Add credential
             cred = kg.add_credential(user, password, source=source,
-                                     service=service, verified=verified)
+                                     service=service, verified=verified,
+                                     host=target)
             # Link credential → asset
             from core.knowledge.models import EdgeType
-            kg.link(cred.node_id, f"asset:{target}", EdgeType.CAN_ACCESS,
+            kg.link(cred.node_id, asset.node_id, EdgeType.CAN_ACCESS,
                     method=service, port=port)
         except Exception as _exc:
             logging.debug(f"Suppressed in credentials.py: {_exc}")

@@ -80,7 +80,12 @@ class ContextBuilder:
         }
         """
         state = self.state_resolver.resolve_state(scan_id, host)
-        facts = self.fact_store.get_facts(scan_id, host)
+        all_facts = self.fact_store.get_facts(scan_id, host)
+        facts = [
+            fact
+            for fact in all_facts
+            if str(fact.get("assessment_status") or "observed") != "contradicted"
+        ]
         target_model = TargetModel.from_facts(scan_id, host, facts).to_dict()
         asset_graph = AssetGraph.from_facts(host, facts).to_dict()
         surface_states = SurfaceState(facts).to_dict()
@@ -150,6 +155,7 @@ class ContextBuilder:
             "asset_graph": asset_graph,
             "surface_states": surface_states,
             "target_model": target_model,
+            "fact_assessments": self._fact_assessment_summary(all_facts),
         }
         if execution_context is None and self.execution_context_factory is not None:
             execution_context = self.execution_context_factory(scan_id, host)
@@ -162,6 +168,32 @@ class ContextBuilder:
             requested=True,
         ).to_dict()
         return context
+
+    def _fact_assessment_summary(self, facts: list[dict[str, Any]]) -> dict[str, Any]:
+        counts = {
+            status: sum(
+                1
+                for fact in facts
+                if str(fact.get("assessment_status") or "observed") == status
+            )
+            for status in ("observed", "inferred", "verified", "contradicted")
+        }
+        return {
+            "schema_version": "1.0",
+            "counts": counts,
+            "verified_fact_ids": [
+                int(fact["id"])
+                for fact in facts
+                if fact.get("id") is not None
+                and str(fact.get("assessment_status") or "observed") == "verified"
+            ],
+            "contradicted_fact_ids": [
+                int(fact["id"])
+                for fact in facts
+                if fact.get("id") is not None
+                and str(fact.get("assessment_status") or "observed") == "contradicted"
+            ],
+        }
 
     def _service_text_from_port_fact(self, port_fact: str) -> str:
         value = (port_fact or "").lower()

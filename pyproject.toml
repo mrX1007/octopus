@@ -5,9 +5,13 @@ python_files = ["test_*.py"]
 markers = [
     "unit: hermetic in-process test with no service, subprocess, or platform dependency",
     "contract: hermetic compatibility or serialization/protocol boundary test",
+    "replay: deterministic recorded-output or persisted-snapshot replay test",
     "integration: test crossing a process or component boundary",
     "slow: intentionally expensive test excluded from the fast suite",
+    "external: requires a separately managed external service or executable",
     "external_tools: requires a separately installed scanner, browser, or service integration",
+    "security: security-boundary, scope, policy, or redaction regression test",
+    "benchmark: versioned scenario-harness or benchmark aggregation test",
     "mysql: requires a live MariaDB/MySQL service and the optional connector profile",
     "platform: depends on a specific operating system or platform facility",
 ]
@@ -55,6 +59,8 @@ warn_redundant_casts = true
 follow_imports = "skip"
 explicit_package_bases = true
 files = [
+    "core/actions",
+    "core/benchmarks",
     "core/execution",
     "core/plugins",
     "core/secrets.py",
@@ -63,9 +69,25 @@ files = [
     "core/ai/runtime.py",
     "core/ai/command_scheduler.py",
     "core/ai/credential_sync.py",
+    "core/ai/fact_assessment.py",
+    "core/ai/fact_store.py",
+    "core/knowledge/identity.py",
+    "core/knowledge/graph.py",
+    "core/knowledge/projection.py",
     "core/ai/mission_store.py",
     "core/ai/outcomes.py",
+    "core/ai/capability_assessment.py",
+    "core/ai/exploit_applicability.py",
+    "core/ai/pipeline_mission.py",
+    "core/ai/pipeline_observability.py",
+    "core/ai/pipeline_planning.py",
+    "core/ai/pipeline_replay.py",
     "core/ai/pipeline_telemetry.py",
+    "core/ai/pipeline_types.py",
+    "core/ai/scan_loop.py",
+    "core/ai/report_schema.py",
+    "core/ai/decision_trace.py",
+    "core/ai/task_scoring.py",
 ]
 exclude = [
     "venv/",

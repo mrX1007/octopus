@@ -1,0 +1,274 @@
+{
+  "comparison_id": "task-efficiency://sha256/5d5be7df5425369a4e5dac1f3523aa157d1e4aac0e8dee77c2e0184364bea429",
+  "definitions": {
+    "no_op_task": "A selected candidate marked known_noop in the recorded frontier.",
+    "repeated_task": "A selected task ID that was selected in an earlier replay round."
+  },
+  "input": {
+    "candidates_per_round": 4,
+    "rounds": 6,
+    "selection_width": 2
+  },
+  "method": "deterministic_task_scorer_frontier_replay",
+  "profiles": {
+    "baseline": {
+      "metrics": {
+        "no_op_rate": 1.0,
+        "no_op_tasks": 12,
+        "repeated_task_rate": 0.833333,
+        "repeated_tasks": 10,
+        "selected_tasks": 12
+      },
+      "profile_id": "legacy-risk-time-cost-v1",
+      "rounds": [
+        {
+          "round": 1,
+          "selected": [
+            {
+              "known_noop": true,
+              "repeated": false,
+              "score": -0.07,
+              "task_id": "cached_external_intelligence"
+            },
+            {
+              "known_noop": true,
+              "repeated": false,
+              "score": -0.15,
+              "task_id": "unchanged_plugin_assessment"
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "selected": [
+            {
+              "known_noop": true,
+              "repeated": true,
+              "score": -0.07,
+              "task_id": "cached_external_intelligence"
+            },
+            {
+              "known_noop": true,
+              "repeated": true,
+              "score": -0.15,
+              "task_id": "unchanged_plugin_assessment"
+            }
+          ]
+        },
+        {
+          "round": 3,
+          "selected": [
+            {
+              "known_noop": true,
+              "repeated": true,
+              "score": -0.07,
+              "task_id": "cached_external_intelligence"
+            },
+            {
+              "known_noop": true,
+              "repeated": true,
+              "score": -0.15,
+              "task_id": "unchanged_plugin_assessment"
+            }
+          ]
+        },
+        {
+          "round": 4,
+          "selected": [
+            {
+              "known_noop": true,
+              "repeated": true,
+              "score": -0.07,
+              "task_id": "cached_external_intelligence"
+            },
+            {
+              "known_noop": true,
+              "repeated": true,
+              "score": -0.15,
+              "task_id": "unchanged_plugin_assessment"
+            }
+          ]
+        },
+        {
+          "round": 5,
+          "selected": [
+            {
+              "known_noop": true,
+              "repeated": true,
+              "score": -0.07,
+              "task_id": "cached_external_intelligence"
+            },
+            {
+              "known_noop": true,
+              "repeated": true,
+              "score": -0.15,
+              "task_id": "unchanged_plugin_assessment"
+            }
+          ]
+        },
+        {
+          "round": 6,
+          "selected": [
+            {
+              "known_noop": true,
+              "repeated": true,
+              "score": -0.07,
+              "task_id": "cached_external_intelligence"
+            },
+            {
+              "known_noop": true,
+              "repeated": true,
+              "score": -0.15,
+              "task_id": "unchanged_plugin_assessment"
+            }
+          ]
+        }
+      ],
+      "weights": {
+        "cost": 1.0,
+        "coverage_value": 0.0,
+        "information_gain": 0.0,
+        "path_value": 0.0,
+        "repeat": 0.0,
+        "risk": 1.0,
+        "uncertainty": 0.0,
+        "verification_value": 0.0
+      }
+    },
+    "configured": {
+      "metrics": {
+        "no_op_rate": 0.0,
+        "no_op_tasks": 0,
+        "repeated_task_rate": 0.0,
+        "repeated_tasks": 0,
+        "selected_tasks": 12
+      },
+      "profile_id": "task-scoring-1.0",
+      "rounds": [
+        {
+          "round": 1,
+          "selected": [
+            {
+              "known_noop": false,
+              "repeated": false,
+              "score": 6.6,
+              "task_id": "verify_service_state_1"
+            },
+            {
+              "known_noop": false,
+              "repeated": false,
+              "score": 6.275,
+              "task_id": "map_open_coverage_1"
+            }
+          ]
+        },
+        {
+          "round": 2,
+          "selected": [
+            {
+              "known_noop": false,
+              "repeated": false,
+              "score": 6.6,
+              "task_id": "verify_service_state_2"
+            },
+            {
+              "known_noop": false,
+              "repeated": false,
+              "score": 6.275,
+              "task_id": "map_open_coverage_2"
+            }
+          ]
+        },
+        {
+          "round": 3,
+          "selected": [
+            {
+              "known_noop": false,
+              "repeated": false,
+              "score": 6.6,
+              "task_id": "verify_service_state_3"
+            },
+            {
+              "known_noop": false,
+              "repeated": false,
+              "score": 6.275,
+              "task_id": "map_open_coverage_3"
+            }
+          ]
+        },
+        {
+          "round": 4,
+          "selected": [
+            {
+              "known_noop": false,
+              "repeated": false,
+              "score": 6.6,
+              "task_id": "verify_service_state_4"
+            },
+            {
+              "known_noop": false,
+              "repeated": false,
+              "score": 6.275,
+              "task_id": "map_open_coverage_4"
+            }
+          ]
+        },
+        {
+          "round": 5,
+          "selected": [
+            {
+              "known_noop": false,
+              "repeated": false,
+              "score": 6.6,
+              "task_id": "verify_service_state_5"
+            },
+            {
+              "known_noop": false,
+              "repeated": false,
+              "score": 6.275,
+              "task_id": "map_open_coverage_5"
+            }
+          ]
+        },
+        {
+          "round": 6,
+          "selected": [
+            {
+              "known_noop": false,
+              "repeated": false,
+              "score": 6.6,
+              "task_id": "verify_service_state_6"
+            },
+            {
+              "known_noop": false,
+              "repeated": false,
+              "score": 6.275,
+              "task_id": "map_open_coverage_6"
+            }
+          ]
+        }
+      ],
+      "weights": {
+        "cost": 1.0,
+        "coverage_value": 2.5,
+        "information_gain": 3.0,
+        "path_value": 2.0,
+        "repeat": 3.0,
+        "risk": 1.5,
+        "uncertainty": 1.5,
+        "verification_value": 2.0
+      }
+    }
+  },
+  "reduction": {
+    "no_op_rate_absolute": 1.0,
+    "no_op_rate_relative": 1.0,
+    "no_op_tasks": 12,
+    "repeated_task_rate_absolute": 0.833333,
+    "repeated_task_rate_relative": 1.0,
+    "repeated_tasks": 10
+  },
+  "scenario_version": "mission-frontier-replay-v1",
+  "schema_version": "1.0",
+  "scope": "Planner-selection replay over recorded candidate frontiers; no scanner, network, model provider, or external tool is invoked."
+}

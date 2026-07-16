@@ -3,7 +3,9 @@
 import json
 from typing import Any, Optional
 
+from core.ai.decision_trace import build_decision_metrics
 from core.ai.fact_store import FactStore
+from core.ai.report_schema import build_evidence_report
 from core.ai.reporting import (
     build_attack_path,
     build_coverage_summary,
@@ -28,9 +30,11 @@ class TraceReporter:
         command_trace: Optional[list[dict[str, Any]]] = None,
         task_outcomes: Optional[list[dict[str, Any]]] = None,
         context: Optional[dict[str, Any]] = None,
+        decision_events: Optional[list[dict[str, Any]]] = None,
     ) -> dict[str, Any]:
         facts = self.fact_store.get_facts(scan_id, target)
         command_results = self.fact_store.get_command_results(scan_id, target)
+        hypotheses = self.fact_store.get_hypotheses(scan_id, target)
         context = context or {}
         llm_events = self._llm_events(facts)
         state = {
@@ -40,16 +44,44 @@ class TraceReporter:
             "cleanup_completed": bool((context.get("stage_gates") or {}).get("cleanup")),
         }
         finding_groups = build_finding_groups(facts, state)
+        evidence_index = build_evidence_index(facts)
+        coverage = build_coverage_summary(facts)
+        machine_report = build_evidence_report(
+            scan_id,
+            target,
+            facts,
+            evidence_index=evidence_index,
+            state=state,
+            hypotheses=hypotheses,
+            command_results=command_results,
+            command_trace=command_trace or [],
+            coverage=coverage,
+            context=context,
+            redact=self.redactor.redact_data,
+        )
+        decision_events = decision_events or []
+        decision_metrics = build_decision_metrics(
+            facts,
+            command_results,
+            decision_events=decision_events,
+            task_outcomes=task_outcomes or [],
+            machine_report=machine_report,
+        )
         report = {
+            "schema_version": "1.0",
             "scan_id": scan_id,
             "target": target,
             "summary": self._summary(facts, command_results, goal_trace or [], command_trace or []),
             "surface_states": (context.get("target_model") or {}).get("surface_states")
                 or (context.get("surface_states") or {}),
             "asset_graph_summary": (context.get("asset_graph") or {}).get("summary", {}),
-            "evidence_index": build_evidence_index(facts),
+            "evidence_index": evidence_index,
+            "machine_report": machine_report,
+            "decision_trace": decision_events,
+            "decision_metrics": decision_metrics,
+            "fact_assessments": context.get("fact_assessments") or self._assessment_summary(facts),
             "finding_groups": finding_groups,
-            "coverage": build_coverage_summary(facts),
+            "coverage": coverage,
             "attack_path": build_attack_path(facts, state),
             "remediations": build_remediations(finding_groups, facts),
             "llm_status": self._llm_status(goal_trace or [], task_outcomes or [], llm_events),
@@ -94,6 +126,17 @@ class TraceReporter:
             lines.append(f"  degraded: {item.get('tool')} {item.get('status')} - {item.get('impact')}")
         for item in coverage.get("checked_but_not_confirmed", [])[:10]:
             lines.append(f"  checked: {item.get('status')}")
+        lines.append("")
+        lines.append("machine_report:")
+        machine_report = report.get("machine_report") or {}
+        lines.append(f"  schema_version: {machine_report.get('schema_version', 'unknown')}")
+        section_counts = (machine_report.get("summary") or {}).get("section_counts") or {}
+        for name in machine_report.get("section_order") or []:
+            lines.append(f"  {name}: {section_counts.get(name, 0)}")
+        lines.append("")
+        lines.append("decision_metrics:")
+        for name, value in (report.get("decision_metrics") or {}).get("metrics", {}).items():
+            lines.append(f"  {name}: {value}")
         lines.append("")
         lines.append("evidence_index:")
         human_evidence = self._human_evidence(report.get("evidence_index", []))
@@ -201,8 +244,24 @@ class TraceReporter:
                 "sources": fact.get("sources") or ([fact.get("source")] if fact.get("source") else []),
                 "observations": len(fact.get("observations") or []),
                 "confidence": fact.get("confidence", 100),
+                "assessment_id": fact.get("assessment_id"),
+                "assessment_status": fact.get("assessment_status", "observed"),
             })
         return flow
+
+    def _assessment_summary(self, facts: list[dict[str, Any]]) -> dict[str, Any]:
+        statuses = ("observed", "inferred", "verified", "contradicted")
+        return {
+            "schema_version": "1.0",
+            "counts": {
+                status: sum(
+                    1
+                    for fact in facts
+                    if str(fact.get("assessment_status") or "observed") == status
+                )
+                for status in statuses
+            },
+        }
 
     def _human_evidence(self, evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [

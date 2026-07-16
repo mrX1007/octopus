@@ -136,6 +136,30 @@ DEFAULTS = {
         "exploit_select_context_facts": 0,
         "parallel_tools": 8,
         "max_director_loops": 10,
+        "mission": {
+            "task_retry_budget": 2,
+            "retryable_error_classes": [
+                "timeout",
+                "rate_limit",
+                "transient_network",
+                "provider_unavailable",
+                "tool_unavailable",
+            ],
+            "max_state_replans": 3,
+        },
+        "task_scoring": {
+            "schema_version": "1.0",
+            "weights": {
+                "information_gain": 3.0,
+                "coverage_value": 2.5,
+                "verification_value": 2.0,
+                "path_value": 2.0,
+                "cost": 1.0,
+                "repeat": 3.0,
+                "risk": 1.5,
+                "uncertainty": 1.5,
+            },
+        },
     },
     "reporting": {
         "auto_export": False,

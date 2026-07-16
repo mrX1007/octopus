@@ -187,7 +187,11 @@ class CapabilityResolver:
         requested: bool | None = None,
     ) -> CapabilityAssessment:
         canonical = self._canonical_capability(capability)
-        fact_list = [dict(fact) for fact in facts or []]
+        fact_list = [
+            dict(fact)
+            for fact in facts or []
+            if str(fact.get("assessment_status") or "observed") != "contradicted"
+        ]
         tasks = self._tasks_for_capability(canonical)
         requirements = self._requirements_for(canonical, tasks)
         missing = tuple(
@@ -636,7 +640,18 @@ class CapabilityResolver:
         fact_list = list(facts)
         timestamps: list[float] = []
         confidences: list[float] = []
+        freshness_states: list[str] = []
+        coverage_states: list[str] = []
         for fact in fact_list:
+            freshness_state = str(fact.get("freshness_status") or "").strip().lower()
+            if freshness_state:
+                freshness_states.append(freshness_state)
+            coverage_state = str(fact.get("coverage_status") or "").strip().lower()
+            execution_status = str(fact.get("execution_status") or "").strip().lower()
+            if execution_status == "timeout":
+                coverage_state = "degraded"
+            if coverage_state:
+                coverage_states.append(coverage_state)
             observations = fact.get("observations") or []
             samples = [item for item in observations if isinstance(item, Mapping)] or [fact]
             for sample in samples:
@@ -655,6 +670,17 @@ class CapabilityResolver:
                 if math.isfinite(confidence):
                     confidences.append(confidence)
 
+        if "degraded" in coverage_states:
+            freshness = "degraded"
+        elif freshness_states and all(state == "stale" for state in freshness_states):
+            freshness = "stale"
+        elif "fresh" in freshness_states:
+            freshness = "fresh"
+        elif freshness_states:
+            freshness = "unknown"
+        else:
+            freshness = "not_assessed"
+
         return FreshnessConfidenceSummary(
             fact_count=len(fact_list),
             oldest_observed_at=min(timestamps) if timestamps else None,
@@ -666,6 +692,7 @@ class CapabilityResolver:
                 if confidences
                 else None
             ),
+            freshness=freshness,
         )
 
     @staticmethod

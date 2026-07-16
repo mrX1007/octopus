@@ -6,9 +6,11 @@ import math
 import os
 import sqlite3
 import time
+from collections.abc import Iterable, Sequence
 from contextlib import contextmanager
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
+from core.ai.fact_assessment import FactAssessment, FactAssessmentStore, FreshnessPolicy
 from core.execution.results import ExecutionResult, ExecutionStatus
 from core.secrets import Redactor, SecretStore, default_secret_store_path
 
@@ -26,7 +28,14 @@ _MAX_RECORDED_OUTPUT_BYTES = 100_000_000
 
 
 class FactStore:
-    def __init__(self, db_path: str = "data/facts.db", secret_store: Optional[SecretStore] = None):
+    def __init__(
+        self,
+        db_path: str = "data/facts.db",
+        secret_store: Optional[SecretStore] = None,
+        *,
+        assessment_policy: Optional[FreshnessPolicy] = None,
+        assessment_clock: Optional[Callable[[], float]] = None,
+    ):
         self.db_path = db_path
         os.makedirs(os.path.dirname(os.path.abspath(self.db_path)), exist_ok=True)
         if secret_store is None:
@@ -40,11 +49,19 @@ class FactStore:
         self.secret_store = secret_store
         self.redactor = Redactor(secret_store)
         self._init_db()
+        self.assessments = FactAssessmentStore(
+            self.db_path,
+            secret_store=self.secret_store,
+            redactor=self.redactor,
+            freshness_policy=assessment_policy,
+            clock=assessment_clock,
+        )
 
     @contextmanager
     def _get_conn(self):
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=10000")
         try:
             yield conn
             conn.commit()
@@ -56,6 +73,7 @@ class FactStore:
 
     def _init_db(self):
         with self._get_conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             cursor = conn.cursor()
             # Facts Table
             cursor.execute('''
@@ -119,6 +137,7 @@ class FactStore:
                     status TEXT NOT NULL DEFAULT 'legacy',
                     partial INTEGER NOT NULL DEFAULT 0,
                     execution_id TEXT NOT NULL DEFAULT '',
+                    execution_key TEXT NOT NULL DEFAULT '',
                     request_id TEXT NOT NULL DEFAULT '',
                     policy_decision_ref TEXT NOT NULL DEFAULT '',
                     exit_code INTEGER,
@@ -127,6 +146,7 @@ class FactStore:
                     error_class TEXT NOT NULL DEFAULT '',
                     artifact_count INTEGER NOT NULL DEFAULT 0,
                     metadata_json TEXT NOT NULL DEFAULT '{}',
+                    idempotency_key TEXT NOT NULL DEFAULT '',
                     timestamp REAL NOT NULL
                 )
             ''')
@@ -142,6 +162,12 @@ class FactStore:
             self._ensure_column(cursor, "command_results", "status", "TEXT NOT NULL DEFAULT 'legacy'")
             self._ensure_column(cursor, "command_results", "partial", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(cursor, "command_results", "execution_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(
+                cursor,
+                "command_results",
+                "execution_key",
+                "TEXT NOT NULL DEFAULT ''",
+            )
             self._ensure_column(cursor, "command_results", "request_id", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(
                 cursor,
@@ -155,6 +181,12 @@ class FactStore:
             self._ensure_column(cursor, "command_results", "error_class", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(cursor, "command_results", "artifact_count", "INTEGER NOT NULL DEFAULT 0")
             self._ensure_column(cursor, "command_results", "metadata_json", "TEXT NOT NULL DEFAULT '{}'")
+            self._ensure_column(
+                cursor,
+                "command_results",
+                "idempotency_key",
+                "TEXT NOT NULL DEFAULT ''",
+            )
             cursor.execute(
                 """
                 UPDATE command_results
@@ -162,13 +194,56 @@ class FactStore:
                 WHERE status = 'legacy'
                 """
             )
+            self._backfill_command_execution_keys(cursor)
             self._redact_existing_rows(cursor)
+            self._merge_duplicate_facts(cursor)
+            cursor.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_fact_identity_unique
+                ON facts(scan_id, host, type, value)
+                """
+            )
+            cursor.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_command_result_idempotency
+                ON command_results(idempotency_key)
+                WHERE idempotency_key <> ''
+                """
+            )
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_command_result_execution
+                ON command_results(execution_key, scan_id, host, timestamp)
+                WHERE execution_key <> ''
+                """
+            )
             conn.commit()
 
     def _ensure_column(self, cursor, table: str, column: str, definition: str) -> None:
         columns = {row[1] for row in cursor.execute(f"PRAGMA table_info({table})").fetchall()}
         if column not in columns:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+    def _backfill_command_execution_keys(self, cursor: sqlite3.Cursor) -> None:
+        """Key legacy execution IDs before their display values are redacted."""
+
+        for row_id, execution_id in cursor.execute(
+            """
+            SELECT id, execution_id
+            FROM command_results
+            WHERE execution_key = '' AND execution_id <> ''
+            """
+        ).fetchall():
+            cursor.execute(
+                "UPDATE command_results SET execution_key = ? WHERE id = ?",
+                (
+                    self.secret_store.keyed_digest(
+                        str(execution_id),
+                        kind="fact_assessment:execution",
+                    ),
+                    int(row_id),
+                ),
+            )
 
     def _redact_existing_rows(self, cursor) -> None:
         """One-way migrate legacy plaintext rows before any caller can read them."""
@@ -251,6 +326,177 @@ class FactStore:
                     "UPDATE hypotheses SET claim = ?, required_evidence = ?, source = ? WHERE id = ?",
                     (safe_claim, required_json, safe_source, row_id),
                 )
+
+    def _merge_duplicate_facts(self, cursor: sqlite3.Cursor) -> None:
+        """One-way migration to the database-enforced canonical fact identity."""
+
+        groups = cursor.execute(
+            """
+            SELECT scan_id, host, type, value
+            FROM facts
+            GROUP BY scan_id, host, type, value
+            HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+        replacements: dict[int, int] = {}
+        for scan_id, host, fact_type, value in groups:
+            rows = cursor.execute(
+                """
+                SELECT id, confidence, timestamp, derived_from, secret_refs
+                FROM facts
+                WHERE scan_id = ? AND host = ? AND type = ? AND value = ?
+                ORDER BY id
+                """,
+                (scan_id, host, fact_type, value),
+            ).fetchall()
+            if len(rows) < 2:
+                continue
+            keeper_id = int(rows[0][0])
+            merged_confidence = max(int(row[1] or 0) for row in rows)
+            merged_timestamp = max(float(row[2] or 0.0) for row in rows)
+            merged_refs = tuple(
+                dict.fromkeys(
+                    ref
+                    for row in rows
+                    for ref in self._load_refs(row[4])
+                )
+            )
+            for row in rows[1:]:
+                duplicate_id = int(row[0])
+                replacements[duplicate_id] = keeper_id
+                cursor.execute(
+                    "UPDATE fact_observations SET fact_id = ? WHERE fact_id = ?",
+                    (keeper_id, duplicate_id),
+                )
+                self._merge_duplicate_assessments(cursor, keeper_id, duplicate_id)
+                cursor.execute("DELETE FROM facts WHERE id = ?", (duplicate_id,))
+            cursor.execute(
+                """
+                UPDATE facts
+                SET confidence = ?, timestamp = ?, secret_refs = ?
+                WHERE id = ?
+                """,
+                (
+                    merged_confidence,
+                    merged_timestamp,
+                    json.dumps(merged_refs),
+                    keeper_id,
+                ),
+            )
+
+        if not replacements:
+            return
+        for fact_id, derived_json in cursor.execute(
+            "SELECT id, derived_from FROM facts"
+        ).fetchall():
+            derived = []
+            for raw_id in self._load_json_list(derived_json):
+                try:
+                    source_id = int(raw_id)
+                except (TypeError, ValueError):
+                    continue
+                canonical_id = replacements.get(source_id, source_id)
+                if canonical_id > 0 and canonical_id != int(fact_id):
+                    derived.append(canonical_id)
+            canonical = list(dict.fromkeys(derived))
+            encoded = json.dumps(canonical)
+            if encoded != str(derived_json or "[]"):
+                cursor.execute(
+                    "UPDATE facts SET derived_from = ? WHERE id = ?",
+                    (encoded, int(fact_id)),
+                )
+        if self._table_exists(cursor, "mission_task_attempts"):
+            for attempt_id, fact_ids_json in cursor.execute(
+                "SELECT attempt_id, fact_ids_json FROM mission_task_attempts"
+            ).fetchall():
+                canonical_ids = []
+                for raw_id in self._load_json_list(fact_ids_json):
+                    try:
+                        fact_id = int(raw_id)
+                    except (TypeError, ValueError):
+                        continue
+                    canonical_ids.append(replacements.get(fact_id, fact_id))
+                encoded = json.dumps(
+                    list(dict.fromkeys(item for item in canonical_ids if item > 0)),
+                    separators=(",", ":"),
+                )
+                if encoded != str(fact_ids_json or "[]"):
+                    cursor.execute(
+                        """
+                        UPDATE mission_task_attempts SET fact_ids_json = ?
+                        WHERE attempt_id = ?
+                        """,
+                        (encoded, attempt_id),
+                    )
+
+    def _merge_duplicate_assessments(
+        self,
+        cursor: sqlite3.Cursor,
+        keeper_id: int,
+        duplicate_id: int,
+    ) -> None:
+        if not self._table_exists(cursor, "fact_assessments"):
+            return
+        if self._table_exists(cursor, "fact_assessment_evidence"):
+            cursor.execute(
+                """
+                DELETE FROM fact_assessment_evidence AS duplicate_ref
+                WHERE duplicate_ref.evidence_fact_id = ?
+                  AND EXISTS (
+                      SELECT 1 FROM fact_assessment_evidence AS keeper_ref
+                      WHERE keeper_ref.assessment_id = duplicate_ref.assessment_id
+                        AND keeper_ref.evidence_fact_id = ?
+                  )
+                """,
+                (duplicate_id, keeper_id),
+            )
+            cursor.execute(
+                """
+                UPDATE fact_assessment_evidence
+                SET evidence_fact_id = ?
+                WHERE evidence_fact_id = ?
+                """,
+                (keeper_id, duplicate_id),
+            )
+        chosen_head = None
+        if self._table_exists(cursor, "fact_assessment_heads"):
+            heads = cursor.execute(
+                """
+                SELECT assessment_id, updated_at
+                FROM fact_assessment_heads
+                WHERE fact_id IN (?, ?)
+                ORDER BY updated_at DESC, assessment_id DESC
+                """,
+                (keeper_id, duplicate_id),
+            ).fetchall()
+            if heads:
+                chosen_head = (str(heads[0][0]), float(heads[0][1]))
+            cursor.execute(
+                "DELETE FROM fact_assessment_heads WHERE fact_id IN (?, ?)",
+                (keeper_id, duplicate_id),
+            )
+        cursor.execute(
+            "UPDATE fact_assessments SET fact_id = ? WHERE fact_id = ?",
+            (keeper_id, duplicate_id),
+        )
+        if chosen_head is not None:
+            cursor.execute(
+                """
+                INSERT INTO fact_assessment_heads(fact_id, assessment_id, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (keeper_id, chosen_head[0], chosen_head[1]),
+            )
+
+    @staticmethod
+    def _table_exists(cursor: sqlite3.Cursor, table: str) -> bool:
+        return cursor.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE type = 'table' AND name = ?
+            """,
+            (table,),
+        ).fetchone() is not None
 
     @staticmethod
     def _load_json_list(value: Any) -> list[Any]:
@@ -336,7 +582,8 @@ class FactStore:
 
     def add_fact(self, scan_id: str, host: str, fact_type: str, value: str, source: str,
                  confidence: int = 100, session_id: str = 'none',
-                 derived_from: Optional[list[int]] = None, evidence_hash: str = "") -> int:
+                 derived_from: Optional[list[int]] = None, evidence_hash: str = "",
+                 source_execution_ids: Optional[Sequence[str]] = None) -> int:
         """Add a fact and return its row id.
 
         For backward compatibility this returns the existing id when the fact is
@@ -353,12 +600,14 @@ class FactStore:
             session_id=session_id,
             derived_from=derived_from,
             evidence_hash=evidence_hash,
+            source_execution_ids=source_execution_ids,
         )
         return fact_id
 
     def add_fact_with_status(self, scan_id: str, host: str, fact_type: str, value: str, source: str,
                              confidence: int = 100, session_id: str = 'none',
-                             derived_from: Optional[list[int]] = None, evidence_hash: str = "") -> tuple[int, bool]:
+                             derived_from: Optional[list[int]] = None, evidence_hash: str = "",
+                             source_execution_ids: Optional[Sequence[str]] = None) -> tuple[int, bool]:
         """Add a fact and return (row_id, created).
 
         The AI pipeline uses the created flag for anti-loop accounting. Without
@@ -378,6 +627,7 @@ class FactStore:
         )
 
         with self._get_conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             cursor = conn.cursor()
             cursor.execute('''
                 SELECT id, confidence FROM facts
@@ -396,6 +646,13 @@ class FactStore:
                     cursor, fact_id, scan_id, host, fact_type, value,
                     confidence, source, session_id, evidence_hash, now, secret_refs,
                 )
+                self.assessments.ensure_initial_in_connection(
+                    conn,
+                    fact_id=int(fact_id),
+                    confidence=max(int(old_confidence or 0), int(confidence or 0)),
+                    derived_from=derived_from,
+                    source_execution_ids=source_execution_ids or (),
+                )
                 conn.commit()
                 return fact_id, False
 
@@ -413,6 +670,13 @@ class FactStore:
             self._insert_observation(
                 cursor, fact_id, scan_id, host, fact_type, value,
                 confidence, source, session_id, evidence_hash, now, secret_refs,
+            )
+            self.assessments.ensure_initial_in_connection(
+                conn,
+                fact_id=int(fact_id),
+                confidence=confidence,
+                derived_from=derived_from,
+                source_execution_ids=source_execution_ids or (),
             )
             conn.commit()
             return fact_id, True
@@ -477,10 +741,59 @@ class FactStore:
             rows = cursor.fetchall()
             fact_ids = [row[0] for row in rows]
             observations_by_fact = self._get_observations_for_facts(cursor, fact_ids)
+        return self._serialize_fact_rows(rows, observations_by_fact)
 
+    def get_facts_by_ids(self, fact_ids: Sequence[int]) -> list[dict[str, Any]]:
+        """Read a bounded fact set for projection without bypassing this store."""
+
+        ids = []
+        for item in fact_ids:
+            try:
+                fact_id = int(item)
+            except (TypeError, ValueError):
+                continue
+            if fact_id > 0 and fact_id not in ids:
+                ids.append(fact_id)
+        if not ids:
+            return []
+        placeholders = ",".join("?" for _ in ids)
+        with self._get_conn() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, scan_id, host, type, value, confidence, source,
+                       session_id, derived_from, evidence_hash, timestamp,
+                       secret_refs
+                FROM facts WHERE id IN ({placeholders}) ORDER BY timestamp, id
+                """,
+                ids,
+            )
+            rows = cursor.fetchall()
+            observations_by_fact = self._get_observations_for_facts(cursor, ids)
+        return self._serialize_fact_rows(rows, observations_by_fact)
+
+    def _serialize_fact_rows(
+        self,
+        rows: Sequence[Sequence[Any]],
+        observations_by_fact: dict[int, list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
+        fact_ids = [int(row[0]) for row in rows]
+        assessments_by_fact = self.assessments.current_for_facts(fact_ids)
+        latest_execution_statuses = self._latest_execution_statuses_for_assessments(
+            assessments_by_fact.values()
+        )
         results = []
         for row in rows:
             observations = observations_by_fact.get(row[0], [])
+            assessment = assessments_by_fact.get(int(row[0]))
+            latest_execution_status = latest_execution_statuses.get(int(row[0]))
+            freshness = self.assessments.freshness_for(
+                str(row[3]),
+                row[10],
+                execution_statuses=(
+                    (latest_execution_status,) if latest_execution_status else ()
+                ),
+            )
             if not observations:
                 observations = [{
                     "id": None,
@@ -509,8 +822,48 @@ class FactStore:
                 "observations": observations,
                 "sources": sources,
                 "sessions": sessions,
+                "assessment": assessment.to_dict() if assessment else None,
+                "assessment_id": assessment.assessment_id if assessment else None,
+                "assessment_status": assessment.status.value if assessment else "observed",
+                "assessment_rule_id": assessment.rule_id if assessment else None,
+                "freshness": freshness.to_dict(),
+                "freshness_status": freshness.status.value,
+                "coverage_status": freshness.coverage.value,
             })
         return results
+
+    def _latest_execution_statuses_for_assessments(
+        self,
+        assessments: Iterable[FactAssessment],
+    ) -> dict[int, str]:
+        assessment_ids = tuple(
+            assessment.assessment_id for assessment in assessments
+        )
+        if not assessment_ids:
+            return {}
+        placeholders = ",".join("?" for _ in assessment_ids)
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT a.fact_id, cr.status, cr.timestamp, cr.id
+                FROM fact_assessment_executions AS ae
+                JOIN fact_assessments AS a
+                  ON a.assessment_id = ae.assessment_id
+                JOIN facts AS f ON f.id = a.fact_id
+                JOIN command_results AS cr
+                  ON cr.execution_key = ae.execution_key
+                 AND cr.scan_id = f.scan_id
+                 AND LOWER(RTRIM(TRIM(cr.host), '.')) =
+                     LOWER(RTRIM(TRIM(f.host), '.'))
+                WHERE ae.assessment_id IN ({placeholders})
+                ORDER BY cr.timestamp, cr.id
+                """,
+                assessment_ids,
+            ).fetchall()
+        return {
+            int(fact_id): str(status)
+            for fact_id, status, _timestamp, _result_id in rows
+        }
 
     def _get_observations_for_facts(self, cursor, fact_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
         if not fact_ids:
@@ -587,6 +940,7 @@ class FactStore:
         error_class: str = "",
         artifact_count: int = 0,
         metadata: Optional[dict[str, Any]] = None,
+        idempotency_key: str = "",
     ) -> tuple[int, bool]:
         now = time.time()
         if execution_result is not None:
@@ -632,8 +986,17 @@ class FactStore:
         )
         output_hash = self._safe_output_hash(output_hash)
         schema_version = self._bounded_text(schema_version, 32)
+        raw_execution_id = str(execution_id or "")
+        execution_key = (
+            self.secret_store.keyed_digest(
+                raw_execution_id,
+                kind="fact_assessment:execution",
+            )
+            if raw_execution_id
+            else ""
+        )
         execution_id = self._bounded_text(
-            self.redactor.redact_text(execution_id, kind="execution_id"),
+            self.redactor.redact_text(raw_execution_id, kind="execution_id"),
             _MAX_IDENTIFIER_BYTES,
         )
         request_id = self._bounded_text(
@@ -649,8 +1012,31 @@ class FactStore:
             256,
         )
         metadata_json = self._metadata_json(metadata or {})
+        safe_idempotency_key = (
+            hashlib.sha256(str(idempotency_key).encode("utf-8", "replace")).hexdigest()
+            if idempotency_key
+            else ""
+        )
         with self._get_conn() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             cursor = conn.cursor()
+            if safe_idempotency_key:
+                cursor.execute(
+                    """
+                    SELECT id, execution_key FROM command_results
+                    WHERE idempotency_key = ? LIMIT 1
+                    """,
+                    (safe_idempotency_key,),
+                )
+                idempotent = cursor.fetchone()
+                if idempotent is not None:
+                    self.assessments.apply_automatic_rules_for_execution_in_connection(
+                        conn,
+                        execution_key=str(idempotent[1] or ""),
+                        scan_id=scan_id,
+                        host=host,
+                    )
+                    return int(idempotent[0]), False
             cursor.execute('''
                 SELECT id FROM command_results
                 WHERE scan_id = ? AND host = ? AND output_hash = ?
@@ -661,10 +1047,12 @@ class FactStore:
                 INSERT INTO command_results (
                     scan_id, host, command_key, command, output_hash, output_bytes,
                     parsed_facts, new_facts, failed, schema_version, status, partial,
-                    execution_id, request_id, policy_decision_ref, exit_code, duration,
-                    stderr_bytes, error_class, artifact_count, metadata_json, timestamp
+                    execution_id, execution_key, request_id, policy_decision_ref,
+                    exit_code, duration,
+                    stderr_bytes, error_class, artifact_count, metadata_json,
+                    idempotency_key, timestamp
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 scan_id,
                 host,
@@ -679,6 +1067,7 @@ class FactStore:
                 normalized_status,
                 1 if partial else 0,
                 execution_id,
+                execution_key,
                 request_id,
                 policy_decision_ref,
                 safe_exit_code,
@@ -687,8 +1076,15 @@ class FactStore:
                 error_class,
                 self._bounded_count(artifact_count),
                 metadata_json,
+                safe_idempotency_key,
                 now,
             ))
+            self.assessments.apply_automatic_rules_for_execution_in_connection(
+                conn,
+                execution_key=execution_key,
+                scan_id=scan_id,
+                host=host,
+            )
             conn.commit()
             return cursor.lastrowid, existing is None
 
@@ -697,7 +1093,8 @@ class FactStore:
             SELECT id, scan_id, host, command_key, command, output_hash, output_bytes,
                    parsed_facts, new_facts, failed, timestamp, schema_version, status,
                    partial, execution_id, request_id, policy_decision_ref, exit_code,
-                   duration, stderr_bytes, error_class, artifact_count, metadata_json
+                   duration, stderr_bytes, error_class, artifact_count, metadata_json,
+                   idempotency_key
             FROM command_results
             WHERE scan_id = ?
         '''
@@ -736,6 +1133,7 @@ class FactStore:
                 "artifact_count": row[21],
                 "metadata_json": row[22],
                 "metadata": self._load_json_value(row[22]),
+                "idempotency_key": row[23],
             }
             for row in rows
         ]
@@ -753,7 +1151,9 @@ class FactStore:
                 "sources": f.get("sources", []),
                 "observations": len(f.get("observations", [])),
                 "session_id": f["session_id"],
-                "confidence": f["confidence"]
+                "confidence": f["confidence"],
+                "assessment_id": f.get("assessment_id"),
+                "assessment_status": f.get("assessment_status", "observed"),
             })
         return json.dumps(clean_facts, indent=2)
 

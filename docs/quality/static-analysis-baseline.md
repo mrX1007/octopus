@@ -57,7 +57,8 @@ After the 14 non-line-length fixes, the same inventory contains only the 595
 
 The largest files are `core/ai/evidence.py` (237),
 `core/tools/post_tools.py` (54), `core/tools/recon_tools.py` (43),
-`core/ai/pipeline.py` (28), and `tests/test_pipeline_quality.py` (22).
+`core/ai/pipeline.py` (28), and the historical
+`tests/test_pipeline_quality.py` (22), which Wave 6 later split and removed.
 
 The configured ratchet now selects `E4`, `E7`, `E9`, `F`, `I`, `B`, `UP`,
 `SIM`, `C4`, `PIE`, and `RUF`. The existing `E501` ignore remains visible
@@ -153,3 +154,43 @@ annotations; C2/AI/observability/recon; result and registry contracts; graph
 types; tools; killchain; root orchestration. Existing `type: ignore` comments
 are removed only after the corresponding types are made sound, never replaced
 with broader suppression.
+
+## Wave 6 ratchet verification (2026-07-15)
+
+The configured first-party ratchet now covers 38 source files/directories,
+including actions, benchmarks, execution, plugins, facts/assessments, mission
+state, canonical graph identity/projection, report schema, decision trace,
+runtime, credentials and secrets.
+
+```text
+venv/bin/ruff check .
+All checks passed!
+
+venv/bin/python -m mypy
+Success: no issues found in 38 source files
+
+PYTHONPYCACHEPREFIX=/private/tmp/octopus-wave6-pyc \
+  venv/bin/python -m compileall -q core modules tests octopus.py msf.py tools.py
+exit 0
+```
+
+Mypy still notes that two untyped bodies in `core/plugins/events.py` are not
+checked; these are informational notes, not errors or new suppressions.
+
+## Mission/assessment ratchet verification (2026-07-16)
+
+The configured ratchet now covers 50 source files/directories. The added set
+includes capability and exploit assessment, all extracted pipeline mixins, the
+scan lifecycle, and the dynamic-composition typing seam. No module-level
+suppression or per-file ignore was added.
+
+```text
+venv/bin/python -m ruff check .
+All checks passed!
+
+venv/bin/python -m mypy
+Success: no issues found in 50 source files
+```
+
+The two existing informational notes for untyped plugin event bodies remain;
+they are not type-check failures.

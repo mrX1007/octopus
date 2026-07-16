@@ -1,0 +1,19 @@
+{
+  "schema_version": "1.0",
+  "scenario_id": "crash-resume",
+  "name": "Crash and durable resume",
+  "category": "crash_resume",
+  "lab": {"name": "octopus-replay-lab", "version": "1.0"},
+  "target": {"kind": "recorded-mission", "version": "resume-v1", "fixture_ref": "crash-resume-v1"},
+  "model": {"provider": "deterministic-replay", "name": "pipeline-runtime", "parameters": {"temperature": 0}},
+  "tool_versions": {"mission_store": "1.0", "decision_trace": "1.0"},
+  "strategy_config": {"mode": "replay", "inject_crash_after_task": 1},
+  "seed": 909,
+  "budgets": {"max_tools": 8, "max_seconds": 60, "max_output_bytes": 1000000},
+  "allowed_actions": ["replay_mission_start", "inject_crash", "resume_mission"],
+  "ground_truth": {"expected_findings": ["mission_resumed", "no_duplicate_execution"], "forbidden_findings": ["orphan_running_task"], "expected_status": "succeeded"},
+  "artifacts": {"inputs": ["fixture://crash-resume-v1"], "results": []},
+  "repetitions": 5,
+  "ablations": [],
+  "tags": ["replay", "crash", "resume"]
+}

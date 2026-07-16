@@ -14,7 +14,12 @@ class StateResolver:
         Pulls all facts for a host and infers the current attack state.
         Returns a dictionary representing the state.
         """
-        facts: list[dict[str, Any]] = self.fact_store.get_facts(scan_id, host)
+        all_facts: list[dict[str, Any]] = self.fact_store.get_facts(scan_id, host)
+        facts = [
+            fact
+            for fact in all_facts
+            if str(fact.get("assessment_status") or "observed") != "contradicted"
+        ]
         fact_values = [f['value'].lower() for f in facts]
         fact_types = [f['type'].lower() for f in facts]
 
@@ -24,6 +29,8 @@ class StateResolver:
             "web_services_found": False,
             "ssh_service_found": False,
             "vulnerabilities_found": False,
+            "vulnerability_candidates_found": False,
+            "verified_vulnerabilities_found": False,
             "credentials_found": False,
             "root_access_confirmed": False,
             "post_access_inventory_completed": False,
@@ -31,7 +38,15 @@ class StateResolver:
             "internal_recon_completed": False,
             "exfiltration_completed": False,
             "cleanup_completed": False,
-            "open_ports": []
+            "open_ports": [],
+            "fact_assessment_counts": {
+                status: sum(
+                    1
+                    for fact in all_facts
+                    if str(fact.get("assessment_status") or "observed") == status
+                )
+                for status in ("observed", "inferred", "verified", "contradicted")
+            },
         }
 
         # Group facts by session_id
@@ -68,8 +83,21 @@ class StateResolver:
                     state["open_ports"].append("80/tcp (http)")
 
         # Vulnerabilities (including hypotheses)
-        if any('vuln' in ft for ft in fact_types) or any('cve' in fv for fv in fact_values) or any('exploit_success' in ft for ft in fact_types):
+        vulnerability_facts = [
+            fact
+            for fact in facts
+            if "vuln" in str(fact.get("type", "")).lower()
+            or "cve" in str(fact.get("value", "")).lower()
+            or "exploit_success" in str(fact.get("type", "")).lower()
+        ]
+        if vulnerability_facts:
+            state["vulnerability_candidates_found"] = True
             state["vulnerabilities_found"] = True
+        if any(
+            str(fact.get("assessment_status") or "observed") == "verified"
+            for fact in vulnerability_facts
+        ):
+            state["verified_vulnerabilities_found"] = True
 
         if any('uid=0' in fv or 'root_access_confirmed' in fv for fv in fact_values):
             state["root_access_confirmed"] = True

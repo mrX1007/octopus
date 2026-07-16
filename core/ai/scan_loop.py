@@ -82,6 +82,7 @@ class ScanLifecycle:
         raw_scan: str = "",
     ):
         print(f"\n[*] Starting AI Pipeline for target: {target} (Scan ID: {scan_id})")
+        pipeline.cancellation.checkpoint()
         max_iterations = pipeline._runtime_limit(max_iterations)
         max_tools = pipeline._runtime_limit(max_tools)
         max_time_minutes = pipeline._runtime_limit(max_time_minutes)
@@ -156,6 +157,7 @@ class ScanLifecycle:
 
         loop = 1
         while max_iterations is None or loop <= max_iterations:
+            pipeline.cancellation.checkpoint()
             elapsed_minutes = (time.time() - pipeline.scan_start_time) / 60
             if max_time_minutes is not None and elapsed_minutes >= max_time_minutes:
                 pipeline._mission_stop_reason = "max_time_reached"
@@ -281,6 +283,7 @@ class ScanLifecycle:
 
             new_facts_this_loop = 0
             for step in plan:
+                pipeline.cancellation.checkpoint()
                 agent_name = step.get("agent")
                 task = step.get("task")
 
@@ -292,7 +295,13 @@ class ScanLifecycle:
                 print(f"  -> [{agent_name}] Task: {task}")
                 pipeline.task_history.append(f"{agent_name}:{task}")
                 attempt = pipeline._begin_task_attempt(agent_name, task)
-                if attempt is not None and attempt.status == "blocked":
+                if attempt is None:
+                    print(
+                        "     [*] Task deferred until durable prerequisites "
+                        "reach a terminal state."
+                    )
+                    continue
+                if attempt.status == "blocked":
                     print(
                         f"     [!] Task blocked by durable dependency state: "
                         f"{attempt.reason}"
@@ -503,9 +512,23 @@ class ScanLifecycle:
                         time.time() - task_started,
                     )
 
+            state_replan_requested = pipeline._evaluate_state_change_replan(
+                context,
+                scan_id,
+                target,
+            )
+            if state_replan_requested:
+                print(
+                    "[*] Material state transition requested a bounded replan "
+                    f"({pipeline._state_replan_count}/{pipeline._max_state_replans()})."
+                )
             if new_facts_this_loop == 0:
                 print(f"[*] Loop {loop} produced 0 new facts.")
-            if not durable_resuming:
+            # A material state transition earns one immediate planning pass
+            # without consuming the caller's ordinary iteration budget.  The
+            # mission mixin bounds these passes, so changing state cannot turn
+            # a finite run into an unbounded loop.
+            if not durable_resuming and not state_replan_requested:
                 loop += 1
 
         if not pipeline._mission_stop_reason and max_iterations is not None:

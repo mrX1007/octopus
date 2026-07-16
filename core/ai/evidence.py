@@ -154,17 +154,42 @@ def _check_result_fact(tool_label: str, status: str, target: str, session_id: st
 
 
 class EvidenceVerifier:
-    def __init__(self, fact_store):
+    def __init__(self, fact_store, assessment_store=None, graph_projector=None):
         self.fact_store = fact_store
+        self.assessment_store = assessment_store or getattr(fact_store, "assessments", None)
+        self.graph_projector = graph_projector
 
     def verify_claim(self, scan_id: str, host: str, claim: str, required_evidence: list[str]) -> dict[str, Any]:
         """
         Verify if a high-level claim is supported by hard evidence in the Fact Store.
         """
-        facts = self.fact_store.get_facts(scan_id, host)
+        facts = [
+            fact
+            for fact in self.fact_store.get_facts(scan_id, host)
+            if str(fact.get("assessment_status") or "observed") != "contradicted"
+        ]
+        facts_by_id = {
+            int(fact["id"]): fact
+            for fact in facts
+            if fact.get("id") is not None
+        }
         evidence_terms = self._build_evidence_terms(scan_id, host, facts)
 
         missing_evidence = []
+        supporting_fact_ids: list[int] = []
+        inferred_requirements: list[str] = []
+        if not str(claim or "").strip():
+            return {
+                "claim": claim,
+                "status": "rejected",
+                "reason": "Claim must not be empty.",
+            }
+        if not required_evidence:
+            return {
+                "claim": claim,
+                "status": "rejected",
+                "reason": "Explicit required evidence is mandatory for claim assessment.",
+            }
         for req in required_evidence:
             req_norm = self._norm(req)
             if req_norm in {"state", "services", "service", "open_questions", "ports_count"}:
@@ -176,6 +201,17 @@ class EvidenceVerifier:
             found = self._requirement_supported(req, evidence_terms)
             if not found:
                 missing_evidence.append(req)
+                continue
+            requirement_fact_ids = self._supporting_fact_ids(req, facts)
+            if requirement_fact_ids:
+                supporting_fact_ids.extend(requirement_fact_ids)
+                if not any(
+                    self._fact_is_hard_evidence(facts_by_id[fact_id])
+                    for fact_id in requirement_fact_ids
+                ):
+                    inferred_requirements.append(req)
+            else:
+                inferred_requirements.append(req)
 
         if missing_evidence:
             return {
@@ -184,31 +220,95 @@ class EvidenceVerifier:
                 "reason": f"No supporting evidence found for: {', '.join(missing_evidence)}"
             }
 
+        supporting_fact_ids = list(dict.fromkeys(supporting_fact_ids))
+        supporting_by_id = facts_by_id
+        if any(
+            str((supporting_by_id.get(fact_id, {}).get("assessment") or {}).get("status", "observed"))
+            == "inferred"
+            for fact_id in supporting_fact_ids
+        ):
+            inferred_requirements.append("inferred_supporting_fact")
+        assessment_status = "inferred" if inferred_requirements else "verified"
+        fact_type = "inferred_claim" if assessment_status == "inferred" else "verified_claim"
+        confidence_values = [
+            int(supporting_by_id[fact_id].get("confidence", 100) or 100)
+            for fact_id in supporting_fact_ids
+            if fact_id in supporting_by_id
+        ]
+        confidence = min(confidence_values) if confidence_values else 70
+        if assessment_status == "inferred":
+            confidence = min(confidence, 80)
+        source_execution_ids: list[str] = []
+        for fact_id in supporting_fact_ids:
+            assessment = supporting_by_id.get(fact_id, {}).get("assessment") or {}
+            source_execution_ids.extend(assessment.get("source_execution_ids") or [])
+        source_execution_ids = list(dict.fromkeys(source_execution_ids))
+
         add_with_status = getattr(self.fact_store, "add_fact_with_status", None)
         if add_with_status:
             fact_id, created = add_with_status(
                 scan_id=scan_id,
                 host=host,
-                fact_type="verified_claim",
+                fact_type=fact_type,
                 value=claim,
-                source="evidence_verifier"
+                source="evidence_verifier",
+                confidence=confidence,
+                derived_from=supporting_fact_ids,
+                source_execution_ids=source_execution_ids,
             )
         else:
             fact_id = self.fact_store.add_fact(
                 scan_id=scan_id,
                 host=host,
-                fact_type="verified_claim",
+                fact_type=fact_type,
                 value=claim,
-                source="evidence_verifier"
+                source="evidence_verifier",
+                confidence=confidence,
+                derived_from=supporting_fact_ids,
             )
             created = True
+
+        assessment_id = None
+        if self.assessment_store is not None:
+            from core.ai.fact_assessment import AssessmentStatus
+
+            assessment, _assessment_created = self.assessment_store.assess_fact(
+                fact_id,
+                (
+                    AssessmentStatus.INFERRED
+                    if assessment_status == "inferred"
+                    else AssessmentStatus.VERIFIED
+                ),
+                confidence=confidence,
+                reason=(
+                    "All requirements matched persisted facts."
+                    if assessment_status == "verified"
+                    else "Requirements matched a derived read model and are not direct proof: "
+                    + ", ".join(dict.fromkeys(inferred_requirements))
+                ),
+                assessor="evidence_verifier",
+                evidence_fact_ids=supporting_fact_ids,
+                source_execution_ids=source_execution_ids,
+            )
+            assessment_id = assessment.assessment_id
+
+        if self.graph_projector is not None:
+            self.graph_projector.project_fact_ids([fact_id])
 
         return {
             "claim": claim,
             "status": "accepted",
-            "reason": "All required evidence verified.",
+            "reason": (
+                "All required evidence verified."
+                if assessment_status == "verified"
+                else "Requirements are supported by an inferred read model; claim remains inferred."
+            ),
             "created": created,
             "fact_id": fact_id,
+            "assessment_id": assessment_id,
+            "assessment_status": assessment_status,
+            "evidence_fact_ids": supporting_fact_ids,
+            "source_execution_ids": source_execution_ids,
         }
 
     def _norm(self, value: str) -> str:
@@ -242,6 +342,102 @@ class EvidenceVerifier:
             for candidate in candidates
             for term in evidence_terms
         )
+
+    def _supporting_fact_ids(
+        self,
+        requirement: str,
+        facts: list[dict[str, Any]],
+    ) -> list[int]:
+        candidates = self._requirement_alias_terms(requirement)
+        supporting: list[int] = []
+        for fact in facts:
+            raw_id = fact.get("id")
+            try:
+                fact_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            terms = self._fact_evidence_terms(fact)
+            if any(
+                candidate and (candidate == term or candidate in term or term in candidate)
+                for candidate in candidates
+                for term in terms
+            ):
+                supporting.append(fact_id)
+        return list(dict.fromkeys(supporting))
+
+    def _fact_evidence_terms(self, fact: dict[str, Any]) -> set[str]:
+        fact_type = str(fact.get("type", ""))
+        value = str(fact.get("value", ""))
+        value_lower = value.lower()
+        terms = {
+            self._norm(fact_type),
+            self._norm(value),
+            self._norm(f"{fact_type}:{value}"),
+        }
+        if fact_type in {"port_open", "service_version", "internal_service"}:
+            service_names = (
+                "http", "https", "ssh", "smb", "ldap", "kerberos", "winrm",
+                "rdp", "redis", "mysql", "postgresql", "mongodb", "tomcat",
+                "cpanel", "dns", "ftp", "smtp",
+            )
+            for service in service_names:
+                if service not in value_lower:
+                    continue
+                for alias in (
+                    f"service:{service}",
+                    f"service_{service}",
+                    f"services:{service}",
+                    f"services_{service}",
+                    f"services_include_{service}",
+                    f"{service}_service",
+                    f"{service}_service_active",
+                    f"{service}_service_running",
+                    f"services_{service}_active",
+                ):
+                    terms.add(self._norm(alias))
+        ssh_access = (
+            (fact_type == "credential" and value_lower.startswith("ssh_login_success:"))
+            or (fact_type == "service_status" and value_lower == "ssh_authenticated")
+            or (
+                fact_type == "system_access"
+                and value_lower in {"uid=0", "root_access_confirmed"}
+            )
+        )
+        if ssh_access:
+            for alias in (
+                "ssh_access_confirmed",
+                "ssh_access:confirmed_present",
+                "surface_states[ssh_access]: confirmed_present",
+                "surface_states.ssh_access: confirmed_present",
+                "surface_states_ssh_access_confirmed_present",
+            ):
+                terms.add(self._norm(alias))
+        return terms
+
+    def _fact_is_hard_evidence(self, fact: dict[str, Any]) -> bool:
+        assessment_status = str(
+            (fact.get("assessment") or {}).get("status")
+            or fact.get("assessment_status")
+            or "observed"
+        )
+        if assessment_status == "verified":
+            return True
+        if assessment_status != "observed":
+            return False
+        fact_type = self._norm(str(fact.get("type", "")))
+        source = self._norm(str(fact.get("source", "")))
+        non_proof_types = {
+            "candidate",
+            "exploit_candidate",
+            "hypothesis",
+            "inferred_claim",
+            "open_question",
+            "potential_vulnerability",
+            "vulnerability_candidate",
+        }
+        if fact_type in non_proof_types or fact_type.endswith("_candidate"):
+            return False
+        return not source.startswith(("analysisagent", "analysis_agent", "llm", "ollama"))
 
     def _requirement_alias_terms(self, requirement: str) -> set:
         raw = str(requirement or "").strip()

@@ -1,12 +1,31 @@
 # OCTOPUS contracts and ownership
 
-Snapshot date: 2026-07-14
-Git revision: `36f06773c89d`
+Snapshot date: 2026-07-15
+Reference: working tree after Waves 4–6 completion
 
 This document records the contracts that exist in the current tree. It does
-not introduce a replacement runtime or domain model. Line references point to
-the revision above; later structural changes must update this map in the same
-logical change.
+not introduce a replacement runtime or domain model. Later structural changes
+must update this map in the same logical change. Historical line references
+remain navigation aids; the
+component/schema names are the stable contract.
+
+## Waves 4–6 completion delta
+
+- `ExecutionResult`/`DispatchResult` schema `1.0` now owns canonical execution
+  statuses (`succeeded`, `failed`, `timeout`, `blocked`, `partial`,
+  `unavailable`, `cancelled`) and adapters preserve legacy result behavior.
+- Canonical entity normalization version `1.0` and `GraphProjectionService`
+  make `KnowledgeGraph` schema `2.0` an idempotent facts/assessment projection.
+- `ActionCatalog`/`ActionExecutor` wrap existing providers and reauthorize at
+  the final boundary; provider selection/fallback uses bounded schema `1.0`
+  telemetry and typed retry classes.
+- Cancellation, bounded process-tree cleanup, partial-output persistence,
+  durable resume, and provider circuit state are implemented through the
+  existing runtime/mission seams.
+- `core.ai.report_schema` owns evidence report `1.0`; `DecisionTraceStore` and
+  decision metrics own bounded observability `1.0`.
+- The pipeline test monolith is split by domain and the benchmark catalog owns
+  ten versioned scenarios with at least five repetitions.
 
 ## Reading rules
 
@@ -15,12 +34,18 @@ logical change.
 - `FactStore` is authoritative for observations and evidence references in the
   AI pipeline. It is not the owner of encrypted secret plaintext, MariaDB scan
   history, or C2 delivery state.
+- `FactAssessmentStore` is authoritative for observed, inferred, verified, and
+  contradicted judgements over those facts. Fact type names, task completion,
+  and execution success are not verification decisions.
 - `PipelineRuntime` is the intended single stateful runtime I/O boundary.
   `AIPipeline` owns orchestration, while `ExecutionPolicy` remains the final
   execution authority.
 - `TargetModel`, `AssetGraph`, state dictionaries, reporting groups, and the
   persistent `KnowledgeGraph` are projections or compatibility views. They do
   not replace facts as evidence.
+- `GraphProjectionService` is the only fact-to-semantic-graph adapter in the AI
+  runtime. Canonical graph identity/provenance and verified path rules are
+  versioned in `docs/architecture/canonical-graph.md`.
 - LLM results are proposals. Director output is checked by deterministic goal
   policy (`core/ai/director.py:77`, `core/ai/director.py:80`), planner output is
   a JSON plan (`core/ai/planner.py:25`, `core/ai/planner.py:62`), and neither is
@@ -31,15 +56,20 @@ logical change.
 | Concern | Current owner | Contract and boundary | Competing paths / ownership gaps |
 |---|---|---|---|
 | Mission orchestration | `AIPipeline` plus `MissionStore` | `AIPipeline` owns scan-loop decisions; `MissionStore` owns durable mission, task, dependency, and attempt identities/transitions in the FactStore SQLite file. Plans are registered before execution, persisted unfinished work is drained before new Director/Planner decisions, running attempts receive incremental execution/fact provenance, and explicit restart recovery interrupts abandoned work while fencing the stale owner. | In-memory sets and outcome dictionaries remain compatibility projections rebuilt from the durable snapshot. Fact/progress/outcome writes are ordered but separate transactions; see `docs/architecture/mission-lifecycle.md`. |
-| Runtime I/O | `PipelineRuntime` | Owns one fact store, scheduler, parser, reporter, and runner (`core/ai/runtime.py:38`, `core/ai/runtime.py:46`, `core/ai/runtime.py:55`). `AIPipeline` exposes compatibility aliases to those exact objects (`core/ai/pipeline.py:41`, `core/ai/pipeline.py:45`, `core/ai/pipeline.py:49`, `core/ai/pipeline.py:51`). | `PipelineRuntime.execute()` converts every runner result to text (`core/ai/runtime.py:75`, `core/ai/runtime.py:79`, `core/ai/runtime.py:82`), so structured subprocess metadata is lost. Public `run_tool()` and menu entry points remain callable outside this runtime (`core/tools/base.py:103`, `core/tools/runner.py:536`). |
+| Runtime I/O | `PipelineRuntime` | Owns one fact/assessment/mission composition, scheduler, parser, reporter, graph projector, runner, action/provider facades, telemetry and decision trace. `execute()` normalizes native/legacy values to schema-`1.0` `DispatchResult`; `ingest_output()` preserves execution provenance and projects committed facts. `AIPipeline` exposes compatibility aliases to those same objects. | Public `run_tool()` and menu/legacy workflow entry points remain callable outside the runtime. The production loop also retains orchestration-specific fact/result writes through shared runtime-owned stores while extraction proceeds. |
 | Concrete tool dispatch | Decorator registry plus `core.tools.runner` | `ToolDef` describes registered callables (`core/tools/registry.py:52`); the registry owns canonical names and aliases (`core/tools/registry.py:103`, `core/tools/registry.py:119`, `core/tools/registry.py:154`). `run_tool_by_command()` parses arguments, rechecks policy, and invokes the registered function (`core/tools/runner.py:647`, `core/tools/runner.py:943`, `core/tools/runner.py:952`, `core/tools/runner.py:962`). | Static `TOOLS_MENU` is a second public selection surface (`core/tools/runner.py:89`, `core/tools/runner.py:536`). `ToolRegistry` separately maps conceptual tasks to command templates (`core/ai/tool_registry.py:500`, `core/ai/tool_registry.py:605`). These are compatibility surfaces, not additional execution authorities. |
+| Unified action lifecycle | `ActionCatalog` plus `ActionExecutor` | Versioned adapters describe requirements/applicability and preserve checked, attempted, succeeded, verified and cleanup outcomes separately. They wrap registry tools, killchain aliases, `ExploitBase`, concrete MSF modules and isolated plugins. The existing provider remains the implementation owner. | The compatibility command loop remains on its scheduler/runtime facade while callers migrate through `PipelineRuntime.execute_action()`. Both paths share the canonical fact-assessment exploit-applicability rule; the command path applies it after policy authorization and before retry-grant consumption/provider dispatch. Provider success is not fact verification. See `docs/architecture/action-lifecycle.md`. |
+| Provider selection and fallback | `ProviderSelector` plus `ProviderFallbackExecutor`; history owned by `ProviderTelemetryStore` | Selection is read-only and ranks applicable catalog actions from bounded provider/capability/target-class history. Every rejection and score contribution is returned in schema-`1.0` trace. Fallback is allowed only for unavailable, timeout, or explicitly typed retryable failure, and partial output is ingested first. | Telemetry is advisory and stored outside FactStore. Selection authorization is only a filter; `ActionExecutor` reauthorizes immediately before every call. See `docs/architecture/provider-selection.md`. |
+| Cancellation and recovery | Scan-owned `CancellationContext`, process runners, `MissionStore` | Policy checks cancellation; canonical/legacy subprocesses enforce context time/output limits and process-group TERM/KILL. Cancelled partial output is normalized and persisted before durable mission interruption. Repeated unavailable providers use the bounded telemetry circuit breaker. | Mission/fact/result writes have explicit independent idempotency boundaries, not a fictitious cross-system transaction. C2 remains supervisor-owned. See `docs/architecture/reliability-recovery.md`. |
 | Final execution authorization | `ExecutionPolicy` | Typed `ExecutionContext`, `ToolInvocation`, and `ExecutionDecision` carry authority, scope, capabilities, approval, limits, and an audit-safe decision (`core/execution/models.py:63`, `core/execution/models.py:142`, `core/execution/models.py:169`). `ExecutionPolicy` validates and authorizes invocations (`core/execution/policy.py:224`, `core/execution/policy.py:250`). | `CommandScheduler` combines the final policy decision with duplicate/negative-fact gates (`core/ai/command_scheduler.py:31`, `core/ai/command_scheduler.py:48`, `core/ai/command_scheduler.py:59`, `core/ai/command_scheduler.py:68`). `DeterministicPolicy` is a strategic goal/plan gate, not permission to execute (`core/ai/policy.py:6`, `core/ai/policy.py:23`, `core/ai/policy.py:34`). Direct calls to the public low-level `core.tools.base.run_tool()` bypass the typed policy boundary (`core/tools/base.py:103`). |
 | Process execution | `core.tools.runner._execute_process` | Enforces wall-time/output limits, starts a process group, and returns the package `ToolResult` (`core/tools/runner.py:1180`, `core/tools/runner.py:1188`, `core/tools/runner.py:1206`, `core/tools/runner.py:1224`, `core/tools/runner.py:1260`, `core/tools/runner.py:1302`). Managed shell is a separate policy-authorized entry (`core/tools/runner.py:1323`, `core/tools/runner.py:1326`, `core/tools/runner.py:1336`). | The older streaming executor returns only text and implements its own timeout/output conventions (`core/tools/base.py:103`, `core/tools/base.py:171`, `core/tools/base.py:200`). Registered tools commonly call that older executor after dispatch. |
-| Facts and evidence observations | `FactStore` | Owns the SQLite `facts`, `fact_observations`, `hypotheses`, and `command_results` records (`core/ai/fact_store.py:14`, `core/ai/fact_store.py:46`, `core/ai/fact_store.py:63`, `core/ai/fact_store.py:75`, `core/ai/fact_store.py:92`). Fact insertion redacts secrets and preserves provenance/evidence hash (`core/ai/fact_store.py:197`, `core/ai/fact_store.py:208`, `core/ai/fact_store.py:214`, `core/ai/fact_store.py:258`). | MariaDB vulnerability/report rows are a separately persisted legacy projection created from facts through `_adapt_state_to_result()` (`octopus.py:1354`, `octopus.py:1362`, `octopus.py:1377`, `octopus.py:1482`) and `_save_and_show_results()` (`octopus.py:1851`, `octopus.py:1857`). `KnowledgeGraph` can also be written directly by credential synchronization rather than exclusively projected from facts (`core/credentials.py:162`, `core/credentials.py:172`). |
+| Facts and evidence observations | `FactStore` | Owns canonical facts/observations, hypotheses and command-result records. Insertion redacts secrets, preserves provenance/evidence hashes and creates an initial assessment in the same transaction. | MariaDB vulnerability/report rows and `KnowledgeGraph` are projections. Credential compatibility sync may add graph entities directly, but does not create evidence or assessments. |
+| Semantic graph projection | `GraphProjectionService` plus `KnowledgeGraph` | Runtime fact ingress refreshes canonical schema-`2.0` nodes/edges after fact commit. The idempotency ledger is keyed by fact, assessment and normalization version. Per-fact provenance determines effective verified/inferred/contradicted edge state. | `TargetModel` and `AssetGraph` are non-persistent per-scan projections using the same entity identity module. `KnowledgeEnricher` remains a legacy text adapter and is not an evidence authority. |
+| Fact assessment | `FactAssessmentStore` | Owns schema `1.1`, append-only assessment transitions, stable rule IDs, versioned read-time freshness, the current head, status/confidence separation, evidence fact IDs, source execution IDs, scoped corroboration/contradiction, idempotency, and legacy backfill. See `docs/architecture/fact-assessment.md`. | Legacy fact-type/report heuristics remain compatibility fallbacks only for dictionaries with no canonical assessment. Final finding/report and graph schemas remain projections. |
 | Secret plaintext | `SecretStore` | Encrypted AES-GCM SQLite store; persisted consumers should keep only opaque `secret://` references (`core/secrets.py:1`, `core/secrets.py:28`, `core/secrets.py:55`). `Redactor` protects fact values and recursively sanitizes structures (`core/secrets.py:340`, `core/secrets.py:389`). | `CredentialStore` reveals plaintext through compatibility getters and synchronizes it into the legacy `_KNOWN_CREDS` cache (`core/credentials.py:139`, `core/credentials.py:195`, `core/credentials.py:216`; `core/tools/exploit_tools.py:28`). Plaintext reveal must remain an execution-boundary operation, not a persistence/report operation. |
 | Scan-session persistence | `db.py` MariaDB layer | Owns scan `history`, vulnerabilities, fixes, exploits, summaries, and tool-result rows (`db.py:137`, `db.py:148`, `db.py:157`, `db.py:411`, `db.py:433`, `db.py:491`, `db.py:508`). `get_session()` returns the canonical legacy `SessionReport` payload (`db.py:35`, `db.py:539`, `db.py:566`). | Facts live in a different SQLite database. There is no atomic transaction spanning FactStore and MariaDB. CLI flows currently mark a scan complete before saving all derived rows (`octopus.py:618`, `octopus.py:619`; resume repeats this at `octopus.py:1342`, `octopus.py:1343`). |
-| Persistent semantic graph | `KnowledgeGraph` | Owns typed node/edge projections in `data/knowledge.db` (`core/knowledge/graph.py:17`, `core/knowledge/graph.py:30`, `core/knowledge/graph.py:93`, `core/knowledge/graph.py:103`). Its high-level APIs upsert assets, credentials, services, sessions, and vulnerabilities (`core/knowledge/graph.py:154`, `core/knowledge/graph.py:170`, `core/knowledge/graph.py:186`, `core/knowledge/graph.py:200`, `core/knowledge/graph.py:214`). | It has independent identifiers and no mandatory fact/evidence reference on every node or edge. `AssetGraph` is a separate ephemeral read model derived from facts (`core/ai/asset_graph.py:10`, `core/ai/asset_graph.py:20`). |
-| Evidence-derived reporting | `core.ai.reporting` and `TraceReporter` | Pure reporting helpers derive evidence indexes, finding groups, access findings, coverage, attack paths, and remediations from facts (`core/ai/reporting.py:11`, `core/ai/reporting.py:32`, `core/ai/reporting.py:92`, `core/ai/reporting.py:268`). `TraceReporter` owns the redacted trace document and text/JSON serialization (`core/ai/trace_report.py:16`, `core/ai/trace_report.py:23`, `core/ai/trace_report.py:63`, `core/ai/trace_report.py:173`). | `export.py` owns a separate presentation/export schema sourced from MariaDB tuples (`export.py:38`, `export.py:594`, `export.py:694`). The two report families do not yet share one versioned machine-readable schema. |
+| Persistent semantic graph | `KnowledgeGraph` plus `GraphProjectionService` | Schema `2.0` owns canonical nodes/aliases/edges and the fact-assessment-normalization projection ledger. Runtime ingress projects canonical facts idempotently; verified-path queries return evidence chains or missing-link explanations. | Direct credential/high-level graph APIs remain compatibility inputs and must not be interpreted as evidence. `AssetGraph` and `TargetModel` are separate ephemeral projections of the same facts/identity contract. |
+| Evidence-derived reporting | `core.ai.report_schema`, `core.ai.reporting`, and `TraceReporter` | Machine report schema `1.0` owns bounded section separation and conservative verified promotion. `TraceReporter` owns redacted text/JSON rendering plus bounded decision events and metrics schema `1.0`. | `export.py` and MariaDB session tuples remain legacy presentation/persistence adapters; they must consume the canonical projection without becoming a second finding authority. |
 | Replay | `AIPipeline.replay_outputs` plus `ReplaySnapshot` | Replays raw output through the same parser and fact path, then snapshots deterministic scheduler decisions without executing them (`core/ai/pipeline.py:394`, `core/ai/pipeline.py:405`, `core/ai/pipeline.py:408`, `core/ai/pipeline.py:418`, `core/ai/pipeline.py:432`). `ReplaySnapshot` provides fixture assertions (`core/ai/replay_snapshot.py:9`, `core/ai/replay_snapshot.py:15`, `core/ai/replay_snapshot.py:54`). | Replay payloads and results are unversioned dictionaries; normalized execution status/output metadata are not stored (`core/ai/replay_snapshot.py:45`). |
 | Plugin lifecycle | `PluginManager` | Discovers metadata and runs discovery/check/execute/event operations in fresh JSON worker processes (`core/plugins/loader.py:1`, `core/plugins/loader.py:50`, `core/plugins/loader.py:82`, `core/plugins/loader.py:513`, `core/plugins/loader.py:581`). The wire rejects arbitrary objects and pickle-like behavior (`core/plugins/protocol.py:1`, `core/plugins/protocol.py:24`, `core/plugins/protocol.py:47`, `core/plugins/protocol.py:56`). | Decorator `ToolDef` and class-based `OctopusPlugin` are different extension contracts (`core/tools/registry.py:52`; `core/plugins/base.py:76`). The `plugin` registered-tool gateway is the compatibility bridge, not a third plugin model (`core/tools/post_tools.py:1856`, `core/tools/post_tools.py:1880`). |
 | C2 composition and protocol | `core.c2.daemon` | Composes KeyStore, crypto, C2 projections, event store, operators, and enrollment (`core/c2/daemon.py:77`, `core/c2/daemon.py:87`, `core/c2/daemon.py:91`). Owns registration and beacon HTTP contracts (`core/c2/daemon.py:184`, `core/c2/daemon.py:242`) and authenticated operator IPC (`core/c2/daemon.py:338`, `core/c2/daemon.py:350`). Automatic startup is owned by the CLI entry point and remains enabled (`octopus.py:2508`, `octopus.py:2509`). | `EventStore` is the append-only C2 event owner (`core/c2/event_store.py:59`, `core/c2/event_store.py:121`); `C2Database` is the agent/task projection owner (`core/c2/db_backend.py:9`, `core/c2/db_backend.py:30`). They share one SQLite file but use separate connections and transactions. |
@@ -66,7 +96,7 @@ cross one of those boundaries.
 | `PluginResult` | Plugin execution dataclass: success, data, output, artifacts, credentials, sessions, error (`core/plugins/base.py:52`). | `PluginManager.execute()` returns it (`core/plugins/loader.py:513`, `core/plugins/loader.py:579`); `_normalize_result()` accepts dataclass, dictionary, or arbitrary truthy value (`core/plugins/loader.py:709`). Result is redacted before leaving the manager (`core/plugins/loader.py:488`, `core/plugins/loader.py:568`). | Stable plugin SDK compatibility contract, but a boolean success cannot distinguish partial, timeout, blocked, unavailable, or cancelled. |
 | `_WorkerReply` | Private process-boundary envelope: ok, payload, error/type, captured stdout/stderr, timeout, return code (`core/plugins/loader.py:70`). | Internal to `PluginManager`; converted to `CheckResult` or `PluginResult` before public return (`core/plugins/loader.py:535`, `core/plugins/loader.py:559`, `core/plugins/loader.py:611`, `core/plugins/loader.py:633`). | Useful adapter input, deliberately not a public domain result. |
 | Pipeline command-result dictionary | `_execute_pipeline_command()` returns facts/counts plus nested `command_result` containing command, failed flag, output hash, duplicate flag, fact pairs, and check status (`core/ai/pipeline.py:944`, `core/ai/pipeline.py:1006`). Skips use a different key set (`core/ai/pipeline.py:1024`). | Aggregated by `_run_task_commands()` (`core/ai/pipeline.py:872`, `core/ai/pipeline.py:937`), recorded in trace and FactStore command results (`core/ai/pipeline.py:994`, `core/ai/pipeline.py:1021`). | Unversioned internal DTO with two shapes. It omits raw/bounded output and loses structured process metadata before persistence. |
-| `TaskOutcome` plus legacy outcome dictionaries | Immutable `TaskOutcome` owns agent/task/status/reason/counts/commands/duration. `MissionStore` persists its redacted representation with task/attempt IDs and execution/fact provenance; `InMemoryTaskOutcomeStore` projects the historical dictionaries and indexes. | Scan-loop recovery, efficiency/trace reporting, and existing callers of `AIPipeline.task_outcomes`. | The compatibility dictionary itself remains unversioned, but durable lifecycle schema `1.0` and exactly-once attempt completion now own persistence. Verification semantics still belong to the future fact-assessment contract. |
+| `TaskOutcome` plus legacy outcome dictionaries | Immutable `TaskOutcome` owns agent/task/status/reason/counts/commands/duration. `MissionStore` persists its redacted representation with task/attempt IDs and execution/fact provenance; `InMemoryTaskOutcomeStore` projects the historical dictionaries and indexes. | Scan-loop recovery, efficiency/trace reporting, and existing callers of `AIPipeline.task_outcomes`. | The compatibility dictionary itself remains unversioned, but durable lifecycle schema `1.0` and exactly-once attempt completion now own persistence. Verification semantics belong to the separate FactAssessmentStore contract. |
 | State/context/report dictionaries | `StateResolver` emits inferred state booleans (`core/ai/state_resolver.py:12`, `core/ai/state_resolver.py:21`); `ContextBuilder` returns a composite context (`core/ai/context_builder.py:51`, `core/ai/context_builder.py:117`); `TraceReporter` and reporting helpers emit derived dictionaries (`core/ai/trace_report.py:43`; `core/ai/reporting.py:268`). | Director/planner, CLI, replay assertions, and report serializers. | Read models, not execution results and not evidence themselves. They need schema/version ownership before durable replay/report use. |
 | `SessionReport` `TypedDict` containing DB tuples | Keys are `history`, canonical `vulns`, fixes, exploits, summary (`db.py:35`); each value is a raw cursor row/row list returned by `get_session()` (`db.py:539`, `db.py:542`, `db.py:566`). | DB CLI and all exporters. Export accepts legacy input key `vulnerabilities` but normalizes to `vulns` (`export.py:38`, `export.py:41`, `export.py:47`). | Canonical legacy report payload, but row layouts are positional and types are `Any`; it is separate from the fact-derived trace report. |
 | Replay dictionary | `ReplaySnapshot.run()` returns `ok`, failures, pipeline result, facts, actions, and surface states (`core/ai/replay_snapshot.py:15`, `core/ai/replay_snapshot.py:45`). Expected facts accept dict or two-item list/tuple (`core/ai/replay_snapshot.py:65`). | Fixture tests and `assert_ok()` (`core/ai/replay_snapshot.py:54`). | Compatibility test contract with no schema version or canonical result serialization. |
@@ -85,15 +115,17 @@ cross one of those boundaries.
 | Pipeline task | `blocked`, `skipped`, `failed`, `no_new_facts`, `completed` | `core/ai/pipeline.py:2846` |
 | Durable mission | `running`, `interrupted`, `completed` | `core/ai/mission_store.py` and `docs/architecture/mission-lifecycle.md` |
 | Durable task/attempt | `pending`, `running`, `interrupted`, `blocked`, `skipped`, `failed`, `no_new_facts`, `completed` | `core/ai/mission_store.py` |
+| Fact assessment | `observed`, `inferred`, `verified`, `contradicted` | `core/ai/fact_assessment.py`; independent from task and execution status |
 | Exploit | default `failed`; adapters also use `vulnerable`, `not_vulnerable`, `success` | `core/killchain/exploits/base.py:15`, `core/killchain/exploits/base.py:48`, `core/killchain/exploits/base.py:75` |
 | Plugin | boolean `success`; check boolean `vulnerable` | `core/plugins/base.py:43`, `core/plugins/base.py:53` |
 | Scan session | `active`, `complete`, `failed`, `interrupted` | `db.py:423` |
 | C2 delivery | `pending`, `sent`, `acknowledged`, `completed`, `error` | `core/c2/db_backend.py:201`, `core/c2/db_backend.py:230`, `core/c2/db_backend.py:275`, `core/c2/db_backend.py:285` |
 
-There is no current `ExecutionResult` with the proposed canonical statuses
-`succeeded`, `failed`, `timeout`, `blocked`, `partial`, `unavailable`, and
-`cancelled`. Phase 1 should evolve `DispatchResult` in place and adapt all
-listed inputs; it should not add a second dispatcher beside `PipelineRuntime`.
+`ExecutionResult` schema `1.0` now owns `succeeded`, `failed`, `timeout`,
+`blocked`, `partial`, `unavailable`, and `cancelled`. `DispatchResult` remains
+its compatibility-aware runtime specialization; subsystem-specific outcome
+vocabularies are mapped at adapters rather than persisted as competing process
+statuses.
 
 ## Public compatibility facades
 
@@ -130,23 +162,25 @@ is safe to declare the sole domain object.
 | Session | One of three distinct concepts: scan lifecycle, evidence correlation, or authenticated remote/application connection. | Scan session is MariaDB `history.sl_no/status` (`db.py:148`, `db.py:411`, `db.py:423`); fact correlation is free-text `facts.session_id` (`core/ai/fact_store.py:55`); KG remote session is `Session(session_id,type,user,host,active)` (`core/knowledge/models.py:138`); plugins return session dictionaries (`core/plugins/base.py:60`). | These are intentionally different domains but share the name. They must receive explicit type/namespace in a canonical identity contract; never join them by bare `session_id`. |
 | Finding | Evidence-backed security conclusion with class, verification state, impact, scope, severity, and evidence chain. Candidate/hypothesis is not verified. | Raw fact types (`vulnerability`, `potential_vulnerability`, `nuclei_finding`, etc.); reporting `finding_groups` and separate `access_findings` (`core/ai/reporting.py:32`, `core/ai/reporting.py:92`); CLI compatibility result dictionaries (`octopus.py:1377`, `octopus.py:1415`); MariaDB vulnerability rows (`db.py:157`, `db.py:433`); KG `Vulnerability` (`core/knowledge/models.py:160`). | FactStore and observations are evidence authority; reporting is current deterministic finding derivation. MariaDB/KG are writable projections with different identifiers and proof fields. **Not yet one report/finding schema.** |
 | Capability | A named ability evaluated separately for provider availability, authorization, evidence state, and prerequisites. | Execution capability constants/set (`core/execution/models.py`); plugin capability strings (`core/plugins/base.py`); ContextBuilder `next_required_capability`; ToolRegistry task/profile and availability maps; read-only `CapabilityAssessment`/`CapabilityResolver` (`core/ai/capability_assessment.py`). | ExecutionContext/Policy still owns authorization, ToolRegistry owns provider availability, and FactStore owns evidence. The facade aggregates those results without executing tools or collapsing them into one boolean. See `docs/architecture/capability-assessment.md`. |
-| Task outcome | Result of one mission task attempt, tied to task/attempt/execution IDs, dependencies, status, reason, facts, and duration. | `MissionStore` persists `mission_id`, `task_id`, monotonic `attempt_id`/number, dependencies, redacted `TaskOutcome`, and execution/fact IDs. `AIPipeline` rebuilds its legacy lists/sets from a `MissionSnapshot`; FactStore separately owns the referenced facts and command results. | Durable mission task IDs are now singular for the AI control plane. C2 `task_id` remains a transport task ID and must not be joined or reused by name alone. Fact assessment, not task completion, will decide observed/inferred/verified state. |
+| Task outcome | Result of one mission task attempt, tied to task/attempt/execution IDs, dependencies, status, reason, facts, and duration. | `MissionStore` persists `mission_id`, `task_id`, monotonic `attempt_id`/number, dependencies, redacted `TaskOutcome`, and execution/fact IDs. `AIPipeline` rebuilds its legacy lists/sets from a `MissionSnapshot`; FactStore separately owns the referenced facts and command results. | Durable mission task IDs are singular for the AI control plane. C2 `task_id` remains separate. `FactAssessmentStore`, not task completion, decides observed/inferred/verified/contradicted state. |
 
 ## Boundaries that later phases must preserve
 
-1. Extend `DispatchResult` through the existing `PipelineRuntime`; do not create
-   a sibling execution dispatcher. Its current metadata-loss point is
-   `core/ai/runtime.py:79` to `core/ai/runtime.py:83`.
+1. Evolve `DispatchResult`/`ExecutionResult` through the existing
+   `PipelineRuntime`; do not create a sibling execution dispatcher. Preserve
+   schema `1.0`, typed status, provenance, bounded output and legacy facades.
 2. Keep `ExecutionPolicy` as the last authorization immediately before every
    process/plugin/action execution. Strategic `DeterministicPolicy` and the
    read-only capability assessment are earlier filters, not substitutes.
-3. Parse and persist partial output before classifying retry/fallback. Current
-   partial/timeout information exists mostly in stdout markers
-   (`core/tools/runner.py:1260`, `core/tools/runner.py:1264`;
-   `core/ai/pipeline.py:1128`).
+   `ActionExecutor` enforces this again after check/applicability and before its
+   provider call.
+3. Parse and persist partial output before classifying retry/fallback. Canonical
+   status/partial fields are authoritative; stdout markers exist only for
+   unadapted legacy output.
 4. Keep FactStore facts/observations as evidence authority. Target/state/graph/
-   report objects remain reproducible projections until a versioned projection
-   contract with evidence IDs exists.
+   report objects remain reproducible projections. The graph projection
+   contract is now versioned and includes evidence IDs; this makes it auditable,
+   not authoritative.
 5. Redact or replace secrets with `secret://` references before facts, replay,
    audit, report, plugin wire output, or MariaDB persistence. Plaintext reveal
    belongs only at an authorized execution adapter.
@@ -158,20 +192,16 @@ is safe to declare the sole domain object.
 8. Keep automatic C2 startup at `octopus.py:2508`; hardening its contracts does
    not change that product requirement.
 
-## Immediate contract blockers for the next waves
+## Residual compatibility boundaries
 
-- `DispatchResult` cannot yet distinguish failed, timeout, blocked, partial,
-  unavailable, or cancelled execution; it only has `executed` and text.
-- `PipelineRuntime.execute()` discards the active `ToolResult` metadata by
-  coercing the runner response to `str`.
-- Two `ToolResult` classes exist, while the second has no current producers.
-- Pipeline command results, task outcomes, replay outputs, trace reports, and
-  MariaDB reports are unversioned dictionaries with different status schemas.
-- Target, endpoint, service, finding, and session identity normalization is
-  duplicated across facts, TargetModel, AssetGraph, KnowledgeGraph, pipeline,
-  and MariaDB projections.
-- Fact insertion and terminal attempt persistence are not yet one transaction;
-  recovery can retain facts whose owning attempt was interrupted between commits.
-
-These blockers define the characterization tests and adapter seams for Waves
-1–3. They do not justify a rewrite or a parallel source of truth.
+- Some legacy menu, kill-chain, C2, and low-level tool paths can still execute
+  outside `PipelineRuntime`; they require separate lifecycle/policy migration.
+- MariaDB/export presentation schemas and replay input aliases remain public
+  compatibility shapes over canonical results/facts/reports.
+- Fact insertion and terminal attempt persistence are ordered idempotent
+  transactions, not one cross-component transaction; recovery can retain facts
+  from an interrupted attempt and must use their provenance.
+- Direct graph/credential APIs, `KnowledgeEnricher`, vector memory, and global
+  compatibility caches remain explicitly non-authoritative.
+- A public wrapper is removed only after external/plugin usage evidence,
+  deprecation, replacement contracts, and migration notes—not grep alone.
