@@ -201,3 +201,57 @@ def test_schema_and_runtime_reject_less_than_five_repetitions():
     scenario = load_scenario(SCENARIO_DIRECTORY / "06-clean-negative.json")
     with pytest.raises(BenchmarkSchemaError, match="repetitions_below_minimum:5"):
         BenchmarkHarness(lambda *_args: {}).run(scenario, repetitions=4)
+
+
+def test_schema_validates_observational_budgets_and_explicit_policy():
+    payload = load_scenario(
+        SCENARIO_DIRECTORY / "01-service-discovery-verification.json"
+    ).to_dict()
+    payload["budgets"].update(
+        {
+            "max_model_tokens": 1000,
+            "max_cost_usd": 2.5,
+            "policy": {
+                "max_tools": "observational",
+                "max_seconds": "hard",
+                "max_output_bytes": "hard",
+                "max_model_tokens": "observational",
+                "max_cost_usd": "observational",
+            },
+        }
+    )
+
+    scenario = BenchmarkScenario.from_dict(payload)
+
+    assert scenario.budgets["max_model_tokens"] == 1000
+    assert scenario.budgets["max_cost_usd"] == 2.5
+    assert scenario.budgets["policy"]["max_cost_usd"] == "observational"
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "error"),
+    [
+        ("max_model_tokens", 0, "invalid_positive_integer:budgets.max_model_tokens"),
+        ("max_model_tokens", 1.5, "invalid_positive_integer:budgets.max_model_tokens"),
+        ("max_cost_usd", 0, "invalid_positive_number:budgets.max_cost_usd"),
+        ("max_cost_usd", float("inf"), "invalid_positive_number:budgets.max_cost_usd"),
+    ],
+)
+def test_schema_rejects_invalid_observational_budget_values(name, value, error):
+    payload = load_scenario(
+        SCENARIO_DIRECTORY / "01-service-discovery-verification.json"
+    ).to_dict()
+    payload["budgets"][name] = value
+
+    with pytest.raises(BenchmarkSchemaError, match=error):
+        BenchmarkScenario.from_dict(payload)
+
+
+def test_observational_budgets_require_explicit_enforcement_policy():
+    payload = load_scenario(
+        SCENARIO_DIRECTORY / "01-service-discovery-verification.json"
+    ).to_dict()
+    payload["budgets"]["max_model_tokens"] = 1000
+
+    with pytest.raises(BenchmarkSchemaError, match=r"missing:budgets\.policy"):
+        BenchmarkScenario.from_dict(payload)

@@ -49,6 +49,7 @@ _METRIC_COLUMNS = (
     ("repeated_task_rate", "Repeat"),
     ("api_cost_usd", "Cost USD"),
 )
+_STRICT_RUN_STATUSES = frozenset({"failed", "invalid", "partial", "timeout"})
 
 
 @dataclass(frozen=True)
@@ -95,7 +96,13 @@ class CompetitorMatrixResult:
     def has_strict_failures(self) -> bool:
         return any(
             int(self.completeness.get(name, 0)) > 0
-            for name in ("failed_runs", "invalid_runs", "policy_violations")
+            for name in (
+                "failed_runs",
+                "invalid_runs",
+                "partial_runs",
+                "timeout_runs",
+                "policy_violations",
+            )
         )
 
 
@@ -548,8 +555,10 @@ def _aggregate_summary(
 ) -> dict[str, Any]:
     durations = [float(run.duration_seconds) for run in aggregate.runs]
     policy_violations = sum(len(run.policy_violations) for run in aggregate.runs)
+    timeout_runs = sum(1 for run in aggregate.runs if run.status == "timeout")
+    partial_runs = sum(1 for run in aggregate.runs if run.status == "partial")
     error_runs = sum(
-        1 for run in aggregate.runs if run.status in {"failed", "invalid"}
+        1 for run in aggregate.runs if run.status in _STRICT_RUN_STATUSES
     )
     return {
         "system_id": system_id,
@@ -565,6 +574,8 @@ def _aggregate_summary(
             if "median" in values
         },
         "policy_violations": policy_violations,
+        "timeout_runs": timeout_runs,
+        "partial_runs": partial_runs,
         "error_runs": error_runs,
     }
 
@@ -583,6 +594,8 @@ def _publication_counts(
     written = len(aggregate_items)
     failed = sum(1 for run in runs if run.status == "failed")
     invalid = sum(1 for run in runs if run.status == "invalid")
+    timeout = sum(1 for run in runs if run.status == "timeout")
+    partial = sum(1 for run in runs if run.status == "partial")
     policy_violations = sum(len(run.policy_violations) for run in runs)
     return {
         "expected_aggregates": expected,
@@ -593,8 +606,10 @@ def _publication_counts(
         "succeeded_runs": sum(1 for run in runs if run.status == "succeeded"),
         "failed_runs": failed,
         "invalid_runs": invalid,
+        "timeout_runs": timeout,
+        "partial_runs": partial,
         "policy_violations": policy_violations,
-        "error_runs": failed + invalid,
+        "error_runs": failed + invalid + timeout + partial,
     }
 
 

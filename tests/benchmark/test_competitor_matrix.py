@@ -127,6 +127,8 @@ def test_matrix_runs_same_scenario_for_each_system_and_is_order_stable():
         "succeeded_runs": 10,
         "failed_runs": 0,
         "invalid_runs": 0,
+        "timeout_runs": 0,
+        "partial_runs": 0,
         "policy_violations": 0,
         "error_runs": 0,
     }
@@ -235,6 +237,38 @@ def test_failures_are_publishable_but_trigger_strict_result():
     assert result.completeness["written_aggregates"] == 2
     assert result.completeness["failed_runs"] == 5
     assert result.has_strict_failures is True
+
+
+@pytest.mark.parametrize("status", ["timeout", "partial"])
+def test_timeout_and_partial_runs_are_published_as_strict_errors(status):
+    scenario = load_scenario(SCENARIO_PATH)
+
+    def factory(_manifest):
+        def nonconforming(_scenario, _repetition, _seed):
+            return {"status": status, "actions": []}
+
+        return nonconforming
+
+    result = run_competitor_matrix(
+        (_manifest("alpha"), _manifest("beta")),
+        (scenario,),
+        runner_factory=factory,
+        clock=lambda: 100.0,
+    )
+
+    expected_timeout = 10 if status == "timeout" else 0
+    expected_partial = 10 if status == "partial" else 0
+    assert result.completeness["timeout_runs"] == expected_timeout
+    assert result.completeness["partial_runs"] == expected_partial
+    assert result.completeness["error_runs"] == 10
+    assert result.has_strict_failures is True
+    assert {summary["timeout_runs"] for summary in result.summaries} == {
+        expected_timeout // 2
+    }
+    assert {summary["partial_runs"] for summary in result.summaries} == {
+        expected_partial // 2
+    }
+    assert {summary["error_runs"] for summary in result.summaries} == {5}
 
 
 def test_cli_runs_two_command_adapters_and_publishes_matrix(tmp_path):

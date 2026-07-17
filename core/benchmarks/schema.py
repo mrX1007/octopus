@@ -28,6 +28,10 @@ REQUIRED_SCENARIO_CATEGORIES = (
 _IDENTIFIER = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
 _MAX_ITEMS = 256
 _MAX_TEXT_BYTES = 4_096
+_REQUIRED_BUDGETS = ("max_tools", "max_seconds", "max_output_bytes")
+_HARD_BUDGETS = ("max_seconds", "max_output_bytes")
+_OBSERVATIONAL_BUDGETS = ("max_tools", "max_model_tokens", "max_cost_usd")
+_OPTIONAL_OBSERVATIONAL_BUDGETS = ("max_model_tokens", "max_cost_usd")
 
 
 class BenchmarkSchemaError(ValueError):
@@ -248,11 +252,48 @@ def _required_version(value: Mapping[str, Any], name: str) -> None:
 
 
 def _validate_budgets(budgets: Mapping[str, Any]) -> None:
-    required = ("max_tools", "max_seconds", "max_output_bytes")
-    for name in required:
+    for name in _REQUIRED_BUDGETS:
         if name not in budgets:
             raise BenchmarkSchemaError(f"missing:budgets.{name}")
         _integer(budgets[name], minimum=1)
+    if "max_model_tokens" in budgets:
+        _strict_positive_integer(
+            budgets["max_model_tokens"],
+            "budgets.max_model_tokens",
+        )
+    if "max_cost_usd" in budgets:
+        _strict_positive_number(budgets["max_cost_usd"], "budgets.max_cost_usd")
+
+    policy = budgets.get("policy")
+    observational = tuple(
+        name for name in _OBSERVATIONAL_BUDGETS if name in budgets
+    )
+    if policy is None:
+        if any(name in budgets for name in _OPTIONAL_OBSERVATIONAL_BUDGETS):
+            raise BenchmarkSchemaError("missing:budgets.policy")
+        return
+    if not isinstance(policy, Mapping):
+        raise BenchmarkSchemaError("invalid:budgets.policy")
+    expected = dict.fromkeys(_HARD_BUDGETS, "hard")
+    expected.update(dict.fromkeys(observational, "observational"))
+    actual = {str(name): str(value) for name, value in policy.items()}
+    if actual != expected:
+        raise BenchmarkSchemaError("invalid:budgets.policy")
+
+
+def _strict_positive_integer(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise BenchmarkSchemaError(f"invalid_positive_integer:{name}")
+    return value
+
+
+def _strict_positive_number(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise BenchmarkSchemaError(f"invalid_positive_number:{name}")
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0:
+        raise BenchmarkSchemaError(f"invalid_positive_number:{name}")
+    return parsed
 
 
 def _mapping(value: Any, name: str) -> dict[str, Any]:

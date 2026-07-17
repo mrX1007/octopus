@@ -41,11 +41,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print(destination)
     print(
-        "matrix={} aggregates={}/{} failed={} invalid={} violations={}".format(
+        "matrix={} aggregates={}/{} failed={} timeout={} partial={} invalid={} violations={}".format(
             result.matrix_id,
             result.completeness["written_aggregates"],
             result.completeness["expected_aggregates"],
             result.completeness["failed_runs"],
+            result.completeness["timeout_runs"],
+            result.completeness["partial_runs"],
             result.completeness["invalid_runs"],
             result.completeness["policy_violations"],
         )
@@ -98,8 +100,8 @@ def _argument_parser() -> argparse.ArgumentParser:
         "--strict",
         action="store_true",
         help=(
-            "Publish results, then return non-zero if any run failed, was invalid, "
-            "or recorded a policy violation."
+            "Publish results, then return non-zero if any run failed, timed out, "
+            "was partial or invalid, or recorded a policy violation."
         ),
     )
     return parser

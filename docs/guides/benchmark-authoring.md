@@ -43,14 +43,17 @@ Adding a new category to the default catalog also requires a hermetic handler in
 for a custom integration runner should not be added to the required default
 catalog.
 
-For a competitor scenario, start from
+The shipped Linux campaign keeps its reviewed scenario under
+`benchmarks/competitors/campaigns/linux-blackbox-v1/scenarios/`. For a custom
+low-level campaign, start from
 `benchmarks/competitors/scenarios/authorized-service-inventory.json.example`
-and publish the completed document under `benchmarks/competitors/scenarios/`.
-Use neutral actions and canonical finding IDs: product-specific commands must
+and place the completed document in a dedicated scenario directory. Use
+neutral actions and canonical finding IDs: product-specific commands must
 be translated inside each adapter. Pin the authorized lab snapshot and restore
-it before every repetition. Clear system state/caches, verify lab health and
-counterbalance manifest order across separate campaigns when infrastructure
-drift could systematically favor one product.
+it before every repetition. Clear system state/caches and verify lab health.
+The shipped launcher records a balanced forward/reverse system rotation;
+custom low-level campaigns must define and publish equivalent scheduling when
+infrastructure drift could systematically favor one product.
 
 Each participating system also needs a schema `1.0` manifest conforming to
 `docs/schemas/benchmark-system-v1.schema.json`. The manifest pins its exact
@@ -70,8 +73,8 @@ enabled and disabled through a tested configuration contract.
 - Replay artifacts are immutable or content-addressed.
 - No plaintext credential, raw prompt, raw exception, or unbounded stdout is
   stored.
-- Budgets are realistic and enforceable by the selected built-in or injected
-  runner.
+- Hard budgets are enforceable by the selected runner; vendor-controlled soft
+  budgets and missing telemetry are disclosed rather than presented as caps.
 - Results from different schema/tool/lab versions are not merged silently.
 - `framework_only` and `full_system` results remain separate, and only systems
   with the same fairness profile are compared directly.
@@ -99,7 +102,19 @@ publication checklist are documented in
 `benchmarks/competitors/README.md`. Competitor campaigns require at least five
 repetitions for every system/scenario pair. Publish immutable inputs, all runs,
 aggregate median/variance/minimum/maximum/count, failures, execution mode,
-comparison track and fairness metadata together.
+comparison track and fairness metadata together. On Linux x86_64, use the
+supported pinned launcher for `linux-blackbox-v1`:
+
+```bash
+./scripts/benchmarks/bootstrap_competitors_linux.sh --profile core
+./venv/bin/python -m core.benchmarks.competitors.launch \
+  --campaign-id <campaign-id> \
+  --profile core \
+  --environment-file benchmarks/competitors/secrets.env
+```
+
+The interface below is the low-level path for a custom, already-controlled
+campaign; it does not bootstrap systems or manage the shipped Docker lab.
 
 Run a completed two-system campaign with:
 
@@ -114,5 +129,7 @@ venv/bin/python -m core.benchmarks.competitors \
 ```
 
 The output directory must not already exist. Strict mode publishes the complete
-comparison first, then exits non-zero if a run failed, was invalid or recorded
-a policy violation.
+comparison first, then exits non-zero if a run failed, timed out, was partial
+or invalid, or recorded a policy violation. Timeout and partial counts remain
+separate in the published completeness metadata and are included in
+`error_runs`.

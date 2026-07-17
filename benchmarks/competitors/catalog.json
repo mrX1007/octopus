@@ -1,0 +1,216 @@
+{
+  "schema_version": "1.0",
+  "as_of": "2026-07-17",
+  "comparison_policy": {
+    "default_track": "full_system",
+    "framework_only_requires": "Identical model, parameters, tool image, hardware, lab snapshot and budgets for every system.",
+    "black_box_launcher_profiles": [
+      "core",
+      "extended"
+    ],
+    "white_box_results_are_separate": true
+  },
+  "systems": [
+    {
+      "system_id": "strix",
+      "display_name": "Strix",
+      "version": "1.1.0",
+      "tag": "v1.1.0",
+      "source_revision": "91d9a847166fe2f82125643d13e099b0d989bbe4",
+      "repository_url": "https://github.com/usestrix/strix",
+      "release_url": "https://github.com/usestrix/strix/releases/tag/v1.1.0",
+      "license": {
+        "spdx": "Apache-2.0",
+        "url": "https://github.com/usestrix/strix/blob/v1.1.0/LICENSE"
+      },
+      "comparison": {
+        "surfaces": [
+          "black_box",
+          "white_box"
+        ],
+        "launcher_profiles": [
+          "core",
+          "extended"
+        ],
+        "default_track": "full_system",
+        "framework_only_status": "conditional_on_a_shared_model_and_tool_image"
+      },
+      "requirements": {
+        "operating_system": [
+          "Linux x86_64"
+        ],
+        "commands": [
+          "git",
+          "CPython 3.12",
+          "uv 0.11.28 (bootstrap-managed)",
+          "Docker",
+          "Docker Compose"
+        ],
+        "runtime": [
+          "A model supported through Strix/LiteLLM",
+          "The corresponding provider credential",
+          "Pinned sandbox image ghcr.io/usestrix/strix-sandbox@sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c",
+          "An authorized target or source checkout"
+        ]
+      },
+      "bootstrap": {
+        "source_directory": ".benchmark-tools/src/strix",
+        "install_directory": ".benchmark-tools/venvs/strix-1.1.0",
+        "executable": ".benchmark-tools/venvs/strix-1.1.0/bin/strix",
+        "sandbox_image": "ghcr.io/usestrix/strix-sandbox@sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c",
+        "default": true,
+        "method": "isolated_venv_from_verified_source_and_frozen_lock"
+      }
+    },
+    {
+      "system_id": "pentestgpt",
+      "display_name": "PentestGPT",
+      "version": "1.0.0",
+      "tag": "v1.0.0",
+      "source_revision": "83ae3647603de8c66229f0877faef77a53f5c8f6",
+      "repository_url": "https://github.com/GreyDGL/PentestGPT",
+      "release_url": "https://github.com/GreyDGL/PentestGPT/releases/tag/v1.0.0",
+      "license": {
+        "spdx": "MIT",
+        "url": "https://github.com/GreyDGL/PentestGPT/blob/v1.0.0/LICENSE.md"
+      },
+      "comparison": {
+        "surfaces": [
+          "ctf_flag_capture"
+        ],
+        "launcher_profiles": [],
+        "default_track": "separate_ctf_only",
+        "framework_only_status": "excluded_from_discovery_profiles_due_to_incompatible_ctf_task_contract",
+        "discovery_status": "not_runnable_upstream_cli_requires_flag_capture_and_retries_no_flag_runs_three_times"
+      },
+      "requirements": {
+        "operating_system": [
+          "Linux x86_64"
+        ],
+        "commands": [
+          "git",
+          "CPython 3.12",
+          "uv 0.11.28 (bootstrap-managed)",
+          "Docker",
+          "Docker Compose"
+        ],
+        "runtime": [
+          "A supported model provider",
+          "The corresponding provider credential",
+          "An authorized CTF target with a capturable flag"
+        ]
+      },
+      "bootstrap": {
+        "source_directory": ".benchmark-tools/src/pentestgpt",
+        "install_directory": ".benchmark-tools/src/pentestgpt/.venv",
+        "executable": ".benchmark-tools/src/pentestgpt/.venv/bin/pentestgpt",
+        "default": false,
+        "method": "optional_ctf_candidate_uv_sync_frozen_from_verified_source"
+      }
+    },
+    {
+      "system_id": "pentagi",
+      "display_name": "PentAGI",
+      "version": "2.1.0",
+      "tag": "v2.1.0",
+      "source_revision": "a112db206b2fb7866c367c33348f52f5cdc207d0",
+      "repository_url": "https://github.com/vxcontrol/pentagi",
+      "release_url": "https://github.com/vxcontrol/pentagi/releases/tag/v2.1.0",
+      "license": {
+        "spdx": "MIT",
+        "url": "https://github.com/vxcontrol/pentagi/blob/v2.1.0/LICENSE"
+      },
+      "comparison": {
+        "surfaces": [
+          "black_box"
+        ],
+        "launcher_profiles": [
+          "extended"
+        ],
+        "default_track": "full_system",
+        "framework_only_status": "not_claimed_without_a_shared_model_and_tool_image"
+      },
+      "requirements": {
+        "operating_system": [
+          "Linux x86_64"
+        ],
+        "commands": [
+          "git",
+          "Docker",
+          "Docker Compose"
+        ],
+        "minimum_resources": {
+          "cpu": "2 vCPU",
+          "memory": "4 GB RAM",
+          "disk": "20 GB"
+        },
+        "runtime": [
+          "A private/internal PentAGI service URL and API token",
+          "The service reports release 2.1.0",
+          "The service can reach the private OCTOBENCH lab address",
+          "Every model used by the selected flow matches the declared model",
+          "An authorized target"
+        ]
+      },
+      "bootstrap": {
+        "source_directory": ".benchmark-tools/src/pentagi",
+        "install_directory": null,
+        "executable": null,
+        "default": false,
+        "method": "optional_verified_source_clone_service_configured_separately"
+      }
+    },
+    {
+      "system_id": "shannon",
+      "display_name": "Shannon",
+      "version": "1.9.0",
+      "tag": "v1.9.0",
+      "source_revision": "00e56455dfb0f2626b63e7e9231980cfb48e2fe2",
+      "repository_url": "https://github.com/KeygraphHQ/shannon",
+      "release_url": "https://github.com/KeygraphHQ/shannon/releases/tag/v1.9.0",
+      "license": {
+        "spdx": "AGPL-3.0",
+        "url": "https://github.com/KeygraphHQ/shannon/blob/v1.9.0/LICENSE"
+      },
+      "comparison": {
+        "surfaces": [
+          "white_box"
+        ],
+        "launcher_profiles": [],
+        "default_track": "full_system",
+        "framework_only_status": "not_claimed_without_a_shared_model_and_tool_image"
+      },
+      "requirements": {
+        "operating_system": [
+          "Linux x86_64"
+        ],
+        "commands": [
+          "git",
+          "Node.js >= 18",
+          "Docker"
+        ],
+        "runtime": [
+          "The authorized target's source checkout",
+          "A supported model provider and credential",
+          "A dedicated white-box scenario matrix"
+        ]
+      },
+      "bootstrap": {
+        "source_directory": ".benchmark-tools/src/shannon",
+        "install_directory": null,
+        "executable": null,
+        "default": false,
+        "method": "optional_verified_source_clone_white_box_setup_separate"
+      }
+    }
+  ],
+  "excluded": [
+    {
+      "system_id": "cai",
+      "display_name": "CAI",
+      "repository_url": "https://github.com/aliasrobotics/cai",
+      "license_url": "https://github.com/aliasrobotics/cai/blob/main/LICENSE",
+      "reason": "Excluded from the strict open-source matrix because the official license includes research-use restrictions and separate commercial-license terms."
+    }
+  ]
+}

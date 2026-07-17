@@ -569,43 +569,89 @@ requires exact equality.
 
 ## Competitor Benchmarks
 
-Live or recorded comparisons with other systems use the separate competitor
-matrix under `benchmarks/competitors/`. The built-in hermetic figures above are
-never included in a live-system matrix or presented as competitor results.
+Live comparisons use a separate Linux-only, resettable and explicitly
+authorized campaign under `benchmarks/competitors/`. The built-in hermetic
+figures above are never mixed with live-system results. The pinned catalog and
+launcher provide two full-system black-box profiles:
 
-Each participating system supplies a versioned manifest that pins its release
-and source revision, `live | replay` execution mode, fairness track, model,
-tools and a shell-free command adapter. Every matrix requires at least two
-systems, one shared scenario catalog and five repetitions per system/scenario
-pair. A matrix rejects mixed execution modes, tracks or fairness profiles.
+- `core`: OCTOPUS and Strix 1.1.0;
+- `extended`: `core` plus PentAGI 2.1.0.
 
-Use `framework_only` when model, tools, hardware, lab snapshot and budgets are
-the same for every system. Use `full_system` for each product's recommended
-configuration and publish those differences. Both tracks require an explicitly
-authorized resettable lab for live scenarios. Restore the same snapshot and
-clear product state before every repetition.
+PentestGPT 1.0.0 remains cataloged only as a separate CTF/flag-capture
+candidate. Its upstream non-interactive CLI hardcodes a CTF task and retries a
+no-flag result three times, so it is not runnable or ranked in this discovery
+campaign. Bootstrap it explicitly with `--with-pentestgpt` only for a separate
+CTF methodology.
 
-After copying and completing the `.json.example` templates, run:
+Run a live competitor campaign only inside a disposable, dedicated Linux VM
+on an isolated VLAN. The VM must have no unrelated or long-lived credentials
+or sensitive mounts; use only scoped, revocable benchmark provider keys. It
+must not receive a Docker socket from a more privileged host. It must have no
+sensitive/private-network reachability beyond the benchmark lab; allow only
+the provider and bootstrap egress that the selected profile needs.
+Third-party agents may invoke their own tools or Docker workloads, and the
+launcher cannot prove their internal action stream. Consequently third-party
+per-tool action conformance is `N/A` (`not assessed`), never inferred or
+presented as enforced. Finding, evidence and coverage metrics remain comparable
+against the shared scenario ground truth.
+
+The extended adapter accepts only a private/internal PentAGI endpoint and
+fails closed unless the service reports release 2.1.0 and its actual flow
+provider/model telemetry matches the generated manifest. Deploy that service
+as benchmark-dedicated infrastructure in the same isolated segment, never as a
+route into a production private network. For an internal CA, set the optional
+`OCTOBENCH_PENTAGI_CA_FILE`; its content digest enters runtime provenance.
+
+Shannon 1.9.0 requires target source and belongs in a separate white-box
+matrix. Framework-only claims are valid only after every system demonstrably
+uses the same model, parameters, tool image, hardware, lab snapshot and
+budgets.
+
+On Linux x86_64 with glibc 2.34 or newer, Git, Docker Compose and CPython 3.12
+installed, prepare the exact competitor revisions, the pinned `uv==0.11.28` installer and
+the OCTOPUS runtime `venv/` from its checked-in hashed lock. Then copy the
+credential template and make the private copy readable only by its owner:
 
 ```bash
-./venv/bin/python -m core.benchmarks.competitors \
-  --system-manifest benchmarks/competitors/systems/octopus.json \
-  --system-manifest benchmarks/competitors/systems/competitor-a.json \
-  --scenario-directory benchmarks/competitors/scenarios \
-  --output-directory benchmarks/competitors/results/2026-07-16-framework-v1 \
-  --repetitions 5 \
-  --strict
+./scripts/benchmarks/bootstrap_competitors_linux.sh --profile core
+cp benchmarks/competitors/secrets.env.example benchmarks/competitors/secrets.env
+chmod 600 benchmarks/competitors/secrets.env
 ```
 
-The destination must be new. It contains `comparison.json`, a human-readable
-`comparison.md`, full per-system/per-scenario aggregates and `SHA256SUMS`.
-Strict mode publishes all evidence first and then exits non-zero if any run
-failed, was invalid or violated allowed actions. Results show per-metric
-medians/variance, sample counts and failures; OCTOPUS does not calculate or
-declare an overall winner by default.
+Fill only the model/provider fields needed by the selected profile. Set both
+blank acknowledgement variables to `YES` yourself only after confirming scope
+and isolation. The launcher fails closed if either value is missing or differs
+from `YES`.
+The checked-in `STRIX_IMAGE` value is an immutable Linux amd64 digest; do not
+replace it with a mutable tag or another digest.
 
-The manifest schema, adapter output protocol, neutral-scenario rules, fairness
-controls and Git publication checklist are in
+```bash
+./venv/bin/python -m core.benchmarks.competitors.launch \
+  --campaign-id linux-blackbox-v1-20260716T120000Z \
+  --profile core \
+  --environment-file benchmarks/competitors/secrets.env
+```
+
+The versioned scenario lives under
+`benchmarks/competitors/campaigns/linux-blackbox-v1/`. Generated manifests and
+config go to `.benchmark-state/generated/<campaign-id>/`, resumable state goes
+to `.benchmark-state/journal/<campaign-id>/`, and the immutable publication
+bundle goes to `benchmarks/competitors/results/<campaign-id>/`. Use
+`--prepare-only` to inspect generated inputs without executing systems.
+
+Initial clones, environments and images can consume multiple gigabytes and
+take tens of minutes. The counterbalanced launcher uses six repetitions for
+both profiles per system/scenario pair; a live campaign can take tens
+of minutes to hours and incur model, cloud or tool charges. Wall time and captured output
+are hard-bounded, but vendor CLIs do not expose one uniform enforceable
+token/tool/cost cutoff. Strix 1.1.0 also receives its native
+`--max-budget-usd` limit; treat the shared declared values as conformance targets,
+set provider-side spending limits, and publish unavailable telemetry as `N/A`
+rather than zero. There is no default overall winner, and failed, timed-out,
+partial or invalid repetitions remain visible.
+
+Exact release SHAs, official links, license decisions, adapter protocol,
+fairness controls and the publication checklist are in
 `benchmarks/competitors/README.md`.
 
 ## Testing

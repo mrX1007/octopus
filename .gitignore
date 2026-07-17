@@ -246,3 +246,9 @@ data/shardx-profiles/
 core/.DS_Store
 modules/.DS_Store
 vendor/.DS_Store
+
+# Local competitor benchmark runtimes, journals, and credentials.
+.benchmark-tools/
+.benchmark-state/
+benchmarks/competitors/private/
+benchmarks/competitors/secrets.env

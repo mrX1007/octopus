@@ -1,9 +1,9 @@
 # Reproducible dependency locks
 
 This directory is the generated, wheel-only dependency boundary for OCTOPUS.
-The checked-in `manifest.json` is intentionally an unresolved skeleton until
-an authorised maintainer runs the resolver. No placeholder packages or fake
-hashes are committed.
+The checked-in `manifest.json` is resolved: every managed lock has a recorded
+digest and every requirement has exact artifact hashes. No placeholder
+packages or fake hashes are committed.
 
 The matrix contains 24 lock files: the `runtime`, `test`, `mysql`,
 `external-tools`, `platform`, and `full` profiles for CPython 3.9, 3.10, 3.11,
