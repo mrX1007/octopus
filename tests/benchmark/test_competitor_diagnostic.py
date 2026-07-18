@@ -166,6 +166,24 @@ def test_private_pilot_runs_once_per_system_without_publication(
         assert str(path) not in json.dumps(payload)
 
 
+def test_pilot_budget_override_preserves_scenario_schema_repetitions(
+    tmp_path: Path,
+) -> None:
+    scenario = load_scenario(SCENARIO_PATH)
+
+    calibrated = diagnostic._with_budget(scenario, 1_800)
+    materialized = tmp_path / "scenario.json"
+    materialized.write_text(
+        json.dumps(calibrated.to_dict()) + "\n",
+        encoding="utf-8",
+    )
+    reloaded = load_scenario(materialized)
+
+    assert reloaded.repetitions == scenario.repetitions
+    assert reloaded.repetitions >= 5
+    assert reloaded.budgets["max_seconds"] == 1_800
+
+
 def test_pilot_can_select_one_system_and_rejects_unsafe_budget(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -302,7 +302,6 @@ def _with_budget(
 ) -> BenchmarkScenario:
     return replace(
         scenario,
-        repetitions=1,
         budgets={**scenario.budgets, "max_seconds": budget_seconds},
     )
 
