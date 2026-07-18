@@ -26,7 +26,12 @@ SCENARIO_PATH = (
 )
 
 
-def _manifest(tmp_path: Path, system_id: str) -> SystemManifest:
+def _manifest(
+    tmp_path: Path,
+    system_id: str,
+    *,
+    runtime_provenance: dict[str, object] | None = None,
+) -> SystemManifest:
     source = tmp_path / f"{system_id}.json"
     source.write_text("{}\n", encoding="utf-8")
     return SystemManifest.from_dict(
@@ -62,6 +67,7 @@ def _manifest(tmp_path: Path, system_id: str) -> SystemManifest:
                 "working_directory": ".",
                 "environment_passthrough": [],
             },
+            "metadata": {"runtime_provenance": runtime_provenance or {}},
         },
         source_path=source,
     )
@@ -82,6 +88,29 @@ def _config(tmp_path: Path, manifests: tuple[SystemManifest, ...]) -> CampaignCo
         health_command=command,
         cleanup_command=command,
     )
+
+
+def test_diagnostic_preserves_safe_ollama_runtime_attestation(
+    tmp_path: Path,
+) -> None:
+    expected = {
+        "ollama_context_length": 65_536,
+        "ollama_max_loaded_models_declared": 1,
+        "ollama_model_size_vram_bytes": 10_987_654_321,
+        "ollama_num_parallel_declared": 1,
+        "ollama_runtime_attestation": "api-version-unload-empty-preload-and-ps",
+        "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
+        "ollama_server_version": "0.18.3",
+    }
+    manifest = _manifest(
+        tmp_path,
+        "strix",
+        runtime_provenance={**expected, "private_runtime_detail": "do-not-copy"},
+    )
+
+    provenance = diagnostic._system_provenance(manifest)
+
+    assert provenance["runtime_provenance"] == expected
 
 
 def test_private_pilot_runs_once_per_system_without_publication(

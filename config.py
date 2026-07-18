@@ -301,6 +301,10 @@ def load_config() -> dict:
         cfg["ollama"]["url"] = os.environ["OCTOPUS_OLLAMA_URL"]
     if os.environ.get("OCTOPUS_OLLAMA_MODEL"):
         cfg["ollama"]["model"] = os.environ["OCTOPUS_OLLAMA_MODEL"]
+    if os.environ.get("OCTOBENCH_OLLAMA_CONTEXT_LENGTH"):
+        cfg["ollama"]["num_ctx"] = int(
+            os.environ["OCTOBENCH_OLLAMA_CONTEXT_LENGTH"]
+        )
 
     return cfg
 

@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,6 +29,9 @@ SHARED_OLLAMA_MODEL = "qwen3.5:9b"
 SHARED_OLLAMA_API_DIGEST = "c" * 64
 SHARED_OLLAMA_DIGEST = "sha256:" + SHARED_OLLAMA_API_DIGEST
 SHARED_OLLAMA_SIZE = 6_321_987_654
+SHARED_OLLAMA_SIZE_VRAM = 10_987_654_321
+SHARED_OLLAMA_CONTEXT_LENGTH = 65_536
+SHARED_OLLAMA_SERVER_VERSION = "0.18.3"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -94,6 +98,10 @@ def _core_environment() -> dict[str, str]:
         "OCTOBENCH_ACK_ISOLATED_HOST": "YES",
         "OCTOPUS_OLLAMA_URL": "http://127.0.0.1:11434/api/generate",
         "OCTOPUS_OLLAMA_MODEL": SHARED_OLLAMA_MODEL,
+        "OCTOBENCH_OLLAMA_CONTEXT_LENGTH": str(SHARED_OLLAMA_CONTEXT_LENGTH),
+        "OCTOBENCH_OLLAMA_SERVER_VERSION": SHARED_OLLAMA_SERVER_VERSION,
+        "OCTOBENCH_OLLAMA_NUM_PARALLEL": "1",
+        "OCTOBENCH_OLLAMA_MAX_LOADED_MODELS": "1",
         "OCTOBENCH_STRIX_BIN": "/opt/strix/bin/strix",
         "STRIX_IMAGE": launch._STRIX_IMAGE,
         "STRIX_LLM": f"ollama/{SHARED_OLLAMA_MODEL}",
@@ -141,10 +149,26 @@ class _OllamaTagsResponse:
 def _stub_ollama_tags(
     monkeypatch: pytest.MonkeyPatch,
     payload: Any,
+    *,
+    context_length: int = SHARED_OLLAMA_CONTEXT_LENGTH,
+    server_version: str = SHARED_OLLAMA_SERVER_VERSION,
+    process_payload: Any | None = None,
 ) -> tuple[dict[str, Any], list[Any]]:
-    encoded = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
-    observed: dict[str, Any] = {}
+    observed: dict[str, Any] = {"requests": [], "timeouts": []}
     handlers: list[Any] = []
+
+    default_process_payload = {
+        "models": [
+            {
+                "name": SHARED_OLLAMA_MODEL,
+                "model": SHARED_OLLAMA_MODEL,
+                "digest": SHARED_OLLAMA_API_DIGEST,
+                "size": SHARED_OLLAMA_SIZE,
+                "size_vram": SHARED_OLLAMA_SIZE_VRAM,
+                "context_length": context_length,
+            }
+        ]
+    }
 
     class Opener:
         def open(
@@ -153,8 +177,33 @@ def _stub_ollama_tags(
             *,
             timeout: float,
         ) -> _OllamaTagsResponse:
-            observed["request"] = request
-            observed["timeout"] = timeout
+            path = urllib.parse.urlsplit(request.full_url).path
+            observed["requests"].append(request)
+            observed["timeouts"].append(timeout)
+            if path == "/api/tags":
+                response_payload = payload
+                observed["request"] = request
+                observed["timeout"] = timeout
+            elif path == "/api/version":
+                response_payload = {"version": server_version}
+            elif path == "/api/generate":
+                response_payload = {
+                    "model": SHARED_OLLAMA_MODEL,
+                    "done": True,
+                }
+            elif path == "/api/ps":
+                response_payload = (
+                    default_process_payload
+                    if process_payload is None
+                    else process_payload
+                )
+            else:  # pragma: no cover - catches accidental endpoint expansion
+                raise AssertionError(f"unexpected Ollama path: {path}")
+            encoded = (
+                response_payload
+                if isinstance(response_payload, bytes)
+                else json.dumps(response_payload).encode()
+            )
             return _OllamaTagsResponse(encoded)
 
     def build_opener(*configured_handlers: Any) -> Opener:
@@ -280,8 +329,8 @@ def test_core_prepare_generates_exact_pins_commands_and_secret_free_config(
             "same_model": True,
             "notes": (
                 "OCTOPUS and Strix use the same neutral Ollama provider, model tag, "
-                "weights and server; product-native prompts, request APIs and "
-                "inference defaults remain distinct."
+                "weights, server and exact context length; prompts, request APIs and "
+                "all other inference defaults remain product-native and distinct."
             ),
             "same_tool_versions": False,
             "same_hardware": True,
@@ -290,8 +339,14 @@ def test_core_prepare_generates_exact_pins_commands_and_secret_free_config(
         assert payload["model"] == {
             "provider": "ollama",
             "name": SHARED_OLLAMA_MODEL,
-            "parameters": {},
+            "parameters": {"context_length": SHARED_OLLAMA_CONTEXT_LENGTH},
         }
+        assert payload["tool_versions"]["ollama"] == SHARED_OLLAMA_SERVER_VERSION
+        context_environment_present = (
+            "OCTOBENCH_OLLAMA_CONTEXT_LENGTH"
+            in payload["adapter"]["environment_passthrough"]
+        )
+        assert context_environment_present is (system_id == "octopus")
         assert payload["adapter"]["argv"] == [
             expected_python,
             expected_adapter,
@@ -505,6 +560,11 @@ def test_environment_file_requires_exact_private_permissions_and_required_values
         {"STRIX_LLM": "ollama/another-qwen"},
         {"OCTOPUS_OLLAMA_MODEL": "octopus-qwen", "STRIX_LLM": "ollama/octopus-qwen"},
         {"OCTOPUS_OLLAMA_URL": "http://127.0.0.1:11434/v1"},
+        {"OCTOBENCH_OLLAMA_CONTEXT_LENGTH": "2048"},
+        {"OCTOBENCH_OLLAMA_CONTEXT_LENGTH": "not-an-integer"},
+        {"OCTOBENCH_OLLAMA_SERVER_VERSION": "invalid version"},
+        {"OCTOBENCH_OLLAMA_NUM_PARALLEL": "2"},
+        {"OCTOBENCH_OLLAMA_MAX_LOADED_MODELS": "2"},
     ],
 )
 def test_shared_ollama_contract_rejects_mismatched_or_biased_configuration(
@@ -1084,6 +1144,13 @@ def test_runtime_prerequisites_attest_one_ollama_digest_for_both_systems(
         "ollama_model_attestation": "api-tags",
         "ollama_model_digest": SHARED_OLLAMA_DIGEST,
         "ollama_model_size_bytes": SHARED_OLLAMA_SIZE,
+        "ollama_runtime_attestation": "api-version-unload-empty-preload-and-ps",
+        "ollama_server_version": SHARED_OLLAMA_SERVER_VERSION,
+        "ollama_context_length": SHARED_OLLAMA_CONTEXT_LENGTH,
+        "ollama_model_size_vram_bytes": SHARED_OLLAMA_SIZE_VRAM,
+        "ollama_num_parallel_declared": 1,
+        "ollama_max_loaded_models_declared": 1,
+        "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
     }
     assert {key: attestations["octopus"][key] for key in expected} == expected
     assert {key: attestations["strix"][key] for key in expected} == expected
@@ -1091,6 +1158,39 @@ def test_runtime_prerequisites_attest_one_ollama_digest_for_both_systems(
     assert request.full_url == "http://127.0.0.1:11434/api/tags"
     assert request.get_header("Authorization") == f"Bearer {secret}"
     assert observed["timeout"] == launch._OLLAMA_ATTESTATION_TIMEOUT_SECONDS
+    requests = observed["requests"]
+    assert [urllib.parse.urlsplit(item.full_url).path for item in requests] == [
+        "/api/tags",
+        "/api/version",
+        "/api/generate",
+        "/api/generate",
+        "/api/ps",
+    ]
+    unload = requests[2]
+    assert unload.method == "POST"
+    assert json.loads(unload.data or b"") == {
+        "model": SHARED_OLLAMA_MODEL,
+        "keep_alive": 0,
+    }
+    preload = requests[3]
+    assert preload.method == "POST"
+    assert json.loads(preload.data or b"") == {
+        "model": SHARED_OLLAMA_MODEL,
+        "prompt": "",
+        "stream": False,
+        "keep_alive": "5m",
+    }
+    assert observed["timeouts"] == [
+        launch._OLLAMA_ATTESTATION_TIMEOUT_SECONDS,
+        launch._OLLAMA_ATTESTATION_TIMEOUT_SECONDS,
+        launch._OLLAMA_PRELOAD_TIMEOUT_SECONDS,
+        launch._OLLAMA_PRELOAD_TIMEOUT_SECONDS,
+        launch._OLLAMA_ATTESTATION_TIMEOUT_SECONDS,
+    ]
+    assert all(
+        item.get_header("Authorization") == f"Bearer {secret}"
+        for item in requests
+    )
     assert any(
         isinstance(item, urllib.request.ProxyHandler) and item.proxies == {}
         for item in handlers
@@ -1125,6 +1225,116 @@ def test_ollama_runtime_attestation_rejects_missing_model(
 
     assert captured.value.code == "runtime_unavailable"
     assert str(captured.value) == "runtime_unavailable"
+
+
+def test_ollama_runtime_attestation_rejects_context_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_ollama_tags(
+        monkeypatch,
+        {
+            "models": [
+                {
+                    "name": SHARED_OLLAMA_MODEL,
+                    "digest": SHARED_OLLAMA_API_DIGEST,
+                    "size": SHARED_OLLAMA_SIZE,
+                }
+            ]
+        },
+        context_length=32_768,
+    )
+
+    with pytest.raises(launch.LaunchError) as captured:
+        launch._attest_shared_ollama_runtime(_core_environment())
+
+    assert captured.value.code == "ollama_context_mismatch"
+
+
+def test_ollama_runtime_attestation_rejects_server_version_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_ollama_tags(
+        monkeypatch,
+        {
+            "models": [
+                {
+                    "name": SHARED_OLLAMA_MODEL,
+                    "digest": SHARED_OLLAMA_API_DIGEST,
+                    "size": SHARED_OLLAMA_SIZE,
+                }
+            ]
+        },
+        server_version="0.18.2",
+    )
+
+    with pytest.raises(launch.LaunchError) as captured:
+        launch._attest_shared_ollama_runtime(_core_environment())
+
+    assert captured.value.code == "ollama_version_mismatch"
+
+
+@pytest.mark.parametrize(
+    "process_payload",
+    (
+        {"models": []},
+        {
+            "models": [
+                {
+                    "name": SHARED_OLLAMA_MODEL,
+                    "digest": "d" * 64,
+                    "size_vram": SHARED_OLLAMA_SIZE_VRAM,
+                    "context_length": SHARED_OLLAMA_CONTEXT_LENGTH,
+                }
+            ]
+        },
+        {
+            "models": [
+                {
+                    "name": SHARED_OLLAMA_MODEL,
+                    "digest": SHARED_OLLAMA_API_DIGEST,
+                    "size_vram": SHARED_OLLAMA_SIZE_VRAM,
+                    "context_length": True,
+                }
+            ]
+        },
+        {
+            "models": [
+                {
+                    "name": SHARED_OLLAMA_MODEL,
+                    "digest": SHARED_OLLAMA_API_DIGEST,
+                    "size_vram": SHARED_OLLAMA_SIZE_VRAM,
+                    "context_length": SHARED_OLLAMA_CONTEXT_LENGTH,
+                },
+                {
+                    "name": "unrelated-model:latest",
+                    "digest": "e" * 64,
+                    "size_vram": 1,
+                    "context_length": SHARED_OLLAMA_CONTEXT_LENGTH,
+                },
+            ]
+        },
+    ),
+)
+def test_ollama_runtime_attestation_rejects_malformed_process_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    process_payload: Any,
+) -> None:
+    _stub_ollama_tags(
+        monkeypatch,
+        {
+            "models": [
+                {
+                    "name": SHARED_OLLAMA_MODEL,
+                    "digest": SHARED_OLLAMA_API_DIGEST,
+                    "size": SHARED_OLLAMA_SIZE,
+                }
+            ]
+        },
+        process_payload=process_payload,
+    )
+
+    with pytest.raises(launch.LaunchError, match=r"^runtime_unavailable$"):
+        launch._attest_shared_ollama_runtime(_core_environment())
 
 
 @pytest.mark.parametrize(

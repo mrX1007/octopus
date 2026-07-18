@@ -151,6 +151,12 @@ class TestEnvVarOverrides:
         cfg = load_config()
         assert cfg["ollama"]["model"] == "custom-model"
 
+    @patch.dict(os.environ, {"OCTOBENCH_OLLAMA_CONTEXT_LENGTH": "65536"})
+    def test_benchmark_ollama_context_override(self):
+        from config import load_config
+        cfg = load_config()
+        assert cfg["ollama"]["num_ctx"] == 65536
+
     @patch.dict(os.environ, {}, clear=False)
     def test_no_env_uses_yaml_defaults(self):
         """When no env vars are set, config.yaml / DEFAULTS are used."""

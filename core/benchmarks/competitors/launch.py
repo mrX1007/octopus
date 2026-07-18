@@ -43,8 +43,11 @@ _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _MAX_ENVIRONMENT_FILE_BYTES = 262_144
 _MAX_ENVIRONMENT_LINES = 512
 _MAX_ENVIRONMENT_VALUE_BYTES = 65_536
-_MAX_OLLAMA_TAGS_BYTES = 1_048_576
+_MAX_OLLAMA_RESPONSE_BYTES = 1_048_576
 _OLLAMA_ATTESTATION_TIMEOUT_SECONDS = 5.0
+_OLLAMA_PRELOAD_TIMEOUT_SECONDS = 300.0
+_MIN_OLLAMA_CONTEXT_LENGTH = 32_768
+_MAX_OLLAMA_CONTEXT_LENGTH = 262_144
 _STRIX_REVISION = "91d9a847166fe2f82125643d13e099b0d989bbe4"
 _STRIX_IMAGE = (
     "ghcr.io/usestrix/strix-sandbox@"
@@ -93,6 +96,10 @@ _BASE_REQUIRED_ENVIRONMENT = (
     "OCTOBENCH_ACK_ISOLATED_HOST",
     "OCTOPUS_OLLAMA_URL",
     "OCTOPUS_OLLAMA_MODEL",
+    "OCTOBENCH_OLLAMA_CONTEXT_LENGTH",
+    "OCTOBENCH_OLLAMA_SERVER_VERSION",
+    "OCTOBENCH_OLLAMA_NUM_PARALLEL",
+    "OCTOBENCH_OLLAMA_MAX_LOADED_MODELS",
     "OCTOBENCH_STRIX_BIN",
     "STRIX_IMAGE",
     "STRIX_LLM",
@@ -175,6 +182,8 @@ class LaunchError(RuntimeError):
             "isolation_required",
             "linux_required",
             "missing_environment",
+            "ollama_context_mismatch",
+            "ollama_version_mismatch",
             "output_exists",
             "repository_dirty",
             "runtime_unavailable",
@@ -433,6 +442,11 @@ def _manifest_payload(
     adapter_environment = tuple(
         dict.fromkeys((*_COMMON_ADAPTER_ENVIRONMENT, *system.adapter_environment))
     )
+    if system.system_id == "octopus":
+        adapter_environment = (
+            *adapter_environment,
+            "OCTOBENCH_OLLAMA_CONTEXT_LENGTH",
+        )
     pentagi_ca_file = str(environment.get("OCTOBENCH_PENTAGI_CA_FILE") or "").strip()
     if system.system_id == "pentagi" and pentagi_ca_file:
         adapter_environment = (*adapter_environment, "OCTOBENCH_PENTAGI_CA_FILE")
@@ -488,6 +502,8 @@ def _manifest_payload(
         "command-adapter-protocol": "1.0",
         system.system_id: system.version,
     }
+    if system.system_id in {"octopus", "strix"}:
+        tool_versions["ollama"] = _configured_ollama_server_version(environment)
     if system.system_id == "strix":
         tool_versions["strix-sandbox-image"] = _STRIX_IMAGE
     return {
@@ -502,7 +518,15 @@ def _manifest_payload(
         "model": {
             "provider": provider,
             "name": str(environment[system.model_name_environment]),
-            "parameters": {},
+            "parameters": (
+                {
+                    "context_length": _configured_ollama_context_length(
+                        environment
+                    )
+                }
+                if system.system_id in {"octopus", "strix"}
+                else {}
+            ),
         },
         "tool_versions": tool_versions,
         "adapter": {
@@ -656,8 +680,8 @@ def _fairness_profile(profile: str) -> dict[str, Any]:
         "same_model": shared_model,
         "notes": (
             "OCTOPUS and Strix use the same neutral Ollama provider, model tag, "
-            "weights and server; product-native prompts, request APIs and "
-            "inference defaults remain distinct."
+            "weights, server and exact context length; prompts, request APIs and "
+            "all other inference defaults remain product-native and distinct."
             if shared_model
             else "OCTOPUS and Strix share neutral Ollama/Qwen; PentAGI retains "
             "its separately attested service model."
@@ -767,6 +791,9 @@ def _validate_strix_image_reference(environment: Mapping[str, str]) -> None:
 def _validate_shared_ollama_configuration(
     environment: Mapping[str, str],
 ) -> None:
+    _configured_ollama_context_length(environment)
+    _configured_ollama_server_version(environment)
+    _validate_declared_ollama_server_policy(environment)
     model = str(environment.get("OCTOPUS_OLLAMA_MODEL") or "").strip()
     strix_model = str(environment.get("STRIX_LLM") or "").strip()
     if (
@@ -785,6 +812,36 @@ def _validate_shared_ollama_configuration(
         octopus_origin != strix_origin
         or octopus_path.rstrip("/") != "/api/generate"
         or strix_path not in {"", "/"}
+    ):
+        raise LaunchError("invalid_shared_ollama_configuration")
+
+
+def _configured_ollama_context_length(environment: Mapping[str, str]) -> int:
+    raw = str(environment.get("OCTOBENCH_OLLAMA_CONTEXT_LENGTH") or "").strip()
+    if not raw.isascii() or not raw.isdecimal():
+        raise LaunchError("invalid_shared_ollama_configuration")
+    value = int(raw)
+    if not _MIN_OLLAMA_CONTEXT_LENGTH <= value <= _MAX_OLLAMA_CONTEXT_LENGTH:
+        raise LaunchError("invalid_shared_ollama_configuration")
+    return value
+
+
+def _configured_ollama_server_version(environment: Mapping[str, str]) -> str:
+    value = str(environment.get("OCTOBENCH_OLLAMA_SERVER_VERSION") or "").strip()
+    if re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}", value) is None:
+        raise LaunchError("invalid_shared_ollama_configuration")
+    return value
+
+
+def _validate_declared_ollama_server_policy(
+    environment: Mapping[str, str],
+) -> None:
+    if any(
+        str(environment.get(name) or "").strip() != "1"
+        for name in (
+            "OCTOBENCH_OLLAMA_NUM_PARALLEL",
+            "OCTOBENCH_OLLAMA_MAX_LOADED_MODELS",
+        )
     ):
         raise LaunchError("invalid_shared_ollama_configuration")
 
@@ -911,10 +968,12 @@ def _validate_runtime_prerequisites(
 def _attest_shared_ollama_runtime(
     environment: Mapping[str, str],
 ) -> dict[str, Any]:
-    """Bind both systems to one live Ollama model artifact without inference."""
+    """Bind both systems to one live Ollama model and allocated context."""
 
     base_url = str(environment.get("LLM_API_BASE") or "").strip().rstrip("/")
     model = str(environment.get("OCTOPUS_OLLAMA_MODEL") or "").strip()
+    expected_context = _configured_ollama_context_length(environment)
+    expected_version = _configured_ollama_server_version(environment)
     if not base_url or not model:
         raise LaunchError("runtime_unavailable")
     headers = {
@@ -925,24 +984,23 @@ def _attest_shared_ollama_runtime(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     try:
-        request = urllib.request.Request(
-            f"{base_url}/api/tags",
-            method="GET",
-            headers=headers,
-        )
         opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
             _NoRedirectHandler(),
             urllib.request.HTTPSHandler(context=ssl.create_default_context()),
         )
-        with opener.open(
-            request,
+        tags = _ollama_json_request(
+            opener,
+            f"{base_url}/api/tags",
+            headers=headers,
             timeout=_OLLAMA_ATTESTATION_TIMEOUT_SECONDS,
-        ) as response:
-            status = int(
-                getattr(response, "status", 0) or response.getcode() or 0
-            )
-            payload = response.read(_MAX_OLLAMA_TAGS_BYTES + 1)
+        )
+        version_payload = _ollama_json_request(
+            opener,
+            f"{base_url}/api/version",
+            headers=headers,
+            timeout=_OLLAMA_ATTESTATION_TIMEOUT_SECONDS,
+        )
     except (
         OSError,
         TimeoutError,
@@ -952,17 +1010,11 @@ def _attest_shared_ollama_runtime(
         urllib.error.URLError,
     ):
         raise LaunchError("runtime_unavailable") from None
-    if status != 200 or len(payload) > _MAX_OLLAMA_TAGS_BYTES:
-        raise LaunchError("runtime_unavailable")
-    try:
-        decoded = json.loads(payload.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError, RecursionError):
-        raise LaunchError("runtime_unavailable") from None
-    if not isinstance(decoded, Mapping) or not isinstance(decoded.get("models"), list):
+    if not isinstance(tags.get("models"), list):
         raise LaunchError("runtime_unavailable")
     matches = [
         entry
-        for entry in decoded["models"]
+        for entry in tags["models"]
         if isinstance(entry, Mapping)
         and (entry.get("name") == model or entry.get("model") == model)
     ]
@@ -982,11 +1034,124 @@ def _attest_shared_ollama_runtime(
         or size <= 0
     ):
         raise LaunchError("runtime_unavailable")
+    reported_version = str(version_payload.get("version") or "").strip()
+    if reported_version != expected_version:
+        raise LaunchError("ollama_version_mismatch")
+
+    try:
+        _ollama_json_request(
+            opener,
+            f"{base_url}/api/generate",
+            headers=headers,
+            method="POST",
+            body={"model": model, "keep_alive": 0},
+            timeout=_OLLAMA_PRELOAD_TIMEOUT_SECONDS,
+        )
+        _ollama_json_request(
+            opener,
+            f"{base_url}/api/generate",
+            headers=headers,
+            method="POST",
+            body={
+                "model": model,
+                "prompt": "",
+                "stream": False,
+                "keep_alive": "5m",
+            },
+            timeout=_OLLAMA_PRELOAD_TIMEOUT_SECONDS,
+        )
+        processes = _ollama_json_request(
+            opener,
+            f"{base_url}/api/ps",
+            headers=headers,
+            timeout=_OLLAMA_ATTESTATION_TIMEOUT_SECONDS,
+        )
+    except (
+        OSError,
+        TimeoutError,
+        ValueError,
+        http.client.HTTPException,
+        urllib.error.HTTPError,
+        urllib.error.URLError,
+    ):
+        raise LaunchError("runtime_unavailable") from None
+    if not isinstance(processes.get("models"), list) or len(processes["models"]) != 1:
+        raise LaunchError("runtime_unavailable")
+    process_matches = [
+        entry
+        for entry in processes["models"]
+        if isinstance(entry, Mapping)
+        and (entry.get("name") == model or entry.get("model") == model)
+    ]
+    if len(process_matches) != 1:
+        raise LaunchError("runtime_unavailable")
+    process = process_matches[0]
+    process_digest = str(process.get("digest") or "").strip().lower()
+    process_raw_digest = (
+        process_digest[len("sha256:") :]
+        if process_digest.startswith("sha256:")
+        else process_digest
+    )
+    context_length = process.get("context_length")
+    size_vram = process.get("size_vram")
+    if (
+        process_raw_digest != raw_digest
+        or isinstance(context_length, bool)
+        or not isinstance(context_length, int)
+        or context_length <= 0
+        or isinstance(size_vram, bool)
+        or not isinstance(size_vram, int)
+        or size_vram < 0
+    ):
+        raise LaunchError("runtime_unavailable")
+    if context_length != expected_context:
+        raise LaunchError("ollama_context_mismatch")
     return {
         "ollama_model_attestation": "api-tags",
         "ollama_model_digest": f"sha256:{raw_digest}",
         "ollama_model_size_bytes": size,
+        "ollama_runtime_attestation": "api-version-unload-empty-preload-and-ps",
+        "ollama_server_version": reported_version,
+        "ollama_context_length": context_length,
+        "ollama_model_size_vram_bytes": size_vram,
+        "ollama_num_parallel_declared": 1,
+        "ollama_max_loaded_models_declared": 1,
+        "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
     }
+
+
+def _ollama_json_request(
+    opener: Any,
+    url: str,
+    *,
+    headers: Mapping[str, str],
+    timeout: float,
+    method: str = "GET",
+    body: Mapping[str, Any] | None = None,
+) -> Mapping[str, Any]:
+    request_headers = dict(headers)
+    encoded: bytes | None = None
+    if body is not None:
+        request_headers["Content-Type"] = "application/json"
+        encoded = json.dumps(body, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=encoded,
+        method=method,
+        headers=request_headers,
+    )
+    with opener.open(request, timeout=timeout) as response:
+        status = int(getattr(response, "status", 0) or response.getcode() or 0)
+        payload = response.read(_MAX_OLLAMA_RESPONSE_BYTES + 1)
+    if status != 200 or len(payload) > _MAX_OLLAMA_RESPONSE_BYTES:
+        raise LaunchError("runtime_unavailable")
+    try:
+        decoded = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError, RecursionError):
+        raise LaunchError("runtime_unavailable") from None
+    if not isinstance(decoded, Mapping) or decoded.get("error"):
+        raise LaunchError("runtime_unavailable")
+    return decoded
 
 
 def _attest_strix_sandbox_image(

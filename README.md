@@ -633,18 +633,57 @@ both model fields:
 ```dotenv
 OCTOPUS_OLLAMA_URL=http://127.0.0.1:11434/api/generate
 OCTOPUS_OLLAMA_MODEL=<exact-neutral-qwen-tag>
+OCTOBENCH_OLLAMA_CONTEXT_LENGTH=65536
+OCTOBENCH_OLLAMA_SERVER_VERSION=<exact-ollama-version>
+OCTOBENCH_OLLAMA_NUM_PARALLEL=1
+OCTOBENCH_OLLAMA_MAX_LOADED_MODELS=1
 STRIX_LLM=ollama/<exact-neutral-qwen-tag>
 LLM_API_BASE=http://127.0.0.1:11434
 ```
 
+`OCTOBENCH_OLLAMA_CONTEXT_LENGTH` declares and verifies the benchmark contract;
+it does not reconfigure an already running Ollama service. On systemd Linux,
+first inspect `systemctl cat ollama`, then run `sudo systemctl edit ollama` and
+set the same server default in the drop-in:
+
+```ini
+[Service]
+Environment="OLLAMA_CONTEXT_LENGTH=65536"
+Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_MAX_LOADED_MODELS=1"
+```
+
+Apply it with `sudo systemctl daemon-reload` and
+`sudo systemctl restart ollama`. Read the bare server version from the exact
+benchmark endpoint (add the configured Bearer header for an authenticated
+endpoint):
+
+```bash
+curl -fsS http://127.0.0.1:11434/api/version |
+  ./venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["version"])'
+```
+
+Copy that bare value into `OCTOBENCH_OLLAMA_SERVER_VERSION`; `ollama --version`
+is only a local CLI sanity check and can refer to a different server. A 64K
+allocation can partially offload to CPU on a 12 GB GPU; check the resulting
+split with `ollama ps` after the launcher preloads the model.
+
 Local Ollama does not require `LLM_API_KEY`. The launcher verifies the shared
-origin and model before generating the campaign. Immediately before a live
-campaign it performs one bounded, direct `GET /api/tags` readiness request
-(with optional Bearer authentication), requires the configured tag to exist,
-and records the same returned SHA-256 digest and byte size in both public
-runtime-provenance objects. This attestation does not generate text or invoke a
-tool. OCTOPUS uses Ollama generate and Strix uses its native Ollama chat route,
-while sharing the model tag, weights and runtime server.
+origin, model, exact server version and context before generating a live
+campaign. It performs bounded, direct version/tags requests, an empty-prompt
+unload/preload cycle that generates no text and invokes no tool, and then reads
+`/api/ps`. Unloading first prevents a stale runner created with different
+request options from masquerading as the configured server default.
+The selected process must have the configured digest and exact allocated
+context, and no second model may be loaded. The digest, sizes, server version
+and context are recorded in both public runtime-provenance objects. The two
+server concurrency values are recorded as operator-declared because Ollama's
+API does not expose them; use a dedicated idle endpoint for the campaign. The
+same context is passed to OCTOPUS while
+Strix uses the attested Ollama server default, removing the hidden context
+difference. Prompts, request APIs and every other inference default remain
+product-native and may differ. The minimum accepted value is 32768; 65536 is
+recommended for agentic runs but can require CPU offload on limited-VRAM GPUs.
 This is a controlled shared-model comparison, not a vendor-best-model score.
 Strix upstream cautions that sub-70B local models can struggle with agentic
 tool use, so label sub-70B, distilled or altered/abliterated runs as a separate
@@ -674,7 +713,7 @@ instructions are in
 
 ```bash
 ./venv/bin/python -m core.benchmarks.competitors.launch \
-  --campaign-id linux-blackbox-v1-20260716T120000Z \
+  --campaign-id linux-blackbox-v1-20260716t120000z \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env
 ```

@@ -117,9 +117,37 @@ placeholder in both fields:
 ```dotenv
 OCTOPUS_OLLAMA_URL=http://127.0.0.1:11434/api/generate
 OCTOPUS_OLLAMA_MODEL=<exact-neutral-qwen-tag>
+OCTOBENCH_OLLAMA_CONTEXT_LENGTH=65536
+OCTOBENCH_OLLAMA_SERVER_VERSION=<exact-ollama-version>
+OCTOBENCH_OLLAMA_NUM_PARALLEL=1
+OCTOBENCH_OLLAMA_MAX_LOADED_MODELS=1
 STRIX_LLM=ollama/<exact-neutral-qwen-tag>
 LLM_API_BASE=http://127.0.0.1:11434
 ```
+
+The context field is an assertion and OCTOPUS override, not a way to mutate the
+running Ollama service. For a systemd installation, use
+`sudo systemctl edit ollama` to set the matching server default before launch:
+
+```ini
+[Service]
+Environment="OLLAMA_CONTEXT_LENGTH=65536"
+Environment="OLLAMA_NUM_PARALLEL=1"
+Environment="OLLAMA_MAX_LOADED_MODELS=1"
+```
+
+Then run `sudo systemctl daemon-reload`, `sudo systemctl restart ollama`, and
+read the bare server version from the exact benchmark endpoint:
+
+```bash
+curl -fsS http://127.0.0.1:11434/api/version |
+  ./venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["version"])'
+```
+
+Copy that value into `OCTOBENCH_OLLAMA_SERVER_VERSION`; add the configured
+Bearer header when the endpoint is authenticated. `ollama --version` is only a
+local CLI sanity check and can target a different server. Limited-VRAM systems
+may use CPU offload; inspect the loaded allocation with `ollama ps`.
 
 `LLM_API_KEY` is not needed for ordinary local Ollama. Define it only for an
 authenticated shared endpoint; when present it is conditionally passed and
@@ -128,15 +156,25 @@ port or model, rejects `/api/generate` in `LLM_API_BASE`, and rejects the biased
 `octopus-qwen` alias. OCTOPUS uses Ollama `/api/generate`, while Strix maps its
 `ollama/` route to Ollama chat; the weights, model tag and runtime server are
 shared, but each product retains its native request/prompt interface.
-Before a live run, the launcher sends one direct, no-proxy, no-redirect,
-five-second `GET /api/tags` request to that server. It uses
-`Authorization: Bearer ...` only when `LLM_API_KEY` is set, requires the exact
-configured tag with Ollama's valid 64-hex digest and positive byte size, and
-writes the same canonical `sha256:` digest and size into OCTOPUS and Strix
-public runtime provenance. An
-unreachable or malformed endpoint fails closed as `runtime_unavailable`; the
-readiness check performs no generation and invokes no product tool.
-This controls model identity, not every inference default. Strix upstream also
+Before a live run, the launcher makes bounded, direct, no-proxy and no-redirect
+requests to `/api/version` and `/api/tags`, performs an empty-prompt preload on
+`/api/generate` after first unloading any stale runner, and reads `/api/ps`.
+The cycle produces no text and invokes no tool; unloading prevents a runner
+created with explicit request options from hiding the real server default. It
+uses `Authorization: Bearer ...` only when `LLM_API_KEY` is set.
+The exact configured tag, digest, server version and allocated context must
+match, and `/api/ps` must contain no competing loaded model; the public
+provenance records those values and model/VRAM byte sizes.
+`OCTOBENCH_OLLAMA_NUM_PARALLEL=1` and
+`OCTOBENCH_OLLAMA_MAX_LOADED_MODELS=1` are mandatory operator declarations:
+Ollama does not expose those service settings through the API. Run the campaign
+against a dedicated idle Ollama endpoint; provenance marks the declarations as
+not independently API-attested.
+The context value is also passed to OCTOPUS, while Strix uses the verified
+server default. Other inference defaults remain product-native and may differ.
+A mismatch fails before the lab or product starts. Values below 32768 are
+rejected; 65536 is recommended for agentic runs but may cause CPU offload on
+limited-VRAM hardware. Strix upstream also
 warns that local models below 70B often struggle with agentic tool use. A
 sub-70B, distilled or altered/abliterated model is therefore a small-model
 stress profile, not a vendor-representative score. Freeze that profile under a
@@ -159,7 +197,7 @@ uses the same launcher with a new immutable campaign ID:
 
 ```bash
 ./venv/bin/python -m core.benchmarks.competitors.launch \
-  --campaign-id linux-blackbox-v1-20260716T120000Z \
+  --campaign-id linux-blackbox-v1-20260716t120000z \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env
 ```
