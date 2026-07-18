@@ -131,8 +131,9 @@ shared, but each product retains its native request/prompt interface.
 Before a live run, the launcher sends one direct, no-proxy, no-redirect,
 five-second `GET /api/tags` request to that server. It uses
 `Authorization: Bearer ...` only when `LLM_API_KEY` is set, requires the exact
-configured tag with a valid `sha256:` digest and positive byte size, and writes
-the same digest and size into OCTOPUS and Strix public runtime provenance. An
+configured tag with Ollama's valid 64-hex digest and positive byte size, and
+writes the same canonical `sha256:` digest and size into OCTOPUS and Strix
+public runtime provenance. An
 unreachable or malformed endpoint fails closed as `runtime_unavailable`; the
 readiness check performs no generation and invokes no product tool.
 This controls model identity, not every inference default. Strix upstream also

@@ -968,10 +968,15 @@ def _attest_shared_ollama_runtime(
     ]
     if len(matches) != 1:
         raise LaunchError("runtime_unavailable")
-    digest = str(matches[0].get("digest") or "").strip().lower()
+    reported_digest = str(matches[0].get("digest") or "").strip().lower()
+    raw_digest = (
+        reported_digest[len("sha256:") :]
+        if reported_digest.startswith("sha256:")
+        else reported_digest
+    )
     size = matches[0].get("size")
     if (
-        re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+        re.fullmatch(r"[0-9a-f]{64}", raw_digest) is None
         or isinstance(size, bool)
         or not isinstance(size, int)
         or size <= 0
@@ -979,7 +984,7 @@ def _attest_shared_ollama_runtime(
         raise LaunchError("runtime_unavailable")
     return {
         "ollama_model_attestation": "api-tags",
-        "ollama_model_digest": digest,
+        "ollama_model_digest": f"sha256:{raw_digest}",
         "ollama_model_size_bytes": size,
     }
 

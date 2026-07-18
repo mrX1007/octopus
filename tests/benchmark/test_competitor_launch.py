@@ -25,7 +25,8 @@ STRIX_REVISION = "91d9a847166fe2f82125643d13e099b0d989bbe4"
 PENTESTGPT_REVISION = "83ae3647603de8c66229f0877faef77a53f5c8f6"
 PENTAGI_REVISION = "a112db206b2fb7866c367c33348f52f5cdc207d0"
 SHARED_OLLAMA_MODEL = "qwen3.5:9b"
-SHARED_OLLAMA_DIGEST = "sha256:" + "c" * 64
+SHARED_OLLAMA_API_DIGEST = "c" * 64
+SHARED_OLLAMA_DIGEST = "sha256:" + SHARED_OLLAMA_API_DIGEST
 SHARED_OLLAMA_SIZE = 6_321_987_654
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -1062,7 +1063,7 @@ def test_runtime_prerequisites_attest_one_ollama_digest_for_both_systems(
                 {
                     "name": SHARED_OLLAMA_MODEL,
                     "model": SHARED_OLLAMA_MODEL,
-                    "digest": SHARED_OLLAMA_DIGEST,
+                    "digest": SHARED_OLLAMA_API_DIGEST,
                     "size": SHARED_OLLAMA_SIZE,
                 }
             ]
