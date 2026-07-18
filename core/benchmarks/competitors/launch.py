@@ -911,7 +911,10 @@ def _attest_local_runtime(
 ) -> dict[str, Any]:
     source = (tools_root / spec.source_layout).resolve()
     executable = (tools_root / spec.executable_layout).resolve()
-    interpreter = (tools_root / spec.interpreter_layout).resolve()
+    # Keep the virtualenv entry point intact. Resolving ``bin/python`` follows
+    # its normal symlink to the system interpreter and bypasses the venv where
+    # the competitor distribution is installed.
+    interpreter = tools_root / spec.interpreter_layout
     configured = Path(
         str(environment.get(spec.executable_environment) or "")
     ).expanduser().resolve()

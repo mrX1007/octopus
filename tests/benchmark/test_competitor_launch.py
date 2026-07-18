@@ -842,13 +842,15 @@ def test_local_runtime_attestation_checks_layout_version_and_binds_digests(
     source = tools_root / "src" / "example"
     executable = tools_root / "venvs" / "example" / "bin" / "example"
     interpreter = executable.parent / "python"
+    interpreter_target = tmp_path / "system-python"
     source.mkdir(parents=True)
     executable.parent.mkdir(parents=True)
     (source / "uv.lock").write_bytes(b"frozen-lock\n")
     executable.write_bytes(b"example executable\n")
-    interpreter.write_bytes(b"python executable\n")
+    interpreter_target.write_bytes(b"python executable\n")
+    interpreter.symlink_to(interpreter_target)
     os.chmod(executable, 0o700)
-    os.chmod(interpreter, 0o700)
+    os.chmod(interpreter_target, 0o700)
     observed: dict[str, Any] = {}
 
     def clean_checkout(path: Path, revision: str) -> str:
@@ -856,10 +858,18 @@ def test_local_runtime_attestation_checks_layout_version_and_binds_digests(
         return "e" * 64
 
     monkeypatch.setattr(launch, "_attest_clean_checkout", clean_checkout)
+
+    def installed_distribution_version(
+        runtime_interpreter: Path,
+        distribution: str,
+    ) -> str:
+        observed["distribution"] = (runtime_interpreter, distribution)
+        return "1.2.3"
+
     monkeypatch.setattr(
         launch,
         "_installed_distribution_version",
-        lambda _interpreter, _distribution: "1.2.3",
+        installed_distribution_version,
     )
 
     attestation = launch._attest_local_runtime(
@@ -869,6 +879,7 @@ def test_local_runtime_attestation_checks_layout_version_and_binds_digests(
     )
 
     assert observed["checkout"] == (source, "d" * 40)
+    assert observed["distribution"] == (interpreter, "example-package")
     assert attestation["source_tree_sha256"] == "e" * 64
     assert attestation["lock_sha256"] == hashlib.sha256(
         b"frozen-lock\n"
