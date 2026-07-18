@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import subprocess
+import sys
+import time
 import urllib.request
+from contextlib import suppress
+from pathlib import Path
 
 import pytest
 
@@ -18,6 +24,7 @@ from core.benchmarks.competitors.adapter import (
     main as adapter_main,
 )
 from core.benchmarks.schema import BenchmarkScenario
+from core.execution import CancellationContext, ExecutionCancelled
 
 pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 
@@ -418,9 +425,12 @@ def test_octopus_adapter_keeps_exact_scope_and_skips_broad_recon(monkeypatch, tm
 
     assert outcome.status == "succeeded"
     assert outcome.metrics["tool_calls"] == 3.0
-    assert observed["probe"] == (target, 10.0, 200_000)
+    assert observed["probe"][0] == target
+    assert observed["probe"][1] == pytest.approx(8.0, abs=0.1)
+    assert observed["probe"][2] == 200_000
     assert observed["scan"][1] == target
     assert observed["scan"][2]["raw_scan"].startswith(f"URL: {target}")
+    assert isinstance(observed["scan"][2]["cancellation"], CancellationContext)
     assert observed["facts"][1] == target
     assert observed["trace"][1] == target
 
@@ -447,7 +457,7 @@ def test_octopus_adapter_cannot_succeed_during_protocol_completion_grace(
         def trace_report(_scan_id, _scan_target):
             return {}
 
-    clock = iter((100.0, 110.1))
+    clock = iter((100.0, 100.0, 110.1, 110.1))
     monkeypatch.setattr(adapter_module.time, "monotonic", lambda: next(clock))
     monkeypatch.setattr(
         adapter_module,
@@ -466,6 +476,136 @@ def test_octopus_adapter_cannot_succeed_during_protocol_completion_grace(
 
     assert outcome.status == "timeout"
     assert outcome.duration_seconds == pytest.approx(10.1)
+
+
+@pytest.mark.parametrize(
+    ("timeout", "expected"),
+    [(0.05, 0.01), (10.0, 2.0), (300.0, 60.0), (900.0, 60.0)],
+)
+def test_octopus_finalization_reserve_scales_and_is_bounded(timeout, expected):
+    assert adapter_module._octopus_finalization_reserve(timeout) == pytest.approx(
+        expected
+    )
+
+
+def test_octopus_deadline_cancellation_preserves_a_bounded_partial_snapshot(
+    monkeypatch,
+    tmp_path,
+):
+    observed = {}
+
+    class FakeFactStore:
+        @staticmethod
+        def get_facts(_scan_id, _scan_target):
+            return [{"type": "service", "value": "http"}]
+
+    class FakePipeline:
+        def __init__(self, _database):
+            self.fact_store = FakeFactStore()
+            self.tools_run_count = 2
+
+        @staticmethod
+        def run_scan(_scan_id, _scan_target, **kwargs):
+            cancellation = kwargs["cancellation"]
+            observed["cancellation"] = cancellation
+            cancellation.cancel("deadline_exceeded")
+            raise ExecutionCancelled("deadline_exceeded")
+
+        @staticmethod
+        def trace_report(_scan_id, _scan_target):
+            return {"status": "partial"}
+
+    monkeypatch.setattr(
+        adapter_module,
+        "_octopus_exact_http_probe",
+        lambda *_args: "OCTOBENCH_EVIDENCE_SERVICE_HTTP_8080",
+    )
+    monkeypatch.setattr("core.ai.pipeline.AIPipeline", FakePipeline)
+
+    outcome = adapter_module._run_octopus(
+        _scenario(),
+        "http://127.0.0.1:8080",
+        tmp_path,
+        timeout=10.0,
+        max_output=200_000,
+    )
+
+    assert outcome.status == "timeout"
+    assert outcome.error_class == "ProductTimeout"
+    assert outcome.metrics["tool_calls"] == 3.0
+    assert observed["cancellation"].reason_code == "deadline_exceeded"
+    assert "OCTOBENCH_EVIDENCE_SERVICE_HTTP_8080" in outcome.output_text
+    assert '"status": "partial"' in outcome.output_text
+
+
+def test_octopus_non_deadline_cancellation_is_not_reported_as_timeout(
+    monkeypatch,
+    tmp_path,
+):
+    class FakeFactStore:
+        @staticmethod
+        def get_facts(_scan_id, _scan_target):
+            return [{"type": "service", "value": "http"}]
+
+    class FakePipeline:
+        def __init__(self, _database):
+            self.fact_store = FakeFactStore()
+            self.tools_run_count = 1
+
+        @staticmethod
+        def run_scan(_scan_id, _scan_target, **kwargs):
+            kwargs["cancellation"].cancel("operator_request")
+            raise ExecutionCancelled("provider_cancelled")
+
+        @staticmethod
+        def trace_report(_scan_id, _scan_target):
+            return {"status": "partial"}
+
+    monkeypatch.setattr(
+        adapter_module,
+        "_octopus_exact_http_probe",
+        lambda *_args: "OCTOBENCH_EVIDENCE_SERVICE_HTTP_8080",
+    )
+    monkeypatch.setattr("core.ai.pipeline.AIPipeline", FakePipeline)
+
+    outcome = adapter_module._run_octopus(
+        _scenario(),
+        "http://127.0.0.1:8080",
+        tmp_path,
+        timeout=10.0,
+        max_output=200_000,
+    )
+
+    assert outcome.status == "failed"
+    assert outcome.error_class == "ProductCancelled"
+    assert '"reason": "operator_request"' in outcome.output_text
+
+
+def test_octopus_keyboard_cancellation_remains_interruptible(monkeypatch, tmp_path):
+    class FakePipeline:
+        def __init__(self, _database):
+            self.fact_store = object()
+            self.tools_run_count = 0
+
+        @staticmethod
+        def run_scan(_scan_id, _scan_target, **_kwargs):
+            raise ExecutionCancelled("keyboard_interrupt")
+
+    monkeypatch.setattr(
+        adapter_module,
+        "_octopus_exact_http_probe",
+        lambda *_args: "8080/tcp open http",
+    )
+    monkeypatch.setattr("core.ai.pipeline.AIPipeline", FakePipeline)
+
+    with pytest.raises(KeyboardInterrupt):
+        adapter_module._run_octopus(
+            _scenario(),
+            "http://127.0.0.1:8080",
+            tmp_path,
+            timeout=10.0,
+            max_output=200_000,
+        )
 
 
 def test_octopus_probe_requests_only_exact_url_without_proxy_or_redirect(monkeypatch):
@@ -733,3 +873,68 @@ def test_cli_writes_protocol_failure_without_exception_details(tmp_path, monkeyp
         "artifact_refs": [],
         "error_class": "ProductAdapterFailure",
     }
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group contract is POSIX-only")
+def test_parent_termination_kills_nested_product_process_group(tmp_path):
+    product_pid_path = tmp_path / "product.pid"
+    product_code = (
+        "import os,sys,time;"
+        "from pathlib import Path;"
+        "Path(sys.argv[1]).write_text(str(os.getpid()), encoding='ascii');"
+        "time.sleep(60)"
+    )
+    wrapper_code = (
+        "import os,sys;"
+        "from pathlib import Path;"
+        "from core.benchmarks.competitors.adapter import _run_bounded_process;"
+        "_run_bounded_process("
+        "[sys.executable,'-c',sys.argv[1],sys.argv[2]],"
+        "cwd=Path(sys.argv[3]),environment=dict(os.environ),"
+        "timeout=60.0,max_output=1024)"
+    )
+    wrapper = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            wrapper_code,
+            product_code,
+            str(product_pid_path),
+            str(tmp_path),
+        ],
+        cwd=str(Path(__file__).resolve().parents[2]),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    product_pid: int | None = None
+    try:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not product_pid_path.exists():
+            time.sleep(0.05)
+        assert product_pid_path.is_file()
+        product_pid = int(product_pid_path.read_text(encoding="ascii"))
+
+        os.killpg(wrapper.pid, signal.SIGTERM)
+        wrapper.wait(timeout=5.0)
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and _process_exists(product_pid):
+            time.sleep(0.05)
+        assert not _process_exists(product_pid)
+    finally:
+        if wrapper.poll() is None:
+            os.killpg(wrapper.pid, signal.SIGKILL)
+            wrapper.wait(timeout=5.0)
+        if product_pid is not None and _process_exists(product_pid):
+            with suppress(ProcessLookupError):
+                os.kill(product_pid, signal.SIGKILL)
+
+
+def _process_exists(process_id: int) -> bool:
+    try:
+        os.kill(process_id, 0)
+    except ProcessLookupError:
+        return False
+    return True

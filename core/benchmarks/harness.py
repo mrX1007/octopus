@@ -164,11 +164,25 @@ class BenchmarkHarness:
             if _is_number(value)
         } if isinstance(result.get("metrics") or {}, Mapping) else {}
         metrics.update(self._ground_truth_metrics(scenario, result))
+        reported_findings = _string_tuple(result.get("reported_findings") or [])
+        expected_findings = _string_tuple(
+            scenario.ground_truth.get("expected_findings") or []
+        )
+        reported_finding_set = set(reported_findings)
+        derived_coverage_gaps = tuple(
+            finding
+            for finding in expected_findings
+            if finding not in reported_finding_set
+        )
+        runner_coverage_gaps = _string_tuple(result.get("coverage_gaps") or [])
+        coverage_gaps = tuple(
+            dict.fromkeys((*derived_coverage_gaps, *runner_coverage_gaps))
+        )
         result_summary = {
             "status": status,
-            "reported_findings": list(_string_tuple(result.get("reported_findings") or [])),
+            "reported_findings": list(reported_findings),
             "verified_findings": list(_string_tuple(result.get("verified_findings") or [])),
-            "coverage_gaps": list(_string_tuple(result.get("coverage_gaps") or [])),
+            "coverage_gaps": list(coverage_gaps),
         }
         artifact_refs = _string_tuple(result.get("artifact_refs") or [])
         environment = {

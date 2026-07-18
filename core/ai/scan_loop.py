@@ -11,6 +11,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from core.execution import CancellationContext
+
 
 class ToolBudgetReached(RuntimeError):
     """Stop the scan without terminalizing the active durable task attempt."""
@@ -28,6 +30,8 @@ class ScanLifecycle:
         max_tools: int = 0,
         max_time_minutes: int = 0,
         raw_scan: str = "",
+        *,
+        cancellation: CancellationContext | None = None,
     ):
         current = pipeline.mission_store.get_mission_by_scan_id(scan_id)
         if (
@@ -38,24 +42,35 @@ class ScanLifecycle:
             pipeline.mission_store.open_mission(scan_id, target)
             return pipeline.state_resolver.resolve_state(scan_id, target)
         pipeline._reset_runtime_state()
+        if cancellation is not None:
+            # Reset creates the ordinary unbounded per-scan token. A caller
+            # supplying an explicit deadline owns this replacement token.
+            pipeline.cancellation = cancellation
         mission = pipeline._start_mission(scan_id, target)
         if mission.status == "completed":
             return pipeline.state_resolver.resolve_state(scan_id, target)
 
         pipeline._mission_stop_reason = ""
         try:
-            result = ScanLifecycle._run_active(
-                pipeline,
-                scan_id,
-                target,
-                max_iterations,
-                max_tools,
-                max_time_minutes,
-                raw_scan,
-            )
-        except ToolBudgetReached:
-            pipeline._mission_stop_reason = "max_tools_reached"
-            result = pipeline.state_resolver.resolve_state(scan_id, target)
+            try:
+                result = ScanLifecycle._run_active(
+                    pipeline,
+                    scan_id,
+                    target,
+                    max_iterations,
+                    max_tools,
+                    max_time_minutes,
+                    raw_scan,
+                )
+            except ToolBudgetReached:
+                pipeline._mission_stop_reason = "max_tools_reached"
+                result = pipeline.state_resolver.resolve_state(scan_id, target)
+
+            # An LLM adapter may translate its own cancellation-shaped error
+            # into deterministic fallback output.  Re-check the canonical scan
+            # token before terminalizing so a deadline can never turn into a
+            # durable "completed" mission through that fallback path.
+            pipeline.cancellation.checkpoint()
         except BaseException as exc:
             pipeline._interrupt_mission(f"scan_exception:{type(exc).__name__}")
             raise

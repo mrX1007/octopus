@@ -423,6 +423,12 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
             allowed_actions = set(
                 _string_sequence(scenario_inputs[scenario_id].get("allowed_actions"))
             )
+            ground_truth = _required_mapping(
+                scenario_inputs[scenario_id].get("ground_truth")
+            )
+            expected_findings = set(
+                _string_sequence(ground_truth.get("expected_findings"))
+            )
             for run in runs:
                 repetition = _positive_integer(run.get("repetition"))
                 seed = _nonnegative_integer(run.get("seed"))
@@ -440,6 +446,14 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
                 finished_at = _nonnegative_number(run.get("finished_at"))
                 error_class = run.get("error_class")
                 result_summary = run.get("result_summary")
+                if not isinstance(result_summary, Mapping):
+                    raise CampaignPublicationError("publication_semantic_invalid")
+                reported_findings = set(
+                    _string_sequence(result_summary.get("reported_findings"))
+                )
+                coverage_gaps = set(
+                    _string_sequence(result_summary.get("coverage_gaps"))
+                )
                 if (
                     status not in _RUN_STATUSES
                     or run.get("scenario_id") != scenario_id
@@ -455,9 +469,9 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
                         bool(error_class)
                         and not _ERROR_CLASS.fullmatch(error_class)
                     )
-                    or (
-                        not isinstance(result_summary, Mapping)
-                        or result_summary.get("status") != status
+                    or result_summary.get("status") != status
+                    or not expected_findings.difference(reported_findings).issubset(
+                        coverage_gaps
                     )
                 ):
                     raise CampaignPublicationError("publication_semantic_invalid")

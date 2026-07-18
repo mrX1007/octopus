@@ -229,6 +229,12 @@ class CommandLabController:
         except subprocess.TimeoutExpired:
             _terminate_process(process)
             raise LabResetError(f"lab_{phase}_timeout") from None
+        except BaseException:
+            # Reset/health/cleanup commands own a separate process group. An
+            # operator interrupt must tear it down before the caller attempts
+            # cleanup; otherwise a late reset can recreate the lab afterward.
+            _terminate_process(process)
+            raise
         if return_code != 0:
             raise LabResetError(f"lab_{phase}_failed")
         return max(0.0, float(self.monotonic() - started))

@@ -111,12 +111,13 @@ and port overrides are documented as comments in the template.
 The `core` profile intentionally gives OCTOPUS and Strix the same neutral
 Ollama/Qwen model and runtime endpoint. Use the raw Qwen tag or a neutral alias;
 do not use this repository's `octopus-qwen` alias because its embedded
-OCTOPUS-specific system prompt would bias the comparison. For example:
+OCTOPUS-specific system prompt would bias the comparison. Replace the same
+placeholder in both fields:
 
 ```dotenv
 OCTOPUS_OLLAMA_URL=http://127.0.0.1:11434/api/generate
-OCTOPUS_OLLAMA_MODEL=huihui_ai/qwen3.5-abliterated:9b
-STRIX_LLM=ollama/huihui_ai/qwen3.5-abliterated:9b
+OCTOPUS_OLLAMA_MODEL=<exact-neutral-qwen-tag>
+STRIX_LLM=ollama/<exact-neutral-qwen-tag>
 LLM_API_BASE=http://127.0.0.1:11434
 ```
 
@@ -127,10 +128,19 @@ port or model, rejects `/api/generate` in `LLM_API_BASE`, and rejects the biased
 `octopus-qwen` alias. OCTOPUS uses Ollama `/api/generate`, while Strix maps its
 `ollama/` route to Ollama chat; the weights, model tag and runtime server are
 shared, but each product retains its native request/prompt interface.
+Before a live run, the launcher sends one direct, no-proxy, no-redirect,
+five-second `GET /api/tags` request to that server. It uses
+`Authorization: Bearer ...` only when `LLM_API_KEY` is set, requires the exact
+configured tag with a valid `sha256:` digest and positive byte size, and writes
+the same digest and size into OCTOPUS and Strix public runtime provenance. An
+unreachable or malformed endpoint fails closed as `runtime_unavailable`; the
+readiness check performs no generation and invokes no product tool.
 This controls model identity, not every inference default. Strix upstream also
-warns that local models below 70B often struggle with agentic tool use, so a 9B
-Qwen result measures this shared local-model profile rather than each vendor's
-best achievable cloud-model performance.
+warns that local models below 70B often struggle with agentic tool use. A
+sub-70B, distilled or altered/abliterated model is therefore a small-model
+stress profile, not a vendor-representative score. Freeze that profile under a
+distinct campaign version and label it explicitly. See Strix's official
+[local-model guidance](https://docs.strix.ai/llm-providers/local).
 
 Optionally inspect the exact generated manifests and campaign config without
 running a system:
@@ -143,8 +153,8 @@ running a system:
   --prepare-only
 ```
 
-Then run the complete reset/health/execute/resume/publish lifecycle with one
-launcher command and a new immutable campaign ID:
+After calibration, the complete reset/health/execute/resume/publish lifecycle
+uses the same launcher with a new immutable campaign ID:
 
 ```bash
 ./venv/bin/python -m core.benchmarks.competitors.launch \
@@ -152,6 +162,49 @@ launcher command and a new immutable campaign ID:
   --profile core \
   --environment-file benchmarks/competitors/secrets.env
 ```
+
+Do not start that repeated publication campaign until one private calibration
+run has completed for each system. The checked-in `linux-blackbox-v1` scenario
+is an authorized discovery smoke test, and its original 300-second budget was
+not calibrated as a general autonomous-pentest budget. Start with Strix alone
+so an early product error does not consume the full matrix:
+
+```bash
+PILOT_ID="linux-blackbox-pilot-strix-$(date -u +%Y%m%dt%H%M%Sz)"
+./venv/bin/python -m core.benchmarks.competitors.launch \
+  --campaign-id "$PILOT_ID" \
+  --profile core \
+  --environment-file benchmarks/competitors/secrets.env \
+  --diagnostic-pilot \
+  --pilot-system strix \
+  --pilot-seconds 1800
+./venv/bin/python -m json.tool \
+  ".benchmark-state/diagnostics/$PILOT_ID/summary.json"
+find ".benchmark-state/diagnostics/$PILOT_ID/raw/strix" \
+  -name product.log -print
+```
+
+The diagnostic command performs exactly one repetition for the selected
+system/scenario. `--pilot-seconds` is the product-execution cap; separately
+bounded reset, health and cleanup work can increase lifecycle wall time. The
+command returns exit code 1 for a product/cleanup failure and 130 after an
+operator interrupt, but still writes a summary and prints its path. The summary
+contains only safe model/runtime identity, lab snapshot, manifest/config and
+log digests, byte counts, and product/adapter/lifecycle durations.
+
+The diagnostic directory and raw adapter/product logs are owner-only and
+ignored by Git. Raw logs can contain provider or target output: never commit,
+publish or attach them without manual redaction. A diagnostic summary is
+explicitly marked `publishable: false` and must not be copied into a result
+bundle. Campaign IDs cannot be shared between diagnostic and publication runs;
+always use a fresh ID.
+
+After Strix completes or exposes a fixable error, repeat with a fresh ID and
+`--pilot-system octopus`. Use observed completion times to define a new,
+versioned scenario and freeze its budget before the repeated campaign; do not
+silently change the published `linux-blackbox-v1` contract. Strix describes
+`quick` as a minutes-scale mode, not a guaranteed five-minute completion cap;
+see its official [scan-mode documentation](https://docs.strix.ai/usage/scan-modes).
 
 The launcher writes bounded JSON progress events to stderr for campaign start,
 each run start/finish, interruption and publication. Stdout remains reserved
@@ -277,9 +330,16 @@ must report `timeout` or `partial`; it cannot turn work completed during the
 protocol grace into a successful run.
 
 The pinned Strix adapter uses its upstream `quick` scan mode, which is intended
-for bounded CI execution. The selected mode is written to Strix's public system
-manifest; it is not a hidden operator-controlled input. OCTOPUS continues to
-receive the scenario's explicit iteration, tool and time limits.
+for minutes-scale CI execution but does not guarantee completion within five
+minutes. The selected mode is written to Strix's public system manifest; it is
+not a hidden operator-controlled input. OCTOPUS continues to
+receive the scenario's explicit iteration, tool and total time limits. Within
+that same total time, the OCTOPUS adapter ends active scan work 20% early (at
+most 60 seconds) and installs a cooperative cancellation deadline. The reserved
+interval is used only to read its durable facts/trace and serialize the final
+adapter object; it is proportionally smaller for short contract-test budgets.
+Bound Ollama requests and retry waits use the remaining active interval, so a
+late model call cannot consume the result-finalization reserve.
 
 The output object uses the existing `BenchmarkRunner` mapping:
 

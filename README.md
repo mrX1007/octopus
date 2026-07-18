@@ -627,23 +627,50 @@ replace it with a mutable tag or another digest.
 
 For the `core` comparison, point both systems at one neutral/raw Qwen model on
 the same Ollama server. Do not use the OCTOPUS-specific `octopus-qwen` alias,
-whose embedded system prompt would bias Strix:
+whose embedded system prompt would bias Strix. Replace the same placeholder in
+both model fields:
 
 ```dotenv
 OCTOPUS_OLLAMA_URL=http://127.0.0.1:11434/api/generate
-OCTOPUS_OLLAMA_MODEL=huihui_ai/qwen3.5-abliterated:9b
-STRIX_LLM=ollama/huihui_ai/qwen3.5-abliterated:9b
+OCTOPUS_OLLAMA_MODEL=<exact-neutral-qwen-tag>
+STRIX_LLM=ollama/<exact-neutral-qwen-tag>
 LLM_API_BASE=http://127.0.0.1:11434
 ```
 
 Local Ollama does not require `LLM_API_KEY`. The launcher verifies the shared
-origin and model before generating the campaign. OCTOPUS uses Ollama generate
-and Strix uses its native Ollama chat route, while sharing the model tag,
-weights and runtime server.
-This is a controlled shared-model comparison, not a vendor-best-model score;
+origin and model before generating the campaign. Immediately before a live
+campaign it performs one bounded, direct `GET /api/tags` readiness request
+(with optional Bearer authentication), requires the configured tag to exist,
+and records the same returned SHA-256 digest and byte size in both public
+runtime-provenance objects. This attestation does not generate text or invoke a
+tool. OCTOPUS uses Ollama generate and Strix uses its native Ollama chat route,
+while sharing the model tag, weights and runtime server.
+This is a controlled shared-model comparison, not a vendor-best-model score.
 Strix upstream cautions that sub-70B local models can struggle with agentic
-tool use. The bounded campaign pins Strix's upstream `quick` mode and records
-that choice in its public manifest.
+tool use, so label sub-70B, distilled or altered/abliterated runs as a separate
+small-model stress profile. The bounded campaign pins Strix's upstream `quick`
+mode and records that choice in its public manifest.
+
+Calibrate one private repetition before paying for the repeated campaign. The
+diagnostic output is ignored by Git and explicitly non-publishable:
+
+```bash
+PILOT_ID="linux-blackbox-pilot-strix-$(date -u +%Y%m%dt%H%M%Sz)"
+./venv/bin/python -m core.benchmarks.competitors.launch \
+  --campaign-id "$PILOT_ID" \
+  --profile core \
+  --environment-file benchmarks/competitors/secrets.env \
+  --diagnostic-pilot --pilot-system strix --pilot-seconds 1800
+./venv/bin/python -m json.tool \
+  ".benchmark-state/diagnostics/$PILOT_ID/summary.json"
+```
+
+The existing `linux-blackbox-v1` is a 300-second discovery smoke contract, not
+a calibrated general pentest ranking. Inspect and redact the owner-only raw
+diagnostic log locally, then calibrate OCTOPUS with a fresh ID and freeze any
+longer budget in a new versioned scenario. Full methodology and log-handling
+instructions are in
+[`benchmarks/competitors/README.md`](benchmarks/competitors/README.md).
 
 ```bash
 ./venv/bin/python -m core.benchmarks.competitors.launch \

@@ -14,7 +14,7 @@ import time
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from ..schema import BenchmarkScenario
 from .schema import SystemManifest
@@ -61,12 +61,16 @@ class CommandSystemRunner:
         timeout_seconds: float | None = None,
         max_output_bytes: int | None = None,
         temporary_directory: str | Path | None = None,
+        private_log_path: str | Path | None = None,
     ) -> None:
         self.manifest = manifest
         self.timeout_seconds = _positive_optional_number(timeout_seconds)
         self.max_output_bytes = _positive_optional_integer(max_output_bytes)
         self.temporary_directory = (
             Path(temporary_directory) if temporary_directory is not None else None
+        )
+        self.private_log_path = (
+            Path(private_log_path) if private_log_path is not None else None
         )
 
     def __call__(
@@ -104,32 +108,38 @@ class CommandSystemRunner:
                     repetition=repetition,
                     seed=seed,
                 )
+                private_log = _open_private_log(self.private_log_path)
                 try:
-                    process = subprocess.Popen(
-                        argv,
-                        cwd=str(cwd),
-                        env=environment,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        shell=False,
-                        start_new_session=os.name == "posix",
-                    )
-                except (OSError, ValueError):
-                    raise SystemUnavailableError() from None
+                    try:
+                        process = subprocess.Popen(
+                            argv,
+                            cwd=str(cwd),
+                            env=environment,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            shell=False,
+                            start_new_session=os.name == "posix",
+                        )
+                    except (OSError, ValueError):
+                        raise SystemUnavailableError() from None
 
-                (
-                    return_code,
-                    log_bytes,
-                    timed_out,
-                    output_exceeded,
-                    execution_deadline_reached,
-                ) = _monitor_process(
-                    process,
-                    timeout_seconds=wall_timeout,
-                    execution_timeout_seconds=timeout,
-                    output_limit=output_limit,
-                )
+                    (
+                        return_code,
+                        log_bytes,
+                        timed_out,
+                        output_exceeded,
+                        execution_deadline_reached,
+                    ) = _monitor_process(
+                        process,
+                        timeout_seconds=wall_timeout,
+                        execution_timeout_seconds=timeout,
+                        output_limit=output_limit,
+                        private_log=private_log,
+                    )
+                finally:
+                    if private_log is not None:
+                        private_log.close()
                 # The fixed completion grace is control-plane time for an adapter
                 # to stop its bounded product and atomically emit the protocol
                 # result.  It is shared by every system and is not scored as
@@ -288,6 +298,7 @@ def _monitor_process(
     timeout_seconds: float,
     execution_timeout_seconds: float,
     output_limit: int,
+    private_log: BinaryIO | None = None,
 ) -> tuple[int, int, bool, bool, bool]:
     stdout = process.stdout
     if stdout is None:
@@ -326,6 +337,12 @@ def _monitor_process(
                 except OSError:
                     chunk = b""
                 if chunk:
+                    _capture_private_chunk(
+                        private_log,
+                        chunk,
+                        captured=captured,
+                        output_limit=output_limit,
+                    )
                     captured += len(chunk)
                     if captured > output_limit:
                         output_exceeded = True
@@ -343,6 +360,12 @@ def _monitor_process(
                         chunk = os.read(key.fd, 65_536)
                     except OSError:
                         chunk = b""
+                    _capture_private_chunk(
+                        private_log,
+                        chunk,
+                        captured=captured,
+                        output_limit=output_limit,
+                    )
                     captured += len(chunk)
                     if captured > output_limit:
                         output_exceeded = True
@@ -358,6 +381,70 @@ def _monitor_process(
         output_exceeded,
         execution_deadline_reached,
     )
+
+
+def _open_private_log(path: Path | None) -> BinaryIO | None:
+    """Open an opt-in local diagnostic sink without following links."""
+
+    if path is None:
+        return None
+    candidate = path
+    if not candidate.is_absolute():
+        raise SystemUnavailableError()
+    parent_descriptor: int | None = None
+    descriptor: int | None = None
+    parent_flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        parent_flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        parent_flags |= os.O_NOFOLLOW
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        parent_descriptor = os.open(candidate.parent, parent_flags)
+        parent_metadata = os.fstat(parent_descriptor)
+        if (
+            not stat.S_ISDIR(parent_metadata.st_mode)
+            or stat.S_IMODE(parent_metadata.st_mode) & 0o077
+        ):
+            raise SystemUnavailableError()
+        descriptor = os.open(
+            candidate.name,
+            flags,
+            0o600,
+            dir_fd=parent_descriptor,
+        )
+        os.fchmod(descriptor, 0o600)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise SystemUnavailableError()
+        stream = os.fdopen(descriptor, "wb")
+        descriptor = None
+        return stream
+    except SystemUnavailableError:
+        raise
+    except OSError:
+        raise SystemUnavailableError() from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if parent_descriptor is not None:
+            os.close(parent_descriptor)
+
+
+def _capture_private_chunk(
+    destination: BinaryIO | None,
+    chunk: bytes,
+    *,
+    captured: int,
+    output_limit: int,
+) -> None:
+    if destination is None or not chunk:
+        return
+    remaining = max(0, output_limit - captured)
+    if remaining:
+        destination.write(chunk[:remaining])
 
 
 def _cleanup_process_tree(process: subprocess.Popen[bytes]) -> None:

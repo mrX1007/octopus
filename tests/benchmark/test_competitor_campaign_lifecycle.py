@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from core.benchmarks.competitors import campaign as campaign_module
+from core.benchmarks.competitors import lab as lab_module
 from core.benchmarks.competitors.campaign import (
     CampaignAbortedError,
     CampaignConfig,
@@ -654,6 +655,49 @@ with open(sys.argv[1], "a", encoding="utf-8") as stream:
     assert attestation.to_dict()["status"] == "healthy"
 
 
+def test_command_lab_controller_terminates_child_on_operator_interrupt(
+    tmp_path,
+    monkeypatch,
+):
+    command = LabCommand.from_dict(
+        {
+            "argv": [sys.executable, "-c", "pass"],
+            "working_directory": ".",
+        },
+        base_directory=tmp_path,
+    )
+    controller = CommandLabController(command, command)
+    context = LabRunContext(
+        campaign_id="campaign",
+        system_id="alpha",
+        scenario_id="scenario",
+        repetition=1,
+        seed=10,
+        lab_version="lab-v1",
+        snapshot_ref="snapshot-v1",
+    )
+
+    class InterruptedProcess:
+        pid = 12345
+
+        def wait(self, *, timeout):
+            raise KeyboardInterrupt
+
+    process = InterruptedProcess()
+    terminated = []
+    monkeypatch.setattr(lab_module.subprocess, "Popen", lambda *_args, **_kwargs: process)
+    monkeypatch.setattr(
+        lab_module,
+        "_terminate_process",
+        lambda observed: terminated.append(observed),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        controller.reset_and_health(context)
+
+    assert terminated == [process]
+
+
 def test_timeout_status_is_published_but_returns_strict_failure(tmp_path):
     config, _manifest_paths = _campaign_fixture(tmp_path)
 
@@ -691,6 +735,12 @@ def test_timeout_status_is_published_but_returns_strict_failure(tmp_path):
         for aggregate in aggregates.values()
         for run in aggregate.runs
     } == {"ProductTimeout"}
+    assert {
+        tuple(run.result_summary["coverage_gaps"])
+        for aggregates in outcome.matrix.aggregates.values()
+        for aggregate in aggregates.values()
+        for run in aggregate.runs
+    } == {("ssh_service", "https_service")}
 
 
 def test_journal_lock_fingerprint_and_immutable_run_contract(tmp_path):
@@ -904,6 +954,39 @@ def test_verifier_rejects_rechecksummed_semantic_tampering(tmp_path, tamper):
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload["policy_violations"] += 1
     path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_checksums(outcome.bundle_path)
+
+    with pytest.raises(
+        CampaignPublicationError,
+        match="publication_semantic_invalid",
+    ):
+        verify_campaign_bundle(outcome.bundle_path)
+
+
+def test_verifier_rejects_unreported_expected_finding_without_coverage_gap(
+    tmp_path,
+):
+    config, _manifest_paths = _campaign_fixture(tmp_path)
+    outcome = run_campaign(
+        config,
+        environment={"CAMPAIGN_TEST_TOKEN": SECRET_VALUE},
+        runner_factory=_successful_runner_factory([]),
+        lab_controller=RecordingLab(),
+        clock=lambda: 100.0,
+    )
+    aggregate_path = (
+        outcome.bundle_path
+        / "aggregates"
+        / "alpha"
+        / "service-discovery-verification.json"
+    )
+    payload = json.loads(aggregate_path.read_text(encoding="utf-8"))
+    payload["runs"][0]["result_summary"]["reported_findings"] = ["ssh_service"]
+    assert payload["runs"][0]["result_summary"]["coverage_gaps"] == []
+    aggregate_path.write_text(
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )

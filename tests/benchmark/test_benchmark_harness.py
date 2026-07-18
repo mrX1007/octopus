@@ -167,6 +167,27 @@ def test_runner_failure_records_only_error_class():
     assert "sensitive runner detail" not in json.dumps(aggregate.to_dict())
 
 
+def test_harness_derives_expected_coverage_gaps_and_preserves_runner_gaps():
+    scenario = load_scenario(
+        SCENARIO_DIRECTORY / "01-service-discovery-verification.json"
+    )
+
+    def runner(_scenario, _repetition, _seed):
+        return {
+            "status": "timeout",
+            "reported_findings": ["ssh_service"],
+            "coverage_gaps": ["runner_specific_gap", "https_service"],
+        }
+
+    aggregate = BenchmarkHarness(runner, clock=lambda: 1.0).run(scenario)
+
+    assert all(
+        run.result_summary["coverage_gaps"]
+        == ["https_service", "runner_specific_gap"]
+        for run in aggregate.runs
+    )
+
+
 def test_ablations_require_explicitly_stable_toggle():
     payload = load_scenario(
         SCENARIO_DIRECTORY / "01-service-discovery-verification.json"

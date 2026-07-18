@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import stat
 import sys
 import time
 from dataclasses import replace
@@ -208,6 +209,86 @@ json.dump(payload, open(sys.argv[2], "w", encoding="utf-8"))
     assert "available" not in json.dumps(
         CommandSystemRunner(load_system_manifest(source)).public_metadata()
     )
+
+
+def test_command_runner_opt_in_private_log_is_bounded_and_owner_only(
+    tmp_path: Path,
+) -> None:
+    adapter = tmp_path / "adapter.py"
+    adapter.write_text(
+        """\
+import json
+import sys
+
+print("private adapter detail", flush=True)
+json.dump({"status": "succeeded"}, open(sys.argv[2], "w"))
+""",
+        encoding="utf-8",
+    )
+    manifest = load_system_manifest(
+        _write_manifest(
+            tmp_path,
+            _manifest_payload(
+                [sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]
+            ),
+        )
+    )
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    private.chmod(0o700)
+    log = private / "adapter.log"
+
+    result = CommandSystemRunner(manifest, private_log_path=log)(
+        load_scenario(SCENARIO_PATH),
+        1,
+        101,
+    )
+
+    assert result["status"] == "succeeded"
+    assert log.read_text(encoding="utf-8") == "private adapter detail\n"
+    assert stat.S_IMODE(log.stat().st_mode) == 0o600
+
+
+def test_command_runner_rejects_nonprivate_diagnostic_parent(tmp_path: Path) -> None:
+    adapter = tmp_path / "adapter.py"
+    adapter.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    manifest = load_system_manifest(
+        _write_manifest(
+            tmp_path,
+            _manifest_payload(
+                [sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]
+            ),
+        )
+    )
+    unsafe = tmp_path / "unsafe"
+    unsafe.mkdir(mode=0o755)
+    unsafe.chmod(0o755)
+
+    with pytest.raises(SystemUnavailableError):
+        CommandSystemRunner(
+            manifest,
+            private_log_path=unsafe / "adapter.log",
+        )(load_scenario(SCENARIO_PATH), 1, 101)
+
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    private.chmod(0o700)
+    target = private / "target.log"
+    target.write_bytes(b"do-not-overwrite")
+    link = private / "adapter.log"
+    link.symlink_to(target)
+    with pytest.raises(SystemUnavailableError):
+        CommandSystemRunner(
+            manifest,
+            private_log_path=link,
+        )(load_scenario(SCENARIO_PATH), 1, 101)
+    assert target.read_bytes() == b"do-not-overwrite"
+
+    with pytest.raises(SystemUnavailableError):
+        CommandSystemRunner(
+            manifest,
+            private_log_path=Path("relative-adapter.log"),
+        )(load_scenario(SCENARIO_PATH), 1, 101)
 
 
 def test_runner_enforces_action_output_and_timeout_budgets(tmp_path: Path) -> None:

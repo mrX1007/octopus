@@ -6,6 +6,8 @@ import hashlib
 import json
 import os
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -23,6 +25,8 @@ STRIX_REVISION = "91d9a847166fe2f82125643d13e099b0d989bbe4"
 PENTESTGPT_REVISION = "83ae3647603de8c66229f0877faef77a53f5c8f6"
 PENTAGI_REVISION = "a112db206b2fb7866c367c33348f52f5cdc207d0"
 SHARED_OLLAMA_MODEL = "qwen3.5:9b"
+SHARED_OLLAMA_DIGEST = "sha256:" + "c" * 64
+SHARED_OLLAMA_SIZE = 6_321_987_654
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -113,6 +117,51 @@ def _write_environment(path: Path, values: dict[str, str], *, mode: int = 0o600)
     )
     path.chmod(mode)
     return path
+
+
+class _OllamaTagsResponse:
+    def __init__(self, payload: bytes, *, status: int = 200) -> None:
+        self._payload = payload
+        self.status = status
+
+    def __enter__(self) -> _OllamaTagsResponse:
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
+
+    def getcode(self) -> int:
+        return self.status
+
+    def read(self, limit: int) -> bytes:
+        return self._payload[:limit]
+
+
+def _stub_ollama_tags(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: Any,
+) -> tuple[dict[str, Any], list[Any]]:
+    encoded = payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+    observed: dict[str, Any] = {}
+    handlers: list[Any] = []
+
+    class Opener:
+        def open(
+            self,
+            request: urllib.request.Request,
+            *,
+            timeout: float,
+        ) -> _OllamaTagsResponse:
+            observed["request"] = request
+            observed["timeout"] = timeout
+            return _OllamaTagsResponse(encoded)
+
+    def build_opener(*configured_handlers: Any) -> Opener:
+        handlers.extend(configured_handlers)
+        return Opener()
+
+    monkeypatch.setattr(launch.urllib.request, "build_opener", build_opener)
+    return observed, handlers
 
 
 def _prepare_root(
@@ -532,8 +581,12 @@ def test_optional_llm_api_key_is_conditionally_passed_and_redacted(
         campaign_id="optional-key-v1",
     )
     strix = json.loads((config_path.parent / "strix.json").read_text(encoding="utf-8"))
+    octopus = json.loads(
+        (config_path.parent / "octopus.json").read_text(encoding="utf-8")
+    )
 
     assert "LLM_API_KEY" in strix["adapter"]["environment_passthrough"]
+    assert "LLM_API_KEY" in octopus["adapter"]["environment_passthrough"]
     assert "LLM_API_KEY" in config["required_environment"]
     assert config["secret_environment"] == ["LLM_API_KEY"]
     assert secret not in "\n".join(
@@ -727,6 +780,153 @@ def test_linux_run_sets_detected_target_and_returns_campaign_exit(
     assert capsys.readouterr().out == f"{tmp_path / 'published'}\n"
 
 
+def test_linux_diagnostic_pilot_runs_privately_and_returns_pilot_exit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _prepare_root(tmp_path, monkeypatch)
+    environment_file = _write_environment(tmp_path / "campaign.env", _core_environment())
+    monkeypatch.setattr(launch.sys, "platform", "linux")
+    monkeypatch.setattr(launch, "_repository_is_clean", lambda: True)
+    monkeypatch.setattr(
+        launch,
+        "_lab_address",
+        lambda _environment, *, port: "http://10.1.2.3:8080",
+    )
+    monkeypatch.setattr(
+        launch,
+        "_validate_runtime_prerequisites",
+        lambda _environment, *, octopus_revision: _runtime_attestations(),
+    )
+    observed: dict[str, Any] = {}
+    summary_path = (
+        tmp_path
+        / ".benchmark-state"
+        / "diagnostics"
+        / "pilot-v1"
+        / "summary.json"
+    )
+
+    def run_diagnostic(config: Path, **kwargs: Any) -> SimpleNamespace:
+        observed["config"] = config
+        observed.update(kwargs)
+        return SimpleNamespace(summary_path=summary_path, exit_code=1)
+
+    monkeypatch.setattr(launch, "run_diagnostic_pilot", run_diagnostic)
+    exit_code = launch.main(
+        [
+            "--campaign-id",
+            "pilot-v1",
+            "--environment-file",
+            str(environment_file),
+            "--diagnostic-pilot",
+            "--pilot-system",
+            "strix",
+            "--pilot-seconds",
+            "1200",
+        ]
+    )
+
+    assert exit_code == 1
+    assert observed["config"] == (
+        tmp_path / ".benchmark-state" / "generated" / "pilot-v1" / "campaign.json"
+    )
+    assert observed["root"] == tmp_path / ".benchmark-state" / "diagnostics"
+    assert observed["budget_seconds"] == 1200.0
+    assert observed["selected_system"] == "strix"
+    assert observed["environment"]["OCTOBENCH_TARGET_URL"] == (
+        "http://10.1.2.3:8080"
+    )
+    assert capsys.readouterr().out == f"{summary_path}\n"
+
+    observed.clear()
+    assert launch.main(
+        [
+            "--campaign-id",
+            "pilot-default-v1",
+            "--environment-file",
+            str(environment_file),
+            "--diagnostic-pilot",
+        ]
+    ) == 1
+    assert observed["budget_seconds"] == launch.DEFAULT_PILOT_SECONDS
+    assert observed["selected_system"] is None
+    capsys.readouterr()
+
+    public_output = (
+        tmp_path
+        / "benchmarks"
+        / "competitors"
+        / "results"
+        / "pilot-collision-v1"
+    )
+    public_output.mkdir(parents=True)
+    assert launch.main(
+        [
+            "--campaign-id",
+            "pilot-collision-v1",
+            "--environment-file",
+            str(environment_file),
+            "--diagnostic-pilot",
+        ]
+    ) == 2
+    assert json.loads(capsys.readouterr().err) == {"error": "output_exists"}
+
+    def diagnostic_failure(*_args: Any, **_kwargs: Any) -> None:
+        raise launch.DiagnosticError("private-provider-secret-93824")
+
+    monkeypatch.setattr(launch, "run_diagnostic_pilot", diagnostic_failure)
+    assert launch.main(
+        [
+            "--campaign-id",
+            "diagnostic-error-v1",
+            "--environment-file",
+            str(environment_file),
+            "--diagnostic-pilot",
+        ]
+    ) == 2
+    captured = capsys.readouterr()
+    assert json.loads(captured.err) == {"error": "diagnostic_failed"}
+    assert "private-provider-secret-93824" not in captured.err
+
+    diagnostic_output = (
+        tmp_path
+        / ".benchmark-state"
+        / "diagnostics"
+        / "public-collision-v1"
+    )
+    diagnostic_output.mkdir(parents=True)
+    assert launch.main(
+        [
+            "--campaign-id",
+            "public-collision-v1",
+            "--environment-file",
+            str(environment_file),
+        ]
+    ) == 2
+    assert json.loads(capsys.readouterr().err) == {"error": "output_exists"}
+
+
+def test_diagnostic_only_options_reject_incompatible_launch_modes(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert launch.main(
+        ["--campaign-id", "invalid-v1", "--pilot-seconds", "120"]
+    ) == 2
+    assert json.loads(capsys.readouterr().err) == {"error": "campaign_failed"}
+
+    assert launch.main(
+        [
+            "--campaign-id",
+            "invalid-v2",
+            "--prepare-only",
+            "--diagnostic-pilot",
+        ]
+    ) == 2
+    assert json.loads(capsys.readouterr().err) == {"error": "campaign_failed"}
+
+
 def test_relative_product_binaries_are_resolved_from_repository_root(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -823,6 +1023,168 @@ def test_generated_scenario_directory_is_nested_atomic_and_idempotent(
     assert json.loads(capsys.readouterr().err) == {
         "error": "generated_state_conflict"
     }
+
+
+def test_runtime_prerequisites_attest_one_ollama_digest_for_both_systems(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _prepare_root(tmp_path, monkeypatch)
+    executable = tmp_path / "venv" / "bin" / "python"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"python\n")
+    executable.chmod(0o700)
+    launcher_directory = tmp_path / "benchmarks" / "competitors"
+    launcher_directory.mkdir(parents=True, exist_ok=True)
+    for name in ("run_adapter.py", "run_lab.py"):
+        (launcher_directory / name).write_bytes(b"# launcher\n")
+    monkeypatch.setattr(launch.shutil, "which", lambda *_args, **_kwargs: "/bin/docker")
+    monkeypatch.setattr(
+        launch,
+        "_attest_octopus_runtime",
+        lambda **_kwargs: {"runtime": "octopus"},
+    )
+    monkeypatch.setattr(
+        launch,
+        "_attest_local_runtime",
+        lambda *_args, **_kwargs: {"runtime": "strix"},
+    )
+    monkeypatch.setattr(
+        launch,
+        "_attest_strix_sandbox_image",
+        lambda *_args, **_kwargs: {"sandbox": "attested"},
+    )
+    secret = "private-ollama-canary-93824"
+    observed, handlers = _stub_ollama_tags(
+        monkeypatch,
+        {
+            "models": [
+                {
+                    "name": SHARED_OLLAMA_MODEL,
+                    "model": SHARED_OLLAMA_MODEL,
+                    "digest": SHARED_OLLAMA_DIGEST,
+                    "size": SHARED_OLLAMA_SIZE,
+                }
+            ]
+        },
+    )
+    environment = {
+        **_core_environment(),
+        "PATH": "/usr/bin:/bin",
+        "LLM_API_KEY": secret,
+    }
+
+    attestations = launch._validate_runtime_prerequisites(
+        environment,
+        octopus_revision=OCTOPUS_REVISION,
+    )
+
+    expected = {
+        "ollama_model_attestation": "api-tags",
+        "ollama_model_digest": SHARED_OLLAMA_DIGEST,
+        "ollama_model_size_bytes": SHARED_OLLAMA_SIZE,
+    }
+    assert {key: attestations["octopus"][key] for key in expected} == expected
+    assert {key: attestations["strix"][key] for key in expected} == expected
+    request = observed["request"]
+    assert request.full_url == "http://127.0.0.1:11434/api/tags"
+    assert request.get_header("Authorization") == f"Bearer {secret}"
+    assert observed["timeout"] == launch._OLLAMA_ATTESTATION_TIMEOUT_SECONDS
+    assert any(
+        isinstance(item, urllib.request.ProxyHandler) and item.proxies == {}
+        for item in handlers
+    )
+    assert any(isinstance(item, launch._NoRedirectHandler) for item in handlers)
+    tls_handler = next(
+        item for item in handlers if isinstance(item, urllib.request.HTTPSHandler)
+    )
+    assert tls_handler._context.verify_mode == launch.ssl.CERT_REQUIRED
+    assert tls_handler._context.check_hostname is True
+    assert secret not in json.dumps(attestations)
+
+
+def test_ollama_runtime_attestation_rejects_missing_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_ollama_tags(
+        monkeypatch,
+        {
+            "models": [
+                {
+                    "name": "another-model:latest",
+                    "digest": SHARED_OLLAMA_DIGEST,
+                    "size": SHARED_OLLAMA_SIZE,
+                }
+            ]
+        },
+    )
+
+    with pytest.raises(launch.LaunchError) as captured:
+        launch._attest_shared_ollama_runtime(_core_environment())
+
+    assert captured.value.code == "runtime_unavailable"
+    assert str(captured.value) == "runtime_unavailable"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    (
+        b"not-json",
+        {},
+        {"models": "not-a-list"},
+        {
+            "models": [
+                {
+                    "name": SHARED_OLLAMA_MODEL,
+                    "digest": "not-a-sha256",
+                    "size": SHARED_OLLAMA_SIZE,
+                }
+            ]
+        },
+        {
+            "models": [
+                {
+                    "name": SHARED_OLLAMA_MODEL,
+                    "digest": SHARED_OLLAMA_DIGEST,
+                    "size": 0,
+                }
+            ]
+        },
+    ),
+)
+def test_ollama_runtime_attestation_rejects_malformed_endpoint_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: Any,
+) -> None:
+    _stub_ollama_tags(monkeypatch, payload)
+
+    with pytest.raises(launch.LaunchError, match=r"^runtime_unavailable$"):
+        launch._attest_shared_ollama_runtime(_core_environment())
+
+
+def test_ollama_runtime_attestation_hides_unreachable_endpoint_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "private-ollama-canary-93824"
+
+    class Opener:
+        def open(self, *_args: Any, **_kwargs: Any) -> None:
+            raise urllib.error.URLError(f"upstream rejected {secret}")
+
+    monkeypatch.setattr(
+        launch.urllib.request,
+        "build_opener",
+        lambda *_handlers: Opener(),
+    )
+
+    with pytest.raises(launch.LaunchError) as captured:
+        launch._attest_shared_ollama_runtime(
+            {**_core_environment(), "LLM_API_KEY": secret}
+        )
+
+    assert captured.value.code == "runtime_unavailable"
+    assert str(captured.value) == "runtime_unavailable"
+    assert secret not in str(captured.value)
 
 
 def test_local_runtime_attestation_checks_layout_version_and_binds_digests(

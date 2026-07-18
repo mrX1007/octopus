@@ -170,9 +170,36 @@ class AIPipeline(
 
         return self.cancellation.cancel(reason)
 
-    def run_scan(self, scan_id: str, target: str, max_iterations: int = 0, max_tools: int = 0, max_time_minutes: int = 0, raw_scan: str = ""):
+    def run_scan(
+        self,
+        scan_id: str,
+        target: str,
+        max_iterations: int = 0,
+        max_tools: int = 0,
+        max_time_minutes: int = 0,
+        raw_scan: str = "",
+        *,
+        cancellation: Optional[CancellationContext] = None,
+    ):
         from core.ai.scan_loop import ScanLifecycle
 
+        if cancellation is not None:
+            # The explicit token is used by bounded integration callers such as
+            # the competitor adapter. Ordinary scans keep their existing
+            # timeout/retry behavior and do not bind Ollama to a deadline.
+            from core.ai.ollama_client import bind_ollama_cancellation
+
+            with bind_ollama_cancellation(cancellation):
+                return ScanLifecycle().run(
+                    self,
+                    scan_id,
+                    target,
+                    max_iterations,
+                    max_tools,
+                    max_time_minutes,
+                    raw_scan,
+                    cancellation=cancellation,
+                )
         return ScanLifecycle().run(
             self,
             scan_id,

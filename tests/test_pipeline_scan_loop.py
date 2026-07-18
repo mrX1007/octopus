@@ -2,8 +2,11 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from core.ai.pipeline import AIPipeline
 from core.ai.scan_loop import ScanLifecycle
+from core.execution import CancellationContext, ExecutionCancelled
 
 
 class _RegistryStub:
@@ -121,6 +124,107 @@ def test_pipeline_run_scan_delegates_arguments_to_scan_lifecycle(tmp_path, monke
         "max_time_minutes": 4,
         "raw_scan": "seed output",
     }
+
+
+def test_pipeline_binds_explicit_scan_cancellation_to_ollama(tmp_path, monkeypatch):
+    import core.ai.ollama_client as ollama
+
+    pipeline = AIPipeline(str(tmp_path / "bounded-delegation.db"))
+    cancellation = CancellationContext.with_timeout(30.0)
+    observed = {}
+
+    def capture_run(
+        _lifecycle,
+        _facade,
+        _scan_id,
+        _target,
+        _max_iterations,
+        _max_tools,
+        _max_time_minutes,
+        _raw_scan,
+        *,
+        cancellation=None,
+    ):
+        observed["argument"] = cancellation
+        observed["bound"] = ollama._ACTIVE_CANCELLATION.get()
+        return {"state": "bounded"}
+
+    monkeypatch.setattr(ScanLifecycle, "run", capture_run)
+
+    result = pipeline.run_scan(
+        "scan-bounded",
+        "10.0.0.5",
+        cancellation=cancellation,
+    )
+
+    assert result == {"state": "bounded"}
+    assert observed == {"argument": cancellation, "bound": cancellation}
+    assert ollama._ACTIVE_CANCELLATION.get() is None
+
+
+def test_scan_lifecycle_installs_explicit_token_after_runtime_reset():
+    cancellation = CancellationContext.with_timeout(30.0)
+
+    class MissionStore:
+        @staticmethod
+        def get_mission_by_scan_id(_scan_id):
+            return None
+
+    class Facade:
+        mission_id = None
+        mission_store = MissionStore()
+        state_resolver = SimpleNamespace(
+            resolve_state=lambda _scan_id, _target: {"state": "completed"}
+        )
+
+        def _reset_runtime_state(self):
+            self.cancellation = CancellationContext()
+
+        @staticmethod
+        def _start_mission(_scan_id, _target):
+            return SimpleNamespace(status="completed")
+
+    facade = Facade()
+
+    result = ScanLifecycle().run(
+        facade,
+        "scan-bounded",
+        "10.0.0.5",
+        cancellation=cancellation,
+    )
+
+    assert result == {"state": "completed"}
+    assert facade.cancellation is cancellation
+
+
+def test_scan_lifecycle_interrupts_if_director_fallback_concludes_after_cancellation(
+    tmp_path,
+):
+    pipeline = _configure_lifecycle(AIPipeline(str(tmp_path / "cancelled.db")))
+    cancellation = CancellationContext()
+
+    def cancel_and_conclude(_context, _history):
+        cancellation.cancel("deadline_exceeded")
+        return {
+            "goal": "conclude",
+            "thought": "fallback after cancelled request",
+            "llm_status": "failed",
+        }
+
+    pipeline.director = SimpleNamespace(decide_goal=cancel_and_conclude)
+
+    with pytest.raises(ExecutionCancelled, match="deadline_exceeded"):
+        ScanLifecycle().run(
+            pipeline,
+            "scan-cancelled",
+            "10.0.0.5",
+            cancellation=cancellation,
+        )
+
+    mission = pipeline.mission_store.get_mission_by_scan_id("scan-cancelled")
+    assert mission is not None
+    assert mission.status == "interrupted"
+    assert mission.reason == "scan_exception:ExecutionCancelled"
 
 
 def test_scan_lifecycle_checks_tool_budget_before_director(tmp_path, capsys):

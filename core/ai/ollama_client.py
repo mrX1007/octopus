@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import sys
+import threading
 import time
-from collections.abc import Generator
+from collections.abc import Generator, Iterator
+from contextlib import contextmanager, suppress
+from contextvars import ContextVar
 
-import requests
+import requests  # type: ignore[import-untyped]
+
+from core.execution import CancellationContext
 
 # ─────────────────────────────────────────────
 # CONFIG CONSTANTS
@@ -86,6 +93,107 @@ C_MAGENTA = "\033[95m"
 
 logger = logging.getLogger("octopus.ollama")
 
+_CANCELLATION_POLL_SECONDS = 0.05
+
+_ACTIVE_CANCELLATION: ContextVar[CancellationContext | None] = ContextVar(
+    "octopus_ollama_cancellation",
+    default=None,
+)
+
+
+@contextmanager
+def bind_ollama_cancellation(
+    cancellation: CancellationContext,
+) -> Iterator[CancellationContext]:
+    """Bound Ollama calls to one cooperative scan deadline.
+
+    Ordinary interactive and non-benchmark callers do not bind a token and
+    therefore retain the configured request timeout and retry behavior.
+    """
+
+    token = _ACTIVE_CANCELLATION.set(cancellation)
+    try:
+        yield cancellation
+    finally:
+        _ACTIVE_CANCELLATION.reset(token)
+
+
+def _cancellation_error() -> str:
+    cancellation = _ACTIVE_CANCELLATION.get()
+    if cancellation is None or not cancellation.cancelled:
+        return ""
+    reason = cancellation.reason_code or "cancelled"
+    return f"[!] Ollama request cancelled: {reason}."
+
+
+def _request_timeout() -> float:
+    cancellation = _ACTIVE_CANCELLATION.get()
+    if cancellation is None:
+        return OLLAMA_TIMEOUT
+    remaining = cancellation.remaining_seconds()
+    if remaining is None:
+        return OLLAMA_TIMEOUT
+    return max(0.001, min(float(OLLAMA_TIMEOUT), remaining))
+
+
+def _post_ollama(payload: dict):
+    """POST to Ollama, adding the optional shared-endpoint bearer token."""
+
+    kwargs = {
+        "json": payload,
+        "stream": True,
+        "timeout": _request_timeout(),
+    }
+    api_key = str(os.environ.get("LLM_API_KEY") or "").strip()
+    if api_key:
+        kwargs["headers"] = {"Authorization": f"Bearer {api_key}"}
+    return requests.post(OLLAMA_URL, **kwargs)
+
+
+def _wait_before_retry(seconds: float) -> bool:
+    """Wait normally, or stop as soon as the bound scan deadline fires."""
+
+    cancellation = _ACTIVE_CANCELLATION.get()
+    if cancellation is None:
+        time.sleep(seconds)
+        return False
+    return cancellation.wait(seconds)
+
+
+@contextmanager
+def _bound_response_deadline(response) -> Iterator[None]:
+    """Close a bound stream on cancellation or when its deadline expires."""
+
+    cancellation = _ACTIVE_CANCELLATION.get()
+    if cancellation is None:
+        yield
+        return
+
+    stopped = threading.Event()
+
+    def close_response() -> None:
+        close = getattr(response, "close", None)
+        if callable(close):
+            with suppress(Exception):
+                close()
+
+    def interrupt() -> None:
+        while not stopped.is_set():
+            if cancellation.wait(_CANCELLATION_POLL_SECONDS):
+                close_response()
+                return
+
+    watcher = threading.Thread(
+        target=interrupt,
+        name="octopus-ollama-cancellation",
+        daemon=True,
+    )
+    watcher.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+
 
 # ─────────────────────────────────────────────
 # OLLAMA QUERY WITH RETRY
@@ -135,36 +243,48 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
         full_response = ""
         in_thought = False
         token_count = 0
-        for line in resp.iter_lines():
-            if line:
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                chunk = data.get("response", "")
-                full_response += chunk
-                token_count += 1
+        with _bound_response_deadline(resp):
+            for line in resp.iter_lines():
+                cancellation_error = _cancellation_error()
+                if cancellation_error:
+                    close = getattr(resp, "close", None)
+                    if callable(close):
+                        with suppress(Exception):
+                            close()
+                    return cancellation_error
+                if line:
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    chunk = data.get("response", "")
+                    full_response += chunk
+                    token_count += 1
 
-                # Live Color Logic: grey inside <thought> or <think>, normal outside
-                if "<thought>" in chunk or "<think>" in chunk:
-                    chunk = chunk.replace("<thought>", f"{C_GREY}<thought>").replace("<think>", f"{C_GREY}<think>")
-                    sys.stdout.write(chunk)
-                    in_thought = True
-                elif "</thought>" in chunk or "</think>" in chunk:
-                    chunk = chunk.replace("</thought>", f"</thought>{C_RESET}").replace("</think>", f"</think>{C_RESET}")
-                    sys.stdout.write(chunk)
-                    in_thought = False
-                else:
-                    if in_thought:
-                        sys.stdout.write(f"{C_GREY}{chunk}{C_RESET}")
-                    else:
+                    # Live Color Logic: grey inside <thought> or <think>, normal outside
+                    if "<thought>" in chunk or "<think>" in chunk:
+                        chunk = chunk.replace("<thought>", f"{C_GREY}<thought>").replace("<think>", f"{C_GREY}<think>")
                         sys.stdout.write(chunk)
-                sys.stdout.flush()
+                        in_thought = True
+                    elif "</thought>" in chunk or "</think>" in chunk:
+                        chunk = chunk.replace("</thought>", f"</thought>{C_RESET}").replace("</think>", f"</think>{C_RESET}")
+                        sys.stdout.write(chunk)
+                        in_thought = False
+                    else:
+                        if in_thought:
+                            sys.stdout.write(f"{C_GREY}{chunk}{C_RESET}")
+                        else:
+                            sys.stdout.write(chunk)
+                    sys.stdout.flush()
 
-                # Check for errors in response
-                if data.get("error"):
-                    print(f"\n{C_RED}[!] Ollama error: {data['error']}{C_RESET}")
-                    return f"[!] Ollama error: {data['error']}"
+                    # Check for errors in response
+                    if data.get("error"):
+                        print(f"\n{C_RED}[!] Ollama error: {data['error']}{C_RESET}")
+                        return f"[!] Ollama error: {data['error']}"
+
+        cancellation_error = _cancellation_error()
+        if cancellation_error:
+            return cancellation_error
 
         print()  # newline after stream
 
@@ -201,6 +321,10 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
         return clean
 
     for attempt in range(1, OLLAMA_RETRIES + 1):
+        cancellation_error = _cancellation_error()
+        if cancellation_error:
+            return cancellation_error
+
         use_minimal = (attempt > 1)
         options = _build_options(minimal=use_minimal)
 
@@ -229,7 +353,7 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
             label = " (minimal mode)" if use_minimal else ""
             print(f"\n[*] Streaming from {MODEL_NAME}{label}...")
 
-            resp = requests.post(OLLAMA_URL, json=payload, stream=True, timeout=OLLAMA_TIMEOUT)
+            resp = _post_ollama(payload)
 
             if resp.status_code in {400, 422} and json_mode and ("think" in payload or "format" in payload):
                 error_text = ""
@@ -243,7 +367,10 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
                 relaxed_payload = dict(payload)
                 relaxed_payload.pop("think", None)
                 relaxed_payload.pop("format", None)
-                resp = requests.post(OLLAMA_URL, json=relaxed_payload, stream=True, timeout=OLLAMA_TIMEOUT)
+                cancellation_error = _cancellation_error()
+                if cancellation_error:
+                    return cancellation_error
+                resp = _post_ollama(relaxed_payload)
 
             # Handle HTTP errors explicitly
             if resp.status_code == 500:
@@ -253,11 +380,15 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
                 except Exception as _exc:
                     logging.debug(f"Suppressed in ollama_client.py: {_exc}")
                 if attempt < OLLAMA_RETRIES:
+                    cancellation_error = _cancellation_error()
+                    if cancellation_error:
+                        return cancellation_error
                     print(f"\n{C_RED}[!] Ollama 500 error (attempt {attempt}/{OLLAMA_RETRIES}).{C_RESET}")
                     if error_text:
                         print(f"  {C_GREY}Detail: {error_text}{C_RESET}")
                     print(f"  {C_YELLOW}Retrying with minimal options in 3s...{C_RESET}")
-                    time.sleep(3)
+                    if _wait_before_retry(3):
+                        return _cancellation_error()
                     continue
                 else:
                     return f"[!] Ollama 500 error after {OLLAMA_RETRIES} retries."
@@ -269,24 +400,36 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
             result = _stream_response(resp)
             if result.startswith("[!] LLM returned empty response") and attempt < OLLAMA_RETRIES:
                 print(f"  {C_YELLOW}Retrying empty LLM response in minimal mode...{C_RESET}")
-                time.sleep(2)
+                if _wait_before_retry(2):
+                    return _cancellation_error()
                 continue
             return result
 
         except requests.exceptions.Timeout:
+            cancellation_error = _cancellation_error()
+            if cancellation_error:
+                return cancellation_error
             if attempt < OLLAMA_RETRIES:
                 print(f"\n{C_YELLOW}[!] Ollama timed out (attempt {attempt}/{OLLAMA_RETRIES}). Retrying in 5s...{C_RESET}")
-                time.sleep(5)
+                if _wait_before_retry(5):
+                    return _cancellation_error()
             else:
                 return "[!] Ollama timed out after all retries."
 
         except requests.exceptions.ConnectionError:
+            cancellation_error = _cancellation_error()
+            if cancellation_error:
+                return cancellation_error
             return "[!] Cannot connect to Ollama. Is it running? Start with: ollama serve"
 
         except Exception as e:
+            cancellation_error = _cancellation_error()
+            if cancellation_error:
+                return cancellation_error
             if attempt < OLLAMA_RETRIES:
                 print(f"\n{C_YELLOW}[!] Error: {e} (attempt {attempt}/{OLLAMA_RETRIES}). Retrying...{C_RESET}")
-                time.sleep(3)
+                if _wait_before_retry(3):
+                    return _cancellation_error()
             else:
                 return f"[!] Unexpected error after {OLLAMA_RETRIES} retries: {e}"
 
@@ -449,6 +592,8 @@ def ask_ollama_structured(prompt: str, schema: dict, max_retries: int = 2) -> di
 
         if response.startswith("[!]"):
             logger.warning(f"Structured query attempt {attempt} failed: {response}")
+            if _cancellation_error():
+                return {"error": response}
             if attempt < max_retries:
                 continue
             return {"error": response}
@@ -471,7 +616,7 @@ def ask_ollama_structured(prompt: str, schema: dict, max_retries: int = 2) -> di
     return {"error": "Structured query exhausted all retries"}
 
 
-def ask_ollama_stream(prompt: str) -> "Generator[str, None, None]":
+def ask_ollama_stream(prompt: str) -> Generator[str, None, None]:
     """Generator that yields tokens as they arrive from Ollama.
 
     Useful for real-time display in Rich panels or custom UI.
@@ -509,28 +654,48 @@ def ask_ollama_stream(prompt: str) -> "Generator[str, None, None]":
     }
 
     try:
-        resp = requests.post(
-            OLLAMA_URL, json=payload,
-            stream=True, timeout=OLLAMA_TIMEOUT,
-        )
+        cancellation_error = _cancellation_error()
+        if cancellation_error:
+            yield cancellation_error
+            return
+        resp = _post_ollama(payload)
         resp.raise_for_status()
 
-        for line in resp.iter_lines():
-            if line:
-                try:
-                    data = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                chunk = data.get("response", "")
-                if chunk:
-                    yield chunk
-                if data.get("done"):
-                    break
-                if data.get("error"):
-                    logger.error(f"Ollama stream error: {data['error']}")
-                    yield f"\n[!] Error: {data['error']}"
-                    break
+        with _bound_response_deadline(resp):
+            for line in resp.iter_lines():
+                cancellation_error = _cancellation_error()
+                if cancellation_error:
+                    close = getattr(resp, "close", None)
+                    if callable(close):
+                        with suppress(Exception):
+                            close()
+                    yield cancellation_error
+                    return
+                if line:
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    chunk = data.get("response", "")
+                    if chunk:
+                        yield chunk
+                    if data.get("done"):
+                        break
+                    if data.get("error"):
+                        logger.error(f"Ollama stream error: {data['error']}")
+                        yield f"\n[!] Error: {data['error']}"
+                        break
 
     except requests.exceptions.RequestException as e:
+        cancellation_error = _cancellation_error()
+        if cancellation_error:
+            yield cancellation_error
+            return
         logger.error(f"Ollama stream request failed: {e}")
         yield f"[!] Connection failed: {e}"
+    except Exception:
+        cancellation_error = _cancellation_error()
+        if cancellation_error:
+            yield cancellation_error
+            return
+        raise

@@ -418,6 +418,37 @@ def test_ollama_json_mode_disables_thinking_and_uses_structured_json(monkeypatch
     assert calls[0]["prompt"].startswith("Machine JSON mode.")
 
 
+def test_ollama_optional_shared_endpoint_key_is_sent_as_bearer(monkeypatch):
+    import json as jsonlib
+
+    import core.ai.ollama_client as ollama
+
+    observed = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def iter_lines(self):
+            yield jsonlib.dumps({"response": "ready"}).encode()
+
+        def raise_for_status(self):
+            return None
+
+    def fake_post(_url, **kwargs):
+        observed.update(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setenv("LLM_API_KEY", "private-ollama-key-93824")
+    monkeypatch.setattr(ollama.requests, "post", fake_post)
+    monkeypatch.setattr(ollama, "OLLAMA_RETRIES", 1)
+
+    assert ollama.ask_ollama("ready") == "ready"
+    assert observed["headers"] == {
+        "Authorization": "Bearer private-ollama-key-93824"
+    }
+
+
 def test_ollama_json_mode_retries_relaxed_when_strict_controls_are_unsupported(monkeypatch):
     import json as jsonlib
 
@@ -458,3 +489,192 @@ def test_ollama_json_mode_retries_relaxed_when_strict_controls_are_unsupported(m
     assert calls[0]["think"] is False
     assert "format" not in calls[1]
     assert "think" not in calls[1]
+
+
+def test_bound_ollama_deadline_limits_request_and_suppresses_retry(monkeypatch):
+    import core.ai.ollama_client as ollama
+    from core.execution import CancellationContext
+
+    calls = []
+    cancellation = CancellationContext.with_timeout(10.0)
+
+    def fake_post(_url, json=None, stream=None, timeout=None):
+        calls.append(timeout)
+        cancellation.cancel("deadline_exceeded")
+        raise ollama.requests.exceptions.Timeout("bounded fixture")
+
+    monkeypatch.setattr(ollama.requests, "post", fake_post)
+    monkeypatch.setattr(ollama, "OLLAMA_TIMEOUT", 180)
+    monkeypatch.setattr(ollama, "OLLAMA_RETRIES", 2)
+    monkeypatch.setattr(
+        ollama.time,
+        "sleep",
+        lambda _seconds: pytest.fail("bound retries must not sleep past cancellation"),
+    )
+
+    with ollama.bind_ollama_cancellation(cancellation):
+        result = ollama.ask_ollama("Return JSON", json_mode=True)
+
+    assert result == "[!] Ollama request cancelled: deadline_exceeded."
+    assert len(calls) == 1
+    assert 0 < calls[0] <= 10.0
+
+
+@pytest.mark.parametrize(
+    "failure_kind",
+    ("timeout", "connection", "unexpected"),
+)
+def test_bound_ollama_final_exception_preserves_cancellation(
+    monkeypatch,
+    failure_kind,
+):
+    import core.ai.ollama_client as ollama
+    from core.execution import CancellationContext
+
+    cancellation = CancellationContext.with_timeout(10.0)
+
+    def fake_post(_url, json=None, stream=None, timeout=None):
+        cancellation.cancel("deadline_exceeded")
+        if failure_kind == "timeout":
+            raise ollama.requests.exceptions.Timeout("closed at deadline")
+        if failure_kind == "connection":
+            raise ollama.requests.exceptions.ConnectionError("closed at deadline")
+        raise RuntimeError("closed at deadline")
+
+    monkeypatch.setattr(ollama.requests, "post", fake_post)
+    monkeypatch.setattr(ollama, "OLLAMA_RETRIES", 1)
+
+    with ollama.bind_ollama_cancellation(cancellation):
+        result = ollama.ask_ollama("Return JSON", json_mode=True)
+
+    assert result == "[!] Ollama request cancelled: deadline_exceeded."
+
+
+def test_unbound_ollama_keeps_configured_timeout(monkeypatch):
+    import json as jsonlib
+
+    import core.ai.ollama_client as ollama
+
+    observed = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        @staticmethod
+        def iter_lines():
+            yield jsonlib.dumps({"response": '{"goal":"conclude"}'}).encode()
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    def fake_post(_url, json=None, stream=None, timeout=None):
+        observed["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(ollama.requests, "post", fake_post)
+    monkeypatch.setattr(ollama, "OLLAMA_TIMEOUT", 37)
+    monkeypatch.setattr(ollama, "OLLAMA_RETRIES", 1)
+
+    result = ollama.ask_ollama("Return JSON", json_mode=True)
+
+    assert result == '{"goal":"conclude"}'
+    assert observed["timeout"] == 37
+
+
+def test_bound_ollama_stream_stops_when_scan_is_cancelled(monkeypatch):
+    import json as jsonlib
+
+    import core.ai.ollama_client as ollama
+    from core.execution import CancellationContext
+
+    cancellation = CancellationContext.with_timeout(10.0)
+    observed = {"closed": False}
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def iter_lines():
+            yield jsonlib.dumps({"response": "first"}).encode()
+            cancellation.cancel("deadline_exceeded")
+            yield jsonlib.dumps({"response": "late"}).encode()
+
+        @staticmethod
+        def close():
+            observed["closed"] = True
+
+    def fake_post(_url, json=None, stream=None, timeout=None):
+        observed["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(ollama.requests, "post", fake_post)
+    monkeypatch.setattr(ollama, "OLLAMA_TIMEOUT", 180)
+
+    with ollama.bind_ollama_cancellation(cancellation):
+        chunks = list(ollama.ask_ollama_stream("stream"))
+
+    assert chunks == ["first", "[!] Ollama request cancelled: deadline_exceeded."]
+    assert observed["closed"] is True
+    assert 0 < observed["timeout"] <= 10.0
+
+
+def test_bound_ollama_stalled_stream_is_closed_on_early_cancellation(monkeypatch):
+    import threading
+
+    import core.ai.ollama_client as ollama
+    from core.execution import CancellationContext
+
+    cancellation = CancellationContext()
+    stream_started = threading.Event()
+    stream_released = threading.Event()
+    response_closed = threading.Event()
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        @staticmethod
+        def iter_lines():
+            stream_started.set()
+            if not stream_released.wait(2.0):
+                raise AssertionError("cancellation did not release stalled stream")
+            raise ollama.requests.exceptions.ConnectionError("response closed")
+            yield b""  # pragma: no cover - keeps this a generator fixture
+
+        @staticmethod
+        def close():
+            response_closed.set()
+            stream_released.set()
+
+    monkeypatch.setattr(
+        ollama.requests,
+        "post",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+    monkeypatch.setattr(ollama, "OLLAMA_TIMEOUT", 180)
+
+    def cancel_stalled_stream():
+        assert stream_started.wait(1.0)
+        cancellation.cancel("operator_request")
+
+    canceller = threading.Thread(target=cancel_stalled_stream)
+    canceller.start()
+    try:
+        with ollama.bind_ollama_cancellation(cancellation):
+            chunks = list(ollama.ask_ollama_stream("stream"))
+    finally:
+        stream_released.set()
+        canceller.join(timeout=1.0)
+
+    assert chunks == ["[!] Ollama request cancelled: operator_request."]
+    assert response_closed.wait(1.0)
+    assert not canceller.is_alive()

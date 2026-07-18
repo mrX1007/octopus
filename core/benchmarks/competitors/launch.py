@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
 import re
 import shutil
+import ssl
 import stat
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +26,11 @@ from urllib.parse import urlsplit
 from ..schema import BenchmarkScenario
 from .adapter import STRIX_BENCHMARK_SCAN_MODE
 from .campaign import CampaignConfig, run_campaign
+from .diagnostic import (
+    DEFAULT_PILOT_SECONDS,
+    DiagnosticError,
+    run_diagnostic_pilot,
+)
 from .labctl import LabControlError, _lab_address
 from .schema import SystemManifest
 
@@ -34,6 +43,8 @@ _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _MAX_ENVIRONMENT_FILE_BYTES = 262_144
 _MAX_ENVIRONMENT_LINES = 512
 _MAX_ENVIRONMENT_VALUE_BYTES = 65_536
+_MAX_OLLAMA_TAGS_BYTES = 1_048_576
+_OLLAMA_ATTESTATION_TIMEOUT_SECONDS = 5.0
 _STRIX_REVISION = "91d9a847166fe2f82125643d13e099b0d989bbe4"
 _STRIX_IMAGE = (
     "ghcr.io/usestrix/strix-sandbox@"
@@ -100,6 +111,11 @@ _FAIRNESS_PROFILE_BASE = {
     "same_hardware": True,
     "same_budgets": False,
 }
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
 
 
 @dataclass(frozen=True)
@@ -175,6 +191,12 @@ class LaunchError(RuntimeError):
 def main(argv: Sequence[str] | None = None) -> int:
     args = _argument_parser().parse_args(argv)
     try:
+        if args.prepare_only and args.diagnostic_pilot:
+            raise LaunchError("campaign_failed")
+        if not args.diagnostic_pilot and (
+            args.pilot_seconds is not None or args.pilot_system is not None
+        ):
+            raise LaunchError("campaign_failed")
         campaign_id = _campaign_id(args.campaign_id)
         environment = _merged_environment(args.environment_file)
         required = _required_environment(args.profile)
@@ -198,7 +220,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not _repository_is_clean():
             raise LaunchError("repository_dirty")
         output_directory = _output_directory(campaign_id)
-        if output_directory.exists() or output_directory.is_symlink():
+        diagnostic_directory = _diagnostic_root() / campaign_id
+        journal_directory = _journal_campaign_directory(campaign_id)
+        if args.diagnostic_pilot:
+            if any(
+                path.exists() or path.is_symlink()
+                for path in (
+                    output_directory,
+                    diagnostic_directory,
+                    journal_directory,
+                )
+            ):
+                raise LaunchError("output_exists")
+        elif any(
+            path.exists() or path.is_symlink()
+            for path in (output_directory, diagnostic_directory)
+        ):
             raise LaunchError("output_exists")
         runtime_environment = _runtime_lab_environment(environment)
         runtime_attestations = _validate_runtime_prerequisites(
@@ -213,12 +250,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             octopus_revision=revision,
             runtime_attestations=runtime_attestations,
         )
+        if args.diagnostic_pilot:
+            diagnostic = run_diagnostic_pilot(
+                config_path,
+                environment=runtime_environment,
+                root=_diagnostic_root(),
+                budget_seconds=(
+                    args.pilot_seconds
+                    if args.pilot_seconds is not None
+                    else DEFAULT_PILOT_SECONDS
+                ),
+                selected_system=args.pilot_system,
+            )
+            print(diagnostic.summary_path)
+            return diagnostic.exit_code
         outcome = run_campaign(config_path, environment=runtime_environment)
     except LaunchError as exc:
         _print_error(exc.code)
         return 2
     except LabControlError:
         _print_error("campaign_failed")
+        return 2
+    except DiagnosticError:
+        _print_error("diagnostic_failed")
         return 2
     except Exception:
         # The launcher is a secret boundary.  Campaign, filesystem, Git and
@@ -241,6 +295,21 @@ def _argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--environment-file", type=Path)
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument(
+        "--diagnostic-pilot",
+        action="store_true",
+        help="run one private, non-publishable calibration repetition per system",
+    )
+    parser.add_argument(
+        "--pilot-seconds",
+        type=float,
+        help="diagnostic product cap (default: 1800, range: 60..3600)",
+    )
+    parser.add_argument(
+        "--pilot-system",
+        choices=("octopus", "strix", "pentagi"),
+        help="diagnose only one system from the selected profile",
+    )
     return parser
 
 
@@ -367,13 +436,17 @@ def _manifest_payload(
     pentagi_ca_file = str(environment.get("OCTOBENCH_PENTAGI_CA_FILE") or "").strip()
     if system.system_id == "pentagi" and pentagi_ca_file:
         adapter_environment = (*adapter_environment, "OCTOBENCH_PENTAGI_CA_FILE")
-    if system.system_id == "strix":
+    if system.system_id in {"octopus", "strix"}:
         adapter_environment = (
             *adapter_environment,
             *_configured_optional_environment(
                 environment,
                 ("LLM_API_KEY",),
             ),
+        )
+    if system.system_id == "strix":
+        adapter_environment = (
+            *adapter_environment,
             *_configured_optional_environment(
                 environment,
                 _OPTIONAL_DOCKER_ENVIRONMENT,
@@ -829,7 +902,86 @@ def _validate_runtime_prerequisites(
     attestations["strix"].update(
         _attest_strix_sandbox_image(docker, environment=environment)
     )
+    shared_ollama = _attest_shared_ollama_runtime(environment)
+    for system_id in ("octopus", "strix"):
+        attestations[system_id].update(shared_ollama)
     return attestations
+
+
+def _attest_shared_ollama_runtime(
+    environment: Mapping[str, str],
+) -> dict[str, Any]:
+    """Bind both systems to one live Ollama model artifact without inference."""
+
+    base_url = str(environment.get("LLM_API_BASE") or "").strip().rstrip("/")
+    model = str(environment.get("OCTOPUS_OLLAMA_MODEL") or "").strip()
+    if not base_url or not model:
+        raise LaunchError("runtime_unavailable")
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Octopus-Benchmark/1.0",
+    }
+    api_key = str(environment.get("LLM_API_KEY") or "").strip()
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        request = urllib.request.Request(
+            f"{base_url}/api/tags",
+            method="GET",
+            headers=headers,
+        )
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            _NoRedirectHandler(),
+            urllib.request.HTTPSHandler(context=ssl.create_default_context()),
+        )
+        with opener.open(
+            request,
+            timeout=_OLLAMA_ATTESTATION_TIMEOUT_SECONDS,
+        ) as response:
+            status = int(
+                getattr(response, "status", 0) or response.getcode() or 0
+            )
+            payload = response.read(_MAX_OLLAMA_TAGS_BYTES + 1)
+    except (
+        OSError,
+        TimeoutError,
+        ValueError,
+        http.client.HTTPException,
+        urllib.error.HTTPError,
+        urllib.error.URLError,
+    ):
+        raise LaunchError("runtime_unavailable") from None
+    if status != 200 or len(payload) > _MAX_OLLAMA_TAGS_BYTES:
+        raise LaunchError("runtime_unavailable")
+    try:
+        decoded = json.loads(payload.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError, RecursionError):
+        raise LaunchError("runtime_unavailable") from None
+    if not isinstance(decoded, Mapping) or not isinstance(decoded.get("models"), list):
+        raise LaunchError("runtime_unavailable")
+    matches = [
+        entry
+        for entry in decoded["models"]
+        if isinstance(entry, Mapping)
+        and (entry.get("name") == model or entry.get("model") == model)
+    ]
+    if len(matches) != 1:
+        raise LaunchError("runtime_unavailable")
+    digest = str(matches[0].get("digest") or "").strip().lower()
+    size = matches[0].get("size")
+    if (
+        re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+        or isinstance(size, bool)
+        or not isinstance(size, int)
+        or size <= 0
+    ):
+        raise LaunchError("runtime_unavailable")
+    return {
+        "ollama_model_attestation": "api-tags",
+        "ollama_model_digest": digest,
+        "ollama_model_size_bytes": size,
+    }
 
 
 def _attest_strix_sandbox_image(
@@ -1164,6 +1316,14 @@ def _scenario_directory() -> Path:
 
 def _output_directory(campaign_id: str) -> Path:
     return ROOT / "benchmarks" / "competitors" / "results" / campaign_id
+
+
+def _diagnostic_root() -> Path:
+    return ROOT / ".benchmark-state" / "diagnostics"
+
+
+def _journal_campaign_directory(campaign_id: str) -> Path:
+    return ROOT / ".benchmark-state" / "journal" / campaign_id
 
 
 def _print_error(code: str) -> None:

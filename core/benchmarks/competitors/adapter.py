@@ -25,11 +25,13 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+
+from core.execution import CancellationContext, ExecutionCancelled
 
 from ..schema import BenchmarkScenario, load_scenario
 
@@ -40,6 +42,8 @@ _PENTAGI_RELEASE = "2.1.0"
 _PENTAGI_CLEANUP_GRACE_SECONDS = 15.0
 _PENTAGI_CLEANUP_REQUEST_TIMEOUT_SECONDS = 7.0
 _PENTAGI_REQUEST_TIMEOUT_SECONDS = 30.0
+_OCTOPUS_FINALIZATION_MAX_SECONDS = 60.0
+_OCTOPUS_FINALIZATION_FRACTION = 0.20
 _REPORTED_BUDGET_METRICS = (
     ("max_tools", "tool_calls"),
     ("max_model_tokens", "model_tokens"),
@@ -220,20 +224,47 @@ def _run_octopus(
     timeout: float,
     max_output: int,
 ) -> ProductOutcome:
+    """Run OCTOPUS with active work ending before its publication deadline.
+
+    OCTOPUS serializes several durable stores after the scan loop. Reserve part
+    of the shared product budget for that work instead of relying on the outer
+    adapter's five-second protocol grace. The reserve scales down for short
+    contract tests and is capped at sixty seconds for publication campaigns.
+    """
+
     started = time.monotonic()
+    pipeline: Any | None = None
+    raw_scan = ""
+    state: Any = {"status": "not_started"}
+    scan_id = ""
+    exact_target = ""
+    probe_completed = False
+    cancellation: CancellationContext | None = None
     try:
         from core.ai.pipeline import AIPipeline
 
+        reserve = _octopus_finalization_reserve(timeout)
+        active_budget = timeout - reserve
+        active_deadline = started + active_budget
         exact_target = _octopus_exact_target(target)
-        raw_scan = _octopus_exact_http_probe(exact_target, timeout, max_output)
+        probe_timeout = active_deadline - time.monotonic()
+        if probe_timeout <= 0:
+            raise ExecutionCancelled("deadline_exceeded")
+        raw_scan = _octopus_exact_http_probe(
+            exact_target,
+            probe_timeout,
+            max_output,
+        )
+        probe_completed = True
         pipeline = AIPipeline(str(workspace / "facts.db"))
+        cancellation = CancellationContext(deadline_monotonic=active_deadline)
         max_tools = max(1, _positive_integer(scenario.budgets.get("max_tools")) - 1)
         max_iterations = _bounded_integer(
             scenario.strategy_config.get("max_iterations", 3),
             minimum=1,
             maximum=12,
         )
-        max_minutes = max(1, math.ceil(timeout / 60.0))
+        max_minutes = max(1, math.ceil(active_budget / 60.0))
         scan_id = f"benchmark-{scenario.scenario_id}-{os.environ.get('OCTOPUS_BENCHMARK_REPETITION', '0')}"
         state = pipeline.run_scan(
             scan_id,
@@ -242,31 +273,43 @@ def _run_octopus(
             max_tools=max_tools,
             max_time_minutes=max_minutes,
             raw_scan=raw_scan,
+            cancellation=cancellation,
         )
-        facts = pipeline.fact_store.get_facts(scan_id, exact_target)
-        trace = pipeline.trace_report(scan_id, exact_target)
-        output = _bounded_text(
-            "\n".join(
-                (
-                    raw_scan,
-                    json.dumps(facts, sort_keys=True, default=str),
-                    json.dumps(state, sort_keys=True, default=str),
-                    json.dumps(trace, sort_keys=True, default=str),
-                )
-            ),
+        active_timed_out = cancellation.cancelled
+        return _octopus_outcome(
+            pipeline,
+            scan_id,
+            exact_target,
+            raw_scan,
+            state,
             max_output,
+            started,
+            probe_completed=probe_completed,
+            timed_out=active_timed_out,
+            total_timeout=timeout,
         )
-        metrics = {"tool_calls": float(pipeline.tools_run_count + 1)}
-        duration = max(0.0, time.monotonic() - started)
-        return ProductOutcome(
-            # The outer runner reserves a short protocol-completion grace, but
-            # Octopus must never turn that control-plane time into a successful
-            # product run beyond the shared scenario budget.
-            status="timeout" if duration >= timeout else "succeeded",
-            output_text=output,
-            duration_seconds=duration,
-            metrics=metrics,
-            error_class=("ProductTimeout" if duration >= timeout else ""),
+    except ExecutionCancelled as exc:
+        cancellation_reason = (
+            cancellation.reason_code
+            if cancellation is not None and cancellation.cancelled
+            else exc.reason_code
+        )
+        if cancellation_reason == "keyboard_interrupt":
+            raise KeyboardInterrupt from None
+        timed_out = cancellation_reason == "deadline_exceeded"
+        state = {"status": "interrupted", "reason": cancellation_reason}
+        return _octopus_outcome(
+            pipeline,
+            scan_id,
+            exact_target,
+            raw_scan,
+            state,
+            max_output,
+            started,
+            probe_completed=probe_completed,
+            timed_out=timed_out,
+            total_timeout=timeout,
+            failure_error_class=("" if timed_out else "ProductCancelled"),
         )
     except (OSError, ProductAdapterError, urllib.error.URLError, ValueError):
         duration = max(0.0, time.monotonic() - started)
@@ -280,6 +323,70 @@ def _run_octopus(
                 else "OctopusAdapterFailure"
             ),
         )
+
+
+def _octopus_finalization_reserve(timeout: float) -> float:
+    """Return OCTOPUS's bounded in-budget result-finalization interval."""
+
+    return min(
+        _OCTOPUS_FINALIZATION_MAX_SECONDS,
+        max(0.0, float(timeout)) * _OCTOPUS_FINALIZATION_FRACTION,
+    )
+
+
+def _octopus_outcome(
+    pipeline: Any | None,
+    scan_id: str,
+    target: str,
+    raw_scan: str,
+    state: Any,
+    max_output: int,
+    started: float,
+    *,
+    probe_completed: bool,
+    timed_out: bool,
+    total_timeout: float,
+    failure_error_class: str = "",
+) -> ProductOutcome:
+    """Capture the bounded OCTOPUS snapshot, including after cancellation."""
+
+    facts: Any = []
+    trace: Any = {}
+    if pipeline is not None and scan_id and target:
+        with suppress(Exception):
+            facts = pipeline.fact_store.get_facts(scan_id, target)
+        with suppress(Exception):
+            trace = pipeline.trace_report(scan_id, target)
+    output = _bounded_text(
+        "\n".join(
+            (
+                raw_scan,
+                json.dumps(facts, sort_keys=True, default=str),
+                json.dumps(state, sort_keys=True, default=str),
+                json.dumps(trace, sort_keys=True, default=str),
+            )
+        ),
+        max_output,
+    )
+    duration = max(0.0, time.monotonic() - started)
+    timed_out = timed_out or duration >= total_timeout
+    tools_run = int(getattr(pipeline, "tools_run_count", 0) or 0)
+    metrics = {
+        "tool_calls": float(tools_run + (1 if probe_completed else 0)),
+    }
+    return ProductOutcome(
+        status=(
+            "timeout"
+            if timed_out
+            else "failed"
+            if failure_error_class
+            else "succeeded"
+        ),
+        output_text=output,
+        duration_seconds=duration,
+        metrics=metrics,
+        error_class="ProductTimeout" if timed_out else failure_error_class,
+    )
 
 
 def _octopus_exact_target(target: str) -> str:
@@ -832,23 +939,27 @@ def _run_bounded_process(
             )
         except (OSError, ValueError):
             raise ProductAdapterError("product_unavailable") from None
-        deadline = started + timeout
-        while process.poll() is None:
-            if time.monotonic() >= deadline:
-                timed_out = True
+        try:
+            with _kill_product_on_parent_termination(process):
+                deadline = started + timeout
+                while process.poll() is None:
+                    if time.monotonic() >= deadline:
+                        timed_out = True
+                        _terminate_process(process)
+                        break
+                    with suppress(OSError):
+                        if log_path.stat().st_size > max_output:
+                            output_exceeded = True
+                            _terminate_process(process)
+                            break
+                    time.sleep(0.05)
+        finally:
+            if process.poll() is None:
                 _terminate_process(process)
-                break
-            with suppress(OSError):
-                if log_path.stat().st_size > max_output:
-                    output_exceeded = True
-                    _terminate_process(process)
-                    break
-            time.sleep(0.05)
-        if process.poll() is None:
-            _terminate_process(process)
         with suppress(subprocess.TimeoutExpired):
             process.wait(timeout=1.0)
-    raw = log_path.read_bytes()[:max_output]
+    with log_path.open("rb") as captured_output:
+        raw = captured_output.read(max_output)
     text = raw.decode("utf-8", "replace")
     return (
         int(process.returncode or 0),
@@ -857,6 +968,48 @@ def _run_bounded_process(
         text,
         max(0.0, time.monotonic() - started),
     )
+
+
+@contextmanager
+def _kill_product_on_parent_termination(
+    process: subprocess.Popen[Any],
+):
+    """Prevent a nested product session surviving its adapter process.
+
+    The outer matrix runner owns a process group for the adapter, while each
+    product owns a second group so its own descendants can be bounded. Forward
+    SIGTERM/SIGINT synchronously to that nested group before unwinding.
+    """
+
+    if os.name != "posix":  # pragma: no cover - live campaigns require Linux
+        yield
+        return
+    previous: dict[int, Any] = {}
+
+    def terminate(signum: int, _frame: Any) -> None:
+        with suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, signal.SIGKILL)
+        raise SystemExit(128 + signum)
+
+    try:
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous[signum] = signal.getsignal(signum)
+            signal.signal(signum, terminate)
+    except ValueError:
+        # Python permits signal handlers only in the main thread. The live
+        # adapter runs there; library callers in worker threads retain the
+        # ordinary bounded-process cleanup path.
+        for saved_signum, handler in previous.items():
+            with suppress(ValueError):
+                signal.signal(saved_signum, handler)
+        yield
+        return
+    try:
+        yield
+    finally:
+        for saved_signum, handler in previous.items():
+            with suppress(ValueError):
+                signal.signal(saved_signum, handler)
 
 
 def _terminate_process(process: subprocess.Popen[Any]) -> None:
