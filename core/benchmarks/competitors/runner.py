@@ -22,9 +22,11 @@ from .schema import SystemManifest
 MAX_SCENARIO_BYTES = 2_000_000
 MAX_EFFECTIVE_OUTPUT_BYTES = 16_000_000
 MAX_EFFECTIVE_TIMEOUT_SECONDS = 3_600.0
+_ADAPTER_COMPLETION_GRACE_SECONDS = 5.0
 _MAX_RESULT_ITEMS = 512
 _MAX_RESULT_TEXT_BYTES = 4_096
 _RESULT_IDENTIFIER = __import__("re").compile(r"^[a-z0-9][a-z0-9_.:-]{0,255}$")
+_ERROR_CLASS = __import__("re").compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 _RESULT_STATUSES = frozenset({"succeeded", "failed", "timeout", "partial", "invalid"})
 
 
@@ -74,6 +76,7 @@ class CommandSystemRunner:
         seed: int,
     ) -> Mapping[str, Any]:
         timeout = self._effective_timeout(scenario)
+        wall_timeout = self._effective_wall_timeout(timeout)
         output_limit = self._effective_output_limit(scenario)
         max_tools = _positive_integer(scenario.budgets.get("max_tools"))
         started = time.monotonic()
@@ -115,25 +118,53 @@ class CommandSystemRunner:
                 except (OSError, ValueError):
                     raise SystemUnavailableError() from None
 
-                return_code, log_bytes, timed_out, output_exceeded = _monitor_process(
+                (
+                    return_code,
+                    log_bytes,
+                    timed_out,
+                    output_exceeded,
+                    execution_deadline_reached,
+                ) = _monitor_process(
                     process,
-                    timeout_seconds=timeout,
+                    timeout_seconds=wall_timeout,
+                    execution_timeout_seconds=timeout,
                     output_limit=output_limit,
                 )
-                duration = max(0.0, time.monotonic() - started)
+                # The fixed completion grace is control-plane time for an adapter
+                # to stop its bounded product and atomically emit the protocol
+                # result.  It is shared by every system and is not scored as
+                # additional product execution time.
+                duration = min(timeout, max(0.0, time.monotonic() - started))
                 if timed_out:
-                    return _empty_result("timeout", duration)
+                    return _empty_result(
+                        "timeout",
+                        duration,
+                        error_class="AdapterWallTimeout",
+                    )
                 if output_exceeded:
                     raise SystemProtocolError()
                 if return_code != 0:
-                    return _empty_result("failed", duration)
+                    return _empty_result(
+                        "failed",
+                        duration,
+                        error_class=_adapter_exit_error_class(return_code),
+                    )
                 remaining_output = output_limit - log_bytes
                 raw_result = _read_result(output_path, remaining_output)
-                return _normalize_result(
+                normalized = _normalize_result(
                     raw_result,
                     max_tools=max_tools,
                     duration_seconds=duration,
                 )
+                if execution_deadline_reached and normalized["status"] not in {
+                    "partial",
+                    "timeout",
+                }:
+                    # Grace can preserve evidence, never convert over-budget
+                    # product work into a successful or ordinary failed run.
+                    normalized["status"] = "timeout"
+                    normalized["error_class"] = "AdapterExecutionDeadlineExceeded"
+                return normalized
         except SystemRunnerError:
             raise
         except (OSError, ValueError):
@@ -147,6 +178,17 @@ class CommandSystemRunner:
     def _effective_timeout(self, scenario: BenchmarkScenario) -> float:
         scenario_limit = float(_positive_number(scenario.budgets.get("max_seconds")))
         candidates = [scenario_limit, MAX_EFFECTIVE_TIMEOUT_SECONDS]
+        if self.timeout_seconds is not None:
+            candidates.append(self.timeout_seconds)
+        return min(candidates)
+
+    def _effective_wall_timeout(self, timeout: float) -> float:
+        candidates = [
+            timeout + _ADAPTER_COMPLETION_GRACE_SECONDS,
+            MAX_EFFECTIVE_TIMEOUT_SECONDS + _ADAPTER_COMPLETION_GRACE_SECONDS,
+        ]
+        # An explicit runner limit is an absolute wall-clock cap.  Callers can
+        # therefore tighten or disable the default protocol-completion window.
         if self.timeout_seconds is not None:
             candidates.append(self.timeout_seconds)
         return min(candidates)
@@ -244,8 +286,9 @@ def _monitor_process(
     process: subprocess.Popen[bytes],
     *,
     timeout_seconds: float,
+    execution_timeout_seconds: float,
     output_limit: int,
-) -> tuple[int, int, bool, bool]:
+) -> tuple[int, int, bool, bool, bool]:
     stdout = process.stdout
     if stdout is None:
         _cleanup_process_tree(process)
@@ -254,17 +297,29 @@ def _monitor_process(
         os.set_blocking(stdout.fileno(), False)
     selector = selectors.DefaultSelector()
     selector.register(stdout, selectors.EVENT_READ)
-    deadline = time.monotonic() + timeout_seconds
+    monitored_at = time.monotonic()
+    deadline = monitored_at + timeout_seconds
+    execution_deadline = monitored_at + execution_timeout_seconds
     captured = 0
     timed_out = False
     output_exceeded = False
+    execution_deadline_reached = False
     try:
         while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0 and process.poll() is None:
+            now = time.monotonic()
+            running = process.poll() is None
+            if now >= execution_deadline and running:
+                execution_deadline_reached = True
+            remaining = deadline - now
+            if remaining <= 0 and running:
                 timed_out = True
                 break
-            events = selector.select(max(0.0, min(0.05, remaining)))
+            wait_for = remaining
+            if not execution_deadline_reached:
+                # Wake exactly at the active deadline so an adapter that exits
+                # just before it is not confused with one using completion grace.
+                wait_for = min(wait_for, max(0.0, execution_deadline - now))
+            events = selector.select(max(0.0, min(0.05, wait_for)))
             for key, _mask in events:
                 try:
                     chunk = os.read(key.fd, 65_536)
@@ -296,7 +351,13 @@ def _monitor_process(
         selector.close()
         stdout.close()
         _cleanup_process_tree(process)
-    return process.returncode or 0, captured, timed_out, output_exceeded
+    return (
+        process.returncode or 0,
+        captured,
+        timed_out,
+        output_exceeded,
+        execution_deadline_reached,
+    )
 
 
 def _cleanup_process_tree(process: subprocess.Popen[bytes]) -> None:
@@ -321,7 +382,8 @@ def _cleanup_process_tree(process: subprocess.Popen[bytes]) -> None:
         process.wait(timeout=0.2)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait()
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=0.2)
 
 
 def _read_result(path: Path, remaining_output: int) -> Mapping[str, Any]:
@@ -373,7 +435,15 @@ def _normalize_result(
         "metrics": metrics,
         "artifact_refs": _text_list(result.get("artifact_refs") or []),
         "duration_seconds": duration_seconds,
+        "error_class": _optional_error_class(result.get("error_class")),
     }
+
+
+def _optional_error_class(value: Any) -> str:
+    candidate = str(value or "").strip()
+    if candidate and not _ERROR_CLASS.fullmatch(candidate):
+        raise SystemProtocolError()
+    return candidate
 
 
 def _identifier_list(value: Any) -> list[str]:
@@ -430,7 +500,12 @@ def _sequence(value: Any) -> Sequence[Any]:
     return value
 
 
-def _empty_result(status: str, duration_seconds: float) -> dict[str, Any]:
+def _empty_result(
+    status: str,
+    duration_seconds: float,
+    *,
+    error_class: str = "",
+) -> dict[str, Any]:
     return {
         "status": status,
         "actions": [],
@@ -440,7 +515,14 @@ def _empty_result(status: str, duration_seconds: float) -> dict[str, Any]:
         "metrics": {},
         "artifact_refs": [],
         "duration_seconds": duration_seconds,
+        "error_class": error_class,
     }
+
+
+def _adapter_exit_error_class(exit_code: int) -> str:
+    if exit_code < 0:
+        return f"AdapterSignal{abs(exit_code)}"
+    return f"AdapterExitCode{exit_code}"
 
 
 def _positive_number(value: Any) -> float:

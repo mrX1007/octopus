@@ -252,17 +252,19 @@ def _successful_runner_factory(calls):
 
 def test_campaign_resets_each_run_outside_duration_and_publishes_complete_bundle(
     tmp_path,
+    capsys,
 ):
     config, _manifest_paths = _campaign_fixture(tmp_path)
     calls = []
     lab = RecordingLab()
 
+    clock_ticks = iter(float(value) for value in range(100, 1000))
     outcome = run_campaign(
         config,
         environment={"CAMPAIGN_TEST_TOKEN": SECRET_VALUE},
         runner_factory=_successful_runner_factory(calls),
         lab_controller=lab,
-        clock=lambda: 100.0,
+        clock=lambda: next(clock_ticks),
     )
 
     assert outcome.status == "succeeded"
@@ -278,6 +280,12 @@ def test_campaign_resets_each_run_outside_duration_and_publishes_complete_bundle
         for aggregate in aggregates.values()
         for run in aggregate.runs
     } == {0.25}
+    assert {
+        run.finished_at - run.started_at
+        for aggregates in outcome.matrix.aggregates.values()
+        for aggregate in aggregates.values()
+        for run in aggregate.runs
+    } == {1.0}
 
     verification = verify_campaign_bundle(outcome.bundle_path)
     assert verification["status"] == "verified"
@@ -310,6 +318,19 @@ def test_campaign_resets_each_run_outside_duration_and_publishes_complete_bundle
         for path in outcome.bundle_path.rglob("*")
         if path.is_file()
     )
+    progress_text = capsys.readouterr().err
+    progress = [json.loads(line) for line in progress_text.splitlines()]
+    assert [item["event"] for item in progress].count("run_started") == 10
+    assert [item["event"] for item in progress].count("run_finished") == 10
+    assert progress[0] == {
+        "campaign_id": config.campaign_id,
+        "completed_runs": 0,
+        "event": "campaign_started",
+        "total_runs": 10,
+    }
+    assert progress[-1]["event"] == "campaign_published"
+    assert progress[-1]["completed_runs"] == 10
+    assert SECRET_VALUE not in progress_text
 
 
 def test_campaign_resumes_only_unfinished_runs_after_interruption(tmp_path):
@@ -352,6 +373,87 @@ def test_campaign_resumes_only_unfinished_runs_after_interruption(tmp_path):
     assert outcome.resumed_runs == 3
     assert len(resumed_calls) == len(resumed_lab.resets) == 7
     assert outcome.status == "succeeded"
+
+
+def test_public_provenance_omits_environment_hash_oracle_while_resume_detects_drift(
+    tmp_path: Path,
+) -> None:
+    config, _manifest_paths = _campaign_fixture(tmp_path)
+    low_entropy_environment = {
+        "HOME": "/home/benchmark-user",
+        "OCTOBENCH_HOST_IP": "192.168.1.29",
+        "OCTOBENCH_LAB_PORT": "8080",
+        "OCTOBENCH_TARGET_URL": "http://192.168.1.29:8080",
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+    }
+    config = replace(
+        config,
+        required_environment=(
+            *config.required_environment,
+            *low_entropy_environment,
+        ),
+    )
+    environment = {
+        "CAMPAIGN_TEST_TOKEN": SECRET_VALUE,
+        **low_entropy_environment,
+    }
+
+    def interrupting_factory(_manifest):
+        def runner(_scenario, _repetition, _seed):
+            raise KeyboardInterrupt
+
+        return runner
+
+    with pytest.raises(KeyboardInterrupt):
+        run_campaign(
+            config,
+            environment=environment,
+            runner_factory=interrupting_factory,
+            lab_controller=RecordingLab(),
+            clock=lambda: 100.0,
+        )
+
+    journal_campaign = json.loads(
+        (
+            config.state_directory
+            / config.campaign_id
+            / "campaign.json"
+        ).read_text(encoding="utf-8")
+    )
+    original_fingerprint = journal_campaign["fingerprint"]
+    changed_environment = {**environment, "HOME": "/home/other-user"}
+    with pytest.raises(
+        CampaignFingerprintMismatch,
+        match="campaign_fingerprint_mismatch",
+    ):
+        run_campaign(
+            config,
+            environment=changed_environment,
+            runner_factory=_successful_runner_factory([]),
+            lab_controller=RecordingLab(),
+            clock=lambda: 100.0,
+        )
+
+    outcome = run_campaign(
+        config,
+        environment=environment,
+        runner_factory=_successful_runner_factory([]),
+        lab_controller=RecordingLab(),
+        clock=lambda: 100.0,
+    )
+    assert outcome.fingerprint == original_fingerprint
+
+    provenance_path = outcome.bundle_path / "provenance.json"
+    provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+    assert set(provenance["input_sha256"]) == {
+        "campaign",
+        "scenarios",
+        "systems",
+    }
+    serialized = provenance_path.read_text(encoding="utf-8")
+    for value in low_entropy_environment.values():
+        assert value not in serialized
+        assert hashlib.sha256(value.encode("utf-8")).hexdigest() not in serialized
 
 
 def test_fully_resumed_campaign_cleans_before_publication(tmp_path, monkeypatch):
@@ -564,6 +666,7 @@ def test_timeout_status_is_published_but_returns_strict_failure(tmp_path):
                 "verified_findings": [],
                 "metrics": {},
                 "duration_seconds": 1.0,
+                "error_class": "ProductTimeout",
             }
 
         return runner
@@ -582,6 +685,12 @@ def test_timeout_status_is_published_but_returns_strict_failure(tmp_path):
         (outcome.bundle_path / "campaign-status.json").read_text(encoding="utf-8")
     )
     assert status["status_counts"] == {"timeout": 10}
+    assert {
+        run.error_class
+        for aggregates in outcome.matrix.aggregates.values()
+        for aggregate in aggregates.values()
+        for run in aggregate.runs
+    } == {"ProductTimeout"}
 
 
 def test_journal_lock_fingerprint_and_immutable_run_contract(tmp_path):
@@ -701,10 +810,16 @@ def test_verifier_rejects_self_checksummed_incomplete_evidence(
         "scenario_metadata",
         "summary",
         "run_metric",
+        "run_error_class",
+        "run_timing_nonfinite",
+        "run_timing_negative",
+        "run_timing_order",
+        "run_timing_duration",
         "metric_statistics",
         "aggregate_id",
         "matrix_id",
         "provenance_digest",
+        "provenance_environment_digest",
         "repetitions",
         "policy_counts",
     ),
@@ -740,19 +855,46 @@ def test_verifier_rejects_rechecksummed_semantic_tampering(tmp_path, tamper):
             payload["summaries"][0]["duration_median_seconds"] += 1.0
         else:
             payload["matrix_id"] = "competitor-matrix://sha256/" + "0" * 64
-    elif tamper in {"run_metric", "metric_statistics", "aggregate_id"}:
+    elif tamper in {
+        "run_metric",
+        "run_error_class",
+        "run_timing_nonfinite",
+        "run_timing_negative",
+        "run_timing_order",
+        "run_timing_duration",
+        "metric_statistics",
+        "aggregate_id",
+    }:
         path = aggregate_path
         payload = json.loads(path.read_text(encoding="utf-8"))
         if tamper == "run_metric":
             payload["runs"][0]["metrics"]["finding_recall"] = 0.125
+        elif tamper == "run_error_class":
+            payload["runs"][0]["error_class"] = "/home/private/error"
+        elif tamper == "run_timing_nonfinite":
+            payload["runs"][0]["started_at"] = float("inf")
+        elif tamper == "run_timing_negative":
+            payload["runs"][0]["started_at"] = -1.0
+        elif tamper == "run_timing_order":
+            payload["runs"][0]["started_at"] = 101.0
+            payload["runs"][0]["finished_at"] = 100.0
+        elif tamper == "run_timing_duration":
+            payload["runs"][0]["duration_seconds"] = 300.0
+            payload["runs"][0]["started_at"] = 100.0
+            payload["runs"][0]["finished_at"] = 100.0003
         elif tamper == "metric_statistics":
             payload["metric_statistics"]["finding_recall"]["median"] = 0.125
         else:
             payload["aggregate_id"] = "benchmark-aggregate://sha256/" + "0" * 64
-    elif tamper == "provenance_digest":
+    elif tamper in {"provenance_digest", "provenance_environment_digest"}:
         path = outcome.bundle_path / "provenance.json"
         payload = json.loads(path.read_text(encoding="utf-8"))
-        payload["input_sha256"]["campaign"] = "0" * 64
+        if tamper == "provenance_digest":
+            payload["input_sha256"]["campaign"] = "0" * 64
+        else:
+            payload["input_sha256"]["non_secret_environment"] = {
+                "HOME": hashlib.sha256(b"/home/user").hexdigest(),
+            }
     elif tamper == "repetitions":
         path = outcome.bundle_path / "inputs" / "campaign.json"
         payload = json.loads(path.read_text(encoding="utf-8"))

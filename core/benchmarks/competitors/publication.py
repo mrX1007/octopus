@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import shutil
 import statistics
 import tempfile
@@ -21,6 +22,19 @@ from .state import schedule_run_key
 CAMPAIGN_PUBLICATION_SCHEMA_VERSION = "1.0"
 _STRICT_RUN_STATUSES = frozenset({"failed", "invalid", "partial", "timeout"})
 _RUN_STATUSES = _STRICT_RUN_STATUSES | {"succeeded"}
+_RUN_TIMING_TOLERANCE_SECONDS = 1.0
+_ERROR_CLASS = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
+_PUBLIC_PROVENANCE_KEYS = frozenset(
+    {
+        "controller_source_sha256",
+        "fingerprint",
+        "input_sha256",
+        "repository_revision",
+        "runtime",
+        "schema_version",
+    }
+)
+_PUBLIC_PROVENANCE_INPUT_KEYS = frozenset({"campaign", "scenarios", "systems"})
 _PRIVATE_METADATA_KEYS = frozenset(
     {
         "adapter",
@@ -422,6 +436,9 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
                 )
                 metrics = _metrics_mapping(run.get("metrics"))
                 duration = _nonnegative_number(run.get("duration_seconds"))
+                started_at = _nonnegative_number(run.get("started_at"))
+                finished_at = _nonnegative_number(run.get("finished_at"))
+                error_class = run.get("error_class")
                 result_summary = run.get("result_summary")
                 if (
                     status not in _RUN_STATUSES
@@ -430,6 +447,14 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
                     or scheduled["seed"] != seed
                     or repetition in seen_repetitions
                     or violations != expected_violations
+                    or finished_at < started_at
+                    or duration
+                    > finished_at - started_at + _RUN_TIMING_TOLERANCE_SECONDS
+                    or not isinstance(error_class, str)
+                    or (
+                        bool(error_class)
+                        and not _ERROR_CLASS.fullmatch(error_class)
+                    )
                     or (
                         not isinstance(result_summary, Mapping)
                         or result_summary.get("status") != status
@@ -856,23 +881,27 @@ def _published_provenance(
     systems: Mapping[str, Mapping[str, Any]],
     scenarios: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    payload = dict(provenance)
-    raw_inputs = payload.get("input_sha256")
-    input_sha256 = dict(raw_inputs) if isinstance(raw_inputs, Mapping) else {}
-    input_sha256.update(
-        {
-            "campaign": _canonical_digest(campaign),
-            "systems": {
-                system_id: _canonical_digest(value)
-                for system_id, value in sorted(systems.items())
-            },
-            "scenarios": {
-                scenario_id: _canonical_digest(value)
-                for scenario_id, value in sorted(scenarios.items())
-            },
-        }
-    )
-    payload["input_sha256"] = input_sha256
+    # Provenance is a public allowlisted contract. In particular, never copy
+    # the internal per-variable environment digests: low-entropy values such
+    # as private IPs, HOME, PATH, ports, and acknowledgement flags are readily
+    # recoverable from an unsalted SHA-256 oracle. Those values still affect
+    # the aggregate campaign fingerprint used by the private resume journal.
+    payload = {
+        str(key): value
+        for key, value in provenance.items()
+        if str(key) in _PUBLIC_PROVENANCE_KEYS and str(key) != "input_sha256"
+    }
+    payload["input_sha256"] = {
+        "campaign": _canonical_digest(campaign),
+        "systems": {
+            system_id: _canonical_digest(value)
+            for system_id, value in sorted(systems.items())
+        },
+        "scenarios": {
+            scenario_id: _canonical_digest(value)
+            for scenario_id, value in sorted(scenarios.items())
+        },
+    }
     return payload
 
 
@@ -883,7 +912,11 @@ def _verify_provenance_inputs(
     systems: Mapping[str, Mapping[str, Any]],
     scenarios: Mapping[str, Mapping[str, Any]],
 ) -> None:
+    if set(provenance) != _PUBLIC_PROVENANCE_KEYS:
+        raise CampaignPublicationError("publication_semantic_invalid")
     inputs = _required_mapping(provenance.get("input_sha256"))
+    if set(inputs) != _PUBLIC_PROVENANCE_INPUT_KEYS:
+        raise CampaignPublicationError("publication_semantic_invalid")
     observed_systems = _required_mapping(inputs.get("systems"))
     observed_scenarios = _required_mapping(inputs.get("scenarios"))
     expected_systems = {

@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import statistics
 import time
 from collections import Counter
@@ -20,6 +21,8 @@ from .schema import (
     BenchmarkScenario,
     BenchmarkSchemaError,
 )
+
+_ERROR_CLASS = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 
 
 class BenchmarkRunner(Protocol):
@@ -125,11 +128,25 @@ class BenchmarkHarness:
                 raise TypeError("benchmark runner must return a mapping")
             result = dict(raw)
             status = str(result.get("status") or "succeeded").lower()
+            reported_error_class = _optional_error_class(
+                result.get("error_class")
+            )
+            if status != "succeeded" and reported_error_class:
+                error_class = reported_error_class
         except Exception as exc:
             result = {}
             status = "failed"
             error_class = type(exc).__name__
         finished_at = self.clock()
+        recorded_started_at = _optional_timestamp(result.get("started_at"))
+        recorded_finished_at = _optional_timestamp(result.get("finished_at"))
+        if (
+            recorded_started_at is not None
+            and recorded_finished_at is not None
+            and recorded_finished_at >= recorded_started_at
+        ):
+            started_at = recorded_started_at
+            finished_at = recorded_finished_at
         duration = _nonnegative_number(
             result.get("duration_seconds"),
             default=max(0.0, finished_at - started_at),
@@ -290,6 +307,20 @@ def _is_number(value: Any) -> bool:
         and not isinstance(value, bool)
         and math.isfinite(float(value))
     )
+
+
+def _optional_timestamp(value: Any) -> float | None:
+    if not _is_number(value):
+        return None
+    parsed = float(value)
+    return parsed if parsed >= 0 else None
+
+
+def _optional_error_class(value: Any) -> str:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return ""
+    return candidate if _ERROR_CLASS.fullmatch(candidate) else "InvalidRunnerErrorClass"
 
 
 def _nonnegative_number(value: Any, *, default: float = 0.0) -> float:

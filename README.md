@@ -642,7 +642,8 @@ and Strix uses its native Ollama chat route, while sharing the model tag,
 weights and runtime server.
 This is a controlled shared-model comparison, not a vendor-best-model score;
 Strix upstream cautions that sub-70B local models can struggle with agentic
-tool use.
+tool use. The bounded campaign pins Strix's upstream `quick` mode and records
+that choice in its public manifest.
 
 ```bash
 ./venv/bin/python -m core.benchmarks.competitors.launch \
@@ -656,7 +657,10 @@ The versioned scenario lives under
 config go to `.benchmark-state/generated/<campaign-id>/`, resumable state goes
 to `.benchmark-state/journal/<campaign-id>/`, and the immutable publication
 bundle goes to `benchmarks/competitors/results/<campaign-id>/`. Use
-`--prepare-only` to inspect generated inputs without executing systems.
+`--prepare-only` with a dedicated preview ID to inspect generated inputs
+without executing systems; a preview ID cannot later be reused for a live run.
+During execution, secret-free JSON progress events are written to stderr after
+every run while stdout remains reserved for the final bundle path.
 
 Initial clones, environments and images can consume multiple gigabytes and
 take tens of minutes. The counterbalanced launcher uses six repetitions for

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import sys
+import time
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -248,6 +250,80 @@ time.sleep(1)
     result = CommandSystemRunner(manifest, timeout_seconds=0.05)(scenario, 1, 101)
     assert result["status"] == "timeout"
     assert result["actions"] == []
+    assert result["error_class"] == "AdapterWallTimeout"
+
+
+def test_runner_preserves_result_written_during_bounded_completion_grace(
+    tmp_path: Path,
+) -> None:
+    scenario = load_scenario(SCENARIO_PATH)
+    scenario = replace(
+        scenario,
+        budgets={**scenario.budgets, "max_seconds": 0.1},
+    )
+    adapter = tmp_path / "adapter.py"
+    adapter.write_text(
+        """\
+import json
+import sys
+import time
+
+time.sleep(0.2)
+json.dump(
+    {
+        "status": "succeeded",
+        "reported_findings": ["ssh_service"],
+        "metrics": {"adapter_result_preserved": 1},
+    },
+    open(sys.argv[2], "w"),
+)
+""",
+        encoding="utf-8",
+    )
+    manifest = load_system_manifest(
+        _write_manifest(
+            tmp_path,
+            _manifest_payload(
+                [sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]
+            ),
+        )
+    )
+
+    started = time.monotonic()
+    result = CommandSystemRunner(manifest)(scenario, 1, 101)
+    elapsed = time.monotonic() - started
+
+    assert result["status"] == "timeout"
+    assert result["error_class"] == "AdapterExecutionDeadlineExceeded"
+    assert result["reported_findings"] == ["ssh_service"]
+    assert result["metrics"] == {"adapter_result_preserved": 1.0}
+    assert result["duration_seconds"] == pytest.approx(0.1)
+    assert elapsed < 2.0
+
+
+def test_explicit_runner_timeout_remains_an_absolute_wall_cap(
+    tmp_path: Path,
+) -> None:
+    scenario = load_scenario(SCENARIO_PATH)
+    adapter = tmp_path / "adapter.py"
+    adapter.write_text("import time\ntime.sleep(2)\n", encoding="utf-8")
+    manifest = load_system_manifest(
+        _write_manifest(
+            tmp_path,
+            _manifest_payload(
+                [sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]
+            ),
+        )
+    )
+
+    started = time.monotonic()
+    result = CommandSystemRunner(manifest, timeout_seconds=0.05)(scenario, 1, 101)
+    elapsed = time.monotonic() - started
+
+    assert result["status"] == "timeout"
+    assert result["error_class"] == "AdapterWallTimeout"
+    assert result["duration_seconds"] == pytest.approx(0.05)
+    assert elapsed < 1.0
 
 
 def test_unavailable_adapter_error_never_exposes_command_or_environment(

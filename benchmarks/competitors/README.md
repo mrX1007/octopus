@@ -153,6 +153,14 @@ launcher command and a new immutable campaign ID:
   --environment-file benchmarks/competitors/secrets.env
 ```
 
+The launcher writes bounded JSON progress events to stderr for campaign start,
+each run start/finish, interruption and publication. Stdout remains reserved
+for the final bundle path, so automation can capture it without parsing live
+diagnostics. A failed product reports only a stable error class such as
+`ProductExitCode1`; raw vendor output is never serialized into campaign state
+or publication data and is represented in the public bundle only by a content
+digest.
+
 Use `--profile extended` only after a private/internal PentAGI endpoint is
 configured as benchmark-dedicated infrastructure in the isolated segment, can
 reach the private OCTOBENCH lab address, and the four
@@ -256,6 +264,22 @@ can directly observe and control:
    controls;
 3. write exactly one bounded UTF-8 JSON object to `{output_path}`;
 4. exit with status zero only after that object has been completely written.
+
+The scenario's `max_seconds` remains the identical hard product-execution
+budget for every system. The outer command runner allows a fixed five-second
+control-plane grace after that budget only so the adapter can stop the product
+and atomically write its final protocol object. The scenario passed to the
+adapter is unchanged, the grace must not be used for product work, and duration
+scoring is capped at `max_seconds`. The watchdog wall time is therefore bounded
+by `min(max_seconds, 3600) + 5` seconds; an explicit runner timeout remains a
+stricter absolute wall-clock cap. An adapter that reaches the product deadline
+must report `timeout` or `partial`; it cannot turn work completed during the
+protocol grace into a successful run.
+
+The pinned Strix adapter uses its upstream `quick` scan mode, which is intended
+for bounded CI execution. The selected mode is written to Strix's public system
+manifest; it is not a hidden operator-controlled input. OCTOPUS continues to
+receive the scenario's explicit iteration, tool and time limits.
 
 The output object uses the existing `BenchmarkRunner` mapping:
 
@@ -422,6 +446,15 @@ runtime manifests remain under ignored `.benchmark-state/`; their sanitized
 public forms are already preserved under `inputs/systems/`. Published result
 directories are append-only: use a new campaign ID when any input, revision or
 configuration changes.
+
+Public provenance includes content digests only for the published campaign,
+system and scenario inputs and for the benchmark controller sources. It never
+publishes environment values or a direct digest for an individual environment
+variable: unsalted hashes of low-entropy values such as private IPs, HOME,
+PATH, ports and target URLs are reversible by enumeration. Environment values
+still contribute to the aggregate campaign fingerprint used by the private
+journal, so an interrupted campaign resumes deterministically and rejects
+environment drift without exposing a per-variable hash oracle.
 
 ## Git publication workflow
 

@@ -34,6 +34,7 @@ from urllib.parse import urlsplit, urlunsplit
 from ..schema import BenchmarkScenario, load_scenario
 
 ADAPTER_PROTOCOL_VERSION = "1.0"
+STRIX_BENCHMARK_SCAN_MODE = "quick"
 SUPPORTED_SYSTEMS = ("octopus", "pentagi", "pentestgpt", "shannon", "strix")
 _PENTAGI_RELEASE = "2.1.0"
 _PENTAGI_CLEANUP_GRACE_SECONDS = 15.0
@@ -78,6 +79,7 @@ class ProductOutcome:
     output_text: str = field(repr=False)
     duration_seconds: float = 0.0
     metrics: dict[str, float] = field(default_factory=dict)
+    error_class: str = ""
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,9 @@ def run_product_adapter(
     status = outcome.status
     if _reported_budget_overrun(scenario.budgets, metrics):
         status = "invalid"
+    error_class = outcome.error_class
+    if status == "invalid" and not error_class:
+        error_class = "ReportedBudgetOverrun"
 
     artifact_refs: list[str] = []
     if outcome.output_text:
@@ -181,6 +186,7 @@ def run_product_adapter(
         "metrics": metrics,
         "duration_seconds": outcome.duration_seconds,
         "artifact_refs": artifact_refs,
+        "error_class": error_class,
     }
 
 
@@ -251,17 +257,28 @@ def _run_octopus(
             max_output,
         )
         metrics = {"tool_calls": float(pipeline.tools_run_count + 1)}
+        duration = max(0.0, time.monotonic() - started)
         return ProductOutcome(
-            status="succeeded",
+            # The outer runner reserves a short protocol-completion grace, but
+            # Octopus must never turn that control-plane time into a successful
+            # product run beyond the shared scenario budget.
+            status="timeout" if duration >= timeout else "succeeded",
             output_text=output,
-            duration_seconds=max(0.0, time.monotonic() - started),
+            duration_seconds=duration,
             metrics=metrics,
+            error_class=("ProductTimeout" if duration >= timeout else ""),
         )
     except (OSError, ProductAdapterError, urllib.error.URLError, ValueError):
+        duration = max(0.0, time.monotonic() - started)
         return ProductOutcome(
-            status="failed",
+            status="timeout" if duration >= timeout else "failed",
             output_text="",
-            duration_seconds=max(0.0, time.monotonic() - started),
+            duration_seconds=duration,
+            error_class=(
+                "ProductTimeout"
+                if duration >= timeout
+                else "OctopusAdapterFailure"
+            ),
         )
 
 
@@ -368,7 +385,7 @@ def _run_cli_product(
             "--target",
             target,
             "--scan-mode",
-            str(source_environment.get("OCTOBENCH_STRIX_SCAN_MODE") or "standard"),
+            STRIX_BENCHMARK_SCAN_MODE,
             "--scope-mode",
             "full",
             "--instruction-file",
@@ -432,19 +449,30 @@ def _run_cli_product(
     collected = _collect_product_output(workspace, stdout_text, max_output)
     if timed_out:
         status = "timeout"
+        error_class = "ProductTimeout"
     elif output_exceeded:
         status = "invalid"
+        error_class = "ProductOutputExceeded"
     elif exit_code not in accepted:
         status = "failed"
+        error_class = _product_exit_error_class(exit_code)
     else:
         status = "succeeded"
+        error_class = ""
     metrics = _extract_structured_metrics(collected)
     return ProductOutcome(
         status=status,
         output_text=collected,
         duration_seconds=duration,
         metrics=metrics,
+        error_class=error_class,
     )
+
+
+def _product_exit_error_class(exit_code: int) -> str:
+    if exit_code < 0:
+        return f"ProductSignal{abs(exit_code)}"
+    return f"ProductExitCode{exit_code}"
 
 
 def _run_pentagi(
@@ -1289,6 +1317,7 @@ def _failed_result() -> dict[str, Any]:
         "metrics": {},
         "duration_seconds": 0.0,
         "artifact_refs": [],
+        "error_class": "ProductAdapterFailure",
     }
 
 

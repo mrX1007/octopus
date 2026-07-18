@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import platform
+import re
 import subprocess
 import sys
 import time
@@ -49,6 +51,7 @@ from .state import CampaignJournal, campaign_fingerprint, schedule_run_key
 CAMPAIGN_CONFIG_SCHEMA_VERSION = "1.0"
 _KNOWN_STRICT_STATUSES = frozenset({"failed", "invalid", "partial", "timeout"})
 _RUN_STATUSES = _KNOWN_STRICT_STATUSES | {"succeeded"}
+_ERROR_CLASS = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 _CAMPAIGN_CONFIG_KEYS = frozenset(
     {
         "$schema",
@@ -363,7 +366,14 @@ def run_campaign(
     with journal.lock():
         journal.initialize(schedule)
         journal.write_preflight(preflight.to_dict())
-        journal.set_status("running", completed_runs=journal.completed_run_count())
+        completed_at_start = journal.completed_run_count()
+        journal.set_status("running", completed_runs=completed_at_start)
+        _emit_progress(
+            "campaign_started",
+            campaign_id=resolved.campaign_id,
+            completed_runs=completed_at_start,
+            total_runs=len(schedule),
+        )
         runners = {item.system_id: runner_factory(item) for item in manifests}
         with _temporary_environment(effective_environment):
             try:
@@ -375,6 +385,15 @@ def run_campaign(
                     system_id = str(scheduled["system_id"])
                     scenario_id = str(scheduled["scenario_id"])
                     scenario = scenario_by_id[scenario_id]
+                    _emit_progress(
+                        "run_started",
+                        campaign_id=resolved.campaign_id,
+                        order=int(scheduled["order"]),
+                        total_runs=len(schedule),
+                        system_id=system_id,
+                        scenario_id=scenario_id,
+                        repetition=int(scheduled["repetition"]),
+                    )
                     context = _scheduled_context(
                         resolved.campaign_id,
                         scheduled,
@@ -383,6 +402,7 @@ def run_campaign(
                     last_context = context
                     attestation = controller.reset_and_health(context)
                     journal.write_attestation(run_key, attestation.to_dict())
+                    started_at = float(clock())
                     started = monotonic()
                     error_class = ""
                     try:
@@ -397,7 +417,10 @@ def run_campaign(
                     except Exception as exc:
                         error_class = type(exc).__name__
                         result = _failed_result(max(0.0, monotonic() - started))
-                    result.setdefault("duration_seconds", max(0.0, monotonic() - started))
+                    result["duration_seconds"] = _nonnegative_duration(
+                        result.get("duration_seconds"),
+                        default=max(0.0, monotonic() - started),
+                    )
                     result["status"] = str(result.get("status") or "succeeded").lower()
                     if result["status"] not in _RUN_STATUSES:
                         error_class = "InvalidRunnerStatus"
@@ -405,6 +428,15 @@ def run_campaign(
                     if _contains_secret_canary(result, secret_canaries):
                         error_class = "SecretCanaryDetected"
                         result = _failed_result(max(0.0, monotonic() - started))
+                    reported_error_class = result.pop("error_class", "")
+                    if not error_class and reported_error_class:
+                        error_class = _safe_error_class(reported_error_class)
+                    # Persist the wall-clock interval at execution time.  The
+                    # matrix is assembled later by replaying the journal, so
+                    # timing it again would publish replay timestamps beside
+                    # the original (potentially minutes-long) duration.
+                    result["started_at"] = started_at
+                    result["finished_at"] = float(clock())
                     journal.write_run(
                         run_key,
                         {
@@ -417,6 +449,20 @@ def run_campaign(
                         },
                     )
                     executed_runs += 1
+                    _emit_progress(
+                        "run_finished",
+                        campaign_id=resolved.campaign_id,
+                        order=int(scheduled["order"]),
+                        total_runs=len(schedule),
+                        system_id=system_id,
+                        scenario_id=scenario_id,
+                        repetition=context.repetition,
+                        status=str(result["status"]),
+                        duration_seconds=round(
+                            float(result["duration_seconds"]),
+                            6,
+                        ),
+                    )
             except LabResetError as exc:
                 journal.set_status(
                     "aborted",
@@ -428,6 +474,12 @@ def run_campaign(
                 journal.set_status(
                     "interrupted",
                     completed_runs=journal.completed_run_count(),
+                )
+                _emit_progress(
+                    "campaign_interrupted",
+                    campaign_id=resolved.campaign_id,
+                    completed_runs=journal.completed_run_count(),
+                    total_runs=len(schedule),
                 )
                 raise
             finally:
@@ -488,7 +540,6 @@ def run_campaign(
             manifests,
             scenarios,
             fingerprint=fingerprint,
-            environment_identity=environment_identity,
             controller_source_identity=controller_source_identity,
         )
         try:
@@ -516,6 +567,13 @@ def run_campaign(
             matrix_id=matrix.matrix_id,
             output_directory_name=resolved.output_directory.name,
             cleanup_status=cleanup_attestation["status"],
+        )
+        _emit_progress(
+            "campaign_published",
+            campaign_id=resolved.campaign_id,
+            completed_runs=journal.completed_run_count(),
+            total_runs=len(schedule),
+            status=campaign_outcome_status,
         )
         return CampaignOutcome(
             campaign_id=resolved.campaign_id,
@@ -654,7 +712,11 @@ def _journal_runner_factory(
             result = record.get("result")
             if not isinstance(result, Mapping):
                 raise RuntimeError("campaign_journal_result_invalid")
-            return dict(result)
+            replayed = dict(result)
+            replayed["error_class"] = _safe_error_class(
+                record.get("error_class") or ""
+            )
+            return replayed
 
         return replay
 
@@ -720,7 +782,6 @@ def _provenance(
     scenarios: Sequence[BenchmarkScenario],
     *,
     fingerprint: str,
-    environment_identity: Mapping[str, str],
     controller_source_identity: Mapping[str, str],
 ) -> dict[str, Any]:
     return {
@@ -743,7 +804,6 @@ def _provenance(
             "scenarios": {
                 item.scenario_id: _canonical_digest(item.to_dict()) for item in scenarios
             },
-            "non_secret_environment": dict(sorted(environment_identity.items())),
         },
     }
 
@@ -765,6 +825,17 @@ def _repository_revision() -> str:
         return "unknown"
     revision = completed.stdout.strip().lower()
     return revision if len(revision) == 40 else "unknown"
+
+
+def _emit_progress(event: str, **fields: Any) -> None:
+    """Write one bounded, secret-free progress event for long live campaigns."""
+
+    payload = {"event": event, **fields}
+    print(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")),
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _controller_source_identity() -> dict[str, str]:
@@ -794,6 +865,23 @@ def _failed_result(duration_seconds: float) -> dict[str, Any]:
         "artifact_refs": [],
         "duration_seconds": duration_seconds,
     }
+
+
+def _safe_error_class(value: Any) -> str:
+    candidate = str(value or "").strip()
+    if not candidate:
+        return ""
+    return candidate if _ERROR_CLASS.fullmatch(candidate) else "InvalidRunnerErrorClass"
+
+
+def _nonnegative_duration(value: Any, *, default: float) -> float:
+    if isinstance(value, bool):
+        return float(default)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    return parsed if math.isfinite(parsed) and parsed >= 0 else float(default)
 
 
 def _run_cleanup(

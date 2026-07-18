@@ -260,6 +260,7 @@ def test_core_prepare_generates_exact_pins_commands_and_secret_free_config(
         }
         if system_id == "strix":
             expected_provenance["sandbox_image"] = launch._STRIX_IMAGE
+            assert payload["metadata"]["scan_mode"] == "quick"
             assert payload["tool_versions"]["strix-sandbox-image"] == (
                 launch._STRIX_IMAGE
             )

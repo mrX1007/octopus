@@ -20,6 +20,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from ..schema import BenchmarkScenario
+from .adapter import STRIX_BENCHMARK_SCAN_MODE
 from .campaign import CampaignConfig, run_campaign
 from .labctl import LabControlError, _lab_address
 from .schema import SystemManifest
@@ -450,6 +451,11 @@ def _manifest_payload(
             "campaign_profile": profile,
             "integration": "repository-command-adapter",
             "action_conformance": "not_assessed",
+            **(
+                {"scan_mode": STRIX_BENCHMARK_SCAN_MODE}
+                if system.system_id == "strix"
+                else {}
+            ),
             "runtime_provenance": runtime_provenance,
         },
     }

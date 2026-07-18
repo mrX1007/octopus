@@ -146,6 +146,7 @@ def test_strix_exit_two_is_success_and_output_is_canonically_normalized(tmp_path
         tmp_path,
         """
 case "$*" in *"--max-budget-usd 2"*) ;; *) exit 64 ;; esac
+case "$*" in *"--scan-mode quick"*) ;; *) exit 63 ;; esac
 [ "$STRIX_IMAGE" = "ghcr.io/usestrix/strix-sandbox@sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c" ] || exit 65
 [ "$STRIX_TELEMETRY" = "false" ] || exit 66
 [ "$STRIX_LLM" = "ollama/qwen3.5:9b" ] || exit 67
@@ -176,10 +177,33 @@ exit 2
     assert result["actions"] == []
     assert result["metrics"]["tool_calls"] == 4.0
     assert result["metrics"]["evidence_completeness"] == 0.5
+    assert result["error_class"] == ""
     assert result["artifact_refs"][0].startswith("sha256:")
     serialized = json.dumps(result)
     assert "OCTOBENCH_EVIDENCE_SERVICE_HTTP_8080" not in serialized
     assert str(executable) not in serialized
+
+
+def test_strix_execution_failure_reports_only_stable_exit_class(tmp_path):
+    executable = _fake_executable(
+        tmp_path,
+        "echo 'provider response may contain sensitive detail'\nexit 1",
+    )
+
+    result = run_product_adapter(
+        "strix",
+        _scenario(),
+        environment=_environment(
+            OCTOBENCH_STRIX_BIN=str(executable),
+            STRIX_LLM="ollama/qwen3.5:9b",
+            LLM_API_BASE="http://127.0.0.1:11434",
+        ),
+    )
+
+    assert result["status"] == "failed"
+    assert result["error_class"] == "ProductExitCode1"
+    assert result["artifact_refs"][0].startswith("sha256:")
+    assert "sensitive detail" not in json.dumps(result)
 
 
 def test_runtime_target_override_uses_private_lab_address(tmp_path):
@@ -399,6 +423,49 @@ def test_octopus_adapter_keeps_exact_scope_and_skips_broad_recon(monkeypatch, tm
     assert observed["scan"][2]["raw_scan"].startswith(f"URL: {target}")
     assert observed["facts"][1] == target
     assert observed["trace"][1] == target
+
+
+def test_octopus_adapter_cannot_succeed_during_protocol_completion_grace(
+    monkeypatch,
+    tmp_path,
+):
+    class FakeFactStore:
+        @staticmethod
+        def get_facts(_scan_id, _scan_target):
+            return []
+
+    class FakePipeline:
+        def __init__(self, _database):
+            self.fact_store = FakeFactStore()
+            self.tools_run_count = 0
+
+        @staticmethod
+        def run_scan(_scan_id, _scan_target, **_kwargs):
+            return {"status": "done"}
+
+        @staticmethod
+        def trace_report(_scan_id, _scan_target):
+            return {}
+
+    clock = iter((100.0, 110.1))
+    monkeypatch.setattr(adapter_module.time, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        adapter_module,
+        "_octopus_exact_http_probe",
+        lambda *_args: "8080/tcp open http",
+    )
+    monkeypatch.setattr("core.ai.pipeline.AIPipeline", FakePipeline)
+
+    outcome = adapter_module._run_octopus(
+        _scenario(),
+        "http://127.0.0.1:8080",
+        tmp_path,
+        timeout=10.0,
+        max_output=200_000,
+    )
+
+    assert outcome.status == "timeout"
+    assert outcome.duration_seconds == pytest.approx(10.1)
 
 
 def test_octopus_probe_requests_only_exact_url_without_proxy_or_redirect(monkeypatch):
@@ -664,4 +731,5 @@ def test_cli_writes_protocol_failure_without_exception_details(tmp_path, monkeyp
         "metrics": {},
         "duration_seconds": 0.0,
         "artifact_refs": [],
+        "error_class": "ProductAdapterFailure",
     }

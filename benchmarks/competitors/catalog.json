@@ -48,6 +48,7 @@
         ],
         "runtime": [
           "The same neutral Ollama/Qwen model and server used by OCTOPUS",
+          "Pinned quick scan mode for the bounded CI-style campaign",
           "No credential for local Ollama; optional scoped credential for an authenticated endpoint",
           "Pinned sandbox image ghcr.io/usestrix/strix-sandbox@sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c",
           "An authorized target or source checkout"
