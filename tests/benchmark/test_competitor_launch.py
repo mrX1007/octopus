@@ -22,6 +22,7 @@ OCTOPUS_REVISION = "0123456789abcdef0123456789abcdef01234567"
 STRIX_REVISION = "91d9a847166fe2f82125643d13e099b0d989bbe4"
 PENTESTGPT_REVISION = "83ae3647603de8c66229f0877faef77a53f5c8f6"
 PENTAGI_REVISION = "a112db206b2fb7866c367c33348f52f5cdc207d0"
+SHARED_OLLAMA_MODEL = "qwen3.5:9b"
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -87,11 +88,11 @@ def _core_environment() -> dict[str, str]:
         "OCTOBENCH_ACK_AUTHORIZED": "YES",
         "OCTOBENCH_ACK_ISOLATED_HOST": "YES",
         "OCTOPUS_OLLAMA_URL": "http://127.0.0.1:11434/api/generate",
-        "OCTOPUS_OLLAMA_MODEL": "octopus-model",
+        "OCTOPUS_OLLAMA_MODEL": SHARED_OLLAMA_MODEL,
         "OCTOBENCH_STRIX_BIN": "/opt/strix/bin/strix",
         "STRIX_IMAGE": launch._STRIX_IMAGE,
-        "STRIX_LLM": "strix-model",
-        "LLM_API_KEY": "secret-strix-canary-93824",
+        "STRIX_LLM": f"ollama/{SHARED_OLLAMA_MODEL}",
+        "LLM_API_BASE": "http://127.0.0.1:11434",
     }
 
 
@@ -122,6 +123,7 @@ def _prepare_root(
     monkeypatch.setattr(launch, "_repository_revision", lambda: OCTOPUS_REVISION)
     monkeypatch.setenv("PATH", "/usr/bin:/bin")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
     for name in launch._OPTIONAL_DOCKER_ENVIRONMENT:
         monkeypatch.delenv(name, raising=False)
     scenario_directory = (
@@ -224,11 +226,21 @@ def test_core_prepare_generates_exact_pins_commands_and_secret_free_config(
         assert payload["track"] == "full_system"
         assert payload["execution_mode"] == "live"
         assert payload["fairness_profile"] == {
-            "profile_id": "linux-blackbox-full-system-v1",
-            "same_model": False,
+            "profile_id": "linux-blackbox-shared-ollama-v1",
+            "same_model": True,
+            "notes": (
+                "OCTOPUS and Strix use the same neutral Ollama provider, model tag, "
+                "weights and server; product-native prompts, request APIs and "
+                "inference defaults remain distinct."
+            ),
             "same_tool_versions": False,
             "same_hardware": True,
             "same_budgets": False,
+        }
+        assert payload["model"] == {
+            "provider": "ollama",
+            "name": SHARED_OLLAMA_MODEL,
+            "parameters": {},
         }
         assert payload["adapter"]["argv"] == [
             expected_python,
@@ -252,6 +264,8 @@ def test_core_prepare_generates_exact_pins_commands_and_secret_free_config(
                 launch._STRIX_IMAGE
             )
             assert "STRIX_IMAGE" in payload["adapter"]["environment_passthrough"]
+            assert "LLM_API_BASE" in payload["adapter"]["environment_passthrough"]
+            assert "LLM_API_KEY" not in payload["adapter"]["environment_passthrough"]
         assert payload["metadata"]["runtime_provenance"] == expected_provenance
 
     assert config_path == (
@@ -279,7 +293,7 @@ def test_core_prepare_generates_exact_pins_commands_and_secret_free_config(
         load_system_manifest(path).system_id
         for path in loaded_config.system_manifest_paths
     } == {"octopus", "strix"}
-    assert config["secret_environment"] == ["LLM_API_KEY"]
+    assert config["secret_environment"] == []
     for command, action in (
         (config["lab"]["reset"], "reset"),
         (config["lab"]["health"], "health"),
@@ -302,7 +316,7 @@ def test_core_prepare_generates_exact_pins_commands_and_secret_free_config(
     serialized = "\n".join(
         path.read_text(encoding="utf-8") for path in generated.rglob("*.json")
     )
-    assert _core_environment()["LLM_API_KEY"] not in serialized
+    assert _core_environment()["LLM_API_BASE"] not in serialized
     assert all(
         path.stat().st_mode & 0o777 == 0o600 for path in generated.rglob("*.json")
     )
@@ -348,10 +362,7 @@ def test_extended_profile_adds_exact_pentagi_pin_and_environment_contract(
         "service_release": "2.1.0",
         "source_revision_attested": False,
     }
-    assert config["secret_environment"] == [
-        "LLM_API_KEY",
-        "OCTOBENCH_PENTAGI_TOKEN",
-    ]
+    assert config["secret_environment"] == ["OCTOBENCH_PENTAGI_TOKEN"]
     assert config["repetitions"] == 6
     generated_scenario = json.loads(
         (
@@ -393,7 +404,7 @@ def test_environment_file_requires_exact_private_permissions_and_required_values
     }
 
     values = _core_environment()
-    values.pop("LLM_API_KEY")
+    values.pop("LLM_API_BASE")
     _write_environment(environment_file, values)
     assert launch.main(
         [
@@ -433,6 +444,100 @@ def test_environment_file_requires_exact_private_permissions_and_required_values
         ]
     ) == 2
     assert json.loads(capsys.readouterr().err) == {"error": "invalid_strix_image"}
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"LLM_API_BASE": "http://127.0.0.2:11434"},
+        {"LLM_API_BASE": "http://127.0.0.1:11434/api/generate"},
+        {"STRIX_LLM": "ollama/another-qwen"},
+        {"OCTOPUS_OLLAMA_MODEL": "octopus-qwen", "STRIX_LLM": "ollama/octopus-qwen"},
+        {"OCTOPUS_OLLAMA_URL": "http://127.0.0.1:11434/v1"},
+    ],
+)
+def test_shared_ollama_contract_rejects_mismatched_or_biased_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    updates: dict[str, str],
+) -> None:
+    _prepare_root(tmp_path, monkeypatch)
+    values = {**_core_environment(), **updates}
+    environment_file = _write_environment(tmp_path / "campaign.env", values)
+
+    assert launch.main(
+        [
+            "--campaign-id",
+            "invalid-shared-model-v1",
+            "--environment-file",
+            str(environment_file),
+            "--prepare-only",
+        ]
+    ) == 2
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "invalid_shared_ollama_configuration"
+    }
+
+
+@pytest.mark.parametrize(
+    ("octopus_url", "strix_base"),
+    [
+        (
+            "http://127.0.0.1:11434/api/generate/",
+            "http://127.0.0.1:11434/",
+        ),
+        (
+            "http://[::1]:11434/api/generate",
+            "http://[::1]:11434",
+        ),
+    ],
+)
+def test_shared_ollama_contract_accepts_canonical_equivalent_urls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    octopus_url: str,
+    strix_base: str,
+) -> None:
+    values = {
+        **_core_environment(),
+        "OCTOPUS_OLLAMA_URL": octopus_url,
+        "LLM_API_BASE": strix_base,
+    }
+
+    config_path, _config = _run_prepare(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        values=values,
+        campaign_id="canonical-shared-model-v1",
+    )
+
+    assert config_path.is_file()
+
+
+def test_optional_llm_api_key_is_conditionally_passed_and_redacted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    secret = "secret-optional-ollama-key-93824"
+    config_path, config = _run_prepare(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        values={**_core_environment(), "LLM_API_KEY": secret},
+        campaign_id="optional-key-v1",
+    )
+    strix = json.loads((config_path.parent / "strix.json").read_text(encoding="utf-8"))
+
+    assert "LLM_API_KEY" in strix["adapter"]["environment_passthrough"]
+    assert "LLM_API_KEY" in config["required_environment"]
+    assert config["secret_environment"] == ["LLM_API_KEY"]
+    assert secret not in "\n".join(
+        path.read_text(encoding="utf-8") for path in config_path.parent.rglob("*.json")
+    )
 
 
 def test_optional_docker_environment_is_conditionally_passed_to_lab_and_strix(
@@ -592,8 +697,8 @@ def test_linux_run_sets_detected_target_and_returns_campaign_exit(
     assert observed["environment"]["OCTOBENCH_LAB_BIND"] == "10.1.2.3"
     assert observed["environment"]["OCTOBENCH_HOST_IP"] == "10.1.2.3"
     assert observed["environment"]["OCTOBENCH_LAB_PORT"] == "8080"
-    assert observed["environment"]["LLM_API_KEY"] == (
-        _core_environment()["LLM_API_KEY"]
+    assert observed["environment"]["LLM_API_BASE"] == (
+        _core_environment()["LLM_API_BASE"]
     )
     manifest = json.loads(
         (

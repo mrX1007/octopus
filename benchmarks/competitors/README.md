@@ -32,7 +32,7 @@ out of normal JSON scenario/manifest discovery.
 ## Supported releases and comparison surfaces
 
 `catalog.json` is the machine-readable review record for the competitor
-selection as reviewed on 2026-07-17. A contract test requires its tags and
+selection as reviewed on 2026-07-18. A contract test requires its tags and
 revisions to match the launcher and bootstrap pins, preventing silent drift
 between those three inputs. The supported Linux black-box launcher
 profiles are deliberately small:
@@ -108,6 +108,30 @@ detects one private host address and binds the lab only there;
 standalone lab control defaults to `127.0.0.1`. Optional explicit host, bind
 and port overrides are documented as comments in the template.
 
+The `core` profile intentionally gives OCTOPUS and Strix the same neutral
+Ollama/Qwen model and runtime endpoint. Use the raw Qwen tag or a neutral alias;
+do not use this repository's `octopus-qwen` alias because its embedded
+OCTOPUS-specific system prompt would bias the comparison. For example:
+
+```dotenv
+OCTOPUS_OLLAMA_URL=http://127.0.0.1:11434/api/generate
+OCTOPUS_OLLAMA_MODEL=huihui_ai/qwen3.5-abliterated:9b
+STRIX_LLM=ollama/huihui_ai/qwen3.5-abliterated:9b
+LLM_API_BASE=http://127.0.0.1:11434
+```
+
+`LLM_API_KEY` is not needed for ordinary local Ollama. Define it only for an
+authenticated shared endpoint; when present it is conditionally passed and
+redacted from generated/public data. The launcher rejects a different host,
+port or model, rejects `/api/generate` in `LLM_API_BASE`, and rejects the biased
+`octopus-qwen` alias. OCTOPUS uses Ollama `/api/generate`, while Strix maps its
+`ollama/` route to Ollama chat; the weights, model tag and runtime server are
+shared, but each product retains its native request/prompt interface.
+This controls model identity, not every inference default. Strix upstream also
+warns that local models below 70B often struggle with agentic tool use, so a 9B
+Qwen result measures this shared local-model profile rather than each vendor's
+best achievable cloud-model performance.
+
 Optionally inspect the exact generated manifests and campaign config without
 running a system:
 
@@ -164,7 +188,9 @@ conformance targets, not spending guarantees; `same_budgets` is therefore
 false for this full-system profile. Strix 1.1.0 additionally receives its
 native `--max-budget-usd` limit, but that does not make the cross-system budget
 contract uniform. Set independent provider-side spending
-limits before a live run. Publish only the calls, tokens and cost actually
+limits before a live run. With local Ollama, native dollar-cost telemetry may
+be unavailable or zero even though compute is consumed, so the wall-time bound
+remains the meaningful hard limit. Publish only the calls, tokens and cost actually
 reported in the result bundle, leave unavailable values as `N/A`, and never
 project one provider's price onto another system.
 
@@ -181,9 +207,10 @@ The comparison tracks are:
 - `framework_only`: all systems in the comparison group use the same model,
   model parameters, tool versions, hardware class, lab snapshot and budgets.
   This track is intended to isolate orchestration/framework behavior.
-- `full_system`: each system uses its documented recommended model and tools.
-  Hardware, price and model/tool differences remain visible in the manifests
-  and results.
+- `full_system`: each system retains its product-native orchestration and tools.
+  A versioned fairness profile may control the model, as the shipped `core`
+  profile does with shared Ollama/Qwen; remaining tool, hardware and budget
+  differences stay explicit in manifests and results.
 
 Do not merge, rank or average results across these tracks. A fairness profile
 ID identifies systems that are eligible for a direct comparison. For a

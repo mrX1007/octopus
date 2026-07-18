@@ -148,6 +148,9 @@ def test_strix_exit_two_is_success_and_output_is_canonically_normalized(tmp_path
 case "$*" in *"--max-budget-usd 2"*) ;; *) exit 64 ;; esac
 [ "$STRIX_IMAGE" = "ghcr.io/usestrix/strix-sandbox@sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c" ] || exit 65
 [ "$STRIX_TELEMETRY" = "false" ] || exit 66
+[ "$STRIX_LLM" = "ollama/qwen3.5:9b" ] || exit 67
+[ "$LLM_API_BASE" = "http://127.0.0.1:11434" ] || exit 68
+[ -z "$LLM_API_KEY" ] || exit 69
 echo 'HTTP service on port 8080'
 echo 'OCTOBENCH_EVIDENCE_SERVICE_HTTP_8080'
 echo 'GET /health'
@@ -159,7 +162,11 @@ exit 2
     result = run_product_adapter(
         "strix",
         _scenario(),
-        environment=_environment(OCTOBENCH_STRIX_BIN=str(executable)),
+        environment=_environment(
+            OCTOBENCH_STRIX_BIN=str(executable),
+            STRIX_LLM="ollama/qwen3.5:9b",
+            LLM_API_BASE="http://127.0.0.1:11434",
+        ),
     )
 
     assert result["status"] == "succeeded"

@@ -625,6 +625,25 @@ from `YES`.
 The checked-in `STRIX_IMAGE` value is an immutable Linux amd64 digest; do not
 replace it with a mutable tag or another digest.
 
+For the `core` comparison, point both systems at one neutral/raw Qwen model on
+the same Ollama server. Do not use the OCTOPUS-specific `octopus-qwen` alias,
+whose embedded system prompt would bias Strix:
+
+```dotenv
+OCTOPUS_OLLAMA_URL=http://127.0.0.1:11434/api/generate
+OCTOPUS_OLLAMA_MODEL=huihui_ai/qwen3.5-abliterated:9b
+STRIX_LLM=ollama/huihui_ai/qwen3.5-abliterated:9b
+LLM_API_BASE=http://127.0.0.1:11434
+```
+
+Local Ollama does not require `LLM_API_KEY`. The launcher verifies the shared
+origin and model before generating the campaign. OCTOPUS uses Ollama generate
+and Strix uses its native Ollama chat route, while sharing the model tag,
+weights and runtime server.
+This is a controlled shared-model comparison, not a vendor-best-model score;
+Strix upstream cautions that sub-70B local models can struggle with agentic
+tool use.
+
 ```bash
 ./venv/bin/python -m core.benchmarks.competitors.launch \
   --campaign-id linux-blackbox-v1-20260716T120000Z \

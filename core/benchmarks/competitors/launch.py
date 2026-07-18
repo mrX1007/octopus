@@ -84,7 +84,7 @@ _BASE_REQUIRED_ENVIRONMENT = (
     "OCTOBENCH_STRIX_BIN",
     "STRIX_IMAGE",
     "STRIX_LLM",
-    "LLM_API_KEY",
+    "LLM_API_BASE",
 )
 _EXTENDED_REQUIRED_ENVIRONMENT = (
     "OCTOBENCH_PENTAGI_URL",
@@ -92,12 +92,9 @@ _EXTENDED_REQUIRED_ENVIRONMENT = (
     "OCTOBENCH_PENTAGI_PROVIDER",
     "OCTOBENCH_PENTAGI_MODEL",
 )
-_CORE_SECRET_ENVIRONMENT = ("LLM_API_KEY",)
 _EXTENDED_SECRET_ENVIRONMENT = ("OCTOBENCH_PENTAGI_TOKEN",)
 
-_FAIRNESS_PROFILE = {
-    "profile_id": "linux-blackbox-full-system-v1",
-    "same_model": False,
+_FAIRNESS_PROFILE_BASE = {
     "same_tool_versions": False,
     "same_hardware": True,
     "same_budgets": False,
@@ -156,6 +153,7 @@ class LaunchError(RuntimeError):
             "git_unavailable",
             "invalid_campaign_id",
             "invalid_lab_bind",
+            "invalid_shared_ollama_configuration",
             "invalid_strix_image",
             "isolation_required",
             "linux_required",
@@ -180,6 +178,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         environment = _merged_environment(args.environment_file)
         required = _required_environment(args.profile)
         _validate_required_environment(environment, required)
+        _validate_shared_ollama_configuration(environment)
         _validate_strix_image_reference(environment)
         _validated_lab_bind(environment.get("OCTOBENCH_LAB_BIND"))
         revision = _repository_revision()
@@ -294,7 +293,7 @@ def _prepare_generated_campaign(
     _reject_serialized_secrets(
         payloads,
         environment=environment,
-        names=_secret_environment(profile),
+        names=_secret_environment(profile, environment),
     )
     _atomic_generated_directory(generated_directory, payloads)
     return generated_directory / config_name
@@ -321,12 +320,12 @@ def _system_pins(
             "v1.1.0",
             _STRIX_REVISION,
             None,
-            "STRIX_LLM",
+            "OCTOPUS_OLLAMA_MODEL",
             (
                 "OCTOBENCH_STRIX_BIN",
                 "STRIX_IMAGE",
                 "STRIX_LLM",
-                "LLM_API_KEY",
+                "LLM_API_BASE",
             ),
         ),
     )
@@ -358,7 +357,7 @@ def _manifest_payload(
         if system.model_provider_environment is not None
         else {
             "octopus": "ollama",
-            "strix": "system-recommended",
+            "strix": "ollama",
         }[system.system_id]
     )
     adapter_environment = tuple(
@@ -370,6 +369,10 @@ def _manifest_payload(
     if system.system_id == "strix":
         adapter_environment = (
             *adapter_environment,
+            *_configured_optional_environment(
+                environment,
+                ("LLM_API_KEY",),
+            ),
             *_configured_optional_environment(
                 environment,
                 _OPTIONAL_DOCKER_ENVIRONMENT,
@@ -421,7 +424,7 @@ def _manifest_payload(
         "source_revision": system.source_revision,
         "execution_mode": "live",
         "track": "full_system",
-        "fairness_profile": dict(_FAIRNESS_PROFILE),
+        "fairness_profile": _fairness_profile(profile),
         "model": {
             "provider": provider,
             "name": str(environment[system.model_name_environment]),
@@ -484,6 +487,10 @@ def _campaign_payload(
                     "extended" if any(item.system_id == "pentagi" for item in systems) else "core"
                 ),
                 *_COMMON_ADAPTER_ENVIRONMENT,
+                *_configured_optional_environment(
+                    environment,
+                    ("LLM_API_KEY",),
+                ),
             )
         )
     )
@@ -502,7 +509,7 @@ def _campaign_payload(
         # three-system extended profiles position-balanced.
         "repetitions": repetitions,
         "required_environment": list(required),
-        "secret_environment": list(_secret_environment(profile)),
+        "secret_environment": list(_secret_environment(profile, environment)),
         "strict_statuses": ["failed", "invalid", "partial", "timeout"],
         "lab": {
             "reset": command("reset", 900.0),
@@ -559,10 +566,37 @@ def _required_environment(profile: str) -> tuple[str, ...]:
     return _BASE_REQUIRED_ENVIRONMENT
 
 
-def _secret_environment(profile: str) -> tuple[str, ...]:
+def _fairness_profile(profile: str) -> dict[str, Any]:
+    shared_model = profile == "core"
+    return {
+        "profile_id": (
+            "linux-blackbox-shared-ollama-v1"
+            if shared_model
+            else "linux-blackbox-shared-ollama-plus-pentagi-v1"
+        ),
+        "same_model": shared_model,
+        "notes": (
+            "OCTOPUS and Strix use the same neutral Ollama provider, model tag, "
+            "weights and server; product-native prompts, request APIs and "
+            "inference defaults remain distinct."
+            if shared_model
+            else "OCTOPUS and Strix share neutral Ollama/Qwen; PentAGI retains "
+            "its separately attested service model."
+        ),
+        **_FAIRNESS_PROFILE_BASE,
+    }
+
+
+def _secret_environment(
+    profile: str,
+    environment: Mapping[str, str],
+) -> tuple[str, ...]:
+    names = list(
+        _configured_optional_environment(environment, ("LLM_API_KEY",))
+    )
     if profile == "extended":
-        return (*_CORE_SECRET_ENVIRONMENT, *_EXTENDED_SECRET_ENVIRONMENT)
-    return _CORE_SECRET_ENVIRONMENT
+        names.extend(_EXTENDED_SECRET_ENVIRONMENT)
+    return tuple(names)
 
 
 def _merged_environment(environment_file: Path | None) -> dict[str, str]:
@@ -649,6 +683,53 @@ def _validate_required_environment(
 def _validate_strix_image_reference(environment: Mapping[str, str]) -> None:
     if str(environment.get("STRIX_IMAGE") or "").strip() != _STRIX_IMAGE:
         raise LaunchError("invalid_strix_image")
+
+
+def _validate_shared_ollama_configuration(
+    environment: Mapping[str, str],
+) -> None:
+    model = str(environment.get("OCTOPUS_OLLAMA_MODEL") or "").strip()
+    strix_model = str(environment.get("STRIX_LLM") or "").strip()
+    if (
+        not model
+        or any(character.isspace() for character in model)
+        or model.casefold() == "octopus-qwen"
+        or strix_model != f"ollama/{model}"
+    ):
+        raise LaunchError("invalid_shared_ollama_configuration")
+
+    octopus_origin, octopus_path = _ollama_url_parts(
+        environment.get("OCTOPUS_OLLAMA_URL")
+    )
+    strix_origin, strix_path = _ollama_url_parts(environment.get("LLM_API_BASE"))
+    if (
+        octopus_origin != strix_origin
+        or octopus_path.rstrip("/") != "/api/generate"
+        or strix_path not in {"", "/"}
+    ):
+        raise LaunchError("invalid_shared_ollama_configuration")
+
+
+def _ollama_url_parts(value: Any) -> tuple[tuple[str, str, int], str]:
+    candidate = str(value or "").strip()
+    try:
+        parsed = urlsplit(candidate)
+        port = parsed.port
+    except ValueError:
+        raise LaunchError("invalid_shared_ollama_configuration") from None
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    if (
+        scheme not in {"http", "https"}
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise LaunchError("invalid_shared_ollama_configuration")
+    canonical_port = port if port is not None else (443 if scheme == "https" else 80)
+    return (scheme, host, canonical_port), parsed.path
 
 
 def _runtime_lab_environment(environment: Mapping[str, str]) -> dict[str, str]:

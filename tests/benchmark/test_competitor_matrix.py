@@ -216,6 +216,24 @@ def test_matrix_rejects_unfair_or_ambiguous_inputs(manifests, error):
         )
 
 
+def test_full_system_same_model_declaration_requires_equal_model_metadata():
+    scenario = load_scenario(SCENARIO_PATH)
+
+    with pytest.raises(
+        CompetitorSchemaError,
+        match="fairness_profile_requires_equal_model_metadata",
+    ):
+        run_competitor_matrix(
+            (
+                _manifest("alpha", track="full_system"),
+                _manifest("beta", track="full_system", model_name="other-model"),
+            ),
+            (scenario,),
+            runner_factory=_runner_factory,
+            repetitions=5,
+        )
+
+
 def test_failures_are_publishable_but_trigger_strict_result():
     scenario = load_scenario(SCENARIO_PATH)
 

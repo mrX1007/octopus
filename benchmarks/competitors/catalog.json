@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0",
-  "as_of": "2026-07-17",
+  "as_of": "2026-07-18",
   "comparison_policy": {
     "default_track": "full_system",
     "framework_only_requires": "Identical model, parameters, tool image, hardware, lab snapshot and budgets for every system.",
@@ -47,8 +47,8 @@
           "Docker Compose"
         ],
         "runtime": [
-          "A model supported through Strix/LiteLLM",
-          "The corresponding provider credential",
+          "The same neutral Ollama/Qwen model and server used by OCTOPUS",
+          "No credential for local Ollama; optional scoped credential for an authenticated endpoint",
           "Pinned sandbox image ghcr.io/usestrix/strix-sandbox@sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c",
           "An authorized target or source checkout"
         ]

@@ -145,6 +145,7 @@ def run_competitor_matrix(
     execution_mode = _common_execution_mode(manifest_payloads)
     if track == "framework_only":
         _require_equal_framework_models(manifest_payloads)
+    _validate_declared_model_fairness(manifest_payloads, fairness_profile)
     _validate_declared_tool_fairness(manifest_payloads, fairness_profile)
 
     public_systems_in_run_order = tuple(
@@ -496,6 +497,25 @@ def _validate_declared_tool_fairness(
     if len(versions) != 1:
         raise CompetitorSchemaError(
             "fairness_profile_requires_equal_tool_versions"
+        )
+
+
+def _validate_declared_model_fairness(
+    payloads: Sequence[Mapping[str, Any]],
+    fairness_profile: Any,
+) -> None:
+    if not isinstance(fairness_profile, Mapping):
+        return
+    if not bool(fairness_profile.get("same_model")):
+        return
+    models = {_canonical_json(_model_metadata(payload)) for payload in payloads}
+    if "{}" in models or "null" in models:
+        raise CompetitorSchemaError(
+            "fairness_profile_requires_model_metadata"
+        )
+    if len(models) != 1:
+        raise CompetitorSchemaError(
+            "fairness_profile_requires_equal_model_metadata"
         )
 
 
