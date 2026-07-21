@@ -43,8 +43,11 @@ Adding a new category to the default catalog also requires a hermetic handler in
 for a custom integration runner should not be added to the required default
 catalog.
 
-The shipped Linux campaign keeps its reviewed scenario under
-`benchmarks/competitors/campaigns/linux-blackbox-v1/scenarios/`. For a custom
+The shipped Linux definitions keep reviewed scenarios under
+`benchmarks/competitors/campaigns/linux-blackbox-v1/scenarios/` and
+`benchmarks/competitors/campaigns/linux-blackbox-small-model-v1/scenarios/`.
+The launcher selects only allowlisted checked-in contracts with
+`--campaign-definition`; it never accepts an arbitrary path. For a custom
 low-level campaign, start from
 `benchmarks/competitors/scenarios/authorized-service-inventory.json.example`
 and place the completed document in a dedicated scenario directory. Use
@@ -103,12 +106,16 @@ publication checklist are documented in
 repetitions for every system/scenario pair. Publish immutable inputs, all runs,
 aggregate median/variance/minimum/maximum/count, failures, execution mode,
 comparison track and fairness metadata together. On Linux x86_64, use the
-supported pinned launcher for `linux-blackbox-v1`:
+supported pinned launcher. Omit `--campaign-definition` for the backward-
+compatible `linux-blackbox-v1` default, or select the altered-model stress
+contract explicitly:
 
 ```bash
 ./scripts/benchmarks/bootstrap_competitors_linux.sh --profile core
+CAMPAIGN_ID="linux-blackbox-small-model-v1-$(date -u +%Y%m%dt%H%M%Sz)"
 ./venv/bin/python -m core.benchmarks.competitors.launch \
-  --campaign-id <campaign-id> \
+  --campaign-id "$CAMPAIGN_ID" \
+  --campaign-definition linux-blackbox-small-model-v1 \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env
 ```

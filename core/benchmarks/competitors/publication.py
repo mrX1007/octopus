@@ -376,10 +376,29 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
             key=lambda item: str(item["scenario_id"]),
         )
     )
-    if not _json_equal(comparison_systems, expected_systems) or not _json_equal(
+    legacy_expected_scenarios = tuple(
+        {
+            key: value
+            for key, value in item.items()
+            if key not in {"tags", "evaluation_profile"}
+        }
+        for item in expected_scenarios
+    )
+    enriched_scenario_metadata = _json_equal(
         comparison_scenarios,
         expected_scenarios,
-    ):
+    )
+    legacy_scenario_metadata = (
+        "campaign_definition" not in campaign
+        and _json_equal(
+            comparison_scenarios,
+            legacy_expected_scenarios,
+        )
+    )
+    scenario_metadata_valid = (
+        enriched_scenario_metadata or legacy_scenario_metadata
+    )
+    if not _json_equal(comparison_systems, expected_systems) or not scenario_metadata_valid:
         raise CampaignPublicationError("publication_semantic_invalid")
     if not _json_equal(
         comparison.get("methodology"),
@@ -769,6 +788,8 @@ def _comparison_system_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
 def _comparison_scenario_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
     lab = _required_mapping(payload.get("lab"))
     target = _required_mapping(payload.get("target"))
+    strategy = _required_mapping(payload.get("strategy_config"))
+    evaluation_profile = strategy.get("evaluation_profile")
     return {
         "scenario_id": str(payload.get("scenario_id") or ""),
         "name": payload.get("name"),
@@ -779,6 +800,12 @@ def _comparison_scenario_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
         "tool_versions": dict(_required_mapping(payload.get("tool_versions"))),
         "budgets": dict(_required_mapping(payload.get("budgets"))),
         "seed": _nonnegative_integer(payload.get("seed")),
+        "tags": list(_string_sequence(payload.get("tags") or [])),
+        "evaluation_profile": (
+            dict(evaluation_profile)
+            if isinstance(evaluation_profile, Mapping)
+            else {}
+        ),
     }
 
 

@@ -53,6 +53,7 @@ def _manifest(
                 "same_tool_versions": True,
                 "same_hardware": True,
                 "same_budgets": True,
+                "notes": "Fixture fairness note.",
             },
             "model": {
                 "provider": "test-provider",
@@ -134,6 +135,8 @@ def test_matrix_runs_same_scenario_for_each_system_and_is_order_stable():
     }
     assert {item["duration_median_seconds"] for item in result.summaries} == {3.0}
     assert all("adapter" not in item for item in result.systems)
+    assert result.scenarios[0]["tags"] == ["replay", "service"]
+    assert result.scenarios[0]["evaluation_profile"] == {}
     assert "must-not-be-published" not in json.dumps(result.to_dict())
 
 
@@ -175,6 +178,9 @@ def test_publication_is_atomic_checksummed_and_refuses_overwrite(tmp_path):
     assert "No-op" in markdown
     assert "Repeat" in markdown
     assert "Cost USD" in markdown
+    assert "Fixture fairness note." in markdown
+    assert "Evaluation profile" in markdown
+    assert '["replay","service"]' in markdown
     with pytest.raises(FileExistsError, match="publication_destination_exists"):
         publish_competitor_matrix(result, destination)
 

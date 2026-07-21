@@ -287,6 +287,11 @@ def render_comparison_markdown(result: CompetitorMatrixResult) -> str:
     """Render an auditable comparison report without declaring a winner."""
 
     mode = result.execution_mode or "unspecified"
+    fairness = (
+        result.fairness_profile
+        if isinstance(result.fairness_profile, Mapping)
+        else {}
+    )
     lines = [
         "# Competitor benchmark comparison",
         "",
@@ -294,7 +299,8 @@ def render_comparison_markdown(result: CompetitorMatrixResult) -> str:
         f"Schema: `{result.schema_version}`  ",
         f"Track: `{result.track}`  ",
         f"Execution mode: `{mode}`  ",
-        f"Repetitions per system/scenario: `{result.repetitions}`",
+        f"Repetitions per system/scenario: `{result.repetitions}`  ",
+        f"Fairness profile: `{fairness.get('profile_id') or 'unspecified'}`",
         "",
         "## Methodology",
         "",
@@ -303,6 +309,8 @@ def render_comparison_markdown(result: CompetitorMatrixResult) -> str:
             "repetition counts, seeds, lab/target definitions, and scenario budgets "
             "under the declared fairness profile."
         ),
+        "",
+        str(fairness.get("notes") or "No additional fairness-profile note."),
         "",
         (
             f"This matrix contains only `{mode}` executions; live and replay results are "
@@ -335,14 +343,18 @@ def render_comparison_markdown(result: CompetitorMatrixResult) -> str:
             "",
             "## Scenario controls",
             "",
-            "| Scenario | Lab version | Target version | Budgets | Repetitions |",
-            "|---|---:|---:|---|---:|",
+            "| Scenario | Evaluation profile | Tags | Lab version | Target version | Budgets | Repetitions |",
+            "|---|---|---|---:|---:|---|---:|",
         ]
     )
     for scenario in result.scenarios:
         lines.append(
-            "| {} | {} | {} | {} | {} |".format(
+            "| {} | {} | {} | {} | {} | {} | {} |".format(
                 _markdown_cell(scenario["scenario_id"]),
+                _markdown_cell(
+                    _compact_json(scenario.get("evaluation_profile") or {})
+                ),
+                _markdown_cell(_compact_json(scenario.get("tags") or [])),
                 _markdown_cell(scenario["lab_version"]),
                 _markdown_cell(scenario["target_version"]),
                 _markdown_cell(_compact_json(scenario["budgets"])),
@@ -556,6 +568,7 @@ def _sanitize_public_metadata(value: Any, *, depth: int = 0) -> Any:
 
 
 def _scenario_metadata(scenario: BenchmarkScenario) -> dict[str, Any]:
+    evaluation_profile = scenario.strategy_config.get("evaluation_profile")
     return {
         "scenario_id": scenario.scenario_id,
         "name": scenario.name,
@@ -566,6 +579,12 @@ def _scenario_metadata(scenario: BenchmarkScenario) -> dict[str, Any]:
         "tool_versions": dict(scenario.tool_versions),
         "budgets": dict(scenario.budgets),
         "seed": scenario.seed,
+        "tags": list(scenario.tags),
+        "evaluation_profile": (
+            dict(evaluation_profile)
+            if isinstance(evaluation_profile, Mapping)
+            else {}
+        ),
     }
 
 

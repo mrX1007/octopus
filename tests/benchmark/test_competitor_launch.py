@@ -109,6 +109,17 @@ def _core_environment() -> dict[str, str]:
     }
 
 
+def _small_model_environment() -> dict[str, str]:
+    model = launch._SMALL_MODEL_CAMPAIGN_OLLAMA_MODEL
+    return {
+        **_core_environment(),
+        "OCTOPUS_OLLAMA_MODEL": model,
+        "STRIX_LLM": f"ollama/{model}",
+        "OCTOBENCH_OLLAMA_FLASH_ATTENTION": "1",
+        "OCTOBENCH_OLLAMA_KV_CACHE_TYPE": "q8_0",
+    }
+
+
 def _extended_environment() -> dict[str, str]:
     return {
         **_core_environment(),
@@ -225,25 +236,19 @@ def _prepare_root(
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     for name in launch._OPTIONAL_DOCKER_ENVIRONMENT:
         monkeypatch.delenv(name, raising=False)
-    scenario_directory = (
-        tmp_path
-        / "benchmarks"
-        / "competitors"
-        / "campaigns"
-        / "linux-blackbox-v1"
-        / "scenarios"
-    )
-    scenario_directory.mkdir(parents=True)
-    source_scenarios = (
+    source_campaigns = (
         REPOSITORY_ROOT
         / "benchmarks"
         / "competitors"
         / "campaigns"
-        / "linux-blackbox-v1"
-        / "scenarios"
     )
-    for source in source_scenarios.glob("*.json"):
-        (scenario_directory / source.name).write_bytes(source.read_bytes())
+    destination_campaigns = (
+        tmp_path / "benchmarks" / "competitors" / "campaigns"
+    )
+    for source in source_campaigns.glob("*/scenarios/*.json"):
+        destination = destination_campaigns / source.relative_to(source_campaigns)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
 
 
 def _runtime_attestations() -> dict[str, dict[str, Any]]:
@@ -262,6 +267,10 @@ def _runtime_attestations() -> dict[str, dict[str, Any]]:
         )
     }
     attestations["strix"]["sandbox_image"] = launch._STRIX_IMAGE
+    for system_id in ("octopus", "strix"):
+        attestations[system_id]["ollama_model_digest"] = (
+            launch._SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST
+        )
     return attestations
 
 
@@ -273,23 +282,25 @@ def _run_prepare(
     profile: str = "core",
     values: dict[str, str] | None = None,
     campaign_id: str = "campaign-v1",
+    campaign_definition: str | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     _prepare_root(tmp_path, monkeypatch)
     environment_file = _write_environment(
         tmp_path / "campaign.env",
         _core_environment() if values is None else values,
     )
-    exit_code = launch.main(
-        [
-            "--campaign-id",
-            campaign_id,
-            "--profile",
-            profile,
-            "--environment-file",
-            str(environment_file),
-            "--prepare-only",
-        ]
-    )
+    arguments = [
+        "--campaign-id",
+        campaign_id,
+        "--profile",
+        profile,
+        "--environment-file",
+        str(environment_file),
+        "--prepare-only",
+    ]
+    if campaign_definition is not None:
+        arguments.extend(("--campaign-definition", campaign_definition))
+    exit_code = launch.main(arguments)
     captured = capsys.readouterr()
     assert exit_code == 0, captured.err
     config_path = Path(captured.out.strip())
@@ -393,6 +404,8 @@ def test_core_prepare_generates_exact_pins_commands_and_secret_free_config(
         tmp_path / ".benchmark-state" / "journal"
     )
     assert config["repetitions"] == 6
+    assert config["campaign_definition"] == "linux-blackbox-v1"
+    assert generated_scenario["budgets"]["max_seconds"] == 300
     loaded_config = load_campaign_config(config_path)
     assert loaded_config.campaign_id == "campaign-v1"
     assert {
@@ -426,6 +439,158 @@ def test_core_prepare_generates_exact_pins_commands_and_secret_free_config(
     assert all(
         path.stat().st_mode & 0o777 == 0o600 for path in generated.rglob("*.json")
     )
+
+
+def test_small_model_campaign_definition_is_frozen_distinct_and_public(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path, config = _run_prepare(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        values=_small_model_environment(),
+        campaign_id="small-model-v1",
+        campaign_definition="linux-blackbox-small-model-v1",
+    )
+    scenarios = tuple((config_path.parent / "scenarios").glob("*.json"))
+    assert [path.name for path in scenarios] == [
+        "authorized-discovery-altered-small-model-stress-v1.json"
+    ]
+    scenario = json.loads(scenarios[0].read_text(encoding="utf-8"))
+    assert scenario["scenario_id"] == (
+        "authorized-discovery-altered-small-model-stress-v1"
+    )
+    assert scenario["budgets"]["max_seconds"] == 600
+    assert scenario["repetitions"] == 6
+    assert scenario["model"] == {
+        "provider": "ollama",
+        "name": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_MODEL,
+        "parameters": {
+            "context_length": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH
+        },
+    }
+    assert scenario["tool_versions"]["ollama"] == (
+        launch._SMALL_MODEL_CAMPAIGN_OLLAMA_SERVER_VERSION
+    )
+    assert scenario["strategy_config"]["evaluation_profile"] == {
+        "profile_id": "altered-sub-70b-stress-v1",
+        "classification": "small-model-stress",
+        "vendor_representative": False,
+        "model_tag": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_MODEL,
+        "model_digest": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST,
+        "context_length": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH,
+    }
+    assert scenario["strategy_config"]["runtime_policy"] == {
+        "ollama_flash_attention": True,
+        "ollama_kv_cache_type": "q8_0",
+        "ollama_num_parallel": 1,
+        "ollama_max_loaded_models": 1,
+        "attestation": "operator-declared-where-api-not-exposed",
+    }
+    calibration = scenario["strategy_config"]["time_budget_calibration"]
+    assert calibration["derived_hard_max_seconds"] == 600
+    assert calibration["calibration_scope"] == "engineering-smoke-not-statistical"
+    assert calibration["observations_seconds"] == {
+        "octopus": 334.237465,
+        "strix": 334.265284,
+    }
+    assert "non-vendor-representative" in scenario["tags"]
+    assert config["campaign_definition"] == "linux-blackbox-small-model-v1"
+    loaded_config = load_campaign_config(config_path)
+    assert loaded_config.campaign_definition == "linux-blackbox-small-model-v1"
+    assert loaded_config.fingerprint_payload()["campaign_definition"] == (
+        "linux-blackbox-small-model-v1"
+    )
+    assert loaded_config.public_payload()["campaign_definition"] == (
+        "linux-blackbox-small-model-v1"
+    )
+    assert {
+        "OCTOBENCH_OLLAMA_FLASH_ATTENTION",
+        "OCTOBENCH_OLLAMA_KV_CACHE_TYPE",
+    }.issubset(config["required_environment"])
+
+    for system_id in ("octopus", "strix"):
+        manifest = json.loads(
+            (config_path.parent / f"{system_id}.json").read_text(encoding="utf-8")
+        )
+        assert manifest["metadata"]["campaign_definition_id"] == (
+            "linux-blackbox-small-model-v1"
+        )
+        assert manifest["metadata"]["evaluation_scope"] == (
+            "altered-small-model-stress"
+        )
+        assert manifest["metadata"]["vendor_representative"] is False
+        assert manifest["fairness_profile"]["profile_id"] == (
+            "linux-blackbox-shared-ollama-altered-small-model-v1"
+        )
+        assert "not a vendor-representative score" in manifest[
+            "fairness_profile"
+        ]["notes"]
+
+
+@pytest.mark.parametrize(
+    "campaign_definition",
+    ("unknown-v1", "../linux-blackbox-v1", "/tmp/linux-blackbox-v1"),
+)
+def test_campaign_definition_rejects_unknown_or_path_values(
+    capsys: pytest.CaptureFixture[str],
+    campaign_definition: str,
+) -> None:
+    assert launch.main(
+        [
+            "--campaign-id",
+            "invalid-definition-v1",
+            "--campaign-definition",
+            campaign_definition,
+            "--prepare-only",
+        ]
+    ) == 2
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "invalid_campaign_definition"
+    }
+
+
+def test_small_model_campaign_definition_rejects_wrong_profile_or_runtime() -> None:
+    with pytest.raises(launch.LaunchError, match="campaign_definition_mismatch"):
+        launch._campaign_definition(
+            "linux-blackbox-small-model-v1",
+            profile="extended",
+        )
+
+    definition = launch._campaign_definition(
+        "linux-blackbox-small-model-v1",
+        profile="core",
+    )
+    launch._validate_campaign_definition_configuration(
+        definition,
+        _small_model_environment(),
+    )
+    launch._validate_campaign_definition_runtime(
+        definition,
+        {
+            system_id: {
+                "ollama_model_digest": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST
+            }
+            for system_id in ("octopus", "strix")
+        },
+    )
+    with pytest.raises(launch.LaunchError, match="campaign_definition_mismatch"):
+        launch._validate_campaign_definition_configuration(
+            definition,
+            {**_small_model_environment(), "OCTOBENCH_OLLAMA_KV_CACHE_TYPE": "q4_0"},
+        )
+    with pytest.raises(launch.LaunchError, match="campaign_definition_mismatch"):
+        launch._validate_campaign_definition_runtime(
+            definition,
+            {
+                "octopus": {"ollama_model_digest": "sha256:" + "0" * 64},
+                "strix": {
+                    "ollama_model_digest": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST
+                },
+            },
+        )
 
 
 def test_extended_profile_adds_exact_pentagi_pin_and_environment_contract(
@@ -771,7 +936,10 @@ def test_linux_run_sets_detected_target_and_returns_campaign_exit(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     _prepare_root(tmp_path, monkeypatch)
-    environment_file = _write_environment(tmp_path / "campaign.env", _core_environment())
+    environment_file = _write_environment(
+        tmp_path / "campaign.env",
+        _small_model_environment(),
+    )
     monkeypatch.setattr(launch.sys, "platform", "linux")
     monkeypatch.setattr(launch, "_repository_is_clean", lambda: True)
     monkeypatch.setattr(
@@ -797,6 +965,8 @@ def test_linux_run_sets_detected_target_and_returns_campaign_exit(
         [
             "--campaign-id",
             "run-v1",
+            "--campaign-definition",
+            "linux-blackbox-small-model-v1",
             "--environment-file",
             str(environment_file),
         ]
@@ -813,7 +983,7 @@ def test_linux_run_sets_detected_target_and_returns_campaign_exit(
     assert observed["environment"]["OCTOBENCH_HOST_IP"] == "10.1.2.3"
     assert observed["environment"]["OCTOBENCH_LAB_PORT"] == "8080"
     assert observed["environment"]["LLM_API_BASE"] == (
-        _core_environment()["LLM_API_BASE"]
+        _small_model_environment()["LLM_API_BASE"]
     )
     manifest = json.loads(
         (
@@ -834,10 +1004,11 @@ def test_linux_run_sets_detected_target_and_returns_campaign_exit(
             / "generated"
             / "run-v1"
             / "scenarios"
-            / "authorized-discovery-v1.json"
+            / "authorized-discovery-altered-small-model-stress-v1.json"
         ).read_text(encoding="utf-8")
     )
     assert scenario["repetitions"] == 6
+    assert scenario["budgets"]["max_seconds"] == 600
     assert capsys.readouterr().out == f"{tmp_path / 'published'}\n"
 
 
@@ -847,7 +1018,10 @@ def test_linux_diagnostic_pilot_runs_privately_and_returns_pilot_exit(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     _prepare_root(tmp_path, monkeypatch)
-    environment_file = _write_environment(tmp_path / "campaign.env", _core_environment())
+    environment_file = _write_environment(
+        tmp_path / "campaign.env",
+        _small_model_environment(),
+    )
     monkeypatch.setattr(launch.sys, "platform", "linux")
     monkeypatch.setattr(launch, "_repository_is_clean", lambda: True)
     monkeypatch.setattr(
@@ -879,6 +1053,8 @@ def test_linux_diagnostic_pilot_runs_privately_and_returns_pilot_exit(
         [
             "--campaign-id",
             "pilot-v1",
+            "--campaign-definition",
+            "linux-blackbox-small-model-v1",
             "--environment-file",
             str(environment_file),
             "--diagnostic-pilot",
@@ -1084,6 +1260,81 @@ def test_generated_scenario_directory_is_nested_atomic_and_idempotent(
     assert json.loads(capsys.readouterr().err) == {
         "error": "generated_state_conflict"
     }
+
+
+def test_reusing_campaign_id_with_another_definition_conflicts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _prepare_root(tmp_path, monkeypatch)
+    environment_file = _write_environment(
+        tmp_path / "campaign.env",
+        _small_model_environment(),
+    )
+    base_arguments = [
+        "--campaign-id",
+        "definition-collision-v1",
+        "--environment-file",
+        str(environment_file),
+        "--prepare-only",
+    ]
+    assert launch.main(base_arguments) == 0
+    capsys.readouterr()
+
+    assert launch.main(
+        [
+            *base_arguments,
+            "--campaign-definition",
+            "linux-blackbox-small-model-v1",
+        ]
+    ) == 2
+    assert json.loads(capsys.readouterr().err) == {
+        "error": "generated_state_conflict"
+    }
+
+
+def test_campaign_definition_directory_must_be_real_and_in_repository(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _prepare_root(tmp_path, monkeypatch)
+    definition = launch._campaign_definition(
+        "linux-blackbox-small-model-v1",
+        profile="core",
+    )
+    scenario_directory = (
+        tmp_path
+        / "benchmarks"
+        / "competitors"
+        / "campaigns"
+        / "linux-blackbox-small-model-v1"
+        / "scenarios"
+    )
+    real_directory = scenario_directory.with_name("real-scenarios")
+    scenario_directory.rename(real_directory)
+    scenario_directory.symlink_to(real_directory, target_is_directory=True)
+
+    with pytest.raises(launch.LaunchError, match="campaign_definition_unavailable"):
+        launch._scenario_directory(definition)
+
+
+def test_campaign_definition_rejects_symlinked_campaign_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _prepare_root(tmp_path, monkeypatch)
+    definition = launch._campaign_definition(
+        "linux-blackbox-small-model-v1",
+        profile="core",
+    )
+    campaign_root = tmp_path / "benchmarks" / "competitors" / "campaigns"
+    relocated_root = tmp_path / "relocated-campaigns"
+    campaign_root.rename(relocated_root)
+    campaign_root.symlink_to(relocated_root, target_is_directory=True)
+
+    with pytest.raises(launch.LaunchError, match="campaign_definition_unavailable"):
+        launch._scenario_directory(definition)
 
 
 def test_runtime_prerequisites_attest_one_ollama_digest_for_both_systems(

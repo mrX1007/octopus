@@ -816,6 +816,60 @@ def test_publication_secret_scan_and_verifier_detect_tampering(tmp_path):
         verify_campaign_bundle(outcome.bundle_path)
 
 
+def test_verifier_accepts_legacy_v1_scenario_metadata(tmp_path):
+    config, _manifest_paths = _campaign_fixture(tmp_path)
+    outcome = run_campaign(
+        config,
+        environment={"CAMPAIGN_TEST_TOKEN": SECRET_VALUE},
+        runner_factory=_successful_runner_factory([]),
+        lab_controller=RecordingLab(),
+        clock=lambda: 100.0,
+    )
+    comparison_path = outcome.bundle_path / "comparison.json"
+    comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
+    for scenario in comparison["scenarios"]:
+        scenario.pop("tags")
+        scenario.pop("evaluation_profile")
+    comparison_path.write_text(
+        json.dumps(comparison, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_checksums(outcome.bundle_path)
+
+    assert verify_campaign_bundle(outcome.bundle_path)["status"] == "verified"
+
+
+def test_verifier_requires_enriched_metadata_for_defined_campaign(tmp_path):
+    config, _manifest_paths = _campaign_fixture(tmp_path)
+    config = replace(
+        config,
+        campaign_definition="linux-blackbox-small-model-v1",
+    )
+    outcome = run_campaign(
+        config,
+        environment={"CAMPAIGN_TEST_TOKEN": SECRET_VALUE},
+        runner_factory=_successful_runner_factory([]),
+        lab_controller=RecordingLab(),
+        clock=lambda: 100.0,
+    )
+    comparison_path = outcome.bundle_path / "comparison.json"
+    comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
+    for scenario in comparison["scenarios"]:
+        scenario.pop("tags")
+        scenario.pop("evaluation_profile")
+    comparison_path.write_text(
+        json.dumps(comparison, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_checksums(outcome.bundle_path)
+
+    with pytest.raises(
+        CampaignPublicationError,
+        match="publication_semantic_invalid",
+    ):
+        verify_campaign_bundle(outcome.bundle_path)
+
+
 @pytest.mark.parametrize(
     "missing_evidence",
     ("attestation", "aggregate", "system_input"),

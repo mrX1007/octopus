@@ -614,32 +614,46 @@ credential template and make the private copy readable only by its owner:
 
 ```bash
 ./scripts/benchmarks/bootstrap_competitors_linux.sh --profile core
-cp benchmarks/competitors/secrets.env.example benchmarks/competitors/secrets.env
+test -e benchmarks/competitors/secrets.env || \
+  cp benchmarks/competitors/secrets.env.example benchmarks/competitors/secrets.env
 chmod 600 benchmarks/competitors/secrets.env
 ```
 
-Fill only the model/provider fields needed by the selected profile. Set both
-blank acknowledgement variables to `YES` yourself only after confirming scope
-and isolation. The launcher fails closed if either value is missing or differs
-from `YES`.
+Set both blank acknowledgement variables to `YES` yourself only after
+confirming scope and isolation. The launcher fails closed if either value is
+missing or differs from `YES`.
 The checked-in `STRIX_IMAGE` value is an immutable Linux amd64 digest; do not
 replace it with a mutable tag or another digest.
 
-For the `core` comparison, point both systems at one neutral/raw Qwen model on
-the same Ollama server. Do not use the OCTOPUS-specific `octopus-qwen` alias,
-whose embedded system prompt would bias Strix. Replace the same placeholder in
-both model fields:
+For the calibrated `linux-blackbox-small-model-v1` definition, use this exact
+private env configuration. The two acknowledgement values below are valid only
+after you have personally confirmed authorization and host isolation:
 
 ```dotenv
+OCTOBENCH_ACK_AUTHORIZED=YES
+OCTOBENCH_ACK_ISOLATED_HOST=YES
+
 OCTOPUS_OLLAMA_URL=http://127.0.0.1:11434/api/generate
-OCTOPUS_OLLAMA_MODEL=<exact-neutral-qwen-tag>
+OCTOPUS_OLLAMA_MODEL=huihui_ai/qwen3.5-abliterated:9b
 OCTOBENCH_OLLAMA_CONTEXT_LENGTH=65536
-OCTOBENCH_OLLAMA_SERVER_VERSION=<exact-ollama-version>
+OCTOBENCH_OLLAMA_SERVER_VERSION=0.18.3
 OCTOBENCH_OLLAMA_NUM_PARALLEL=1
 OCTOBENCH_OLLAMA_MAX_LOADED_MODELS=1
-STRIX_LLM=ollama/<exact-neutral-qwen-tag>
+OCTOBENCH_OLLAMA_FLASH_ATTENTION=1
+OCTOBENCH_OLLAMA_KV_CACHE_TYPE=q8_0
+
+OCTOBENCH_STRIX_BIN=.benchmark-tools/venvs/strix-1.1.0/bin/strix
+STRIX_IMAGE=ghcr.io/usestrix/strix-sandbox@sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c
+STRIX_LLM=ollama/huihui_ai/qwen3.5-abliterated:9b
 LLM_API_BASE=http://127.0.0.1:11434
+LLM_API_KEY=
 ```
+
+The calibrated `linux-blackbox-small-model-v1` definition is intentionally a
+separate altered-model stress profile. It requires the exact tag
+`huihui_ai/qwen3.5-abliterated:9b`, server version `0.18.3`, context `65536`,
+flash attention `1`, and KV cache type `q8_0`; the live launcher also pins the
+attested model digest and fails closed if any value differs.
 
 `OCTOBENCH_OLLAMA_CONTEXT_LENGTH` declares and verifies the benchmark contract;
 it does not reconfigure an already running Ollama service. On systemd Linux,
@@ -649,24 +663,35 @@ set the same server default in the drop-in:
 ```ini
 [Service]
 Environment="OLLAMA_CONTEXT_LENGTH=65536"
+Environment="OLLAMA_FLASH_ATTENTION=1"
+Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
 Environment="OLLAMA_NUM_PARALLEL=1"
 Environment="OLLAMA_MAX_LOADED_MODELS=1"
 ```
 
-Apply it with `sudo systemctl daemon-reload` and
-`sudo systemctl restart ollama`. Read the bare server version from the exact
-benchmark endpoint (add the configured Bearer header for an authenticated
+Apply it, verify the effective service environment, and pull the exact model:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart ollama
+systemctl show ollama -p Environment --no-pager
+ollama pull huihui_ai/qwen3.5-abliterated:9b
+```
+
+Then assert that the exact benchmark endpoint is still the pinned Ollama
+`0.18.3` server (add the configured Bearer header for an authenticated
 endpoint):
 
 ```bash
 curl -fsS http://127.0.0.1:11434/api/version |
-  ./venv/bin/python -c 'import json,sys; print(json.load(sys.stdin)["version"])'
+  ./venv/bin/python -c 'import json,sys; v=json.load(sys.stdin)["version"]; print(v); raise SystemExit(0 if v == "0.18.3" else f"expected Ollama 0.18.3, got {v}")'
 ```
 
-Copy that bare value into `OCTOBENCH_OLLAMA_SERVER_VERSION`; `ollama --version`
-is only a local CLI sanity check and can refer to a different server. A 64K
-allocation can partially offload to CPU on a 12 GB GPU; check the resulting
-split with `ollama ps` after the launcher preloads the model.
+Do not substitute another returned version into the small-model env file: this
+campaign definition intentionally fails closed unless it is `0.18.3`.
+`ollama --version` is only a local CLI sanity check and can refer to a different
+server. A 64K allocation can partially offload to CPU on a 12 GB GPU; check the
+resulting split with `ollama ps` after the launcher preloads the model.
 
 Local Ollama does not require `LLM_API_KEY`. The launcher verifies the shared
 origin, model, exact server version and context before generating a live
@@ -676,9 +701,9 @@ unload/preload cycle that generates no text and invokes no tool, and then reads
 request options from masquerading as the configured server default.
 The selected process must have the configured digest and exact allocated
 context, and no second model may be loaded. The digest, sizes, server version
-and context are recorded in both public runtime-provenance objects. The two
-server concurrency values are recorded as operator-declared because Ollama's
-API does not expose them; use a dedicated idle endpoint for the campaign. The
+and context are recorded in both public runtime-provenance objects. Concurrency,
+flash-attention and KV-cache declarations are recorded as operator-declared
+where Ollama's API does not expose them; use a dedicated idle endpoint. The
 same context is passed to OCTOPUS while
 Strix uses the attested Ollama server default, removing the hidden context
 difference. Prompts, request APIs and every other inference default remain
@@ -697,30 +722,55 @@ diagnostic output is ignored by Git and explicitly non-publishable:
 PILOT_ID="linux-blackbox-pilot-strix-$(date -u +%Y%m%dt%H%M%Sz)"
 ./venv/bin/python -m core.benchmarks.competitors.launch \
   --campaign-id "$PILOT_ID" \
+  --campaign-definition linux-blackbox-small-model-v1 \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env \
-  --diagnostic-pilot --pilot-system strix --pilot-seconds 1800
+  --diagnostic-pilot --pilot-system strix --pilot-seconds 3600
 ./venv/bin/python -m json.tool \
   ".benchmark-state/diagnostics/$PILOT_ID/summary.json"
 ```
 
-The existing `linux-blackbox-v1` is a 300-second discovery smoke contract, not
-a calibrated general pentest ranking. Inspect and redact the owner-only raw
-diagnostic log locally, then calibrate OCTOPUS with a fresh ID and freeze any
-longer budget in a new versioned scenario. Full methodology and log-handling
-instructions are in
+Then calibrate OCTOPUS under a fresh, correctly labelled diagnostic ID:
+
+```bash
+PILOT_ID="linux-blackbox-pilot-octopus-$(date -u +%Y%m%dt%H%M%Sz)"
+./venv/bin/python -m core.benchmarks.competitors.launch \
+  --campaign-id "$PILOT_ID" \
+  --campaign-definition linux-blackbox-small-model-v1 \
+  --profile core \
+  --environment-file benchmarks/competitors/secrets.env \
+  --diagnostic-pilot --pilot-system octopus --pilot-seconds 3600
+./venv/bin/python -m json.tool \
+  ".benchmark-state/diagnostics/$PILOT_ID/summary.json"
+```
+
+`linux-blackbox-v1` remains the default 300-second discovery smoke contract.
+The separately selected `linux-blackbox-small-model-v1` definition pins the
+attested altered 9B model/digest, Ollama 0.18.3, 65536-token context and q8_0
+KV policy. Its 600-second hard cap is an engineering calibration derived from
+one successful private pilot per system; it is not a statistical calibration
+or a vendor-representative ranking. Full methodology and log-handling are in
 [`benchmarks/competitors/README.md`](benchmarks/competitors/README.md).
 
 ```bash
+git status --short
+CAMPAIGN_ID="linux-blackbox-small-model-v1-$(date -u +%Y%m%dt%H%M%Sz)"
 ./venv/bin/python -m core.benchmarks.competitors.launch \
-  --campaign-id linux-blackbox-v1-20260716t120000z \
+  --campaign-id "$CAMPAIGN_ID" \
+  --campaign-definition linux-blackbox-small-model-v1 \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env
 ```
 
-The versioned scenario lives under
-`benchmarks/competitors/campaigns/linux-blackbox-v1/`. Generated manifests and
-config go to `.benchmark-state/generated/<campaign-id>/`, resumable state goes
+`git status --short` must print nothing before a publishable run; the launcher
+rejects a dirty attested source checkout. User-owned benchmark state and the
+private env file are ignored and therefore do not appear there.
+
+The checked-in definitions live under `benchmarks/competitors/campaigns/`.
+`--campaign-definition` selects the immutable scenario contract, while
+`--campaign-id` uniquely names one execution and its artifacts; never reuse an
+ID across definitions. Generated manifests and config go to
+`.benchmark-state/generated/<campaign-id>/`, resumable state goes
 to `.benchmark-state/journal/<campaign-id>/`, and the immutable publication
 bundle goes to `benchmarks/competitors/results/<campaign-id>/`. Use
 `--prepare-only` with a dedicated preview ID to inspect generated inputs

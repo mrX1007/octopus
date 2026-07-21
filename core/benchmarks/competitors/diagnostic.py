@@ -50,6 +50,8 @@ _SAFE_RUNTIME_PROVENANCE_KEYS = frozenset(
         "ollama_model_size_bytes",
         "ollama_model_size_vram_bytes",
         "ollama_context_length",
+        "ollama_flash_attention_declared",
+        "ollama_kv_cache_type_declared",
         "ollama_max_loaded_models_declared",
         "ollama_num_parallel_declared",
         "ollama_runtime_attestation",

@@ -56,6 +56,7 @@ _CAMPAIGN_CONFIG_KEYS = frozenset(
     {
         "$schema",
         "campaign_id",
+        "campaign_definition",
         "environment_file",
         "lab",
         "output_directory",
@@ -99,6 +100,7 @@ class CampaignConfig:
     required_environment: tuple[str, ...] = ()
     secret_environment: tuple[str, ...] = ()
     environment_file: Path | None = None
+    campaign_definition: str | None = None
     strict_statuses: tuple[str, ...] = tuple(sorted(_KNOWN_STRICT_STATUSES))
     source_path: Path | None = None
     schema_version: str = CAMPAIGN_CONFIG_SCHEMA_VERSION
@@ -177,6 +179,12 @@ class CampaignConfig:
             if raw_environment_file
             else None
         )
+        raw_campaign_definition = payload.get("campaign_definition")
+        campaign_definition = (
+            _identifier(raw_campaign_definition, "campaign_definition")
+            if raw_campaign_definition
+            else None
+        )
         strict_statuses = tuple(
             sorted(
                 set(
@@ -202,12 +210,13 @@ class CampaignConfig:
             required_environment=required_environment,
             secret_environment=secret_environment,
             environment_file=environment_file,
+            campaign_definition=campaign_definition,
             strict_statuses=strict_statuses,
             source_path=Path(source_path).resolve() if source_path is not None else None,
         )
 
     def fingerprint_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "campaign_id": self.campaign_id,
             "repetitions": self.repetitions,
@@ -224,9 +233,12 @@ class CampaignConfig:
                 ),
             },
         }
+        if self.campaign_definition is not None:
+            payload["campaign_definition"] = self.campaign_definition
+        return payload
 
     def public_payload(self) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "campaign_id": self.campaign_id,
             "repetitions": self.repetitions,
@@ -245,6 +257,9 @@ class CampaignConfig:
                 ),
             },
         }
+        if self.campaign_definition is not None:
+            payload["campaign_definition"] = self.campaign_definition
+        return payload
 
 
 @dataclass(frozen=True)

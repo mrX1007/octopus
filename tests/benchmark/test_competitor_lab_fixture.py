@@ -14,14 +14,21 @@ pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 ROOT = Path(__file__).parents[2]
 LAB_DIRECTORY = ROOT / "benchmarks" / "competitors" / "lab"
 LAB_APP = LAB_DIRECTORY / "app.py"
-CAMPAIGN_SCENARIO = (
+CAMPAIGN_SCENARIOS = (
     ROOT
     / "benchmarks"
     / "competitors"
     / "campaigns"
     / "linux-blackbox-v1"
     / "scenarios"
-    / "authorized-discovery-v1.json"
+    / "authorized-discovery-v1.json",
+    ROOT
+    / "benchmarks"
+    / "competitors"
+    / "campaigns"
+    / "linux-blackbox-small-model-v1"
+    / "scenarios"
+    / "authorized-discovery-altered-small-model-stress-v1.json",
 )
 
 
@@ -85,8 +92,11 @@ def test_health_contract_is_versioned_and_machine_readable():
     }
 
 
-def test_campaign_snapshot_refs_match_the_checked_in_lab_fixture():
-    scenario = json.loads(CAMPAIGN_SCENARIO.read_text(encoding="utf-8"))
+@pytest.mark.parametrize("scenario_path", CAMPAIGN_SCENARIOS)
+def test_campaign_snapshot_refs_match_the_checked_in_lab_fixture(
+    scenario_path: Path,
+):
+    scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
     fixture_paths = (
         LAB_DIRECTORY / "app.py",
         LAB_DIRECTORY / "Dockerfile",

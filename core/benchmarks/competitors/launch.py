@@ -48,6 +48,18 @@ _OLLAMA_ATTESTATION_TIMEOUT_SECONDS = 5.0
 _OLLAMA_PRELOAD_TIMEOUT_SECONDS = 300.0
 _MIN_OLLAMA_CONTEXT_LENGTH = 32_768
 _MAX_OLLAMA_CONTEXT_LENGTH = 262_144
+_DEFAULT_CAMPAIGN_DEFINITION_ID = "linux-blackbox-v1"
+_SMALL_MODEL_CAMPAIGN_DEFINITION_ID = "linux-blackbox-small-model-v1"
+_SMALL_MODEL_CAMPAIGN_OLLAMA_MODEL = "huihui_ai/qwen3.5-abliterated:9b"
+_SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST = (
+    "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600"
+)
+_SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH = 65_536
+_SMALL_MODEL_CAMPAIGN_OLLAMA_SERVER_VERSION = "0.18.3"
+_SMALL_MODEL_REQUIRED_ENVIRONMENT = (
+    "OCTOBENCH_OLLAMA_FLASH_ATTENTION",
+    "OCTOBENCH_OLLAMA_KV_CACHE_TYPE",
+)
 _STRIX_REVISION = "91d9a847166fe2f82125643d13e099b0d989bbe4"
 _STRIX_IMAGE = (
     "ghcr.io/usestrix/strix-sandbox@"
@@ -137,6 +149,16 @@ class _SystemPin:
 
 
 @dataclass(frozen=True)
+class _CampaignDefinition:
+    definition_id: str
+    allowed_profiles: frozenset[str]
+    ollama_model: str | None = None
+    ollama_digest: str | None = None
+    ollama_context_length: int | None = None
+    ollama_server_version: str | None = None
+
+
+@dataclass(frozen=True)
 class _LocalRuntimeSpec:
     system_id: str
     source_revision: str
@@ -147,6 +169,22 @@ class _LocalRuntimeSpec:
     distribution_name: str
     distribution_version: str
     lock_layout: str = "uv.lock"
+
+
+_CAMPAIGN_DEFINITIONS = {
+    _DEFAULT_CAMPAIGN_DEFINITION_ID: _CampaignDefinition(
+        definition_id=_DEFAULT_CAMPAIGN_DEFINITION_ID,
+        allowed_profiles=frozenset({"core", "extended"}),
+    ),
+    _SMALL_MODEL_CAMPAIGN_DEFINITION_ID: _CampaignDefinition(
+        definition_id=_SMALL_MODEL_CAMPAIGN_DEFINITION_ID,
+        allowed_profiles=frozenset({"core"}),
+        ollama_model=_SMALL_MODEL_CAMPAIGN_OLLAMA_MODEL,
+        ollama_digest=_SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST,
+        ollama_context_length=_SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH,
+        ollama_server_version=_SMALL_MODEL_CAMPAIGN_OLLAMA_SERVER_VERSION,
+    ),
+}
 
 
 _LOCAL_RUNTIME_SPECS = (
@@ -170,12 +208,15 @@ class LaunchError(RuntimeError):
         {
             "authorization_required",
             "campaign_failed",
+            "campaign_definition_mismatch",
+            "campaign_definition_unavailable",
             "environment_file_invalid",
             "environment_file_permissions",
             "environment_file_unavailable",
             "generated_state_conflict",
             "git_unavailable",
             "invalid_campaign_id",
+            "invalid_campaign_definition",
             "invalid_lab_bind",
             "invalid_shared_ollama_configuration",
             "invalid_strix_image",
@@ -207,10 +248,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         ):
             raise LaunchError("campaign_failed")
         campaign_id = _campaign_id(args.campaign_id)
+        campaign_definition = _campaign_definition(
+            args.campaign_definition,
+            profile=args.profile,
+        )
         environment = _merged_environment(args.environment_file)
-        required = _required_environment(args.profile)
+        required = _required_environment(
+            args.profile,
+            campaign_definition=campaign_definition,
+        )
         _validate_required_environment(environment, required)
         _validate_shared_ollama_configuration(environment)
+        _validate_campaign_definition_configuration(
+            campaign_definition,
+            environment,
+        )
         _validate_strix_image_reference(environment)
         _validated_lab_bind(environment.get("OCTOBENCH_LAB_BIND"))
         revision = _repository_revision()
@@ -221,6 +273,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 environment=environment,
                 environment_file=args.environment_file,
                 octopus_revision=revision,
+                campaign_definition=campaign_definition,
             )
             print(config_path)
             return 0
@@ -251,6 +304,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             runtime_environment,
             octopus_revision=revision,
         )
+        _validate_campaign_definition_runtime(
+            campaign_definition,
+            runtime_attestations,
+        )
         config_path = _prepare_generated_campaign(
             campaign_id,
             profile=args.profile,
@@ -258,6 +315,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             environment_file=args.environment_file,
             octopus_revision=revision,
             runtime_attestations=runtime_attestations,
+            campaign_definition=campaign_definition,
         )
         if args.diagnostic_pilot:
             diagnostic = run_diagnostic_pilot(
@@ -298,6 +356,14 @@ def _argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--campaign-id", required=True)
     parser.add_argument(
+        "--campaign-definition",
+        default=_DEFAULT_CAMPAIGN_DEFINITION_ID,
+        help=(
+            "checked-in scenario contract; campaign-id remains the unique run "
+            "and artifact identifier"
+        ),
+    )
+    parser.add_argument(
         "--profile",
         choices=("core", "extended"),
         default="core",
@@ -329,6 +395,7 @@ def _prepare_generated_campaign(
     environment: Mapping[str, str],
     environment_file: Path | None,
     octopus_revision: str,
+    campaign_definition: _CampaignDefinition,
     runtime_attestations: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> Path:
     systems = _system_pins(profile, octopus_revision=octopus_revision)
@@ -345,10 +412,14 @@ def _prepare_generated_campaign(
                 else None
             ),
             actual_run=runtime_attestations is not None,
+            campaign_definition=campaign_definition,
         )
         for system in systems
     }
-    scenario_payloads = _generated_scenario_payloads(repetitions)
+    scenario_payloads = _generated_scenario_payloads(
+        repetitions,
+        campaign_definition=campaign_definition,
+    )
     payloads.update(scenario_payloads)
     config_name = "campaign.json"
     payloads[config_name] = _campaign_payload(
@@ -357,6 +428,7 @@ def _prepare_generated_campaign(
         environment=environment,
         environment_file=environment_file,
         repetitions=repetitions,
+        campaign_definition=campaign_definition,
     )
     for system in systems:
         SystemManifest.from_dict(
@@ -430,7 +502,11 @@ def _manifest_payload(
     environment: Mapping[str, str],
     runtime_attestation: Mapping[str, Any] | None,
     actual_run: bool,
+    campaign_definition: _CampaignDefinition | None = None,
 ) -> dict[str, Any]:
+    selected_definition = campaign_definition or _CAMPAIGN_DEFINITIONS[
+        _DEFAULT_CAMPAIGN_DEFINITION_ID
+    ]
     provider = (
         str(environment[system.model_provider_environment])
         if system.model_provider_environment is not None
@@ -514,7 +590,10 @@ def _manifest_payload(
         "source_revision": system.source_revision,
         "execution_mode": "live",
         "track": "full_system",
-        "fairness_profile": _fairness_profile(profile),
+        "fairness_profile": _fairness_profile(
+            profile,
+            campaign_definition=selected_definition,
+        ),
         "model": {
             "provider": provider,
             "name": str(environment[system.model_name_environment]),
@@ -546,8 +625,20 @@ def _manifest_payload(
         },
         "metadata": {
             "campaign_profile": profile,
+            "campaign_definition_id": selected_definition.definition_id,
             "integration": "repository-command-adapter",
             "action_conformance": "not_assessed",
+            **(
+                {
+                    "evaluation_scope": "altered-small-model-stress",
+                    "vendor_representative": False,
+                    "model_class": "sub-70b",
+                    "model_variant": "abliterated",
+                }
+                if selected_definition.definition_id
+                == _SMALL_MODEL_CAMPAIGN_DEFINITION_ID
+                else {}
+            ),
             **(
                 {"scan_mode": STRIX_BENCHMARK_SCAN_MODE}
                 if system.system_id == "strix"
@@ -565,6 +656,7 @@ def _campaign_payload(
     environment: Mapping[str, str],
     environment_file: Path | None,
     repetitions: int,
+    campaign_definition: _CampaignDefinition,
 ) -> dict[str, Any]:
     python = ROOT / "venv" / "bin" / "python"
     lab = ROOT / "benchmarks" / "competitors" / "run_lab.py"
@@ -587,7 +679,8 @@ def _campaign_payload(
         dict.fromkeys(
             (
                 *_required_environment(
-                    "extended" if any(item.system_id == "pentagi" for item in systems) else "core"
+                    "extended" if any(item.system_id == "pentagi" for item in systems) else "core",
+                    campaign_definition=campaign_definition,
                 ),
                 *_COMMON_ADAPTER_ENVIRONMENT,
                 *_configured_optional_environment(
@@ -601,6 +694,7 @@ def _campaign_payload(
     payload: dict[str, Any] = {
         "schema_version": GENERATED_SCHEMA_VERSION,
         "campaign_id": campaign_id,
+        "campaign_definition": campaign_definition.definition_id,
         "system_manifests": [
             str(_generated_directory(campaign_id) / f"{item.system_id}.json")
             for item in systems
@@ -638,8 +732,12 @@ def _configured_optional_environment(
     return tuple(name for name in names if str(environment.get(name) or "").strip())
 
 
-def _generated_scenario_payloads(repetitions: int) -> dict[str, dict[str, Any]]:
-    source = _scenario_directory()
+def _generated_scenario_payloads(
+    repetitions: int,
+    *,
+    campaign_definition: _CampaignDefinition,
+) -> dict[str, dict[str, Any]]:
+    source = _scenario_directory(campaign_definition)
     try:
         candidates = tuple(sorted(source.glob("*.json")))
     except OSError:
@@ -663,28 +761,60 @@ def _generated_scenario_payloads(repetitions: int) -> dict[str, dict[str, Any]]:
     return payloads
 
 
-def _required_environment(profile: str) -> tuple[str, ...]:
+def _required_environment(
+    profile: str,
+    *,
+    campaign_definition: _CampaignDefinition | None = None,
+) -> tuple[str, ...]:
+    selected_definition = campaign_definition or _CAMPAIGN_DEFINITIONS[
+        _DEFAULT_CAMPAIGN_DEFINITION_ID
+    ]
+    required: tuple[str, ...] = _BASE_REQUIRED_ENVIRONMENT
     if profile == "extended":
-        return (*_BASE_REQUIRED_ENVIRONMENT, *_EXTENDED_REQUIRED_ENVIRONMENT)
-    return _BASE_REQUIRED_ENVIRONMENT
+        required = (*required, *_EXTENDED_REQUIRED_ENVIRONMENT)
+    if selected_definition.definition_id == _SMALL_MODEL_CAMPAIGN_DEFINITION_ID:
+        required = (*required, *_SMALL_MODEL_REQUIRED_ENVIRONMENT)
+    return required
 
 
-def _fairness_profile(profile: str) -> dict[str, Any]:
+def _fairness_profile(
+    profile: str,
+    *,
+    campaign_definition: _CampaignDefinition | None = None,
+) -> dict[str, Any]:
+    selected_definition = campaign_definition or _CAMPAIGN_DEFINITIONS[
+        _DEFAULT_CAMPAIGN_DEFINITION_ID
+    ]
     shared_model = profile == "core"
+    small_model_stress = (
+        selected_definition.definition_id == _SMALL_MODEL_CAMPAIGN_DEFINITION_ID
+    )
     return {
         "profile_id": (
-            "linux-blackbox-shared-ollama-v1"
-            if shared_model
-            else "linux-blackbox-shared-ollama-plus-pentagi-v1"
+            "linux-blackbox-shared-ollama-altered-small-model-v1"
+            if small_model_stress
+            else (
+                "linux-blackbox-shared-ollama-v1"
+                if shared_model
+                else "linux-blackbox-shared-ollama-plus-pentagi-v1"
+            )
         ),
         "same_model": shared_model,
         "notes": (
-            "OCTOPUS and Strix use the same neutral Ollama provider, model tag, "
-            "weights, server and exact context length; prompts, request APIs and "
-            "all other inference defaults remain product-native and distinct."
-            if shared_model
-            else "OCTOPUS and Strix share neutral Ollama/Qwen; PentAGI retains "
-            "its separately attested service model."
+            "OCTOPUS and Strix use the same altered sub-70B Ollama model "
+            "huihui_ai/qwen3.5-abliterated:9b, model digest, server and "
+            "65536-token context. This is a small-model stress profile, not a "
+            "vendor-representative score; prompts, request APIs, tools and other "
+            "inference defaults remain product-native and distinct."
+            if small_model_stress
+            else (
+                "OCTOPUS and Strix use the same neutral Ollama provider, model tag, "
+                "weights, server and exact context length; prompts, request APIs and "
+                "all other inference defaults remain product-native and distinct."
+                if shared_model
+                else "OCTOPUS and Strix share neutral Ollama/Qwen; PentAGI retains "
+                "its separately attested service model."
+            )
         ),
         **_FAIRNESS_PROFILE_BASE,
     }
@@ -786,6 +916,57 @@ def _validate_required_environment(
 def _validate_strix_image_reference(environment: Mapping[str, str]) -> None:
     if str(environment.get("STRIX_IMAGE") or "").strip() != _STRIX_IMAGE:
         raise LaunchError("invalid_strix_image")
+
+
+def _campaign_definition(
+    value: Any,
+    *,
+    profile: str,
+) -> _CampaignDefinition:
+    candidate = str(value or "").strip().lower()
+    definition = _CAMPAIGN_DEFINITIONS.get(candidate)
+    if definition is None:
+        raise LaunchError("invalid_campaign_definition")
+    if profile not in definition.allowed_profiles:
+        raise LaunchError("campaign_definition_mismatch")
+    return definition
+
+
+def _validate_campaign_definition_configuration(
+    definition: _CampaignDefinition,
+    environment: Mapping[str, str],
+) -> None:
+    if definition.ollama_model is None:
+        return
+    if (
+        str(environment.get("OCTOPUS_OLLAMA_MODEL") or "").strip()
+        != definition.ollama_model
+        or _configured_ollama_context_length(environment)
+        != definition.ollama_context_length
+        or _configured_ollama_server_version(environment)
+        != definition.ollama_server_version
+        or str(environment.get("OCTOBENCH_OLLAMA_FLASH_ATTENTION") or "").strip()
+        != "1"
+        or str(environment.get("OCTOBENCH_OLLAMA_KV_CACHE_TYPE") or "").strip()
+        != "q8_0"
+    ):
+        raise LaunchError("campaign_definition_mismatch")
+
+
+def _validate_campaign_definition_runtime(
+    definition: _CampaignDefinition,
+    attestations: Mapping[str, Mapping[str, Any]],
+) -> None:
+    if definition.ollama_digest is None:
+        return
+    for system_id in ("octopus", "strix"):
+        provenance = attestations.get(system_id)
+        if (
+            not isinstance(provenance, Mapping)
+            or str(provenance.get("ollama_model_digest") or "").strip().lower()
+            != definition.ollama_digest
+        ):
+            raise LaunchError("campaign_definition_mismatch")
 
 
 def _validate_shared_ollama_configuration(
@@ -1106,6 +1287,12 @@ def _attest_shared_ollama_runtime(
         raise LaunchError("runtime_unavailable")
     if context_length != expected_context:
         raise LaunchError("ollama_context_mismatch")
+    declared_flash_attention = str(
+        environment.get("OCTOBENCH_OLLAMA_FLASH_ATTENTION") or ""
+    ).strip()
+    declared_kv_cache_type = str(
+        environment.get("OCTOBENCH_OLLAMA_KV_CACHE_TYPE") or ""
+    ).strip()
     return {
         "ollama_model_attestation": "api-tags",
         "ollama_model_digest": f"sha256:{raw_digest}",
@@ -1117,6 +1304,16 @@ def _attest_shared_ollama_runtime(
         "ollama_num_parallel_declared": 1,
         "ollama_max_loaded_models_declared": 1,
         "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
+        **(
+            {"ollama_flash_attention_declared": declared_flash_attention == "1"}
+            if declared_flash_attention
+            else {}
+        ),
+        **(
+            {"ollama_kv_cache_type_declared": declared_kv_cache_type}
+            if declared_kv_cache_type
+            else {}
+        ),
     }
 
 
@@ -1480,8 +1677,33 @@ def _generated_directory(campaign_id: str) -> Path:
     return ROOT / ".benchmark-state" / "generated" / campaign_id
 
 
-def _scenario_directory() -> Path:
-    return ROOT / "benchmarks" / "competitors" / "campaigns" / "linux-blackbox-v1" / "scenarios"
+def _scenario_directory(definition: _CampaignDefinition) -> Path:
+    campaign_root = ROOT / "benchmarks" / "competitors" / "campaigns"
+    definition_directory = campaign_root / definition.definition_id
+    scenario_directory = definition_directory / "scenarios"
+    try:
+        resolved_repository_root = ROOT.resolve(strict=True)
+        campaign_root_metadata = campaign_root.lstat()
+        resolved_root = campaign_root.resolve(strict=True)
+        definition_metadata = definition_directory.lstat()
+        scenario_metadata = scenario_directory.lstat()
+        resolved_scenarios = scenario_directory.resolve(strict=True)
+        resolved_scenarios.relative_to(resolved_root)
+    except (OSError, ValueError):
+        raise LaunchError("campaign_definition_unavailable") from None
+    if (
+        stat.S_ISLNK(campaign_root_metadata.st_mode)
+        or not stat.S_ISDIR(campaign_root_metadata.st_mode)
+        or resolved_root
+        != resolved_repository_root / "benchmarks" / "competitors" / "campaigns"
+        or stat.S_ISLNK(definition_metadata.st_mode)
+        or not stat.S_ISDIR(definition_metadata.st_mode)
+        or stat.S_ISLNK(scenario_metadata.st_mode)
+        or not stat.S_ISDIR(scenario_metadata.st_mode)
+        or resolved_scenarios != resolved_root / definition.definition_id / "scenarios"
+    ):
+        raise LaunchError("campaign_definition_unavailable")
+    return resolved_scenarios
 
 
 def _output_directory(campaign_id: str) -> Path:
