@@ -2,6 +2,7 @@ import base64
 import importlib
 import json
 import os
+import re
 import struct
 import sys
 
@@ -176,7 +177,7 @@ def test_go_client_uses_unified_bounded_acknowledged_protocol():
     assert '"enrollment_token": string(enrollmentTokenBytes)' in source
     assert 'registration["agent_id"]' in source
     assert "func exchangeBeacon(" in source
-    assert '"acks": acknowledgements' in source
+    assert re.search(r'"acks":\s+acknowledgements', source)
     assert "exec.CommandContext(" in source
     assert "chunk_index" not in source
     assert "sessionKey = make([]byte, 32)" not in source
