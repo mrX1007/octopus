@@ -86,6 +86,7 @@ def run_diagnostic_pilot(
     root: str | Path,
     budget_seconds: float = DEFAULT_PILOT_SECONDS,
     selected_system: str | None = None,
+    selected_scenario: str | None = None,
 ) -> DiagnosticOutcome:
     """Run one private calibration repetition per selected system/scenario."""
 
@@ -100,9 +101,15 @@ def run_diagnostic_pilot(
         )
         if not manifests:
             raise DiagnosticError("diagnostic_system_unavailable")
-    scenarios = tuple(
-        _with_budget(item, budget) for item in load_scenarios(resolved.scenario_directory)
-    )
+    loaded_scenarios = load_scenarios(resolved.scenario_directory)
+    if selected_scenario is not None:
+        scenario_id = str(selected_scenario or "").strip().lower()
+        loaded_scenarios = tuple(
+            item for item in loaded_scenarios if item.scenario_id == scenario_id
+        )
+        if not loaded_scenarios:
+            raise DiagnosticError("diagnostic_scenario_unavailable")
+    scenarios = tuple(_with_budget(item, budget) for item in loaded_scenarios)
     if not manifests or not scenarios:
         raise DiagnosticError("diagnostic_inputs_unavailable")
 

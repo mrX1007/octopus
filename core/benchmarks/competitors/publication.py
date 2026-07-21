@@ -15,9 +15,21 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ..schema import BenchmarkScenario
-from .matrix import CompetitorMatrixResult, render_comparison_markdown
-from .schema import SystemManifest
+from .matrix import (
+    COMPETITOR_MATRIX_SCHEMA_VERSION,
+    CompetitorMatrixResult,
+    render_comparison_markdown,
+    render_comparison_markdown_payload,
+)
+from .schema import CompetitorSchemaError, SystemManifest
 from .state import schedule_run_key
+from .visualization import (
+    COMPARISON_SVG_PATH,
+    ComparisonVisualizationError,
+    comparison_renderings_contract,
+    metric_statistics_by_pair,
+    render_comparison_svg,
+)
 
 CAMPAIGN_PUBLICATION_SCHEMA_VERSION = "1.0"
 _STRICT_RUN_STATUSES = frozenset({"failed", "invalid", "partial", "timeout"})
@@ -87,11 +99,20 @@ def publish_campaign_bundle(
         tempfile.mkdtemp(prefix=f".{output.name}.tmp-", dir=str(output.parent))
     )
     try:
-        _write_json(temporary / "comparison.json", matrix.to_dict())
+        comparison = matrix.to_dict()
+        _write_json(temporary / "comparison.json", comparison)
         (temporary / "comparison.md").write_text(
             render_comparison_markdown(matrix),
             encoding="utf-8",
         )
+        if "renderings" in comparison:
+            (temporary / COMPARISON_SVG_PATH).write_text(
+                render_comparison_svg(
+                    comparison,
+                    metric_statistics_by_pair(matrix.aggregates),
+                ),
+                encoding="utf-8",
+            )
         for system_id, aggregates in sorted(matrix.aggregates.items()):
             for scenario_id, aggregate in sorted(aggregates.items()):
                 _write_json(
@@ -256,6 +277,21 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
     provenance = _read_json_mapping(root / "provenance.json")
     cleanup = _read_json_mapping(root / "cleanup.json")
 
+    comparison_schema = str(comparison.get("schema_version") or "")
+    if comparison_schema not in {"1.0", COMPETITOR_MATRIX_SCHEMA_VERSION}:
+        raise CampaignPublicationError("publication_semantic_invalid")
+    current_comparison = comparison_schema == COMPETITOR_MATRIX_SCHEMA_VERSION
+    if current_comparison:
+        if not _json_equal(
+            comparison.get("renderings"),
+            comparison_renderings_contract(),
+        ):
+            raise CampaignPublicationError("publication_semantic_invalid")
+        if COMPARISON_SVG_PATH not in observed:
+            raise CampaignPublicationError("publication_semantic_incomplete")
+    elif "renderings" in comparison or COMPARISON_SVG_PATH in observed:
+        raise CampaignPublicationError("publication_semantic_invalid")
+
     fingerprint = str(schedule_document.get("fingerprint") or "")
     if not fingerprint.startswith("benchmark-campaign://sha256/"):
         raise CampaignPublicationError("publication_semantic_invalid")
@@ -389,7 +425,8 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
         expected_scenarios,
     )
     legacy_scenario_metadata = (
-        "campaign_definition" not in campaign
+        comparison_schema == "1.0"
+        and "campaign_definition" not in campaign
         and _json_equal(
             comparison_scenarios,
             legacy_expected_scenarios,
@@ -415,6 +452,9 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
     observed_statuses: Counter[str] = Counter()
     policy_violations = 0
     expected_summaries: list[dict[str, Any]] = []
+    expected_metric_statistics_by_pair: dict[
+        tuple[str, str], dict[str, dict[str, float]]
+    ] = {}
     aggregate_ids: dict[str, dict[str, str]] = {}
     system_identities = {
         system_id: _system_identity(payload)
@@ -541,6 +581,9 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
                 raise CampaignPublicationError("publication_semantic_invalid")
 
             aggregate_ids[system_id][scenario_id] = expected_aggregate_id
+            expected_metric_statistics_by_pair[(system_id, scenario_id)] = (
+                expected_metric_statistics
+            )
             observed_statuses.update(aggregate_statuses)
             policy_violations += aggregate_policy_violations
             expected_summaries.append(
@@ -557,6 +600,10 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
                         name: values["median"]
                         for name, values in sorted(expected_metric_statistics.items())
                     },
+                    "metric_counts": {
+                        name: int(values["count"])
+                        for name, values in sorted(expected_metric_statistics.items())
+                    },
                     "policy_violations": aggregate_policy_violations,
                     "timeout_runs": aggregate_statuses.get("timeout", 0),
                     "partial_runs": aggregate_statuses.get("partial", 0),
@@ -568,10 +615,15 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
             )
 
     expected_summaries.sort(key=lambda item: (item["scenario_id"], item["system_id"]))
-    if not _json_equal(comparison.get("summaries"), expected_summaries):
+    published_summaries = expected_summaries
+    if not current_comparison:
+        published_summaries = [
+            {key: value for key, value in item.items() if key != "metric_counts"}
+            for item in expected_summaries
+        ]
+    if not _json_equal(comparison.get("summaries"), published_summaries):
         raise CampaignPublicationError("publication_semantic_invalid")
 
-    comparison_schema = str(comparison.get("schema_version") or "")
     expected_matrix_id = _stable_id(
         "competitor-matrix",
         {
@@ -583,11 +635,28 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
             },
         },
     )
-    if (
-        comparison_schema != CAMPAIGN_PUBLICATION_SCHEMA_VERSION
-        or matrix_id != expected_matrix_id
-    ):
+    if matrix_id != expected_matrix_id:
         raise CampaignPublicationError("publication_semantic_invalid")
+
+    if current_comparison:
+        try:
+            observed_svg = (root / COMPARISON_SVG_PATH).read_text(encoding="utf-8")
+            expected_svg = render_comparison_svg(
+                comparison,
+                expected_metric_statistics_by_pair,
+            )
+        except (OSError, UnicodeError, ComparisonVisualizationError) as exc:
+            raise CampaignPublicationError("publication_semantic_invalid") from exc
+        if observed_svg != expected_svg:
+            raise CampaignPublicationError("publication_visualization_mismatch")
+
+    try:
+        observed_markdown = (root / "comparison.md").read_text(encoding="utf-8")
+        expected_markdown = render_comparison_markdown_payload(comparison)
+    except (OSError, UnicodeError, CompetitorSchemaError) as exc:
+        raise CampaignPublicationError("publication_semantic_invalid") from exc
+    if observed_markdown != expected_markdown:
+        raise CampaignPublicationError("publication_markdown_mismatch")
 
     for run_key, scheduled in schedule_by_key.items():
         attestation = _read_json_mapping(root / "attestations" / f"{run_key}.json")

@@ -17,6 +17,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import SplitResult, urlsplit, urlunsplit
@@ -25,6 +26,8 @@ COMPOSE_PROJECT_NAME = "octobench"
 LAB_PROTOCOL_VERSION = "1.0"
 LAB_VERSION = "discovery-lab-v1"
 LAB_HEALTH_EVIDENCE = "OCTOBENCH_EVIDENCE_ENDPOINT_HEALTH"
+V2_LAB_VERSION = "discovery-lab-v2"
+V2_LAB_HEALTH_EVIDENCE = "OCTOBENCH_EVIDENCE_V2_HEALTH"
 DEFAULT_PORT = 8080
 DEFAULT_HEALTH_TIMEOUT_SECONDS = 30.0
 MAX_HEALTH_TIMEOUT_SECONDS = 120.0
@@ -38,6 +41,22 @@ _COMPOSE_PATH = (
     / "competitors"
     / "lab"
     / "compose.yaml"
+)
+_V2_COMPOSE_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "benchmarks"
+    / "competitors"
+    / "labs"
+    / V2_LAB_VERSION
+    / "compose.yaml"
+)
+_V2_SCENARIO_IDS = frozenset(
+    {
+        "authorized-hypermedia-pagination-small-model-v2",
+        "authorized-linked-navigation-small-model-v2",
+        "authorized-openapi-contract-small-model-v2",
+        "authorized-relative-redirect-small-model-v2",
+    }
 )
 _PASSTHROUGH_ENVIRONMENT = (
     "DOCKER_CONFIG",
@@ -76,7 +95,9 @@ class LabControlError(RuntimeError):
             "health_timeout",
             "health_unreachable",
             "invalid_host_ip",
+            "invalid_lab_definition",
             "invalid_port",
+            "invalid_scenario",
             "invalid_target",
             "invalid_timeout",
             "reset_failed",
@@ -103,50 +124,80 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
+@dataclass(frozen=True)
+class _LabDefinition:
+    definition_id: str
+    project_name: str
+    compose_path: Path
+    lab_version: str
+    health_evidence: str
+    scenario_ids: frozenset[str] = frozenset()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _argument_parser().parse_args(argv)
     environment = os.environ
     try:
         if args.command == "reset":
+            definition = _lab_definition(args.lab_definition)
+            scenario_id = _selected_scenario(definition, args.scenario_id)
             target = _target_url(args.target, environment)
             timeout = _health_timeout(args.timeout)
             _run_compose(
                 ("up", "-d", "--build", "--force-recreate"),
                 failure_code="reset_failed",
                 environment=environment,
+                lab_definition=definition,
+                scenario_id=scenario_id,
             )
-            health = _wait_for_health(target, timeout_seconds=timeout)
-            _print_json(
-                {
-                    "command": "reset",
-                    "healthy": True,
-                    "lab_version": health["lab_version"],
-                    "project": COMPOSE_PROJECT_NAME,
-                    "target": target,
-                }
+            health = _wait_for_health(
+                target,
+                timeout_seconds=timeout,
+                lab_definition=definition,
+                scenario_id=scenario_id,
             )
+            payload = {
+                "command": "reset",
+                "healthy": True,
+                "lab_version": health["lab_version"],
+                "project": definition.project_name,
+                "target": target,
+            }
+            if scenario_id is not None:
+                payload["scenario_id"] = scenario_id
+            _print_json(payload)
         elif args.command == "health":
+            definition = _lab_definition(args.lab_definition)
+            scenario_id = _selected_scenario(definition, args.scenario_id)
             target = _target_url(args.target, environment)
             timeout = _health_timeout(args.timeout)
-            health = _health(target, timeout_seconds=timeout)
-            _print_json(
-                {
-                    "command": "health",
-                    "healthy": True,
-                    "lab_version": health["lab_version"],
-                    "target": target,
-                }
+            health = _health(
+                target,
+                timeout_seconds=timeout,
+                lab_definition=definition,
+                scenario_id=scenario_id,
             )
+            payload = {
+                "command": "health",
+                "healthy": True,
+                "lab_version": health["lab_version"],
+                "target": target,
+            }
+            if scenario_id is not None:
+                payload["scenario_id"] = scenario_id
+            _print_json(payload)
         elif args.command == "cleanup":
+            definition = _lab_definition(args.lab_definition)
             _run_compose(
                 ("down", "-v", "--remove-orphans"),
                 failure_code="cleanup_failed",
                 environment=environment,
+                lab_definition=definition,
             )
             _print_json(
                 {
                     "command": "cleanup",
-                    "project": COMPOSE_PROJECT_NAME,
+                    "project": definition.project_name,
                     "status": "clean",
                 }
             )
@@ -174,6 +225,7 @@ def _argument_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     reset = subparsers.add_parser("reset", help="Recreate the lab and wait for health.")
+    _add_lab_selection(reset, include_scenario=True)
     reset.add_argument("--target", help="Private lab base URL; overrides OCTOBENCH_TARGET_URL.")
     reset.add_argument(
         "--timeout",
@@ -182,6 +234,7 @@ def _argument_parser() -> argparse.ArgumentParser:
     )
 
     health = subparsers.add_parser("health", help="Validate the lab health endpoint.")
+    _add_lab_selection(health, include_scenario=True)
     health.add_argument("--target", help="Private lab base URL; overrides OCTOBENCH_TARGET_URL.")
     health.add_argument(
         "--timeout",
@@ -189,7 +242,11 @@ def _argument_parser() -> argparse.ArgumentParser:
         help="Bounded request timeout in seconds.",
     )
 
-    subparsers.add_parser("cleanup", help="Remove containers, volumes, and orphans.")
+    cleanup = subparsers.add_parser(
+        "cleanup",
+        help="Remove containers, volumes, and orphans.",
+    )
+    _add_lab_selection(cleanup, include_scenario=False)
 
     address = subparsers.add_parser("address", help="Print a canonical private lab URL.")
     address.add_argument(
@@ -200,21 +257,47 @@ def _argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _add_lab_selection(
+    parser: argparse.ArgumentParser,
+    *,
+    include_scenario: bool,
+) -> None:
+    parser.add_argument(
+        "--lab-definition",
+        default=LAB_VERSION,
+        help="allowlisted fixture definition (default: discovery-lab-v1)",
+    )
+    if include_scenario:
+        parser.add_argument(
+            "--scenario-id",
+            help="required exact scenario surface for discovery-lab-v2",
+        )
+
+
 def _run_compose(
     arguments: Sequence[str],
     *,
     failure_code: str,
     environment: Mapping[str, str],
+    lab_definition: _LabDefinition | str | None = None,
+    scenario_id: str | None = None,
 ) -> None:
-    if not _COMPOSE_PATH.is_file():
+    definition = _lab_definition(lab_definition)
+    selected_scenario = (
+        _selected_scenario(definition, scenario_id)
+        if scenario_id is not None or tuple(arguments[:1]) == ("up",)
+        else None
+    )
+    compose_path = definition.compose_path
+    if not compose_path.is_file():
         raise LabControlError("compose_file_missing")
     argv = [
         "docker",
         "compose",
         "--project-name",
-        COMPOSE_PROJECT_NAME,
+        definition.project_name,
         "--file",
-        str(_COMPOSE_PATH),
+        str(compose_path),
         *arguments,
     ]
     child_environment = {
@@ -222,10 +305,12 @@ def _run_compose(
         for name in _PASSTHROUGH_ENVIRONMENT
         if name in environment
     }
+    if selected_scenario is not None:
+        child_environment["OCTOBENCH_LAB_SCENARIO_ID"] = selected_scenario
     try:
         process = subprocess.Popen(
             argv,
-            cwd=str(_COMPOSE_PATH.parent),
+            cwd=str(compose_path.parent),
             env=child_environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -271,7 +356,15 @@ def _terminate_process_group(process: subprocess.Popen[Any]) -> None:
             process.wait(timeout=1.0)
 
 
-def _wait_for_health(target: str, *, timeout_seconds: float) -> dict[str, Any]:
+def _wait_for_health(
+    target: str,
+    *,
+    timeout_seconds: float,
+    lab_definition: _LabDefinition | str | None = None,
+    scenario_id: str | None = None,
+) -> dict[str, Any]:
+    definition = _lab_definition(lab_definition)
+    selected_scenario = _selected_scenario(definition, scenario_id)
     deadline = time.monotonic() + min(timeout_seconds, MAX_HEALTH_TIMEOUT_SECONDS)
     while True:
         remaining = deadline - time.monotonic()
@@ -281,6 +374,8 @@ def _wait_for_health(target: str, *, timeout_seconds: float) -> dict[str, Any]:
             return _health(
                 target,
                 timeout_seconds=min(remaining, HEALTH_REQUEST_TIMEOUT_SECONDS),
+                lab_definition=definition,
+                scenario_id=selected_scenario,
             )
         except LabControlError as exc:
             if exc.code not in {"health_invalid", "health_unreachable"}:
@@ -288,7 +383,15 @@ def _wait_for_health(target: str, *, timeout_seconds: float) -> dict[str, Any]:
         time.sleep(min(0.25, max(0.0, deadline - time.monotonic())))
 
 
-def _health(target: str, *, timeout_seconds: float) -> dict[str, Any]:
+def _health(
+    target: str,
+    *,
+    timeout_seconds: float,
+    lab_definition: _LabDefinition | str | None = None,
+    scenario_id: str | None = None,
+) -> dict[str, Any]:
+    definition = _lab_definition(lab_definition)
+    selected_scenario = _selected_scenario(definition, scenario_id)
     health_url = _health_url(target)
     try:
         context = ssl.create_default_context()
@@ -322,24 +425,76 @@ def _health(target: str, *, timeout_seconds: float) -> dict[str, Any]:
         decoded = json.loads(payload.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError, RecursionError):
         raise LabControlError("health_invalid") from None
+    expected_keys = {
+        "evidence",
+        "lab_version",
+        "schema_version",
+        "status",
+    }
+    if selected_scenario is not None:
+        expected_keys.add("scenario_id")
     if (
         not isinstance(decoded, Mapping)
-        or set(decoded) != {
-            "evidence",
-            "lab_version",
-            "schema_version",
-            "status",
-        }
+        or set(decoded) != expected_keys
         or decoded.get("schema_version") != LAB_PROTOCOL_VERSION
         or decoded.get("status") != "healthy"
-        or decoded.get("lab_version") != LAB_VERSION
-        or decoded.get("evidence") != LAB_HEALTH_EVIDENCE
+        or decoded.get("lab_version") != definition.lab_version
+        or decoded.get("evidence") != definition.health_evidence
+        or (
+            selected_scenario is not None
+            and decoded.get("scenario_id") != selected_scenario
+        )
     ):
         raise LabControlError("health_invalid")
     return {
         "healthy": True,
-        "lab_version": LAB_VERSION,
+        "lab_version": definition.lab_version,
+        **(
+            {"scenario_id": selected_scenario}
+            if selected_scenario is not None
+            else {}
+        ),
     }
+
+
+def _lab_definition(value: _LabDefinition | str | None) -> _LabDefinition:
+    if isinstance(value, _LabDefinition):
+        return value
+    candidate = str(value or LAB_VERSION).strip().lower()
+    if candidate == LAB_VERSION:
+        # Construct this on demand so contract tests can safely replace the
+        # legacy compose path without mutating a process-global registry.
+        return _LabDefinition(
+            definition_id=LAB_VERSION,
+            project_name=COMPOSE_PROJECT_NAME,
+            compose_path=_COMPOSE_PATH,
+            lab_version=LAB_VERSION,
+            health_evidence=LAB_HEALTH_EVIDENCE,
+        )
+    if candidate == V2_LAB_VERSION:
+        return _LabDefinition(
+            definition_id=V2_LAB_VERSION,
+            project_name="octobench-v2",
+            compose_path=_V2_COMPOSE_PATH,
+            lab_version=V2_LAB_VERSION,
+            health_evidence=V2_LAB_HEALTH_EVIDENCE,
+            scenario_ids=_V2_SCENARIO_IDS,
+        )
+    raise LabControlError("invalid_lab_definition")
+
+
+def _selected_scenario(
+    definition: _LabDefinition,
+    value: str | None,
+) -> str | None:
+    candidate = str(value or "").strip().lower()
+    if definition.scenario_ids:
+        if candidate not in definition.scenario_ids:
+            raise LabControlError("invalid_scenario")
+        return candidate
+    if candidate:
+        raise LabControlError("invalid_scenario")
+    return None
 
 
 def _target_url(value: str | None, environment: Mapping[str, str]) -> str:

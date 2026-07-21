@@ -50,6 +50,7 @@ _MIN_OLLAMA_CONTEXT_LENGTH = 32_768
 _MAX_OLLAMA_CONTEXT_LENGTH = 262_144
 _DEFAULT_CAMPAIGN_DEFINITION_ID = "linux-blackbox-v1"
 _SMALL_MODEL_CAMPAIGN_DEFINITION_ID = "linux-blackbox-small-model-v1"
+_SMALL_MODEL_CAMPAIGN_V2_DEFINITION_ID = "linux-blackbox-small-model-v2"
 _SMALL_MODEL_CAMPAIGN_OLLAMA_MODEL = "huihui_ai/qwen3.5-abliterated:9b"
 _SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST = (
     "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600"
@@ -156,6 +157,9 @@ class _CampaignDefinition:
     ollama_digest: str | None = None
     ollama_context_length: int | None = None
     ollama_server_version: str | None = None
+    fairness_profile_id: str | None = None
+    evaluation_scope: str | None = None
+    lab_definition_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -183,6 +187,23 @@ _CAMPAIGN_DEFINITIONS = {
         ollama_digest=_SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST,
         ollama_context_length=_SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH,
         ollama_server_version=_SMALL_MODEL_CAMPAIGN_OLLAMA_SERVER_VERSION,
+        fairness_profile_id=(
+            "linux-blackbox-shared-ollama-altered-small-model-v1"
+        ),
+        evaluation_scope="altered-small-model-stress",
+    ),
+    _SMALL_MODEL_CAMPAIGN_V2_DEFINITION_ID: _CampaignDefinition(
+        definition_id=_SMALL_MODEL_CAMPAIGN_V2_DEFINITION_ID,
+        allowed_profiles=frozenset({"core"}),
+        ollama_model=_SMALL_MODEL_CAMPAIGN_OLLAMA_MODEL,
+        ollama_digest=_SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST,
+        ollama_context_length=_SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH,
+        ollama_server_version=_SMALL_MODEL_CAMPAIGN_OLLAMA_SERVER_VERSION,
+        fairness_profile_id=(
+            "linux-blackbox-shared-ollama-altered-small-model-v2"
+        ),
+        evaluation_scope="altered-small-model-multi-surface-v2",
+        lab_definition_id="discovery-lab-v2",
     ),
 }
 
@@ -244,7 +265,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.prepare_only and args.diagnostic_pilot:
             raise LaunchError("campaign_failed")
         if not args.diagnostic_pilot and (
-            args.pilot_seconds is not None or args.pilot_system is not None
+            args.pilot_seconds is not None
+            or args.pilot_system is not None
+            or args.pilot_scenario is not None
         ):
             raise LaunchError("campaign_failed")
         campaign_id = _campaign_id(args.campaign_id)
@@ -328,6 +351,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     else DEFAULT_PILOT_SECONDS
                 ),
                 selected_system=args.pilot_system,
+                selected_scenario=args.pilot_scenario,
             )
             print(diagnostic.summary_path)
             return diagnostic.exit_code
@@ -384,6 +408,10 @@ def _argument_parser() -> argparse.ArgumentParser:
         "--pilot-system",
         choices=("octopus", "strix", "pentagi"),
         help="diagnose only one system from the selected profile",
+    )
+    parser.add_argument(
+        "--pilot-scenario",
+        help="diagnose only one exact scenario ID from the selected definition",
     )
     return parser
 
@@ -630,13 +658,17 @@ def _manifest_payload(
             "action_conformance": "not_assessed",
             **(
                 {
-                    "evaluation_scope": "altered-small-model-stress",
+                    "evaluation_scope": selected_definition.evaluation_scope,
                     "vendor_representative": False,
                     "model_class": "sub-70b",
                     "model_variant": "abliterated",
                 }
-                if selected_definition.definition_id
-                == _SMALL_MODEL_CAMPAIGN_DEFINITION_ID
+                if selected_definition.evaluation_scope is not None
+                else {}
+            ),
+            **(
+                {"lab_definition_id": selected_definition.lab_definition_id}
+                if selected_definition.lab_definition_id is not None
                 else {}
             ),
             **(
@@ -669,8 +701,18 @@ def _campaign_payload(
     )
 
     def command(action: str, timeout: float) -> dict[str, Any]:
+        argv = [str(python), str(lab), action]
+        if campaign_definition.lab_definition_id is not None:
+            argv.extend(
+                (
+                    "--lab-definition",
+                    campaign_definition.lab_definition_id,
+                )
+            )
+            if action in {"reset", "health"}:
+                argv.extend(("--scenario-id", "{scenario_id}"))
         return {
-            "argv": [str(python), str(lab), action],
+            "argv": argv,
             "working_directory": str(ROOT.resolve()),
             "timeout_seconds": timeout,
             "environment_passthrough": list(lab_environment),
@@ -772,7 +814,7 @@ def _required_environment(
     required: tuple[str, ...] = _BASE_REQUIRED_ENVIRONMENT
     if profile == "extended":
         required = (*required, *_EXTENDED_REQUIRED_ENVIRONMENT)
-    if selected_definition.definition_id == _SMALL_MODEL_CAMPAIGN_DEFINITION_ID:
+    if selected_definition.ollama_model is not None:
         required = (*required, *_SMALL_MODEL_REQUIRED_ENVIRONMENT)
     return required
 
@@ -786,12 +828,14 @@ def _fairness_profile(
         _DEFAULT_CAMPAIGN_DEFINITION_ID
     ]
     shared_model = profile == "core"
-    small_model_stress = (
-        selected_definition.definition_id == _SMALL_MODEL_CAMPAIGN_DEFINITION_ID
+    small_model_stress = selected_definition.ollama_model is not None
+    multi_surface = (
+        selected_definition.definition_id
+        == _SMALL_MODEL_CAMPAIGN_V2_DEFINITION_ID
     )
     return {
         "profile_id": (
-            "linux-blackbox-shared-ollama-altered-small-model-v1"
+            selected_definition.fairness_profile_id
             if small_model_stress
             else (
                 "linux-blackbox-shared-ollama-v1"
@@ -803,7 +847,14 @@ def _fairness_profile(
         "notes": (
             "OCTOPUS and Strix use the same altered sub-70B Ollama model "
             "huihui_ai/qwen3.5-abliterated:9b, model digest, server and "
-            "65536-token context. This is a small-model stress profile, not a "
+            "65536-token context. "
+            + (
+                "Four scenario-isolated read-only surfaces use a 900-second "
+                "hard cap derived from the published v1 runtime observations. "
+                if multi_surface
+                else ""
+            )
+            + "This is a small-model stress profile, not a "
             "vendor-representative score; prompts, request APIs, tools and other "
             "inference defaults remain product-native and distinct."
             if small_model_stress

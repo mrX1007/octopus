@@ -15,7 +15,8 @@ its results as a system-to-system comparison.
 benchmarks/competitors/
 ├── catalog.json  # reviewed upstream releases, revisions, licenses and tracks
 ├── campaigns/    # versioned live campaign scenarios
-├── lab/          # resettable OCTOBENCH-owned target fixture
+├── lab/          # immutable discovery-lab-v1 fixture
+├── labs/         # newer immutable, allowlisted fixture definitions
 ├── systems/      # low-level system-manifest examples
 ├── scenarios/    # neutral scenario templates for the low-level matrix runner
 └── results/      # immutable campaign publication bundles
@@ -41,6 +42,13 @@ system on one Linux host with the exact altered Qwen 9B model/digest, Ollama
 | --- | --- | ---: | ---: |
 | OCTOPUS | 6 succeeded | 0.8 (`n=6`) | 0.2 (`n=6`) |
 | Strix 1.1.0 | 1 succeeded, 2 timed out at 600 s, 3 exited with code 1 | 0.6 (`n=1`) | 0.0 (`n=1`) |
+
+![Published OCTOPUS and Strix terminal outcomes with successful-run quality ranges](../../docs/benchmarks/linux-blackbox-small-model-v1-20260721t134205z.svg)
+
+The SVG above is a deterministic, non-normative derivative of the immutable
+v1 bundle; the bundle itself remains byte-for-byte unchanged. Every newly
+generated bundle embeds and checksums its own `comparison.svg` from
+`comparison.md`, so GitHub renders the graph beside the report.
 
 The campaign status is intentionally `completed_with_failures`: all 12 runs,
 reset attestations, both aggregates and cleanup evidence are present, while
@@ -136,7 +144,8 @@ detects one private host address and binds the lab only there;
 standalone lab control defaults to `127.0.0.1`. Optional explicit host, bind
 and port overrides are documented as comments in the template.
 
-For the calibrated `linux-blackbox-small-model-v1` definition, use this exact
+For the calibrated `linux-blackbox-small-model-v1` and multi-surface
+`linux-blackbox-small-model-v2` definitions, use this exact
 private env configuration. The two acknowledgement values below are valid only
 after you have personally confirmed authorization and host isolation:
 
@@ -160,8 +169,8 @@ LLM_API_BASE=http://127.0.0.1:11434
 LLM_API_KEY=
 ```
 
-The calibrated `linux-blackbox-small-model-v1` definition is intentionally a
-separate altered-model stress profile. It requires the exact tag
+Both small-model definitions are intentionally separate altered-model stress
+profiles. They require the exact tag
 `huihui_ai/qwen3.5-abliterated:9b`, server version `0.18.3`, context `65536`,
 flash attention `1`, and KV cache type `q8_0`; the live launcher also pins the
 attested model digest and fails closed if any value differs.
@@ -224,7 +233,8 @@ provenance records those values and model/VRAM byte sizes.
 Ollama does not expose those service settings through the API. Run the campaign
 against a dedicated idle Ollama endpoint; provenance marks the declarations as
 not independently API-attested.
-`linux-blackbox-small-model-v1` additionally requires and records
+Both `linux-blackbox-small-model-v1` and
+`linux-blackbox-small-model-v2` additionally require and record
 `OCTOBENCH_OLLAMA_FLASH_ATTENTION=1` and
 `OCTOBENCH_OLLAMA_KV_CACHE_TYPE=q8_0`; these must match the service drop-in.
 The context value is also passed to OCTOPUS, while Strix uses the verified
@@ -243,31 +253,53 @@ running a system:
 
 ```bash
 ./venv/bin/python -m core.benchmarks.competitors.launch \
-  --campaign-id linux-blackbox-small-model-v1-check \
-  --campaign-definition linux-blackbox-small-model-v1 \
+  --campaign-id linux-blackbox-small-model-v2-check \
+  --campaign-definition linux-blackbox-small-model-v2 \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env \
   --prepare-only
 ```
 
-Two checked-in definitions are available. `linux-blackbox-v1` is the backward-
-compatible default 300-second smoke contract. The explicitly selected
+Three checked-in definitions are available. `linux-blackbox-v1` is the
+backward-compatible default 300-second smoke contract. The explicitly selected
 `linux-blackbox-small-model-v1` freezes the altered 9B model tag/digest,
 Ollama 0.18.3, 65536-token context, q8_0 KV policy and a 600-second hard cap.
 That cap is derived from one successful private pilot per system using
 `ceil(max(product_duration_seconds) * 1.5 / 300) * 300`; this is an engineering
-calibration, not a statistical claim or vendor-representative score.
+calibration, not a statistical claim or vendor-representative score. The v2
+definition retains those runtime pins and adds four scenario-isolated surfaces:
+linked navigation, OpenAPI contract discovery, same-origin relative redirects
+and JSON hypermedia pagination. Its shared 900-second hard cap is derived with
+the same 150%/300-second rule from the published v1 maximum successful duration
+and its right-censored 600-second timeouts.
 
 Use a fresh immutable ID for the repeated small-model campaign:
 
 ```bash
 git status --short
-CAMPAIGN_ID="linux-blackbox-small-model-v1-$(date -u +%Y%m%dt%H%M%Sz)"
+CAMPAIGN_ID="linux-blackbox-small-model-v2-$(date -u +%Y%m%dt%H%M%Sz)"
 ./venv/bin/python -m core.benchmarks.competitors.launch \
   --campaign-id "$CAMPAIGN_ID" \
-  --campaign-definition linux-blackbox-small-model-v1 \
+  --campaign-definition linux-blackbox-small-model-v2 \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env
+
+BUNDLE="benchmarks/competitors/results/$CAMPAIGN_ID"
+./venv/bin/python -c \
+  'import json,sys; from core.benchmarks.competitors.publication import verify_campaign_bundle; print(json.dumps(verify_campaign_bundle(sys.argv[1]), sort_keys=True))' \
+  "$BUNDLE"
+```
+
+The verifier JSON must contain `"status": "verified"` before staging. The live launcher
+already publishes the immutable bundle; Git publication is the final explicit
+step:
+
+```bash
+git add "$BUNDLE"
+git diff --cached --check
+git diff --cached --stat
+git commit -m "Publish competitor benchmark $CAMPAIGN_ID"
+git push -u origin "$(git branch --show-current)"
 ```
 
 `git status --short` must print nothing before a publishable run; the launcher
@@ -276,20 +308,25 @@ private env file do not appear there.
 
 `--campaign-definition` selects the checked-in contract;
 `--campaign-id` identifies one execution and all of its generated, journal and
-published artifacts. Never reuse an ID across definitions. Before paying for a
-repeated campaign on a new host, validate one private run per system. Start
-with Strix so an early product error does not consume the matrix:
+published artifacts. Never reuse an ID across definitions. The v2 campaign is
+48 runs (`4 scenarios × 2 systems × 6 repetitions`), normally about five to
+six hours on the calibrated host, with a 12-hour absolute product-time ceiling.
+Before paying for it on a new host, validate the multi-hop pagination surface
+once per system. Start with Strix so an early product error does not consume
+the matrix:
 
 ```bash
-PILOT_ID="linux-blackbox-pilot-strix-$(date -u +%Y%m%dt%H%M%Sz)"
+SCENARIO_ID="authorized-hypermedia-pagination-small-model-v2"
+PILOT_ID="linux-blackbox-v2-pilot-strix-$(date -u +%Y%m%dt%H%M%Sz)"
 ./venv/bin/python -m core.benchmarks.competitors.launch \
   --campaign-id "$PILOT_ID" \
-  --campaign-definition linux-blackbox-small-model-v1 \
+  --campaign-definition linux-blackbox-small-model-v2 \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env \
   --diagnostic-pilot \
   --pilot-system strix \
-  --pilot-seconds 3600
+  --pilot-scenario "$SCENARIO_ID" \
+  --pilot-seconds 900
 ./venv/bin/python -m json.tool \
   ".benchmark-state/diagnostics/$PILOT_ID/summary.json"
 find ".benchmark-state/diagnostics/$PILOT_ID/raw/strix" \
@@ -299,24 +336,56 @@ find ".benchmark-state/diagnostics/$PILOT_ID/raw/strix" \
 Then run the OCTOPUS pilot under a fresh ID:
 
 ```bash
-PILOT_ID="linux-blackbox-pilot-octopus-$(date -u +%Y%m%dt%H%M%Sz)"
+SCENARIO_ID="authorized-hypermedia-pagination-small-model-v2"
+PILOT_ID="linux-blackbox-v2-pilot-octopus-$(date -u +%Y%m%dt%H%M%Sz)"
 ./venv/bin/python -m core.benchmarks.competitors.launch \
   --campaign-id "$PILOT_ID" \
-  --campaign-definition linux-blackbox-small-model-v1 \
+  --campaign-definition linux-blackbox-small-model-v2 \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env \
   --diagnostic-pilot \
   --pilot-system octopus \
-  --pilot-seconds 3600
+  --pilot-scenario "$SCENARIO_ID" \
+  --pilot-seconds 900
 ./venv/bin/python -m json.tool \
   ".benchmark-state/diagnostics/$PILOT_ID/summary.json"
 find ".benchmark-state/diagnostics/$PILOT_ID/raw/octopus" \
   -name adapter.log -print
 ```
 
-The diagnostic command performs exactly one repetition for the selected
-system/scenario. `--pilot-seconds` is the product-execution cap; separately
-bounded reset, health and cleanup work can increase lifecycle wall time. The
+Run all four surfaces for both systems when you want an eight-run diagnostic
+matrix before the full campaign:
+
+```bash
+for SYSTEM_ID in strix octopus; do
+  for SCENARIO_ID in \
+    authorized-linked-navigation-small-model-v2 \
+    authorized-openapi-contract-small-model-v2 \
+    authorized-relative-redirect-small-model-v2 \
+    authorized-hypermedia-pagination-small-model-v2
+  do
+    PILOT_ID="v2-pilot-${SYSTEM_ID}-${SCENARIO_ID#authorized-}-$(date -u +%Y%m%dt%H%M%Sz)"
+    ./venv/bin/python -m core.benchmarks.competitors.launch \
+      --campaign-id "$PILOT_ID" \
+      --campaign-definition linux-blackbox-small-model-v2 \
+      --profile core \
+      --environment-file benchmarks/competitors/secrets.env \
+      --diagnostic-pilot \
+      --pilot-system "$SYSTEM_ID" \
+      --pilot-scenario "$SCENARIO_ID" \
+      --pilot-seconds 900
+    ./venv/bin/python -m json.tool \
+      ".benchmark-state/diagnostics/$PILOT_ID/summary.json"
+  done
+done
+```
+
+The diagnostic command performs exactly one repetition for every selected
+system/scenario pair. `--pilot-system` and `--pilot-scenario` independently
+narrow that cross-product; without `--pilot-scenario`, a v2 pilot runs all four
+surfaces for the selected system. `--pilot-seconds` is a per-run product cap,
+not a whole-pilot cap. Separately bounded reset, health and cleanup work can
+increase lifecycle wall time. The
 command returns exit code 1 for a product/cleanup failure and 130 after an
 operator interrupt, but still writes a summary and prints its path. The summary
 contains only safe model/runtime identity, lab snapshot, manifest/config and
@@ -329,9 +398,9 @@ explicitly marked `publishable: false` and must not be copied into a result
 bundle. Campaign IDs cannot be shared between diagnostic and publication runs;
 always use a fresh ID.
 
-The shipped small-model definition records the pilot-derived rule and
-observations in its versioned strategy config; raw
-diagnostic summaries remain non-publishable. Do not silently change either
+The shipped small-model definitions record their pilot/published-result-derived
+rules and observations in their versioned strategy configs; raw
+diagnostic summaries remain non-publishable. Do not silently change any
 checked-in definition. Strix describes
 `quick` as a minutes-scale mode, not a guaranteed five-minute completion cap;
 see its official [scan-mode documentation](https://docs.strix.ai/usage/scan-modes).
@@ -618,6 +687,7 @@ benchmarks/competitors/results/<campaign-id>/
 ├── campaign-status.json
 ├── comparison.json
 ├── comparison.md
+├── comparison.svg          # deterministic GitHub-rendered outcome/quality graph
 ├── preflight.json
 ├── provenance.json
 ├── schedule.json
@@ -628,8 +698,12 @@ benchmarks/competitors/results/<campaign-id>/
 scenario, execution-mode, fairness and completeness metadata. It excludes
 adapter commands, local paths, environment values and raw logs.
 `comparison.md` is a non-normative rendering and deliberately declares no
-winner. Every full aggregate retains its runs under `aggregates/`; the bundle
-also includes public input copies, the exact schedule, preflight, provenance,
+winner. Schema 1.1 bundles embed `comparison.svg`; terminal-outcome bars use
+all scheduled runs, while quality ranges use successful runs only and show a
+separate per-metric `n`. Missing telemetry is `N/A`, never zero. Verification
+canonically regenerates both Markdown and SVG before accepting the bundle.
+Every full aggregate retains its runs under `aggregates/`; the bundle also
+includes public input copies, the exact schedule, preflight, provenance,
 per-run reset attestations and campaign status. `SHA256SUMS` covers every
 publication file and the campaign verifies it before returning. Generated
 runtime manifests remain under ignored `.benchmark-state/`; their sanitized

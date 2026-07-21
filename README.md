@@ -586,6 +586,13 @@ published as `completed_with_failures`, not as a statistical or
 vendor-representative ranking; successful-run Strix quality metrics have
 `n=1`, and no-op/repeated-task telemetry is unavailable for both systems.
 
+![Published OCTOPUS and Strix terminal outcomes with successful-run quality ranges](docs/benchmarks/linux-blackbox-small-model-v1-20260721t134205z.svg)
+
+This checked-in SVG is derived from the immutable v1 bundle and is
+non-normative. New benchmark bundles include their own deterministic
+`comparison.svg`, embedded by `comparison.md`, so the graph renders directly
+on GitHub beside the checksummed JSON and full aggregates.
+
 PentestGPT 1.0.0 remains cataloged only as a separate CTF/flag-capture
 candidate. Its upstream non-interactive CLI hardcodes a CTF task and retries a
 no-flag result three times, so it is not runnable or ranked in this discovery
@@ -634,7 +641,8 @@ missing or differs from `YES`.
 The checked-in `STRIX_IMAGE` value is an immutable Linux amd64 digest; do not
 replace it with a mutable tag or another digest.
 
-For the calibrated `linux-blackbox-small-model-v1` definition, use this exact
+For the calibrated `linux-blackbox-small-model-v1` and multi-surface
+`linux-blackbox-small-model-v2` definitions, use this exact
 private env configuration. The two acknowledgement values below are valid only
 after you have personally confirmed authorization and host isolation:
 
@@ -658,8 +666,8 @@ LLM_API_BASE=http://127.0.0.1:11434
 LLM_API_KEY=
 ```
 
-The calibrated `linux-blackbox-small-model-v1` definition is intentionally a
-separate altered-model stress profile. It requires the exact tag
+Both small-model definitions are intentionally separate altered-model stress
+profiles. They require the exact tag
 `huihui_ai/qwen3.5-abliterated:9b`, server version `0.18.3`, context `65536`,
 flash attention `1`, and KV cache type `q8_0`; the live launcher also pins the
 attested model digest and fails closed if any value differs.
@@ -724,17 +732,23 @@ tool use, so label sub-70B, distilled or altered/abliterated runs as a separate
 small-model stress profile. The bounded campaign pins Strix's upstream `quick`
 mode and records that choice in its public manifest.
 
-Calibrate one private repetition before paying for the repeated campaign. The
-diagnostic output is ignored by Git and explicitly non-publishable:
+Calibrate one private repetition of the multi-hop pagination surface before
+paying for the 48-run repeated campaign. `--pilot-scenario` prevents the
+diagnostic from running all four surfaces. Diagnostic output is ignored by Git
+and explicitly non-publishable:
 
 ```bash
-PILOT_ID="linux-blackbox-pilot-strix-$(date -u +%Y%m%dt%H%M%Sz)"
+SCENARIO_ID="authorized-hypermedia-pagination-small-model-v2"
+PILOT_ID="linux-blackbox-v2-pilot-strix-$(date -u +%Y%m%dt%H%M%Sz)"
 ./venv/bin/python -m core.benchmarks.competitors.launch \
   --campaign-id "$PILOT_ID" \
-  --campaign-definition linux-blackbox-small-model-v1 \
+  --campaign-definition linux-blackbox-small-model-v2 \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env \
-  --diagnostic-pilot --pilot-system strix --pilot-seconds 3600
+  --diagnostic-pilot \
+  --pilot-system strix \
+  --pilot-scenario "$SCENARIO_ID" \
+  --pilot-seconds 900
 ./venv/bin/python -m json.tool \
   ".benchmark-state/diagnostics/$PILOT_ID/summary.json"
 ```
@@ -742,15 +756,46 @@ PILOT_ID="linux-blackbox-pilot-strix-$(date -u +%Y%m%dt%H%M%Sz)"
 Then calibrate OCTOPUS under a fresh, correctly labelled diagnostic ID:
 
 ```bash
-PILOT_ID="linux-blackbox-pilot-octopus-$(date -u +%Y%m%dt%H%M%Sz)"
+SCENARIO_ID="authorized-hypermedia-pagination-small-model-v2"
+PILOT_ID="linux-blackbox-v2-pilot-octopus-$(date -u +%Y%m%dt%H%M%Sz)"
 ./venv/bin/python -m core.benchmarks.competitors.launch \
   --campaign-id "$PILOT_ID" \
-  --campaign-definition linux-blackbox-small-model-v1 \
+  --campaign-definition linux-blackbox-small-model-v2 \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env \
-  --diagnostic-pilot --pilot-system octopus --pilot-seconds 3600
+  --diagnostic-pilot \
+  --pilot-system octopus \
+  --pilot-scenario "$SCENARIO_ID" \
+  --pilot-seconds 900
 ./venv/bin/python -m json.tool \
   ".benchmark-state/diagnostics/$PILOT_ID/summary.json"
+```
+
+To run all four v2 surfaces as one-repetition diagnostics for both systems,
+use this loop. Every pair receives a distinct private diagnostic ID:
+
+```bash
+for SYSTEM_ID in strix octopus; do
+  for SCENARIO_ID in \
+    authorized-linked-navigation-small-model-v2 \
+    authorized-openapi-contract-small-model-v2 \
+    authorized-relative-redirect-small-model-v2 \
+    authorized-hypermedia-pagination-small-model-v2
+  do
+    PILOT_ID="v2-pilot-${SYSTEM_ID}-${SCENARIO_ID#authorized-}-$(date -u +%Y%m%dt%H%M%Sz)"
+    ./venv/bin/python -m core.benchmarks.competitors.launch \
+      --campaign-id "$PILOT_ID" \
+      --campaign-definition linux-blackbox-small-model-v2 \
+      --profile core \
+      --environment-file benchmarks/competitors/secrets.env \
+      --diagnostic-pilot \
+      --pilot-system "$SYSTEM_ID" \
+      --pilot-scenario "$SCENARIO_ID" \
+      --pilot-seconds 900
+    ./venv/bin/python -m json.tool \
+      ".benchmark-state/diagnostics/$PILOT_ID/summary.json"
+  done
+done
 ```
 
 `linux-blackbox-v1` remains the default 300-second discovery smoke contract.
@@ -758,17 +803,34 @@ The separately selected `linux-blackbox-small-model-v1` definition pins the
 attested altered 9B model/digest, Ollama 0.18.3, 65536-token context and q8_0
 KV policy. Its 600-second hard cap is an engineering calibration derived from
 one successful private pilot per system; it is not a statistical calibration
-or a vendor-representative ranking. Full methodology and log-handling are in
+or a vendor-representative ranking. `linux-blackbox-small-model-v2` retains
+those exact runtime pins but selects four separately reset and health-attested
+read-only surfaces: linked navigation, OpenAPI contract discovery, relative
+redirect traversal and JSON hypermedia pagination. Its 900-second hard cap is
+derived from the published v1 successful durations and right-censored
+600-second timeouts. It runs 48 product executions and normally requires about
+five to six hours; the absolute product-time ceiling is 12 hours. Full
+methodology and log-handling are in
 [`benchmarks/competitors/README.md`](benchmarks/competitors/README.md).
 
 ```bash
 git status --short
-CAMPAIGN_ID="linux-blackbox-small-model-v1-$(date -u +%Y%m%dt%H%M%Sz)"
+CAMPAIGN_ID="linux-blackbox-small-model-v2-$(date -u +%Y%m%dt%H%M%Sz)"
 ./venv/bin/python -m core.benchmarks.competitors.launch \
   --campaign-id "$CAMPAIGN_ID" \
-  --campaign-definition linux-blackbox-small-model-v1 \
+  --campaign-definition linux-blackbox-small-model-v2 \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env
+
+BUNDLE="benchmarks/competitors/results/$CAMPAIGN_ID"
+./venv/bin/python -c \
+  'import json,sys; from core.benchmarks.competitors.publication import verify_campaign_bundle; print(json.dumps(verify_campaign_bundle(sys.argv[1]), sort_keys=True))' \
+  "$BUNDLE"
+
+git add "$BUNDLE"
+git diff --cached --check
+git commit -m "Publish competitor benchmark $CAMPAIGN_ID"
+git push -u origin "$(git branch --show-current)"
 ```
 
 `git status --short` must print nothing before a publishable run; the launcher

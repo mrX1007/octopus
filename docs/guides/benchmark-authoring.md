@@ -45,7 +45,9 @@ catalog.
 
 The shipped Linux definitions keep reviewed scenarios under
 `benchmarks/competitors/campaigns/linux-blackbox-v1/scenarios/` and
-`benchmarks/competitors/campaigns/linux-blackbox-small-model-v1/scenarios/`.
+`benchmarks/competitors/campaigns/linux-blackbox-small-model-v1/scenarios/`,
+with the four multi-surface contracts under
+`benchmarks/competitors/campaigns/linux-blackbox-small-model-v2/scenarios/`.
 The launcher selects only allowlisted checked-in contracts with
 `--campaign-definition`; it never accepts an arbitrary path. For a custom
 low-level campaign, start from
@@ -57,6 +59,14 @@ it before every repetition. Clear system state/caches and verify lab health.
 The shipped launcher records a balanced forward/reverse system rotation;
 custom low-level campaigns must define and publish equivalent scheduling when
 infrastructure drift could systematically favor one product.
+
+Never modify an existing live fixture after its digest has entered a scenario
+or publication bundle. The v1 fixture remains under
+`benchmarks/competitors/lab/`; newer fixtures use an allowlisted directory under
+`benchmarks/competitors/labs/`. The v2 controller recreates the container for
+every run with exactly one selected `scenario_id`, then requires health output
+to attest both `discovery-lab-v2` and that scenario. This prevents a full-host
+scanner from observing another scenario surface in the same repetition.
 
 Each participating system also needs a schema `1.0` manifest conforming to
 `docs/schemas/benchmark-system-v1.schema.json`. The manifest pins its exact
@@ -107,17 +117,35 @@ repetitions for every system/scenario pair. Publish immutable inputs, all runs,
 aggregate median/variance/minimum/maximum/count, failures, execution mode,
 comparison track and fairness metadata together. On Linux x86_64, use the
 supported pinned launcher. Omit `--campaign-definition` for the backward-
-compatible `linux-blackbox-v1` default, or select the altered-model stress
-contract explicitly:
+compatible `linux-blackbox-v1` default, or select the altered-model
+multi-surface contract explicitly. Pilot only one exact surface first; without
+`--pilot-scenario`, a diagnostic runs every scenario in the definition:
 
 ```bash
 ./scripts/benchmarks/bootstrap_competitors_linux.sh --profile core
-CAMPAIGN_ID="linux-blackbox-small-model-v1-$(date -u +%Y%m%dt%H%M%Sz)"
+SCENARIO_ID="authorized-hypermedia-pagination-small-model-v2"
+PILOT_ID="linux-blackbox-v2-pilot-strix-$(date -u +%Y%m%dt%H%M%Sz)"
+./venv/bin/python -m core.benchmarks.competitors.launch \
+  --campaign-id "$PILOT_ID" \
+  --campaign-definition linux-blackbox-small-model-v2 \
+  --profile core \
+  --environment-file benchmarks/competitors/secrets.env \
+  --diagnostic-pilot \
+  --pilot-system strix \
+  --pilot-scenario "$SCENARIO_ID" \
+  --pilot-seconds 900
+
+CAMPAIGN_ID="linux-blackbox-small-model-v2-$(date -u +%Y%m%dt%H%M%Sz)"
 ./venv/bin/python -m core.benchmarks.competitors.launch \
   --campaign-id "$CAMPAIGN_ID" \
-  --campaign-definition linux-blackbox-small-model-v1 \
+  --campaign-definition linux-blackbox-small-model-v2 \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env
+
+BUNDLE="benchmarks/competitors/results/$CAMPAIGN_ID"
+./venv/bin/python -c \
+  'import json,sys; from core.benchmarks.competitors.publication import verify_campaign_bundle; print(json.dumps(verify_campaign_bundle(sys.argv[1]), sort_keys=True))' \
+  "$BUNDLE"
 ```
 
 The interface below is the low-level path for a custom, already-controlled

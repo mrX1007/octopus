@@ -4,6 +4,7 @@ import json
 import os
 import stat
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -274,6 +275,76 @@ def test_pilot_can_select_one_system_and_rejects_unsafe_budget(
             environment={},
             root=tmp_path / "other-diagnostics",
             budget_seconds=59,
+        )
+
+
+def test_pilot_can_select_one_exact_scenario_and_rejects_unknown_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest(tmp_path, "strix")
+    config = _config(tmp_path, (manifest,))
+    first = load_scenario(SCENARIO_PATH)
+    second = replace(
+        first,
+        scenario_id="second-read-only-scenario",
+        seed=999,
+    )
+    observed: list[str] = []
+    monkeypatch.setattr(diagnostic, "load_system_manifest", lambda _path: manifest)
+    monkeypatch.setattr(diagnostic, "load_scenarios", lambda _path: (first, second))
+
+    class Controller:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        def reset_and_health(self, _context):
+            return None
+
+        def cleanup(self, _context):
+            return None
+
+    class Runner:
+        def __init__(self, _manifest, *, private_log_path):
+            self.private_log_path = Path(private_log_path)
+
+        def __call__(self, scenario, _repetition, _seed):
+            observed.append(scenario.scenario_id)
+            self.private_log_path.write_bytes(b"selected\n")
+            self.private_log_path.chmod(0o600)
+            return {
+                "status": "succeeded",
+                "duration_seconds": 1.0,
+                "error_class": "",
+            }
+
+    monkeypatch.setattr(diagnostic, "CommandLabController", Controller)
+    monkeypatch.setattr(diagnostic, "CommandSystemRunner", Runner)
+
+    outcome = diagnostic.run_diagnostic_pilot(
+        replace(config, campaign_id="selected-scenario"),
+        environment={},
+        root=tmp_path / "diagnostics",
+        budget_seconds=120,
+        selected_system="strix",
+        selected_scenario=second.scenario_id,
+    )
+    payload = json.loads(outcome.summary_path.read_text(encoding="utf-8"))
+    assert observed == [second.scenario_id]
+    assert [item["scenario_id"] for item in payload["runs"]] == [
+        second.scenario_id
+    ]
+
+    with pytest.raises(
+        diagnostic.DiagnosticError,
+        match="diagnostic_scenario_unavailable",
+    ):
+        diagnostic.run_diagnostic_pilot(
+            replace(config, campaign_id="unknown-scenario"),
+            environment={},
+            root=tmp_path / "diagnostics",
+            budget_seconds=120,
+            selected_scenario="not-in-definition",
         )
 
 

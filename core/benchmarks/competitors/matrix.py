@@ -21,8 +21,14 @@ from ..schema import (
 )
 from .runner import CommandSystemRunner
 from .schema import CompetitorSchemaError, SystemManifest
+from .visualization import (
+    COMPARISON_SVG_PATH,
+    comparison_renderings_contract,
+    metric_statistics_by_pair,
+    render_comparison_svg,
+)
 
-COMPETITOR_MATRIX_SCHEMA_VERSION = "1.0"
+COMPETITOR_MATRIX_SCHEMA_VERSION = "1.1"
 
 _PRIVATE_METADATA_KEYS = frozenset(
     {
@@ -72,7 +78,7 @@ class CompetitorMatrixResult:
     def to_dict(self) -> dict[str, Any]:
         """Return publication metadata; full run data lives in aggregate files."""
 
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "matrix_id": self.matrix_id,
             "methodology": {
@@ -91,6 +97,9 @@ class CompetitorMatrixResult:
             "publication": dict(self.completeness),
             "generated_at": self.generated_at,
         }
+        if self.schema_version != "1.0":
+            payload["renderings"] = comparison_renderings_contract()
+        return payload
 
     @property
     def has_strict_failures(self) -> bool:
@@ -244,11 +253,20 @@ def publish_competitor_matrix(
         )
     )
     try:
-        _write_json(temporary / "comparison.json", result.to_dict())
+        comparison = result.to_dict()
+        _write_json(temporary / "comparison.json", comparison)
         (temporary / "comparison.md").write_text(
             render_comparison_markdown(result),
             encoding="utf-8",
         )
+        if "renderings" in comparison:
+            (temporary / COMPARISON_SVG_PATH).write_text(
+                render_comparison_svg(
+                    comparison,
+                    metric_statistics_by_pair(result.aggregates),
+                ),
+                encoding="utf-8",
+            )
         for system_id, system_aggregates in sorted(result.aggregates.items()):
             for scenario_id, aggregate in sorted(system_aggregates.items()):
                 _write_json(
@@ -286,20 +304,39 @@ publish_matrix = publish_competitor_matrix
 def render_comparison_markdown(result: CompetitorMatrixResult) -> str:
     """Render an auditable comparison report without declaring a winner."""
 
-    mode = result.execution_mode or "unspecified"
-    fairness = (
-        result.fairness_profile
-        if isinstance(result.fairness_profile, Mapping)
-        else {}
-    )
+    return render_comparison_markdown_payload(result.to_dict())
+
+
+def render_comparison_markdown_payload(comparison: Mapping[str, Any]) -> str:
+    """Render canonical Markdown from a public comparison payload."""
+
+    schema_version = str(comparison.get("schema_version") or "")
+    if schema_version not in {"1.0", COMPETITOR_MATRIX_SCHEMA_VERSION}:
+        raise CompetitorSchemaError("unsupported_matrix_schema")
+    current_rendering = schema_version != "1.0"
+    methodology = comparison.get("methodology")
+    if not isinstance(methodology, Mapping):
+        raise CompetitorSchemaError("invalid:methodology")
+    mode = str(methodology.get("execution_mode") or "unspecified")
+    fairness_value = methodology.get("fairness_profile")
+    fairness = fairness_value if isinstance(fairness_value, Mapping) else {}
+    systems = _mapping_items(comparison.get("systems"), "systems")
+    scenarios = _mapping_items(comparison.get("scenarios"), "scenarios")
+    summaries = _mapping_items(comparison.get("summaries"), "summaries")
+    completeness = comparison.get("publication")
+    if not isinstance(completeness, Mapping):
+        raise CompetitorSchemaError("invalid:publication")
+    repetitions = int(comparison.get("repetitions") or 0)
+    if repetitions <= 0:
+        raise CompetitorSchemaError("invalid:repetitions")
     lines = [
         "# Competitor benchmark comparison",
         "",
-        f"Matrix: `{result.matrix_id}`  ",
-        f"Schema: `{result.schema_version}`  ",
-        f"Track: `{result.track}`  ",
+        f"Matrix: `{comparison.get('matrix_id')}`  ",
+        f"Schema: `{schema_version}`  ",
+        f"Track: `{methodology.get('track')}`  ",
         f"Execution mode: `{mode}`  ",
-        f"Repetitions per system/scenario: `{result.repetitions}`  ",
+        f"Repetitions per system/scenario: `{repetitions}`  ",
         f"Fairness profile: `{fairness.get('profile_id') or 'unspecified'}`",
         "",
         "## Methodology",
@@ -322,13 +359,33 @@ def render_comparison_markdown(result: CompetitorMatrixResult) -> str:
             "an automatic winner. Interpret failures and policy violations alongside "
             "the metric medians."
         ),
-        "",
-        "## Systems",
-        "",
-        "| System | Version | Source revision | Model | Tool versions |",
-        "|---|---:|---|---|---|",
     ]
-    for system in result.systems:
+    if current_rendering:
+        lines.extend(
+            [
+                "",
+                (
+                    "Terminal outcomes in the visualization include every scheduled "
+                    "run. Quality medians and ranges include successful runs only; "
+                    "`n` is a separate per-metric successful-run sample count, and "
+                    "missing telemetry remains `N/A` rather than zero. Duration "
+                    "medians include every terminal outcome and are not time-to-success "
+                    "estimates."
+                ),
+                "",
+                "![Terminal outcomes and success-only quality](comparison.svg)",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Systems",
+            "",
+            "| System | Version | Source revision | Model | Tool versions |",
+            "|---|---:|---|---|---|",
+        ]
+    )
+    for system in systems:
         lines.append(
             "| {} | {} | {} | {} | {} |".format(
                 _markdown_cell(system.get("display_name") or system.get("name") or system.get("system_id")),
@@ -347,7 +404,7 @@ def render_comparison_markdown(result: CompetitorMatrixResult) -> str:
             "|---|---|---|---:|---:|---|---:|",
         ]
     )
-    for scenario in result.scenarios:
+    for scenario in scenarios:
         lines.append(
             "| {} | {} | {} | {} | {} | {} | {} |".format(
                 _markdown_cell(scenario["scenario_id"]),
@@ -358,45 +415,59 @@ def render_comparison_markdown(result: CompetitorMatrixResult) -> str:
                 _markdown_cell(scenario["lab_version"]),
                 _markdown_cell(scenario["target_version"]),
                 _markdown_cell(_compact_json(scenario["budgets"])),
-                result.repetitions,
+                repetitions,
             )
         )
     metric_headers = " | ".join(label for _name, label in _METRIC_COLUMNS)
+    duration_header = (
+        "Duration median, all outcomes (s)"
+        if current_rendering
+        else "Duration median (s)"
+    )
+    quality_header = " | Quality n" if current_rendering else ""
+    separator = "|---|---|---|---:|"
+    if current_rendering:
+        separator += "---|"
     lines.extend(
         [
             "",
             "## Results",
             "",
             (
-                "| Scenario | System | Status counts | Duration median (s) | "
+                f"| Scenario | System | Status counts | {duration_header}"
+                + quality_header
+                + " | "
                 + metric_headers
                 + " |"
             ),
-            "|---|---|---|---:|" + "---:|" * len(_METRIC_COLUMNS),
+            separator + "---:|" * len(_METRIC_COLUMNS),
         ]
     )
-    for summary in result.summaries:
+    for summary in summaries:
         medians = summary["metric_medians"]
         cells = [
             _format_metric(medians.get(metric_name))
             for metric_name, _label in _METRIC_COLUMNS
         ]
-        lines.append(
-            "| {} | {} | {} | {} | {} |".format(
-                _markdown_cell(summary["scenario_id"]),
-                _markdown_cell(summary["system_id"]),
-                _markdown_cell(_compact_json(summary["status_counts"])),
-                _format_metric(summary.get("duration_median_seconds")),
-                " | ".join(cells),
+        row = [
+            _markdown_cell(summary["scenario_id"]),
+            _markdown_cell(summary["system_id"]),
+            _markdown_cell(_compact_json(summary["status_counts"])),
+            _format_metric(summary.get("duration_median_seconds")),
+        ]
+        if current_rendering:
+            row.append(
+                _markdown_cell(_compact_json(summary.get("metric_counts") or {}))
             )
-        )
+        row.append(" | ".join(cells))
+        lines.append("| " + " | ".join(row) + " |")
     lines.extend(
         [
             "",
             "## Publication completeness",
             "",
             "```json",
-            json.dumps(result.completeness, indent=2, sort_keys=True),
+            json.dumps(completeness, indent=2, sort_keys=True),
             "```",
             "",
         ]
@@ -612,6 +683,11 @@ def _aggregate_summary(
             for name, values in sorted(aggregate.metric_statistics.items())
             if "median" in values
         },
+        "metric_counts": {
+            name: int(values["count"])
+            for name, values in sorted(aggregate.metric_statistics.items())
+            if "count" in values
+        },
         "policy_violations": policy_violations,
         "timeout_runs": timeout_runs,
         "partial_runs": partial_runs,
@@ -683,6 +759,14 @@ def _safe_path_component(value: str) -> str:
     if any(character in value for character in ("/", "\\", "\x00")):
         raise CompetitorSchemaError("unsafe_path_component")
     return value
+
+
+def _mapping_items(value: Any, name: str) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise CompetitorSchemaError(f"invalid:{name}")
+    if any(not isinstance(item, Mapping) for item in value):
+        raise CompetitorSchemaError(f"invalid:{name}")
+    return tuple(value)
 
 
 def _compact_json(value: Any) -> str:

@@ -8,6 +8,7 @@ import sys
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,7 @@ from core.benchmarks.competitors import lab as lab_module
 from core.benchmarks.competitors.campaign import (
     CampaignAbortedError,
     CampaignConfig,
+    _build_schedule,
     _counterbalanced_order,
     _effective_environment,
     run_campaign,
@@ -41,6 +43,7 @@ from core.benchmarks.competitors.state import (
     campaign_fingerprint,
     schedule_run_key,
 )
+from core.benchmarks.schema import load_scenarios
 
 pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 
@@ -92,6 +95,47 @@ def test_schedule_rotation_balances_every_position_and_reverses_carryover() -> N
         for position in range(4)
         for system in extended
     )
+
+
+def test_small_model_v2_schedule_has_48_counterbalanced_runs() -> None:
+    scenario_directory = (
+        Path(__file__).parents[2]
+        / "benchmarks"
+        / "competitors"
+        / "campaigns"
+        / "linux-blackbox-small-model-v2"
+        / "scenarios"
+    )
+    scenarios = load_scenarios(scenario_directory)
+    systems = (
+        SimpleNamespace(system_id="octopus"),
+        SimpleNamespace(system_id="strix"),
+    )
+
+    schedule = _build_schedule(
+        SimpleNamespace(repetitions=6),
+        systems,
+        scenarios,
+    )
+
+    assert len(scenarios) == 4
+    assert len(schedule) == 48
+    counts = Counter(
+        (item["scenario_id"], item["system_id"]) for item in schedule
+    )
+    assert set(counts.values()) == {6}
+    for scenario in scenarios:
+        first_systems = [
+            next(
+                item["system_id"]
+                for item in schedule
+                if item["scenario_id"] == scenario.scenario_id
+                and item["repetition"] == repetition
+            )
+            for repetition in range(1, 7)
+        ]
+        assert first_systems.count("octopus") == 3
+        assert first_systems.count("strix") == 3
 
 
 def test_checked_in_competitor_publication_bundles_verify() -> None:
@@ -310,6 +354,7 @@ def test_campaign_resets_each_run_outside_duration_and_publishes_complete_bundle
         "cleanup.json",
         "comparison.json",
         "comparison.md",
+        "comparison.svg",
         "inputs/campaign.json",
         "inputs/scenarios/service-discovery-verification.json",
         "inputs/systems/alpha.json",
@@ -829,9 +874,111 @@ def test_publication_secret_scan_and_verifier_detect_tampering(tmp_path):
     (outcome.bundle_path / "comparison.md").write_text("tampered", encoding="utf-8")
     with pytest.raises(CampaignPublicationError, match="publication_checksum_mismatch"):
         verify_campaign_bundle(outcome.bundle_path)
+    _rewrite_checksums(outcome.bundle_path)
+    with pytest.raises(
+        CampaignPublicationError,
+        match="publication_markdown_mismatch",
+    ):
+        verify_campaign_bundle(outcome.bundle_path)
 
 
-def test_verifier_accepts_legacy_v1_scenario_metadata(tmp_path):
+def test_verifier_rejects_rechecksummed_visualization_tampering(tmp_path):
+    config, _manifest_paths = _campaign_fixture(tmp_path)
+    outcome = run_campaign(
+        config,
+        environment={"CAMPAIGN_TEST_TOKEN": SECRET_VALUE},
+        runner_factory=_successful_runner_factory([]),
+        lab_controller=RecordingLab(),
+        clock=lambda: 100.0,
+    )
+    svg_path = outcome.bundle_path / "comparison.svg"
+    svg = svg_path.read_text(encoding="utf-8")
+    svg_path.write_text(
+        svg.replace("No overall score or winner", "Automatic winner"),
+        encoding="utf-8",
+    )
+    _rewrite_checksums(outcome.bundle_path)
+
+    with pytest.raises(
+        CampaignPublicationError,
+        match="publication_visualization_mismatch",
+    ):
+        verify_campaign_bundle(outcome.bundle_path)
+
+
+def test_verifier_requires_declared_visualization(tmp_path):
+    config, _manifest_paths = _campaign_fixture(tmp_path)
+    outcome = run_campaign(
+        config,
+        environment={"CAMPAIGN_TEST_TOKEN": SECRET_VALUE},
+        runner_factory=_successful_runner_factory([]),
+        lab_controller=RecordingLab(),
+        clock=lambda: 100.0,
+    )
+    (outcome.bundle_path / "comparison.svg").unlink()
+    _rewrite_checksums(outcome.bundle_path)
+
+    with pytest.raises(
+        CampaignPublicationError,
+        match="publication_semantic_incomplete",
+    ):
+        verify_campaign_bundle(outcome.bundle_path)
+
+
+def test_verifier_rejects_current_bundle_downgraded_without_visualization(tmp_path):
+    config, _manifest_paths = _campaign_fixture(tmp_path)
+    outcome = run_campaign(
+        config,
+        environment={"CAMPAIGN_TEST_TOKEN": SECRET_VALUE},
+        runner_factory=_successful_runner_factory([]),
+        lab_controller=RecordingLab(),
+        clock=lambda: 100.0,
+    )
+    (outcome.bundle_path / "comparison.svg").unlink()
+    comparison_path = outcome.bundle_path / "comparison.json"
+    comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
+    comparison.pop("renderings")
+    for summary in comparison["summaries"]:
+        summary.pop("metric_counts")
+    comparison_path.write_text(
+        json.dumps(comparison, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_checksums(outcome.bundle_path)
+
+    with pytest.raises(
+        CampaignPublicationError,
+        match="publication_semantic_invalid",
+    ):
+        verify_campaign_bundle(outcome.bundle_path)
+
+
+def test_verifier_rejects_rechecksummed_metric_sample_count_tampering(tmp_path):
+    config, _manifest_paths = _campaign_fixture(tmp_path)
+    outcome = run_campaign(
+        config,
+        environment={"CAMPAIGN_TEST_TOKEN": SECRET_VALUE},
+        runner_factory=_successful_runner_factory([]),
+        lab_controller=RecordingLab(),
+        clock=lambda: 100.0,
+    )
+    comparison_path = outcome.bundle_path / "comparison.json"
+    comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
+    comparison["summaries"][0]["metric_counts"]["finding_recall"] = 1
+    comparison_path.write_text(
+        json.dumps(comparison, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _rewrite_checksums(outcome.bundle_path)
+
+    with pytest.raises(
+        CampaignPublicationError,
+        match="publication_semantic_invalid",
+    ):
+        verify_campaign_bundle(outcome.bundle_path)
+
+
+def test_verifier_rejects_legacy_scenario_metadata_in_current_matrix(tmp_path):
     config, _manifest_paths = _campaign_fixture(tmp_path)
     outcome = run_campaign(
         config,
@@ -851,7 +998,11 @@ def test_verifier_accepts_legacy_v1_scenario_metadata(tmp_path):
     )
     _rewrite_checksums(outcome.bundle_path)
 
-    assert verify_campaign_bundle(outcome.bundle_path)["status"] == "verified"
+    with pytest.raises(
+        CampaignPublicationError,
+        match="publication_semantic_invalid",
+    ):
+        verify_campaign_bundle(outcome.bundle_path)
 
 
 def test_verifier_requires_enriched_metadata_for_defined_campaign(tmp_path):

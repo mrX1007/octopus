@@ -95,3 +95,16 @@ the payload from code and requires exact equality with the checked-in artifact.
 Do not compare or merge results across changed scenario, lab, target, model,
 tool, or schema versions without making that difference explicit. Ablations
 require a tested stable toggle passed to `BenchmarkHarness`.
+
+## Published live-system visualization
+
+The live competitor track is separate from this hermetic harness. Its current
+checked-in result has a deterministic, non-normative GitHub visualization:
+
+![Published OCTOPUS and Strix terminal outcomes with successful-run quality ranges](linux-blackbox-small-model-v1-20260721t134205z.svg)
+
+The normative data and full provenance remain in
+`benchmarks/competitors/results/linux-blackbox-small-model-v1-20260721t134205z/`.
+New live bundles generate and checksum their own `comparison.svg`; failed or
+timed-out runs remain terminal outcomes and are never converted into zero
+quality scores.

@@ -530,6 +530,92 @@ def test_small_model_campaign_definition_is_frozen_distinct_and_public(
         ]["notes"]
 
 
+def test_small_model_v2_generates_four_isolated_surfaces_and_900s_contract(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path, config = _run_prepare(
+        tmp_path,
+        monkeypatch,
+        capsys,
+        values=_small_model_environment(),
+        campaign_id="small-model-v2",
+        campaign_definition="linux-blackbox-small-model-v2",
+    )
+    scenario_paths = tuple(sorted((config_path.parent / "scenarios").glob("*.json")))
+    assert [path.name for path in scenario_paths] == [
+        "authorized-hypermedia-pagination-small-model-v2.json",
+        "authorized-linked-navigation-small-model-v2.json",
+        "authorized-openapi-contract-small-model-v2.json",
+        "authorized-relative-redirect-small-model-v2.json",
+    ]
+    scenarios = [json.loads(path.read_text(encoding="utf-8")) for path in scenario_paths]
+    assert {item["category"] for item in scenarios} == {
+        "service_discovery_verification",
+        "web_api_mapping",
+    }
+    assert {item["lab"]["version"] for item in scenarios} == {
+        "discovery-lab-v2"
+    }
+    assert {item["budgets"]["max_seconds"] for item in scenarios} == {900}
+    assert {item["repetitions"] for item in scenarios} == {6}
+    assert {
+        item["strategy_config"]["evaluation_profile"]["surface_id"]
+        for item in scenarios
+    } == {
+        "hypermedia-pagination-v1",
+        "linked-navigation-v1",
+        "openapi-contract-v1",
+        "relative-redirect-v1",
+    }
+    for scenario in scenarios:
+        evaluation = scenario["strategy_config"]["evaluation_profile"]
+        calibration = scenario["strategy_config"]["time_budget_calibration"]
+        assert evaluation["profile_id"] == "altered-sub-70b-multi-surface-v2"
+        assert evaluation["vendor_representative"] is False
+        assert evaluation["model_digest"] == (
+            launch._SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST
+        )
+        assert calibration["basis_seconds"] == 600
+        assert calibration["derived_hard_max_seconds"] == 900
+        assert calibration["source_matrix_id"] == (
+            "competitor-matrix://sha256/"
+            "4943d0cc7a12fc0af58f7b22f4fe4f9ba04423b3dde70d49935693bb402dfe60"
+        )
+        assert scenario["ground_truth"]["forbidden_findings"] == [
+            "fixture.cross_surface_evidence"
+        ]
+
+    reset = config["lab"]["reset"]["argv"]
+    health = config["lab"]["health"]["argv"]
+    cleanup = config["lab"]["cleanup"]["argv"]
+    assert reset[-4:] == [
+        "--lab-definition",
+        "discovery-lab-v2",
+        "--scenario-id",
+        "{scenario_id}",
+    ]
+    assert health[-4:] == reset[-4:]
+    assert cleanup[-2:] == ["--lab-definition", "discovery-lab-v2"]
+    assert config["campaign_definition"] == "linux-blackbox-small-model-v2"
+
+    for system_id in ("octopus", "strix"):
+        manifest = json.loads(
+            (config_path.parent / f"{system_id}.json").read_text(encoding="utf-8")
+        )
+        assert manifest["metadata"]["evaluation_scope"] == (
+            "altered-small-model-multi-surface-v2"
+        )
+        assert manifest["metadata"]["lab_definition_id"] == "discovery-lab-v2"
+        assert manifest["fairness_profile"]["profile_id"] == (
+            "linux-blackbox-shared-ollama-altered-small-model-v2"
+        )
+        assert "Four scenario-isolated read-only surfaces" in manifest[
+            "fairness_profile"
+        ]["notes"]
+
+
 @pytest.mark.parametrize(
     "campaign_definition",
     ("unknown-v1", "../linux-blackbox-v1", "/tmp/linux-blackbox-v1"),
@@ -553,11 +639,12 @@ def test_campaign_definition_rejects_unknown_or_path_values(
 
 
 def test_small_model_campaign_definition_rejects_wrong_profile_or_runtime() -> None:
-    with pytest.raises(launch.LaunchError, match="campaign_definition_mismatch"):
-        launch._campaign_definition(
-            "linux-blackbox-small-model-v1",
-            profile="extended",
-        )
+    for definition_id in (
+        "linux-blackbox-small-model-v1",
+        "linux-blackbox-small-model-v2",
+    ):
+        with pytest.raises(launch.LaunchError, match="campaign_definition_mismatch"):
+            launch._campaign_definition(definition_id, profile="extended")
 
     definition = launch._campaign_definition(
         "linux-blackbox-small-model-v1",
@@ -1060,6 +1147,8 @@ def test_linux_diagnostic_pilot_runs_privately_and_returns_pilot_exit(
             "--diagnostic-pilot",
             "--pilot-system",
             "strix",
+            "--pilot-scenario",
+            "authorized-discovery-altered-small-model-stress-v1",
             "--pilot-seconds",
             "1200",
         ]
@@ -1072,6 +1161,9 @@ def test_linux_diagnostic_pilot_runs_privately_and_returns_pilot_exit(
     assert observed["root"] == tmp_path / ".benchmark-state" / "diagnostics"
     assert observed["budget_seconds"] == 1200.0
     assert observed["selected_system"] == "strix"
+    assert observed["selected_scenario"] == (
+        "authorized-discovery-altered-small-model-stress-v1"
+    )
     assert observed["environment"]["OCTOBENCH_TARGET_URL"] == (
         "http://10.1.2.3:8080"
     )
@@ -1089,6 +1181,7 @@ def test_linux_diagnostic_pilot_runs_privately_and_returns_pilot_exit(
     ) == 1
     assert observed["budget_seconds"] == launch.DEFAULT_PILOT_SECONDS
     assert observed["selected_system"] is None
+    assert observed["selected_scenario"] is None
     capsys.readouterr()
 
     public_output = (
@@ -1148,10 +1241,16 @@ def test_linux_diagnostic_pilot_runs_privately_and_returns_pilot_exit(
 def test_diagnostic_only_options_reject_incompatible_launch_modes(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    assert launch.main(
-        ["--campaign-id", "invalid-v1", "--pilot-seconds", "120"]
-    ) == 2
-    assert json.loads(capsys.readouterr().err) == {"error": "campaign_failed"}
+    for option in (
+        ("--pilot-seconds", "120"),
+        ("--pilot-scenario", "authorized-linked-navigation-small-model-v2"),
+    ):
+        assert launch.main(
+            ["--campaign-id", "invalid-v1", *option]
+        ) == 2
+        assert json.loads(capsys.readouterr().err) == {
+            "error": "campaign_failed"
+        }
 
     assert launch.main(
         [

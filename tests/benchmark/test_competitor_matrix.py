@@ -18,6 +18,10 @@ from core.benchmarks.competitors.schema import (
     CompetitorSchemaError,
     SystemManifest,
 )
+from core.benchmarks.competitors.visualization import (
+    metric_statistics_by_pair,
+    render_comparison_svg,
+)
 from core.benchmarks.schema import load_scenario
 
 pytestmark = pytest.mark.benchmark
@@ -115,7 +119,7 @@ def test_matrix_runs_same_scenario_for_each_system_and_is_order_stable():
         clock=lambda: 100.0,
     )
 
-    assert result.schema_version == "1.0"
+    assert result.schema_version == "1.1"
     assert result.matrix_id == reversed_result.matrix_id
     assert set(result.aggregates) == {"alpha", "beta"}
     assert all(len(item.runs) == 5 for item in result.aggregates["alpha"].values())
@@ -138,6 +142,13 @@ def test_matrix_runs_same_scenario_for_each_system_and_is_order_stable():
     assert result.scenarios[0]["tags"] == ["replay", "service"]
     assert result.scenarios[0]["evaluation_profile"] == {}
     assert "must-not-be-published" not in json.dumps(result.to_dict())
+    assert render_comparison_svg(
+        result.to_dict(),
+        metric_statistics_by_pair(result.aggregates),
+    ) == render_comparison_svg(
+        reversed_result.to_dict(),
+        metric_statistics_by_pair(reversed_result.aggregates),
+    )
 
 
 def test_publication_is_atomic_checksummed_and_refuses_overwrite(tmp_path):
@@ -154,6 +165,7 @@ def test_publication_is_atomic_checksummed_and_refuses_overwrite(tmp_path):
         "SHA256SUMS",
         "comparison.json",
         "comparison.md",
+        "comparison.svg",
         f"aggregates/alpha/{scenario.scenario_id}.json",
         f"aggregates/beta/{scenario.scenario_id}.json",
     }
@@ -164,7 +176,7 @@ def test_publication_is_atomic_checksummed_and_refuses_overwrite(tmp_path):
     } == expected_files
 
     checksum_lines = (destination / "SHA256SUMS").read_text().splitlines()
-    assert len(checksum_lines) == 4
+    assert len(checksum_lines) == 5
     for line in checksum_lines:
         digest, relative_path = line.split("  ", 1)
         content = (destination / relative_path).read_bytes()
@@ -173,7 +185,8 @@ def test_publication_is_atomic_checksummed_and_refuses_overwrite(tmp_path):
     markdown = (destination / "comparison.md").read_text()
     assert "live and replay results are never mixed" in markdown
     assert "does not select, rank, or declare an automatic winner" in markdown
-    assert "Duration median (s)" in markdown
+    assert "Duration median, all outcomes (s)" in markdown
+    assert "are not time-to-success estimates" in markdown
     assert "Evidence" in markdown
     assert "No-op" in markdown
     assert "Repeat" in markdown
@@ -181,6 +194,16 @@ def test_publication_is_atomic_checksummed_and_refuses_overwrite(tmp_path):
     assert "Fixture fairness note." in markdown
     assert "Evaluation profile" in markdown
     assert '["replay","service"]' in markdown
+    assert "Quality n" in markdown
+    assert "successful runs only" in markdown
+    assert "(comparison.svg)" in markdown
+    svg = (destination / "comparison.svg").read_text(encoding="utf-8")
+    assert "Terminal outcomes include every scheduled run" in svg
+    assert "Quality statistics include successful runs only" in svg
+    assert "Missing telemetry is N/A, never zero" in svg
+    assert "no combined score or winner is declared" in svg
+    assert "renderer_version&quot;:&quot;1.0" in svg
+    assert "must-not-be-published" not in svg
     with pytest.raises(FileExistsError, match="publication_destination_exists"):
         publish_competitor_matrix(result, destination)
 
@@ -261,6 +284,122 @@ def test_failures_are_publishable_but_trigger_strict_result():
     assert result.completeness["written_aggregates"] == 2
     assert result.completeness["failed_runs"] == 5
     assert result.has_strict_failures is True
+
+
+def test_svg_keeps_terminal_failures_out_of_success_quality_statistics():
+    scenario = load_scenario(SCENARIO_PATH)
+    statuses = {
+        1: "succeeded",
+        2: "failed",
+        3: "timeout",
+        4: "partial",
+        5: "invalid",
+    }
+
+    def factory(manifest):
+        if manifest.system_id == "alpha":
+            return _runner_factory(manifest)
+
+        def mixed_runner(_scenario, repetition, _seed):
+            return {
+                "status": statuses[repetition],
+                "actions": [],
+                "reported_findings": [],
+                "verified_findings": [],
+                "metrics": {
+                    "evidence_completeness": (
+                        0.75 if repetition == 1 else 0.99
+                    )
+                },
+                "duration_seconds": float(repetition),
+            }
+
+        return mixed_runner
+
+    result = run_competitor_matrix(
+        (_manifest("alpha"), _manifest("beta")),
+        (scenario,),
+        repetitions=5,
+        runner_factory=factory,
+        clock=lambda: 100.0,
+    )
+    beta_summary = next(
+        item for item in result.summaries if item["system_id"] == "beta"
+    )
+    svg = render_comparison_svg(
+        result.to_dict(),
+        metric_statistics_by_pair(result.aggregates),
+    )
+
+    assert beta_summary["metric_counts"]["evidence_completeness"] == 1
+    assert (
+        "succeeded 1 | failed 1 | timeout 1 | partial 1 | invalid 1"
+        in svg
+    )
+    assert "success 1/5" in svg
+    assert "0.750 [0.750-0.750], n=1" in svg
+    assert "0.990 [0.990-0.990]" not in svg
+
+
+def test_svg_renders_missing_success_metric_as_na_not_zero():
+    scenario = load_scenario(SCENARIO_PATH)
+
+    def factory(_manifest):
+        def runner(_scenario, _repetition, _seed):
+            return {
+                "status": "succeeded",
+                "actions": [],
+                "reported_findings": [],
+                "verified_findings": [],
+                "metrics": {},
+            }
+
+        return runner
+
+    result = run_competitor_matrix(
+        (_manifest("alpha"), _manifest("beta")),
+        (scenario,),
+        repetitions=5,
+        runner_factory=factory,
+        clock=lambda: 100.0,
+    )
+    svg = render_comparison_svg(
+        result.to_dict(),
+        metric_statistics_by_pair(result.aggregates),
+    )
+
+    assert svg.count("N/A, n=0") == 2
+    assert "Evidence (higher)" in svg
+
+
+def test_checked_in_v1_github_svg_is_canonical_derivative():
+    repository_root = Path(__file__).parents[2]
+    bundle = (
+        repository_root
+        / "benchmarks"
+        / "competitors"
+        / "results"
+        / "linux-blackbox-small-model-v1-20260721t134205z"
+    )
+    comparison = json.loads(
+        (bundle / "comparison.json").read_text(encoding="utf-8")
+    )
+    statistics = {}
+    for aggregate_path in sorted((bundle / "aggregates").glob("*/*.json")):
+        aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
+        statistics[(aggregate_path.parent.name, aggregate_path.stem)] = aggregate[
+            "metric_statistics"
+        ]
+
+    expected = render_comparison_svg(comparison, statistics)
+    observed = (
+        repository_root
+        / "docs"
+        / "benchmarks"
+        / "linux-blackbox-small-model-v1-20260721t134205z.svg"
+    ).read_text(encoding="utf-8")
+
+    assert observed == expected
 
 
 @pytest.mark.parametrize("status", ["timeout", "partial"])
