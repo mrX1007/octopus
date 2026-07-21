@@ -1,0 +1,3 @@
+# Published comparison reports are immutable, checksummed artifacts. Their
+# renderer uses two-space CommonMark hard breaks intentionally.
+benchmarks/competitors/results/**/comparison.md -whitespace

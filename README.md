@@ -577,6 +577,15 @@ launcher provide two full-system black-box profiles:
 - `core`: OCTOPUS and Strix 1.1.0;
 - `extended`: `core` plus PentAGI 2.1.0.
 
+The repository now includes a complete, checksum-verified
+[`linux-blackbox-small-model-v1-20260721t134205z`](benchmarks/competitors/results/linux-blackbox-small-model-v1-20260721t134205z/comparison.md)
+live result. In this single authorized altered-Qwen-9B stress scenario,
+OCTOPUS completed 6/6 runs; Strix completed 1/6, timed out twice at the
+predeclared 600-second cap and exited with code 1 three times. The bundle is
+published as `completed_with_failures`, not as a statistical or
+vendor-representative ranking; successful-run Strix quality metrics have
+`n=1`, and no-op/repeated-task telemetry is unavailable for both systems.
+
 PentestGPT 1.0.0 remains cataloged only as a separate CTF/flag-capture
 candidate. Its upstream non-interactive CLI hardcodes a CTF task and retries a
 no-flag result three times, so it is not runnable or ranked in this discovery

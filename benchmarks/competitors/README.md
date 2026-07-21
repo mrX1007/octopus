@@ -29,6 +29,33 @@ The checked-in files ending in `.json.example` are templates. Copy and fill
 them as `.json` before running a campaign; the suffix deliberately keeps them
 out of normal JSON scenario/manifest discovery.
 
+## Published live campaigns
+
+The first checked-in live result is the complete, checksum-verified
+[`linux-blackbox-small-model-v1-20260721t134205z`](results/linux-blackbox-small-model-v1-20260721t134205z/comparison.md)
+bundle. It ran the authorized read-only discovery scenario six times per
+system on one Linux host with the exact altered Qwen 9B model/digest, Ollama
+0.18.3 and a 65,536-token context.
+
+| System | Terminal outcomes | Successful-run recall | Successful-run evidence completeness |
+| --- | --- | ---: | ---: |
+| OCTOPUS | 6 succeeded | 0.8 (`n=6`) | 0.2 (`n=6`) |
+| Strix 1.1.0 | 1 succeeded, 2 timed out at 600 s, 3 exited with code 1 | 0.6 (`n=1`) | 0.0 (`n=1`) |
+
+The campaign status is intentionally `completed_with_failures`: all 12 runs,
+reset attestations, both aggregates and cleanup evidence are present, while
+the five strict Strix outcomes remain in the publication. The quality values
+above summarize successful runs only, so the Strix values are a single
+observation rather than a stable median. No-op/repeated-task telemetry is
+unavailable for both systems and is displayed as `—` (unavailable), not zero.
+
+This is a one-scenario engineering small-model stress result, not a
+statistical or vendor-representative ranking. Product-native prompts, APIs,
+tools, tool versions and uniformly enforceable budgets are not identical; the
+bundle therefore declares no automatic winner. The machine-readable matrix,
+per-run outcomes, exact inputs and provenance are preserved beside the linked
+report.
+
 ## Supported releases and comparison surfaces
 
 `catalog.json` is the machine-readable review record for the competitor

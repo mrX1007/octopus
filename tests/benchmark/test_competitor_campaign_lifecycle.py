@@ -50,6 +50,9 @@ SCENARIO_SOURCE = (
     / "scenarios"
     / "01-service-discovery-verification.json"
 )
+PUBLISHED_COMPETITOR_RESULTS = (
+    Path(__file__).parents[2] / "benchmarks" / "competitors" / "results"
+)
 SECRET_VALUE = "campaign-secret-canary-9d831c"
 
 
@@ -88,6 +91,18 @@ def test_schedule_rotation_balances_every_position_and_reverses_carryover() -> N
         [order[position] for order in extended_orders].count(system) == 2
         for position in range(4)
         for system in extended
+    )
+
+
+def test_checked_in_competitor_publication_bundles_verify() -> None:
+    bundles = tuple(
+        sorted(path for path in PUBLISHED_COMPETITOR_RESULTS.iterdir() if path.is_dir())
+    )
+
+    assert bundles
+    assert all(
+        verify_campaign_bundle(bundle)["status"] == "verified"
+        for bundle in bundles
     )
 
 

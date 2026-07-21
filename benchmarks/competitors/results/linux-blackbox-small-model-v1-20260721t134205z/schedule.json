@@ -1,0 +1,102 @@
+{
+  "fingerprint": "benchmark-campaign://sha256/0e720287f6247dfc024be46a51d1502086a1a931e7cc86928e10ba93cd59c300",
+  "runs": [
+    {
+      "order": 1,
+      "repetition": 1,
+      "run_key": "c285c429a64bb2b4299e12c875540fd0b5ded7320830a26fd850c506458603ff",
+      "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+      "seed": 7100,
+      "system_id": "octopus"
+    },
+    {
+      "order": 2,
+      "repetition": 1,
+      "run_key": "8bd25478da89d778ac175768fb927f74ce320fcb5de37fbc76880f1ca56df182",
+      "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+      "seed": 7100,
+      "system_id": "strix"
+    },
+    {
+      "order": 3,
+      "repetition": 2,
+      "run_key": "7adad5fae02ce7f70f8c89af4dfaf692114203bc524912bfdcb3f0fc62ec9193",
+      "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+      "seed": 7101,
+      "system_id": "strix"
+    },
+    {
+      "order": 4,
+      "repetition": 2,
+      "run_key": "36de50172c0d7f930f7dfd633a4a8feb73036ace709068b8a523b441ffcc909e",
+      "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+      "seed": 7101,
+      "system_id": "octopus"
+    },
+    {
+      "order": 5,
+      "repetition": 3,
+      "run_key": "e9112e3916ccbe88113aa0185f92b7a1b93e0536818f851a6d55c67983cc76e2",
+      "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+      "seed": 7102,
+      "system_id": "strix"
+    },
+    {
+      "order": 6,
+      "repetition": 3,
+      "run_key": "7f28492f1a5d7986bb924dca271ef259b5cf6a1569235dd78391dc1fd4eee224",
+      "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+      "seed": 7102,
+      "system_id": "octopus"
+    },
+    {
+      "order": 7,
+      "repetition": 4,
+      "run_key": "6420d9bcdd281301d738844538dc6bd89c3a337c07d81352fff6366bca14197f",
+      "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+      "seed": 7103,
+      "system_id": "octopus"
+    },
+    {
+      "order": 8,
+      "repetition": 4,
+      "run_key": "48fb833daeb5dd582633ae4204956b84f77ada057bf055f5a49a0cb5fcbabc3b",
+      "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+      "seed": 7103,
+      "system_id": "strix"
+    },
+    {
+      "order": 9,
+      "repetition": 5,
+      "run_key": "e214c21f3cbc1f9ec946ad4e30dde3f69c443beecde3a39d4b3b0c8c995398c7",
+      "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+      "seed": 7104,
+      "system_id": "octopus"
+    },
+    {
+      "order": 10,
+      "repetition": 5,
+      "run_key": "77d31dfd572516812d3b7c56d9ee7b8e9ad3f3373a78af21f90be23b1746d3b3",
+      "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+      "seed": 7104,
+      "system_id": "strix"
+    },
+    {
+      "order": 11,
+      "repetition": 6,
+      "run_key": "8e5bc127910cbc79022aced579eac8b903756ba9db1ce33459e6dde2db384b43",
+      "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+      "seed": 7105,
+      "system_id": "strix"
+    },
+    {
+      "order": 12,
+      "repetition": 6,
+      "run_key": "038b53f621e16c91474e1cf0af8570d76f139cbdfd8d8534a086710bf8be8bae",
+      "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+      "seed": 7105,
+      "system_id": "octopus"
+    }
+  ],
+  "schema_version": "1.0"
+}

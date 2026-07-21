@@ -1,0 +1,18 @@
+{
+  "campaign_id": "linux-blackbox-small-model-v1-20260721t134205z",
+  "fingerprint": "benchmark-campaign://sha256/0e720287f6247dfc024be46a51d1502086a1a931e7cc86928e10ba93cd59c300",
+  "health_command_sha256": "7d431cbfe14c138438b61d8f0f4bc8f5279486a108f5e6ca04955758f78d3b0a",
+  "health_duration_seconds": 0.214978,
+  "lab_version": "discovery-lab-v1",
+  "observed_at": 1784642208.1094646,
+  "repetition": 2,
+  "reset_command_sha256": "542501405cd9f3b1495d17983721adcc9c6429716d8a453e08153f423864e6de",
+  "reset_duration_seconds": 1.468888,
+  "run_key": "7adad5fae02ce7f70f8c89af4dfaf692114203bc524912bfdcb3f0fc62ec9193",
+  "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+  "schema_version": "1.0",
+  "seed": 7101,
+  "snapshot_ref": "sha256:c227c4862c57559d63cc46bbe4a3665cead055aa76dc6a18b594cbdac1df1cd2",
+  "status": "healthy",
+  "system_id": "strix"
+}

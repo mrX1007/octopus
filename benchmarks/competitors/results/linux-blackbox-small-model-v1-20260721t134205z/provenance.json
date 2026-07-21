@@ -1,0 +1,41 @@
+{
+  "controller_source_sha256": {
+    "core/benchmarks/competitors/__init__.py": "a6aed0891dde4252c59067bd04b94e546222d992a2f239b4850f6fa59d280448",
+    "core/benchmarks/competitors/__main__.py": "4822cfd182e6dc8eb492a5ec63e5d8ccdcfdc89b2e9ba839cb187650cf47c0a2",
+    "core/benchmarks/competitors/adapter.py": "61fc66035d1879b6bb6e1121975d9c1c7b3eea2a0937dc75f9830f7f3bcab186",
+    "core/benchmarks/competitors/campaign.py": "6bec81b11ac78c09a8540dd920e3dc98ee8560b6c11eb81bd67a17bb813fa7da",
+    "core/benchmarks/competitors/diagnostic.py": "1eab3adb428655c131d181f7fa720fda79433dc24ee4ccded42dc33d198d389b",
+    "core/benchmarks/competitors/diagnostic_worker.py": "6a13ab76440eea6ce303f9f2f711e6fd642127778847a81f0aa92654cddf2779",
+    "core/benchmarks/competitors/lab.py": "4d37e7c2f487245fafcabe07082aaa54fb62a06d45d8ccaf96ca1520d120cd22",
+    "core/benchmarks/competitors/labctl.py": "0e79bf8752260a26ec40839d556bbde43529acc20d72b33026ca797cb8140af2",
+    "core/benchmarks/competitors/launch.py": "3bdafca65bcdbfea6653ae4864db809ed5e74e6c5c73398fcf6eb0e2b751fcc2",
+    "core/benchmarks/competitors/matrix.py": "c31ddebf50d2f47e85c3629fd84bcb0d9331d10a5f34346ade8f88a931adc9f3",
+    "core/benchmarks/competitors/preflight.py": "cda27c7c30561c8a6267f27d9170216edce9079c45aed7a95465fbe1455032d3",
+    "core/benchmarks/competitors/publication.py": "d063538b6c074c61a4a3522dc90f2d0c90122c8a62e346023a7b41e8904920cb",
+    "core/benchmarks/competitors/runner.py": "c2cab49679823e35839c2971b87cfa95c42972f72c43eab2979b73e39fc9737d",
+    "core/benchmarks/competitors/schema.py": "118df68f05d88672511eff545a4ce9a0fb767e3b8ed053a9c4a37ec093f80ae2",
+    "core/benchmarks/competitors/state.py": "5a9efdb30e0f17c4335ff75d2df095c17299a37f5fbe768a0f939487db0e8038",
+    "core/benchmarks/harness.py": "0e1a88ec9023efe43a47dd22d01609ded445aaa4199eb9c6183601c318960c34",
+    "core/benchmarks/schema.py": "d82b925b7c9d6a89fd785ba1004ad9489f40e487306cd9983399f4f74c601d15"
+  },
+  "fingerprint": "benchmark-campaign://sha256/0e720287f6247dfc024be46a51d1502086a1a931e7cc86928e10ba93cd59c300",
+  "input_sha256": {
+    "campaign": "62ce2faea62b037ea20e8983565ceb7278f6a71b4758f58f8bd2faad83646959",
+    "scenarios": {
+      "authorized-discovery-altered-small-model-stress-v1": "94ffe12d8dbead39b29e424d5c09bc9e85a9eab02b8c366f014cf7e7898e60f6"
+    },
+    "systems": {
+      "octopus": "078ba23f8ebffcaecbd4508c4b3481f67a9014b91fddc5e3b2397c429b23dc8e",
+      "strix": "d308cb930cbef0fbe2fc23d021134e4988bcfc4427b950ec3d857388b76ca40a"
+    }
+  },
+  "repository_revision": "cbb52565bceb02d0ae232455dba6e668c9bd175e",
+  "runtime": {
+    "implementation": "CPython",
+    "machine": "x86_64",
+    "python": "3.12.13",
+    "release": "6.19.9-arch1-1",
+    "system": "Linux"
+  },
+  "schema_version": "1.0"
+}

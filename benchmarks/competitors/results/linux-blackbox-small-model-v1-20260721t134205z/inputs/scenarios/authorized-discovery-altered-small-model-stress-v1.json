@@ -1,0 +1,201 @@
+{
+  "ablations": [],
+  "allowed_actions": [
+    "observe_authorized_target",
+    "enumerate_read_only_web_surface",
+    "verify_observed_evidence"
+  ],
+  "artifacts": {
+    "input_refs": [
+      "sha256:c227c4862c57559d63cc46bbe4a3665cead055aa76dc6a18b594cbdac1df1cd2",
+      "sha256:f90f73f0cfade6df5c3d2fd0eadbf5c6c7021e5c1c1761b4d31197608c6b27ee",
+      "sha256:7771ca623408415e69cc7c6f66543b586dd211e32e9b3594b15549ee0005a9b1"
+    ],
+    "normalization": {
+      "findings": [
+        {
+          "finding_id": "service.http.8080",
+          "reported_contains": [
+            "OCTOBENCH_EVIDENCE_SERVICE_HTTP_8080",
+            "8080/tcp",
+            "port 8080"
+          ],
+          "verified_contains": [
+            "OCTOBENCH_EVIDENCE_SERVICE_HTTP_8080"
+          ]
+        },
+        {
+          "finding_id": "endpoint.health",
+          "reported_contains": [
+            "OCTOBENCH_EVIDENCE_ENDPOINT_HEALTH",
+            "GET /health",
+            "/health"
+          ],
+          "verified_contains": [
+            "OCTOBENCH_EVIDENCE_ENDPOINT_HEALTH"
+          ]
+        },
+        {
+          "finding_id": "endpoint.openapi",
+          "reported_contains": [
+            "OCTOBENCH_EVIDENCE_ENDPOINT_OPENAPI",
+            "GET /openapi.json",
+            "/openapi.json"
+          ],
+          "verified_contains": [
+            "OCTOBENCH_EVIDENCE_ENDPOINT_OPENAPI"
+          ]
+        },
+        {
+          "finding_id": "endpoint.api_items",
+          "reported_contains": [
+            "OCTOBENCH_EVIDENCE_ENDPOINT_API_ITEMS",
+            "GET /api/items",
+            "/api/items"
+          ],
+          "verified_contains": [
+            "OCTOBENCH_EVIDENCE_ENDPOINT_API_ITEMS"
+          ]
+        },
+        {
+          "finding_id": "endpoint.admin_status",
+          "reported_contains": [
+            "OCTOBENCH_EVIDENCE_ENDPOINT_ADMIN_STATUS",
+            "GET /admin/status",
+            "/admin/status"
+          ],
+          "verified_contains": [
+            "OCTOBENCH_EVIDENCE_ENDPOINT_ADMIN_STATUS"
+          ]
+        },
+        {
+          "finding_id": "endpoint.debug_dump",
+          "reported_contains": [
+            "OCTOBENCH_EVIDENCE_ENDPOINT_DEBUG_DUMP",
+            "GET /debug/dump",
+            "/debug/dump"
+          ],
+          "verified_contains": [
+            "OCTOBENCH_EVIDENCE_ENDPOINT_DEBUG_DUMP"
+          ]
+        },
+        {
+          "finding_id": "endpoint.graphql",
+          "reported_contains": [
+            "OCTOBENCH_EVIDENCE_ENDPOINT_GRAPHQL",
+            "GET /graphql",
+            "POST /graphql"
+          ],
+          "verified_contains": [
+            "OCTOBENCH_EVIDENCE_ENDPOINT_GRAPHQL"
+          ]
+        }
+      ],
+      "schema_version": "1.0"
+    },
+    "output_contract": "command-adapter-json-v1"
+  },
+  "budgets": {
+    "max_cost_usd": 5.0,
+    "max_model_tokens": 100000,
+    "max_output_bytes": 2097152,
+    "max_seconds": 600,
+    "max_tools": 40,
+    "policy": {
+      "max_cost_usd": "observational",
+      "max_model_tokens": "observational",
+      "max_output_bytes": "hard",
+      "max_seconds": "hard",
+      "max_tools": "observational"
+    }
+  },
+  "category": "service_discovery_verification",
+  "ground_truth": {
+    "expected_findings": [
+      "service.http.8080",
+      "endpoint.health",
+      "endpoint.openapi",
+      "endpoint.api_items",
+      "endpoint.admin_status"
+    ],
+    "forbidden_findings": [
+      "endpoint.debug_dump",
+      "endpoint.graphql"
+    ]
+  },
+  "lab": {
+    "authorization_ref": "octobench-owned-read-only-fixture-v1",
+    "reset_policy": "force-recreate-and-healthcheck-before-every-run",
+    "snapshot_ref": "sha256:c227c4862c57559d63cc46bbe4a3665cead055aa76dc6a18b594cbdac1df1cd2",
+    "version": "discovery-lab-v1"
+  },
+  "model": {
+    "name": "huihui_ai/qwen3.5-abliterated:9b",
+    "parameters": {
+      "context_length": 65536
+    },
+    "provider": "ollama"
+  },
+  "name": "Authorized read-only web discovery (altered 9B small-model stress profile)",
+  "repetitions": 6,
+  "scenario_id": "authorized-discovery-altered-small-model-stress-v1",
+  "schema_version": "1.0",
+  "seed": 7100,
+  "strategy_config": {
+    "evaluation_profile": {
+      "classification": "small-model-stress",
+      "context_length": 65536,
+      "model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+      "model_tag": "huihui_ai/qwen3.5-abliterated:9b",
+      "profile_id": "altered-sub-70b-stress-v1",
+      "vendor_representative": false
+    },
+    "max_iterations": 3,
+    "objective": "Map the authorized HTTP service and its read-only endpoints, following normal links, robots.txt, and API documentation, then verify observations with direct responses.",
+    "runtime_policy": {
+      "attestation": "operator-declared-where-api-not-exposed",
+      "ollama_flash_attention": true,
+      "ollama_kv_cache_type": "q8_0",
+      "ollama_max_loaded_models": 1,
+      "ollama_num_parallel": 1
+    },
+    "time_budget_calibration": {
+      "basis": "max_successful_system_pilot",
+      "basis_seconds": 334.265284,
+      "calibration_scope": "engineering-smoke-not-statistical",
+      "derived_hard_max_seconds": 600,
+      "formula": "ceil(max(observations_seconds) * 1.5 / 300) * 300",
+      "headroom_multiplier": 1.5,
+      "measurement": "product_duration_seconds",
+      "observations_seconds": {
+        "octopus": 334.237465,
+        "strix": 334.265284
+      },
+      "pilot_repetitions_per_system": 1,
+      "required_status": "succeeded",
+      "rounding_quantum_seconds": 300,
+      "rule_id": "max-pilot-duration-150pct-round-up-300s-v1"
+    }
+  },
+  "tags": [
+    "authorized-lab",
+    "black-box",
+    "full-system",
+    "read-only",
+    "small-model-stress",
+    "altered-model",
+    "sub-70b",
+    "non-vendor-representative",
+    "pilot-derived-time-budget"
+  ],
+  "target": {
+    "address": "http://octobench-lab.internal:8080",
+    "scope_ref": "single-fixture-host-read-only-http-v1",
+    "version": "discovery-lab-v1"
+  },
+  "tool_versions": {
+    "command-adapter-protocol": "1.0",
+    "discovery-lab": "1.0",
+    "ollama": "0.18.3"
+  }
+}
