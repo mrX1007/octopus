@@ -1,0 +1,62 @@
+{
+  "execution_mode": "live",
+  "fairness_profile": {
+    "notes": "OCTOPUS and Strix use the same altered sub-70B Ollama model huihui_ai/qwen3.5-abliterated:9b, model digest, server and 65536-token context. Four scenario-isolated read-only surfaces use a 900-second hard cap derived from the published v1 runtime observations. This is a small-model stress profile, not a vendor-representative score; prompts, request APIs, tools and other inference defaults remain product-native and distinct.",
+    "profile_id": "linux-blackbox-shared-ollama-altered-small-model-v2",
+    "same_budgets": false,
+    "same_hardware": true,
+    "same_model": true,
+    "same_tool_versions": false
+  },
+  "metadata": {
+    "action_conformance": "not_assessed",
+    "campaign_definition_id": "linux-blackbox-small-model-v2",
+    "campaign_profile": "core",
+    "evaluation_scope": "altered-small-model-multi-surface-v2",
+    "integration": "repository-command-adapter",
+    "lab_definition_id": "discovery-lab-v2",
+    "model_class": "sub-70b",
+    "model_variant": "abliterated",
+    "runtime_provenance": {
+      "attestation": "clean-checkout-and-runtime-artifacts",
+      "checkout_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+      "executable_layout": "venv/bin/python",
+      "executable_sha256": "373b4d619050ed4b2bd35eeab9b84f8a0bf12c63ed2106a1e925ff7e103fa4f9",
+      "lock_layout": "requirements/locks/linux-x86_64/cp312/runtime.txt",
+      "lock_sha256": "96edc265684241254010051baa2923bfdeed615076d921699b993ce1a3270ec0",
+      "ollama_context_length": 65536,
+      "ollama_flash_attention_declared": true,
+      "ollama_kv_cache_type_declared": "q8_0",
+      "ollama_max_loaded_models_declared": 1,
+      "ollama_model_attestation": "api-tags",
+      "ollama_model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+      "ollama_model_size_bytes": 6594474755,
+      "ollama_model_size_vram_bytes": 10535320192,
+      "ollama_num_parallel_declared": 1,
+      "ollama_runtime_attestation": "api-version-unload-empty-preload-and-ps",
+      "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
+      "ollama_server_version": "0.18.3",
+      "source_revision_attested": true,
+      "source_tree_sha256": "e60b4b084b46ca34cff2d2c5722d88490469d326d1625312c1875900686fc148"
+    },
+    "vendor_representative": false
+  },
+  "model": {
+    "name": "huihui_ai/qwen3.5-abliterated:9b",
+    "parameters": {
+      "context_length": 65536
+    },
+    "provider": "ollama"
+  },
+  "name": "OCTOPUS",
+  "schema_version": "1.0",
+  "source_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+  "system_id": "octopus",
+  "tool_versions": {
+    "command-adapter-protocol": "1.0",
+    "octopus": "v1.0.0",
+    "ollama": "0.18.3"
+  },
+  "track": "full_system",
+  "version": "v1.0.0"
+}

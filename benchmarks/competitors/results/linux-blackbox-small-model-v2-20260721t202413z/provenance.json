@@ -1,0 +1,45 @@
+{
+  "controller_source_sha256": {
+    "core/benchmarks/competitors/__init__.py": "a6aed0891dde4252c59067bd04b94e546222d992a2f239b4850f6fa59d280448",
+    "core/benchmarks/competitors/__main__.py": "4822cfd182e6dc8eb492a5ec63e5d8ccdcfdc89b2e9ba839cb187650cf47c0a2",
+    "core/benchmarks/competitors/adapter.py": "61fc66035d1879b6bb6e1121975d9c1c7b3eea2a0937dc75f9830f7f3bcab186",
+    "core/benchmarks/competitors/campaign.py": "6bec81b11ac78c09a8540dd920e3dc98ee8560b6c11eb81bd67a17bb813fa7da",
+    "core/benchmarks/competitors/diagnostic.py": "a5f9539a6feb10e0bdd78f2f13cf5c13994d559de160cb227f8dde3b2009526d",
+    "core/benchmarks/competitors/diagnostic_worker.py": "6a13ab76440eea6ce303f9f2f711e6fd642127778847a81f0aa92654cddf2779",
+    "core/benchmarks/competitors/lab.py": "4d37e7c2f487245fafcabe07082aaa54fb62a06d45d8ccaf96ca1520d120cd22",
+    "core/benchmarks/competitors/labctl.py": "15287c76ba9d463586c69b58bb5b0528f77a90eb1340976870525a3ae3e97821",
+    "core/benchmarks/competitors/launch.py": "ca452ae8cc0b00fc5e75c58f59cfea16e1a4d4461498c5049a38571dd687869b",
+    "core/benchmarks/competitors/matrix.py": "4ac9aa187e80e18bd5f19923d1dfd237de2493b7e44296a4c5d8038fd0e8fa59",
+    "core/benchmarks/competitors/preflight.py": "cda27c7c30561c8a6267f27d9170216edce9079c45aed7a95465fbe1455032d3",
+    "core/benchmarks/competitors/publication.py": "ca342bf4559ab281e457d32836e54643db44d819d09c909ecae393f03d0f8f4d",
+    "core/benchmarks/competitors/runner.py": "c2cab49679823e35839c2971b87cfa95c42972f72c43eab2979b73e39fc9737d",
+    "core/benchmarks/competitors/schema.py": "118df68f05d88672511eff545a4ce9a0fb767e3b8ed053a9c4a37ec093f80ae2",
+    "core/benchmarks/competitors/state.py": "5a9efdb30e0f17c4335ff75d2df095c17299a37f5fbe768a0f939487db0e8038",
+    "core/benchmarks/competitors/visualization.py": "f673e532a3778dc8128056f1305e1ab5f78ed085318942702b1d4e2062e05fc4",
+    "core/benchmarks/harness.py": "0e1a88ec9023efe43a47dd22d01609ded445aaa4199eb9c6183601c318960c34",
+    "core/benchmarks/schema.py": "d82b925b7c9d6a89fd785ba1004ad9489f40e487306cd9983399f4f74c601d15"
+  },
+  "fingerprint": "benchmark-campaign://sha256/8365fd19986dae1b7a4867f5088ac064e3a533ca514a5cda1da45ed3e8e7aeef",
+  "input_sha256": {
+    "campaign": "1b7dab94af07b58b93547e59ee0e807aef5c1f1ea5c75dc709dc93e2bcc6aa0d",
+    "scenarios": {
+      "authorized-hypermedia-pagination-small-model-v2": "1b0ce13c04b8568311d08a2163438be679b1c78bc479fe1d8bc1eef5aed2fc1f",
+      "authorized-linked-navigation-small-model-v2": "f73842b69dde2438c07a1486231e25138a73dbf10065ad09a6b75c1cf35413de",
+      "authorized-openapi-contract-small-model-v2": "7bc8a63a1b48375f64f4c43a9b43b9b617b10e9731cdb561c289464161641d6c",
+      "authorized-relative-redirect-small-model-v2": "1bc27b65e381832789ae5c5b32c4d7334357c94e82cc3917caa7543a1e111ddb"
+    },
+    "systems": {
+      "octopus": "3b204985c9d3b31872bde007af85a8f70befe226651c8f8bf4c3ac50a63160b1",
+      "strix": "f0e9c286559688ca68ee2170ae23a1ea8963b58e40b65852a6c22fe3d3249956"
+    }
+  },
+  "repository_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+  "runtime": {
+    "implementation": "CPython",
+    "machine": "x86_64",
+    "python": "3.12.13",
+    "release": "6.19.9-arch1-1",
+    "system": "Linux"
+  },
+  "schema_version": "1.0"
+}

@@ -1,0 +1,621 @@
+{
+  "generated_at": 1784683127.2748933,
+  "matrix_id": "competitor-matrix://sha256/e76d05e8c0197489f3f3b9fb2b90b35d344d3be674d8c585c8130cd1d45dd7d0",
+  "methodology": {
+    "automatic_winner": false,
+    "execution_mode": "live",
+    "fairness_profile": {
+      "notes": "OCTOPUS and Strix use the same altered sub-70B Ollama model huihui_ai/qwen3.5-abliterated:9b, model digest, server and 65536-token context. Four scenario-isolated read-only surfaces use a 900-second hard cap derived from the published v1 runtime observations. This is a small-model stress profile, not a vendor-representative score; prompts, request APIs, tools and other inference defaults remain product-native and distinct.",
+      "profile_id": "linux-blackbox-shared-ollama-altered-small-model-v2",
+      "same_budgets": false,
+      "same_hardware": true,
+      "same_model": true,
+      "same_tool_versions": false
+    },
+    "same_repetitions": true,
+    "same_scenarios": true,
+    "same_seeds": true,
+    "track": "full_system"
+  },
+  "publication": {
+    "error_runs": 12,
+    "expected_aggregates": 8,
+    "failed_runs": 5,
+    "invalid_runs": 0,
+    "missing_aggregates": 0,
+    "partial_runs": 0,
+    "policy_violations": 0,
+    "publication_complete": true,
+    "succeeded_runs": 36,
+    "timeout_runs": 7,
+    "total_runs": 48,
+    "written_aggregates": 8
+  },
+  "renderings": {
+    "comparison_svg": {
+      "media_type": "image/svg+xml",
+      "normative": false,
+      "path": "comparison.svg",
+      "quality_population": "succeeded",
+      "renderer_version": "1.0"
+    }
+  },
+  "repetitions": 6,
+  "scenarios": [
+    {
+      "budgets": {
+        "max_cost_usd": 5.0,
+        "max_model_tokens": 100000,
+        "max_output_bytes": 2097152,
+        "max_seconds": 900,
+        "max_tools": 40,
+        "policy": {
+          "max_cost_usd": "observational",
+          "max_model_tokens": "observational",
+          "max_output_bytes": "hard",
+          "max_seconds": "hard",
+          "max_tools": "observational"
+        }
+      },
+      "category": "web_api_mapping",
+      "evaluation_profile": {
+        "classification": "small-model-multi-surface-stress",
+        "context_length": 65536,
+        "model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+        "model_tag": "huihui_ai/qwen3.5-abliterated:9b",
+        "profile_id": "altered-sub-70b-multi-surface-v2",
+        "surface_id": "hypermedia-pagination-v1",
+        "vendor_representative": false
+      },
+      "lab_version": "discovery-lab-v2",
+      "model": {
+        "name": "huihui_ai/qwen3.5-abliterated:9b",
+        "parameters": {
+          "context_length": 65536
+        },
+        "provider": "ollama"
+      },
+      "name": "Authorized read-only hypermedia pagination (altered 9B multi-surface profile)",
+      "scenario_id": "authorized-hypermedia-pagination-small-model-v2",
+      "seed": 7500,
+      "tags": [
+        "authorized-lab",
+        "black-box",
+        "full-system",
+        "read-only",
+        "small-model-stress",
+        "multi-surface",
+        "hypermedia-pagination",
+        "altered-model",
+        "sub-70b",
+        "non-vendor-representative",
+        "published-result-derived-time-budget"
+      ],
+      "target_version": "discovery-lab-v2-hypermedia-v1",
+      "tool_versions": {
+        "command-adapter-protocol": "1.0",
+        "discovery-lab": "2.0",
+        "ollama": "0.18.3"
+      }
+    },
+    {
+      "budgets": {
+        "max_cost_usd": 5.0,
+        "max_model_tokens": 100000,
+        "max_output_bytes": 2097152,
+        "max_seconds": 900,
+        "max_tools": 40,
+        "policy": {
+          "max_cost_usd": "observational",
+          "max_model_tokens": "observational",
+          "max_output_bytes": "hard",
+          "max_seconds": "hard",
+          "max_tools": "observational"
+        }
+      },
+      "category": "service_discovery_verification",
+      "evaluation_profile": {
+        "classification": "small-model-multi-surface-stress",
+        "context_length": 65536,
+        "model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+        "model_tag": "huihui_ai/qwen3.5-abliterated:9b",
+        "profile_id": "altered-sub-70b-multi-surface-v2",
+        "surface_id": "linked-navigation-v1",
+        "vendor_representative": false
+      },
+      "lab_version": "discovery-lab-v2",
+      "model": {
+        "name": "huihui_ai/qwen3.5-abliterated:9b",
+        "parameters": {
+          "context_length": 65536
+        },
+        "provider": "ollama"
+      },
+      "name": "Authorized read-only linked navigation (altered 9B multi-surface profile)",
+      "scenario_id": "authorized-linked-navigation-small-model-v2",
+      "seed": 7200,
+      "tags": [
+        "authorized-lab",
+        "black-box",
+        "full-system",
+        "read-only",
+        "small-model-stress",
+        "multi-surface",
+        "linked-navigation",
+        "altered-model",
+        "sub-70b",
+        "non-vendor-representative",
+        "published-result-derived-time-budget"
+      ],
+      "target_version": "discovery-lab-v2-linked-v1",
+      "tool_versions": {
+        "command-adapter-protocol": "1.0",
+        "discovery-lab": "2.0",
+        "ollama": "0.18.3"
+      }
+    },
+    {
+      "budgets": {
+        "max_cost_usd": 5.0,
+        "max_model_tokens": 100000,
+        "max_output_bytes": 2097152,
+        "max_seconds": 900,
+        "max_tools": 40,
+        "policy": {
+          "max_cost_usd": "observational",
+          "max_model_tokens": "observational",
+          "max_output_bytes": "hard",
+          "max_seconds": "hard",
+          "max_tools": "observational"
+        }
+      },
+      "category": "web_api_mapping",
+      "evaluation_profile": {
+        "classification": "small-model-multi-surface-stress",
+        "context_length": 65536,
+        "model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+        "model_tag": "huihui_ai/qwen3.5-abliterated:9b",
+        "profile_id": "altered-sub-70b-multi-surface-v2",
+        "surface_id": "openapi-contract-v1",
+        "vendor_representative": false
+      },
+      "lab_version": "discovery-lab-v2",
+      "model": {
+        "name": "huihui_ai/qwen3.5-abliterated:9b",
+        "parameters": {
+          "context_length": 65536
+        },
+        "provider": "ollama"
+      },
+      "name": "Authorized read-only OpenAPI contract mapping (altered 9B multi-surface profile)",
+      "scenario_id": "authorized-openapi-contract-small-model-v2",
+      "seed": 7300,
+      "tags": [
+        "authorized-lab",
+        "black-box",
+        "full-system",
+        "read-only",
+        "small-model-stress",
+        "multi-surface",
+        "openapi-contract",
+        "altered-model",
+        "sub-70b",
+        "non-vendor-representative",
+        "published-result-derived-time-budget"
+      ],
+      "target_version": "discovery-lab-v2-openapi-v1",
+      "tool_versions": {
+        "command-adapter-protocol": "1.0",
+        "discovery-lab": "2.0",
+        "ollama": "0.18.3"
+      }
+    },
+    {
+      "budgets": {
+        "max_cost_usd": 5.0,
+        "max_model_tokens": 100000,
+        "max_output_bytes": 2097152,
+        "max_seconds": 900,
+        "max_tools": 40,
+        "policy": {
+          "max_cost_usd": "observational",
+          "max_model_tokens": "observational",
+          "max_output_bytes": "hard",
+          "max_seconds": "hard",
+          "max_tools": "observational"
+        }
+      },
+      "category": "service_discovery_verification",
+      "evaluation_profile": {
+        "classification": "small-model-multi-surface-stress",
+        "context_length": 65536,
+        "model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+        "model_tag": "huihui_ai/qwen3.5-abliterated:9b",
+        "profile_id": "altered-sub-70b-multi-surface-v2",
+        "surface_id": "relative-redirect-v1",
+        "vendor_representative": false
+      },
+      "lab_version": "discovery-lab-v2",
+      "model": {
+        "name": "huihui_ai/qwen3.5-abliterated:9b",
+        "parameters": {
+          "context_length": 65536
+        },
+        "provider": "ollama"
+      },
+      "name": "Authorized read-only relative redirect discovery (altered 9B multi-surface profile)",
+      "scenario_id": "authorized-relative-redirect-small-model-v2",
+      "seed": 7400,
+      "tags": [
+        "authorized-lab",
+        "black-box",
+        "full-system",
+        "read-only",
+        "small-model-stress",
+        "multi-surface",
+        "relative-redirect",
+        "altered-model",
+        "sub-70b",
+        "non-vendor-representative",
+        "published-result-derived-time-budget"
+      ],
+      "target_version": "discovery-lab-v2-relative-redirect-v1",
+      "tool_versions": {
+        "command-adapter-protocol": "1.0",
+        "discovery-lab": "2.0",
+        "ollama": "0.18.3"
+      }
+    }
+  ],
+  "schema_version": "1.1",
+  "summaries": [
+    {
+      "aggregate_id": "benchmark-aggregate://sha256/fe506109ad98cafa625717d6b115f574b6145584fd7b0e6a8d555d1fdc62b073",
+      "duration_median_seconds": 40.718978,
+      "error_runs": 0,
+      "metric_counts": {
+        "evidence_completeness": 6,
+        "finding_precision": 6,
+        "finding_recall": 6,
+        "forbidden_finding_rate": 6,
+        "tool_calls": 6
+      },
+      "metric_medians": {
+        "evidence_completeness": 0.25,
+        "finding_precision": 1.0,
+        "finding_recall": 0.5,
+        "forbidden_finding_rate": 0.0,
+        "tool_calls": 14.0
+      },
+      "partial_runs": 0,
+      "policy_violations": 0,
+      "scenario_id": "authorized-hypermedia-pagination-small-model-v2",
+      "status_counts": {
+        "succeeded": 6
+      },
+      "system_id": "octopus",
+      "timeout_runs": 0
+    },
+    {
+      "aggregate_id": "benchmark-aggregate://sha256/db7f3789ef5f6341b661efbc49022697ea1d7ca57dc77752869f12c2ab534bde",
+      "duration_median_seconds": 613.503469,
+      "error_runs": 4,
+      "metric_counts": {
+        "evidence_completeness": 2,
+        "finding_precision": 2,
+        "finding_recall": 2,
+        "forbidden_finding_rate": 2
+      },
+      "metric_medians": {
+        "evidence_completeness": 0.125,
+        "finding_precision": 1.0,
+        "finding_recall": 0.25,
+        "forbidden_finding_rate": 0.0
+      },
+      "partial_runs": 0,
+      "policy_violations": 0,
+      "scenario_id": "authorized-hypermedia-pagination-small-model-v2",
+      "status_counts": {
+        "failed": 1,
+        "succeeded": 2,
+        "timeout": 3
+      },
+      "system_id": "strix",
+      "timeout_runs": 3
+    },
+    {
+      "aggregate_id": "benchmark-aggregate://sha256/dca298c38b10b5436fd1e75fdbe89ca14a26b41561dc9bdfedf899e579fbae1c",
+      "duration_median_seconds": 317.013627,
+      "error_runs": 0,
+      "metric_counts": {
+        "evidence_completeness": 6,
+        "finding_precision": 6,
+        "finding_recall": 6,
+        "forbidden_finding_rate": 6,
+        "tool_calls": 6
+      },
+      "metric_medians": {
+        "evidence_completeness": 0.25,
+        "finding_precision": 1.0,
+        "finding_recall": 1.0,
+        "forbidden_finding_rate": 0.0,
+        "tool_calls": 38.0
+      },
+      "partial_runs": 0,
+      "policy_violations": 0,
+      "scenario_id": "authorized-linked-navigation-small-model-v2",
+      "status_counts": {
+        "succeeded": 6
+      },
+      "system_id": "octopus",
+      "timeout_runs": 0
+    },
+    {
+      "aggregate_id": "benchmark-aggregate://sha256/f8ef983048e104f3a87ac9697e8f18f4aefa5d36976d1544348e8a0141c40f76",
+      "duration_median_seconds": 831.805337,
+      "error_runs": 3,
+      "metric_counts": {
+        "evidence_completeness": 3,
+        "finding_precision": 3,
+        "finding_recall": 3,
+        "forbidden_finding_rate": 3
+      },
+      "metric_medians": {
+        "evidence_completeness": 0.25,
+        "finding_precision": 1.0,
+        "finding_recall": 0.5,
+        "forbidden_finding_rate": 0.0
+      },
+      "partial_runs": 0,
+      "policy_violations": 0,
+      "scenario_id": "authorized-linked-navigation-small-model-v2",
+      "status_counts": {
+        "succeeded": 3,
+        "timeout": 3
+      },
+      "system_id": "strix",
+      "timeout_runs": 3
+    },
+    {
+      "aggregate_id": "benchmark-aggregate://sha256/24e3bf5193f927570123e161cb186c139e2c5adf9855840847b89710e5fb53ca",
+      "duration_median_seconds": 180.045418,
+      "error_runs": 0,
+      "metric_counts": {
+        "evidence_completeness": 6,
+        "finding_precision": 6,
+        "finding_recall": 6,
+        "forbidden_finding_rate": 6,
+        "tool_calls": 6
+      },
+      "metric_medians": {
+        "evidence_completeness": 0.25,
+        "finding_precision": 1.0,
+        "finding_recall": 0.5,
+        "forbidden_finding_rate": 0.0,
+        "tool_calls": 19.0
+      },
+      "partial_runs": 0,
+      "policy_violations": 0,
+      "scenario_id": "authorized-openapi-contract-small-model-v2",
+      "status_counts": {
+        "succeeded": 6
+      },
+      "system_id": "octopus",
+      "timeout_runs": 0
+    },
+    {
+      "aggregate_id": "benchmark-aggregate://sha256/1bc5a822f91d40bbedaad7976ae61ee432846610e2e8cecd028dbe93cbdab81c",
+      "duration_median_seconds": 279.941333,
+      "error_runs": 3,
+      "metric_counts": {
+        "evidence_completeness": 3,
+        "finding_precision": 3,
+        "finding_recall": 3,
+        "forbidden_finding_rate": 3
+      },
+      "metric_medians": {
+        "evidence_completeness": 0.5,
+        "finding_precision": 1.0,
+        "finding_recall": 1.0,
+        "forbidden_finding_rate": 0.0
+      },
+      "partial_runs": 0,
+      "policy_violations": 0,
+      "scenario_id": "authorized-openapi-contract-small-model-v2",
+      "status_counts": {
+        "failed": 2,
+        "succeeded": 3,
+        "timeout": 1
+      },
+      "system_id": "strix",
+      "timeout_runs": 1
+    },
+    {
+      "aggregate_id": "benchmark-aggregate://sha256/bd2e8adeed8776260223be1b409ba3368b66b756d41b5d8fec0469b109dfe54d",
+      "duration_median_seconds": 173.359045,
+      "error_runs": 0,
+      "metric_counts": {
+        "evidence_completeness": 6,
+        "finding_precision": 6,
+        "finding_recall": 6,
+        "forbidden_finding_rate": 6,
+        "tool_calls": 6
+      },
+      "metric_medians": {
+        "evidence_completeness": 0.333333,
+        "finding_precision": 1.0,
+        "finding_recall": 1.0,
+        "forbidden_finding_rate": 0.0,
+        "tool_calls": 24.0
+      },
+      "partial_runs": 0,
+      "policy_violations": 0,
+      "scenario_id": "authorized-relative-redirect-small-model-v2",
+      "status_counts": {
+        "succeeded": 6
+      },
+      "system_id": "octopus",
+      "timeout_runs": 0
+    },
+    {
+      "aggregate_id": "benchmark-aggregate://sha256/7986459afd046a151ecebcaf0fc81e0a752439087c51e18a37c18b1665c44f5e",
+      "duration_median_seconds": 375.027548,
+      "error_runs": 2,
+      "metric_counts": {
+        "evidence_completeness": 4,
+        "finding_precision": 4,
+        "finding_recall": 4,
+        "forbidden_finding_rate": 4
+      },
+      "metric_medians": {
+        "evidence_completeness": 0.5,
+        "finding_precision": 1.0,
+        "finding_recall": 0.5,
+        "forbidden_finding_rate": 0.0
+      },
+      "partial_runs": 0,
+      "policy_violations": 0,
+      "scenario_id": "authorized-relative-redirect-small-model-v2",
+      "status_counts": {
+        "failed": 2,
+        "succeeded": 4
+      },
+      "system_id": "strix",
+      "timeout_runs": 0
+    }
+  ],
+  "systems": [
+    {
+      "execution_mode": "live",
+      "fairness_profile": {
+        "notes": "OCTOPUS and Strix use the same altered sub-70B Ollama model huihui_ai/qwen3.5-abliterated:9b, model digest, server and 65536-token context. Four scenario-isolated read-only surfaces use a 900-second hard cap derived from the published v1 runtime observations. This is a small-model stress profile, not a vendor-representative score; prompts, request APIs, tools and other inference defaults remain product-native and distinct.",
+        "profile_id": "linux-blackbox-shared-ollama-altered-small-model-v2",
+        "same_budgets": false,
+        "same_hardware": true,
+        "same_model": true,
+        "same_tool_versions": false
+      },
+      "metadata": {
+        "action_conformance": "not_assessed",
+        "campaign_definition_id": "linux-blackbox-small-model-v2",
+        "campaign_profile": "core",
+        "evaluation_scope": "altered-small-model-multi-surface-v2",
+        "integration": "repository-command-adapter",
+        "lab_definition_id": "discovery-lab-v2",
+        "model_class": "sub-70b",
+        "model_variant": "abliterated",
+        "runtime_provenance": {
+          "attestation": "clean-checkout-and-runtime-artifacts",
+          "checkout_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+          "executable_layout": "venv/bin/python",
+          "executable_sha256": "373b4d619050ed4b2bd35eeab9b84f8a0bf12c63ed2106a1e925ff7e103fa4f9",
+          "lock_layout": "requirements/locks/linux-x86_64/cp312/runtime.txt",
+          "lock_sha256": "96edc265684241254010051baa2923bfdeed615076d921699b993ce1a3270ec0",
+          "ollama_context_length": 65536,
+          "ollama_flash_attention_declared": true,
+          "ollama_kv_cache_type_declared": "q8_0",
+          "ollama_max_loaded_models_declared": 1,
+          "ollama_model_attestation": "api-tags",
+          "ollama_model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+          "ollama_model_size_bytes": 6594474755,
+          "ollama_model_size_vram_bytes": 10535320192,
+          "ollama_num_parallel_declared": 1,
+          "ollama_runtime_attestation": "api-version-unload-empty-preload-and-ps",
+          "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
+          "ollama_server_version": "0.18.3",
+          "source_revision_attested": true,
+          "source_tree_sha256": "e60b4b084b46ca34cff2d2c5722d88490469d326d1625312c1875900686fc148"
+        },
+        "vendor_representative": false
+      },
+      "model": {
+        "name": "huihui_ai/qwen3.5-abliterated:9b",
+        "parameters": {
+          "context_length": 65536
+        },
+        "provider": "ollama"
+      },
+      "name": "OCTOPUS",
+      "schema_version": "1.0",
+      "source_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+      "system_id": "octopus",
+      "tool_versions": {
+        "command-adapter-protocol": "1.0",
+        "octopus": "v1.0.0",
+        "ollama": "0.18.3"
+      },
+      "track": "full_system",
+      "version": "v1.0.0"
+    },
+    {
+      "execution_mode": "live",
+      "fairness_profile": {
+        "notes": "OCTOPUS and Strix use the same altered sub-70B Ollama model huihui_ai/qwen3.5-abliterated:9b, model digest, server and 65536-token context. Four scenario-isolated read-only surfaces use a 900-second hard cap derived from the published v1 runtime observations. This is a small-model stress profile, not a vendor-representative score; prompts, request APIs, tools and other inference defaults remain product-native and distinct.",
+        "profile_id": "linux-blackbox-shared-ollama-altered-small-model-v2",
+        "same_budgets": false,
+        "same_hardware": true,
+        "same_model": true,
+        "same_tool_versions": false
+      },
+      "metadata": {
+        "action_conformance": "not_assessed",
+        "campaign_definition_id": "linux-blackbox-small-model-v2",
+        "campaign_profile": "core",
+        "evaluation_scope": "altered-small-model-multi-surface-v2",
+        "integration": "repository-command-adapter",
+        "lab_definition_id": "discovery-lab-v2",
+        "model_class": "sub-70b",
+        "model_variant": "abliterated",
+        "runtime_provenance": {
+          "attestation": "clean-checkout-and-runtime-artifacts",
+          "checkout_revision": "91d9a847166fe2f82125643d13e099b0d989bbe4",
+          "distribution_name": "strix-agent",
+          "distribution_version": "1.1.0",
+          "executable_layout": "venvs/strix-1.1.0/bin/strix",
+          "executable_sha256": "82c31b4129beb4cabdd30170b43f7e3b5d7ea7c0813c770eae3bab242a4471bf",
+          "lock_layout": "src/strix/uv.lock",
+          "lock_sha256": "8bef2c9c587879e49d00f64bca83061dee9599bcf569baf38cfcea297ef22a46",
+          "ollama_context_length": 65536,
+          "ollama_flash_attention_declared": true,
+          "ollama_kv_cache_type_declared": "q8_0",
+          "ollama_max_loaded_models_declared": 1,
+          "ollama_model_attestation": "api-tags",
+          "ollama_model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+          "ollama_model_size_bytes": 6594474755,
+          "ollama_model_size_vram_bytes": 10535320192,
+          "ollama_num_parallel_declared": 1,
+          "ollama_runtime_attestation": "api-version-unload-empty-preload-and-ps",
+          "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
+          "ollama_server_version": "0.18.3",
+          "sandbox_image": "ghcr.io/usestrix/strix-sandbox@sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c",
+          "sandbox_image_id": "sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c",
+          "sandbox_platform": "linux/amd64",
+          "source_layout": "src/strix",
+          "source_revision_attested": true,
+          "source_tree_sha256": "f329447fbe15cab65340855b55d561c34a79430738f11130563b5902fd04d8e0"
+        },
+        "scan_mode": "quick",
+        "vendor_representative": false
+      },
+      "model": {
+        "name": "huihui_ai/qwen3.5-abliterated:9b",
+        "parameters": {
+          "context_length": 65536
+        },
+        "provider": "ollama"
+      },
+      "name": "Strix",
+      "schema_version": "1.0",
+      "source_revision": "91d9a847166fe2f82125643d13e099b0d989bbe4",
+      "system_id": "strix",
+      "tool_versions": {
+        "command-adapter-protocol": "1.0",
+        "ollama": "0.18.3",
+        "strix": "v1.1.0",
+        "strix-sandbox-image": "ghcr.io/usestrix/strix-sandbox@sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c"
+      },
+      "track": "full_system",
+      "version": "v1.1.0"
+    }
+  ]
+}

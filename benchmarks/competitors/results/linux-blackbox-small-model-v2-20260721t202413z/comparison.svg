@@ -1,0 +1,471 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1738" viewBox="0 0 1200 1738" role="img" aria-labelledby="chart-title chart-desc">
+  <title id="chart-title">Competitor benchmark terminal outcomes and success-only quality</title>
+  <desc id="chart-desc">Terminal outcomes include every scheduled run. Quality statistics include successful runs only, with a separate sample count for each metric. Missing telemetry is not zero. No overall score or winner is declared.</desc>
+  <metadata>{&quot;matrix_id&quot;:&quot;competitor-matrix://sha256/e76d05e8c0197489f3f3b9fb2b90b35d344d3be674d8c585c8130cd1d45dd7d0&quot;,&quot;quality_metrics&quot;:[&quot;finding_precision&quot;,&quot;finding_recall&quot;,&quot;evidence_completeness&quot;,&quot;forbidden_finding_rate&quot;],&quot;quality_population&quot;:&quot;succeeded&quot;,&quot;renderer_version&quot;:&quot;1.0&quot;}</metadata>
+  <rect width="1200" height="100%" fill="#ffffff"/>
+  <style>text{font-family:Arial,Helvetica,sans-serif;fill:#17202a}.title{font-size:24px;font-weight:700}.subtitle{font-size:12px;fill:#44515c}.section{font-size:16px;font-weight:700}.label{font-size:12px;font-weight:700}.small{font-size:10px;fill:#44515c}.value{font-size:10px}.grid{stroke:#d7dde2;stroke-width:1}.axis{stroke:#69757f;stroke-width:1.2}.range{stroke:#17202a;stroke-width:3;stroke-linecap:round}</style>
+  <text class="title" x="36" y="42">Competitor benchmark comparison</text>
+  <text class="subtitle" x="36" y="66">Matrix: competitor-matrix://sha256/e76d05e8c0197489f3f3b9fb2b90b35d344d3be674d8c585c8130cd1d45dd7d0</text>
+  <text class="subtitle" x="36" y="88">Execution: live | Track: full_system | Fairness: linux-blackbox-shared-ollama-altered-small-model-v2 | Repetitions: 6</text>
+  <text class="subtitle" x="36" y="108">Fairness controls: same model: yes, same hardware: yes, same tools: no, same budgets: no</text>
+  <text class="subtitle" x="36" y="132">Terminal outcomes include all scheduled runs. Quality uses successful runs only; n is per metric.</text>
+  <text class="subtitle" x="36" y="152">Missing telemetry is N/A, never zero. Medians and ranges are descriptive; no combined score or winner is declared.</text>
+  <line x1="36" y1="171" x2="1164" y2="171" class="grid"/>
+  <text class="section" x="36" y="200">Scenario: authorized-hypermedia-pagination-small-model-v2</text>
+  <text class="label" x="36" y="228">Terminal outcomes (N=6 per system)</text>
+  <text class="label" x="36" y="250">octopus</text>
+  <rect x="200" y="236" width="520" height="18" fill="#0072B2"/>
+  <rect x="200" y="236" width="520" height="18" fill="none" stroke="#69757f"/>
+  <text class="small" x="734" y="250">succeeded 6 | failed 0 | timeout 0 | partial 0 | invalid 0</text>
+  <text class="label" x="36" y="284">strix</text>
+  <rect x="200" y="270" width="173.333" height="18" fill="#0072B2"/>
+  <rect x="373.333" y="270" width="86.667" height="18" fill="#D55E00"/>
+  <rect x="460" y="270" width="260" height="18" fill="#E69F00"/>
+  <rect x="200" y="270" width="520" height="18" fill="none" stroke="#69757f"/>
+  <text class="small" x="734" y="284">succeeded 2 | failed 1 | timeout 3 | partial 0 | invalid 0</text>
+  <rect x="200" y="307" width="12" height="12" fill="#0072B2"/>
+  <text class="small" x="217" y="318">Succeeded</text>
+  <rect x="292" y="307" width="12" height="12" fill="#D55E00"/>
+  <text class="small" x="309" y="318">Failed</text>
+  <rect x="384" y="307" width="12" height="12" fill="#E69F00"/>
+  <text class="small" x="401" y="318">Timeout</text>
+  <rect x="476" y="307" width="12" height="12" fill="#CC79A7"/>
+  <text class="small" x="493" y="318">Partial</text>
+  <rect x="568" y="307" width="12" height="12" fill="#666666"/>
+  <text class="small" x="585" y="318">Invalid</text>
+  <rect x="660" y="307" width="12" height="12" fill="#9aa1a6"/>
+  <text class="small" x="677" y="318">Other</text>
+  <text class="label" x="36" y="348">Success-only quality: median, min-max range, and per-metric sample count</text>
+  <text class="small" x="190" y="382">Precision (higher)</text>
+  <text class="small" x="433" y="382">Recall (higher)</text>
+  <text class="small" x="676" y="382">Evidence (higher)</text>
+  <text class="small" x="919" y="382">Forbidden rate (lower)</text>
+  <text class="label" x="36" y="426">octopus</text>
+  <text class="small" x="36" y="442">success 6/6</text>
+  <line x1="190" y1="428" x2="332" y2="428" class="axis"/>
+  <line x1="190" y1="425" x2="190" y2="431" class="grid"/>
+  <text class="small" x="190" y="421" text-anchor="middle">0</text>
+  <line x1="261" y1="425" x2="261" y2="431" class="grid"/>
+  <text class="small" x="261" y="421" text-anchor="middle">.5</text>
+  <line x1="332" y1="425" x2="332" y2="431" class="grid"/>
+  <text class="small" x="332" y="421" text-anchor="middle">1</text>
+  <line x1="332" y1="428" x2="332" y2="428" class="range"/>
+  <circle cx="332" cy="428" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="190" y="454">1.000 [1.000-1.000], n=6</text>
+  <line x1="433" y1="428" x2="575" y2="428" class="axis"/>
+  <line x1="433" y1="425" x2="433" y2="431" class="grid"/>
+  <text class="small" x="433" y="421" text-anchor="middle">0</text>
+  <line x1="504" y1="425" x2="504" y2="431" class="grid"/>
+  <text class="small" x="504" y="421" text-anchor="middle">.5</text>
+  <line x1="575" y1="425" x2="575" y2="431" class="grid"/>
+  <text class="small" x="575" y="421" text-anchor="middle">1</text>
+  <line x1="504" y1="428" x2="504" y2="428" class="range"/>
+  <circle cx="504" cy="428" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="433" y="454">0.500 [0.500-0.500], n=6</text>
+  <line x1="676" y1="428" x2="818" y2="428" class="axis"/>
+  <line x1="676" y1="425" x2="676" y2="431" class="grid"/>
+  <text class="small" x="676" y="421" text-anchor="middle">0</text>
+  <line x1="747" y1="425" x2="747" y2="431" class="grid"/>
+  <text class="small" x="747" y="421" text-anchor="middle">.5</text>
+  <line x1="818" y1="425" x2="818" y2="431" class="grid"/>
+  <text class="small" x="818" y="421" text-anchor="middle">1</text>
+  <line x1="711.5" y1="428" x2="711.5" y2="428" class="range"/>
+  <circle cx="711.5" cy="428" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="676" y="454">0.250 [0.250-0.250], n=6</text>
+  <line x1="919" y1="428" x2="1061" y2="428" class="axis"/>
+  <line x1="919" y1="425" x2="919" y2="431" class="grid"/>
+  <text class="small" x="919" y="421" text-anchor="middle">0</text>
+  <line x1="990" y1="425" x2="990" y2="431" class="grid"/>
+  <text class="small" x="990" y="421" text-anchor="middle">.5</text>
+  <line x1="1061" y1="425" x2="1061" y2="431" class="grid"/>
+  <text class="small" x="1061" y="421" text-anchor="middle">1</text>
+  <line x1="919" y1="428" x2="919" y2="428" class="range"/>
+  <circle cx="919" cy="428" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="919" y="454">0.000 [0.000-0.000], n=6</text>
+  <text class="label" x="36" y="494">strix</text>
+  <text class="small" x="36" y="510">success 2/6</text>
+  <line x1="190" y1="496" x2="332" y2="496" class="axis"/>
+  <line x1="190" y1="493" x2="190" y2="499" class="grid"/>
+  <text class="small" x="190" y="489" text-anchor="middle">0</text>
+  <line x1="261" y1="493" x2="261" y2="499" class="grid"/>
+  <text class="small" x="261" y="489" text-anchor="middle">.5</text>
+  <line x1="332" y1="493" x2="332" y2="499" class="grid"/>
+  <text class="small" x="332" y="489" text-anchor="middle">1</text>
+  <line x1="332" y1="496" x2="332" y2="496" class="range"/>
+  <circle cx="332" cy="496" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="190" y="522">1.000 [1.000-1.000], n=2</text>
+  <line x1="433" y1="496" x2="575" y2="496" class="axis"/>
+  <line x1="433" y1="493" x2="433" y2="499" class="grid"/>
+  <text class="small" x="433" y="489" text-anchor="middle">0</text>
+  <line x1="504" y1="493" x2="504" y2="499" class="grid"/>
+  <text class="small" x="504" y="489" text-anchor="middle">.5</text>
+  <line x1="575" y1="493" x2="575" y2="499" class="grid"/>
+  <text class="small" x="575" y="489" text-anchor="middle">1</text>
+  <line x1="468.5" y1="496" x2="468.5" y2="496" class="range"/>
+  <circle cx="468.5" cy="496" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="433" y="522">0.250 [0.250-0.250], n=2</text>
+  <line x1="676" y1="496" x2="818" y2="496" class="axis"/>
+  <line x1="676" y1="493" x2="676" y2="499" class="grid"/>
+  <text class="small" x="676" y="489" text-anchor="middle">0</text>
+  <line x1="747" y1="493" x2="747" y2="499" class="grid"/>
+  <text class="small" x="747" y="489" text-anchor="middle">.5</text>
+  <line x1="818" y1="493" x2="818" y2="499" class="grid"/>
+  <text class="small" x="818" y="489" text-anchor="middle">1</text>
+  <line x1="676" y1="496" x2="711.5" y2="496" class="range"/>
+  <circle cx="693.75" cy="496" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="676" y="522">0.125 [0.000-0.250], n=2</text>
+  <line x1="919" y1="496" x2="1061" y2="496" class="axis"/>
+  <line x1="919" y1="493" x2="919" y2="499" class="grid"/>
+  <text class="small" x="919" y="489" text-anchor="middle">0</text>
+  <line x1="990" y1="493" x2="990" y2="499" class="grid"/>
+  <text class="small" x="990" y="489" text-anchor="middle">.5</text>
+  <line x1="1061" y1="493" x2="1061" y2="499" class="grid"/>
+  <text class="small" x="1061" y="489" text-anchor="middle">1</text>
+  <line x1="919" y1="496" x2="919" y2="496" class="range"/>
+  <circle cx="919" cy="496" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="919" y="522">0.000 [0.000-0.000], n=2</text>
+  <line x1="36" y1="556" x2="1164" y2="556" class="grid"/>
+  <text class="section" x="36" y="564">Scenario: authorized-linked-navigation-small-model-v2</text>
+  <text class="label" x="36" y="592">Terminal outcomes (N=6 per system)</text>
+  <text class="label" x="36" y="614">octopus</text>
+  <rect x="200" y="600" width="520" height="18" fill="#0072B2"/>
+  <rect x="200" y="600" width="520" height="18" fill="none" stroke="#69757f"/>
+  <text class="small" x="734" y="614">succeeded 6 | failed 0 | timeout 0 | partial 0 | invalid 0</text>
+  <text class="label" x="36" y="648">strix</text>
+  <rect x="200" y="634" width="260" height="18" fill="#0072B2"/>
+  <rect x="460" y="634" width="260" height="18" fill="#E69F00"/>
+  <rect x="200" y="634" width="520" height="18" fill="none" stroke="#69757f"/>
+  <text class="small" x="734" y="648">succeeded 3 | failed 0 | timeout 3 | partial 0 | invalid 0</text>
+  <rect x="200" y="671" width="12" height="12" fill="#0072B2"/>
+  <text class="small" x="217" y="682">Succeeded</text>
+  <rect x="292" y="671" width="12" height="12" fill="#D55E00"/>
+  <text class="small" x="309" y="682">Failed</text>
+  <rect x="384" y="671" width="12" height="12" fill="#E69F00"/>
+  <text class="small" x="401" y="682">Timeout</text>
+  <rect x="476" y="671" width="12" height="12" fill="#CC79A7"/>
+  <text class="small" x="493" y="682">Partial</text>
+  <rect x="568" y="671" width="12" height="12" fill="#666666"/>
+  <text class="small" x="585" y="682">Invalid</text>
+  <rect x="660" y="671" width="12" height="12" fill="#9aa1a6"/>
+  <text class="small" x="677" y="682">Other</text>
+  <text class="label" x="36" y="712">Success-only quality: median, min-max range, and per-metric sample count</text>
+  <text class="small" x="190" y="746">Precision (higher)</text>
+  <text class="small" x="433" y="746">Recall (higher)</text>
+  <text class="small" x="676" y="746">Evidence (higher)</text>
+  <text class="small" x="919" y="746">Forbidden rate (lower)</text>
+  <text class="label" x="36" y="790">octopus</text>
+  <text class="small" x="36" y="806">success 6/6</text>
+  <line x1="190" y1="792" x2="332" y2="792" class="axis"/>
+  <line x1="190" y1="789" x2="190" y2="795" class="grid"/>
+  <text class="small" x="190" y="785" text-anchor="middle">0</text>
+  <line x1="261" y1="789" x2="261" y2="795" class="grid"/>
+  <text class="small" x="261" y="785" text-anchor="middle">.5</text>
+  <line x1="332" y1="789" x2="332" y2="795" class="grid"/>
+  <text class="small" x="332" y="785" text-anchor="middle">1</text>
+  <line x1="332" y1="792" x2="332" y2="792" class="range"/>
+  <circle cx="332" cy="792" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="190" y="818">1.000 [1.000-1.000], n=6</text>
+  <line x1="433" y1="792" x2="575" y2="792" class="axis"/>
+  <line x1="433" y1="789" x2="433" y2="795" class="grid"/>
+  <text class="small" x="433" y="785" text-anchor="middle">0</text>
+  <line x1="504" y1="789" x2="504" y2="795" class="grid"/>
+  <text class="small" x="504" y="785" text-anchor="middle">.5</text>
+  <line x1="575" y1="789" x2="575" y2="795" class="grid"/>
+  <text class="small" x="575" y="785" text-anchor="middle">1</text>
+  <line x1="575" y1="792" x2="575" y2="792" class="range"/>
+  <circle cx="575" cy="792" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="433" y="818">1.000 [1.000-1.000], n=6</text>
+  <line x1="676" y1="792" x2="818" y2="792" class="axis"/>
+  <line x1="676" y1="789" x2="676" y2="795" class="grid"/>
+  <text class="small" x="676" y="785" text-anchor="middle">0</text>
+  <line x1="747" y1="789" x2="747" y2="795" class="grid"/>
+  <text class="small" x="747" y="785" text-anchor="middle">.5</text>
+  <line x1="818" y1="789" x2="818" y2="795" class="grid"/>
+  <text class="small" x="818" y="785" text-anchor="middle">1</text>
+  <line x1="711.5" y1="792" x2="711.5" y2="792" class="range"/>
+  <circle cx="711.5" cy="792" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="676" y="818">0.250 [0.250-0.250], n=6</text>
+  <line x1="919" y1="792" x2="1061" y2="792" class="axis"/>
+  <line x1="919" y1="789" x2="919" y2="795" class="grid"/>
+  <text class="small" x="919" y="785" text-anchor="middle">0</text>
+  <line x1="990" y1="789" x2="990" y2="795" class="grid"/>
+  <text class="small" x="990" y="785" text-anchor="middle">.5</text>
+  <line x1="1061" y1="789" x2="1061" y2="795" class="grid"/>
+  <text class="small" x="1061" y="785" text-anchor="middle">1</text>
+  <line x1="919" y1="792" x2="919" y2="792" class="range"/>
+  <circle cx="919" cy="792" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="919" y="818">0.000 [0.000-0.000], n=6</text>
+  <text class="label" x="36" y="858">strix</text>
+  <text class="small" x="36" y="874">success 3/6</text>
+  <line x1="190" y1="860" x2="332" y2="860" class="axis"/>
+  <line x1="190" y1="857" x2="190" y2="863" class="grid"/>
+  <text class="small" x="190" y="853" text-anchor="middle">0</text>
+  <line x1="261" y1="857" x2="261" y2="863" class="grid"/>
+  <text class="small" x="261" y="853" text-anchor="middle">.5</text>
+  <line x1="332" y1="857" x2="332" y2="863" class="grid"/>
+  <text class="small" x="332" y="853" text-anchor="middle">1</text>
+  <line x1="332" y1="860" x2="332" y2="860" class="range"/>
+  <circle cx="332" cy="860" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="190" y="886">1.000 [1.000-1.000], n=3</text>
+  <line x1="433" y1="860" x2="575" y2="860" class="axis"/>
+  <line x1="433" y1="857" x2="433" y2="863" class="grid"/>
+  <text class="small" x="433" y="853" text-anchor="middle">0</text>
+  <line x1="504" y1="857" x2="504" y2="863" class="grid"/>
+  <text class="small" x="504" y="853" text-anchor="middle">.5</text>
+  <line x1="575" y1="857" x2="575" y2="863" class="grid"/>
+  <text class="small" x="575" y="853" text-anchor="middle">1</text>
+  <line x1="468.5" y1="860" x2="539.5" y2="860" class="range"/>
+  <circle cx="504" cy="860" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="433" y="886">0.500 [0.250-0.750], n=3</text>
+  <line x1="676" y1="860" x2="818" y2="860" class="axis"/>
+  <line x1="676" y1="857" x2="676" y2="863" class="grid"/>
+  <text class="small" x="676" y="853" text-anchor="middle">0</text>
+  <line x1="747" y1="857" x2="747" y2="863" class="grid"/>
+  <text class="small" x="747" y="853" text-anchor="middle">.5</text>
+  <line x1="818" y1="857" x2="818" y2="863" class="grid"/>
+  <text class="small" x="818" y="853" text-anchor="middle">1</text>
+  <line x1="676" y1="860" x2="711.5" y2="860" class="range"/>
+  <circle cx="711.5" cy="860" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="676" y="886">0.250 [0.000-0.250], n=3</text>
+  <line x1="919" y1="860" x2="1061" y2="860" class="axis"/>
+  <line x1="919" y1="857" x2="919" y2="863" class="grid"/>
+  <text class="small" x="919" y="853" text-anchor="middle">0</text>
+  <line x1="990" y1="857" x2="990" y2="863" class="grid"/>
+  <text class="small" x="990" y="853" text-anchor="middle">.5</text>
+  <line x1="1061" y1="857" x2="1061" y2="863" class="grid"/>
+  <text class="small" x="1061" y="853" text-anchor="middle">1</text>
+  <line x1="919" y1="860" x2="919" y2="860" class="range"/>
+  <circle cx="919" cy="860" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="919" y="886">0.000 [0.000-0.000], n=3</text>
+  <line x1="36" y1="920" x2="1164" y2="920" class="grid"/>
+  <text class="section" x="36" y="928">Scenario: authorized-openapi-contract-small-model-v2</text>
+  <text class="label" x="36" y="956">Terminal outcomes (N=6 per system)</text>
+  <text class="label" x="36" y="978">octopus</text>
+  <rect x="200" y="964" width="520" height="18" fill="#0072B2"/>
+  <rect x="200" y="964" width="520" height="18" fill="none" stroke="#69757f"/>
+  <text class="small" x="734" y="978">succeeded 6 | failed 0 | timeout 0 | partial 0 | invalid 0</text>
+  <text class="label" x="36" y="1012">strix</text>
+  <rect x="200" y="998" width="260" height="18" fill="#0072B2"/>
+  <rect x="460" y="998" width="173.333" height="18" fill="#D55E00"/>
+  <rect x="633.333" y="998" width="86.667" height="18" fill="#E69F00"/>
+  <rect x="200" y="998" width="520" height="18" fill="none" stroke="#69757f"/>
+  <text class="small" x="734" y="1012">succeeded 3 | failed 2 | timeout 1 | partial 0 | invalid 0</text>
+  <rect x="200" y="1035" width="12" height="12" fill="#0072B2"/>
+  <text class="small" x="217" y="1046">Succeeded</text>
+  <rect x="292" y="1035" width="12" height="12" fill="#D55E00"/>
+  <text class="small" x="309" y="1046">Failed</text>
+  <rect x="384" y="1035" width="12" height="12" fill="#E69F00"/>
+  <text class="small" x="401" y="1046">Timeout</text>
+  <rect x="476" y="1035" width="12" height="12" fill="#CC79A7"/>
+  <text class="small" x="493" y="1046">Partial</text>
+  <rect x="568" y="1035" width="12" height="12" fill="#666666"/>
+  <text class="small" x="585" y="1046">Invalid</text>
+  <rect x="660" y="1035" width="12" height="12" fill="#9aa1a6"/>
+  <text class="small" x="677" y="1046">Other</text>
+  <text class="label" x="36" y="1076">Success-only quality: median, min-max range, and per-metric sample count</text>
+  <text class="small" x="190" y="1110">Precision (higher)</text>
+  <text class="small" x="433" y="1110">Recall (higher)</text>
+  <text class="small" x="676" y="1110">Evidence (higher)</text>
+  <text class="small" x="919" y="1110">Forbidden rate (lower)</text>
+  <text class="label" x="36" y="1154">octopus</text>
+  <text class="small" x="36" y="1170">success 6/6</text>
+  <line x1="190" y1="1156" x2="332" y2="1156" class="axis"/>
+  <line x1="190" y1="1153" x2="190" y2="1159" class="grid"/>
+  <text class="small" x="190" y="1149" text-anchor="middle">0</text>
+  <line x1="261" y1="1153" x2="261" y2="1159" class="grid"/>
+  <text class="small" x="261" y="1149" text-anchor="middle">.5</text>
+  <line x1="332" y1="1153" x2="332" y2="1159" class="grid"/>
+  <text class="small" x="332" y="1149" text-anchor="middle">1</text>
+  <line x1="332" y1="1156" x2="332" y2="1156" class="range"/>
+  <circle cx="332" cy="1156" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="190" y="1182">1.000 [1.000-1.000], n=6</text>
+  <line x1="433" y1="1156" x2="575" y2="1156" class="axis"/>
+  <line x1="433" y1="1153" x2="433" y2="1159" class="grid"/>
+  <text class="small" x="433" y="1149" text-anchor="middle">0</text>
+  <line x1="504" y1="1153" x2="504" y2="1159" class="grid"/>
+  <text class="small" x="504" y="1149" text-anchor="middle">.5</text>
+  <line x1="575" y1="1153" x2="575" y2="1159" class="grid"/>
+  <text class="small" x="575" y="1149" text-anchor="middle">1</text>
+  <line x1="504" y1="1156" x2="504" y2="1156" class="range"/>
+  <circle cx="504" cy="1156" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="433" y="1182">0.500 [0.500-0.500], n=6</text>
+  <line x1="676" y1="1156" x2="818" y2="1156" class="axis"/>
+  <line x1="676" y1="1153" x2="676" y2="1159" class="grid"/>
+  <text class="small" x="676" y="1149" text-anchor="middle">0</text>
+  <line x1="747" y1="1153" x2="747" y2="1159" class="grid"/>
+  <text class="small" x="747" y="1149" text-anchor="middle">.5</text>
+  <line x1="818" y1="1153" x2="818" y2="1159" class="grid"/>
+  <text class="small" x="818" y="1149" text-anchor="middle">1</text>
+  <line x1="711.5" y1="1156" x2="711.5" y2="1156" class="range"/>
+  <circle cx="711.5" cy="1156" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="676" y="1182">0.250 [0.250-0.250], n=6</text>
+  <line x1="919" y1="1156" x2="1061" y2="1156" class="axis"/>
+  <line x1="919" y1="1153" x2="919" y2="1159" class="grid"/>
+  <text class="small" x="919" y="1149" text-anchor="middle">0</text>
+  <line x1="990" y1="1153" x2="990" y2="1159" class="grid"/>
+  <text class="small" x="990" y="1149" text-anchor="middle">.5</text>
+  <line x1="1061" y1="1153" x2="1061" y2="1159" class="grid"/>
+  <text class="small" x="1061" y="1149" text-anchor="middle">1</text>
+  <line x1="919" y1="1156" x2="919" y2="1156" class="range"/>
+  <circle cx="919" cy="1156" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="919" y="1182">0.000 [0.000-0.000], n=6</text>
+  <text class="label" x="36" y="1222">strix</text>
+  <text class="small" x="36" y="1238">success 3/6</text>
+  <line x1="190" y1="1224" x2="332" y2="1224" class="axis"/>
+  <line x1="190" y1="1221" x2="190" y2="1227" class="grid"/>
+  <text class="small" x="190" y="1217" text-anchor="middle">0</text>
+  <line x1="261" y1="1221" x2="261" y2="1227" class="grid"/>
+  <text class="small" x="261" y="1217" text-anchor="middle">.5</text>
+  <line x1="332" y1="1221" x2="332" y2="1227" class="grid"/>
+  <text class="small" x="332" y="1217" text-anchor="middle">1</text>
+  <line x1="332" y1="1224" x2="332" y2="1224" class="range"/>
+  <circle cx="332" cy="1224" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="190" y="1250">1.000 [1.000-1.000], n=3</text>
+  <line x1="433" y1="1224" x2="575" y2="1224" class="axis"/>
+  <line x1="433" y1="1221" x2="433" y2="1227" class="grid"/>
+  <text class="small" x="433" y="1217" text-anchor="middle">0</text>
+  <line x1="504" y1="1221" x2="504" y2="1227" class="grid"/>
+  <text class="small" x="504" y="1217" text-anchor="middle">.5</text>
+  <line x1="575" y1="1221" x2="575" y2="1227" class="grid"/>
+  <text class="small" x="575" y="1217" text-anchor="middle">1</text>
+  <line x1="539.5" y1="1224" x2="575" y2="1224" class="range"/>
+  <circle cx="575" cy="1224" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="433" y="1250">1.000 [0.750-1.000], n=3</text>
+  <line x1="676" y1="1224" x2="818" y2="1224" class="axis"/>
+  <line x1="676" y1="1221" x2="676" y2="1227" class="grid"/>
+  <text class="small" x="676" y="1217" text-anchor="middle">0</text>
+  <line x1="747" y1="1221" x2="747" y2="1227" class="grid"/>
+  <text class="small" x="747" y="1217" text-anchor="middle">.5</text>
+  <line x1="818" y1="1221" x2="818" y2="1227" class="grid"/>
+  <text class="small" x="818" y="1217" text-anchor="middle">1</text>
+  <line x1="711.5" y1="1224" x2="782.5" y2="1224" class="range"/>
+  <circle cx="747" cy="1224" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="676" y="1250">0.500 [0.250-0.750], n=3</text>
+  <line x1="919" y1="1224" x2="1061" y2="1224" class="axis"/>
+  <line x1="919" y1="1221" x2="919" y2="1227" class="grid"/>
+  <text class="small" x="919" y="1217" text-anchor="middle">0</text>
+  <line x1="990" y1="1221" x2="990" y2="1227" class="grid"/>
+  <text class="small" x="990" y="1217" text-anchor="middle">.5</text>
+  <line x1="1061" y1="1221" x2="1061" y2="1227" class="grid"/>
+  <text class="small" x="1061" y="1217" text-anchor="middle">1</text>
+  <line x1="919" y1="1224" x2="919" y2="1224" class="range"/>
+  <circle cx="919" cy="1224" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="919" y="1250">0.000 [0.000-0.000], n=3</text>
+  <line x1="36" y1="1284" x2="1164" y2="1284" class="grid"/>
+  <text class="section" x="36" y="1292">Scenario: authorized-relative-redirect-small-model-v2</text>
+  <text class="label" x="36" y="1320">Terminal outcomes (N=6 per system)</text>
+  <text class="label" x="36" y="1342">octopus</text>
+  <rect x="200" y="1328" width="520" height="18" fill="#0072B2"/>
+  <rect x="200" y="1328" width="520" height="18" fill="none" stroke="#69757f"/>
+  <text class="small" x="734" y="1342">succeeded 6 | failed 0 | timeout 0 | partial 0 | invalid 0</text>
+  <text class="label" x="36" y="1376">strix</text>
+  <rect x="200" y="1362" width="346.667" height="18" fill="#0072B2"/>
+  <rect x="546.667" y="1362" width="173.333" height="18" fill="#D55E00"/>
+  <rect x="200" y="1362" width="520" height="18" fill="none" stroke="#69757f"/>
+  <text class="small" x="734" y="1376">succeeded 4 | failed 2 | timeout 0 | partial 0 | invalid 0</text>
+  <rect x="200" y="1399" width="12" height="12" fill="#0072B2"/>
+  <text class="small" x="217" y="1410">Succeeded</text>
+  <rect x="292" y="1399" width="12" height="12" fill="#D55E00"/>
+  <text class="small" x="309" y="1410">Failed</text>
+  <rect x="384" y="1399" width="12" height="12" fill="#E69F00"/>
+  <text class="small" x="401" y="1410">Timeout</text>
+  <rect x="476" y="1399" width="12" height="12" fill="#CC79A7"/>
+  <text class="small" x="493" y="1410">Partial</text>
+  <rect x="568" y="1399" width="12" height="12" fill="#666666"/>
+  <text class="small" x="585" y="1410">Invalid</text>
+  <rect x="660" y="1399" width="12" height="12" fill="#9aa1a6"/>
+  <text class="small" x="677" y="1410">Other</text>
+  <text class="label" x="36" y="1440">Success-only quality: median, min-max range, and per-metric sample count</text>
+  <text class="small" x="190" y="1474">Precision (higher)</text>
+  <text class="small" x="433" y="1474">Recall (higher)</text>
+  <text class="small" x="676" y="1474">Evidence (higher)</text>
+  <text class="small" x="919" y="1474">Forbidden rate (lower)</text>
+  <text class="label" x="36" y="1518">octopus</text>
+  <text class="small" x="36" y="1534">success 6/6</text>
+  <line x1="190" y1="1520" x2="332" y2="1520" class="axis"/>
+  <line x1="190" y1="1517" x2="190" y2="1523" class="grid"/>
+  <text class="small" x="190" y="1513" text-anchor="middle">0</text>
+  <line x1="261" y1="1517" x2="261" y2="1523" class="grid"/>
+  <text class="small" x="261" y="1513" text-anchor="middle">.5</text>
+  <line x1="332" y1="1517" x2="332" y2="1523" class="grid"/>
+  <text class="small" x="332" y="1513" text-anchor="middle">1</text>
+  <line x1="332" y1="1520" x2="332" y2="1520" class="range"/>
+  <circle cx="332" cy="1520" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="190" y="1546">1.000 [1.000-1.000], n=6</text>
+  <line x1="433" y1="1520" x2="575" y2="1520" class="axis"/>
+  <line x1="433" y1="1517" x2="433" y2="1523" class="grid"/>
+  <text class="small" x="433" y="1513" text-anchor="middle">0</text>
+  <line x1="504" y1="1517" x2="504" y2="1523" class="grid"/>
+  <text class="small" x="504" y="1513" text-anchor="middle">.5</text>
+  <line x1="575" y1="1517" x2="575" y2="1523" class="grid"/>
+  <text class="small" x="575" y="1513" text-anchor="middle">1</text>
+  <line x1="575" y1="1520" x2="575" y2="1520" class="range"/>
+  <circle cx="575" cy="1520" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="433" y="1546">1.000 [1.000-1.000], n=6</text>
+  <line x1="676" y1="1520" x2="818" y2="1520" class="axis"/>
+  <line x1="676" y1="1517" x2="676" y2="1523" class="grid"/>
+  <text class="small" x="676" y="1513" text-anchor="middle">0</text>
+  <line x1="747" y1="1517" x2="747" y2="1523" class="grid"/>
+  <text class="small" x="747" y="1513" text-anchor="middle">.5</text>
+  <line x1="818" y1="1517" x2="818" y2="1523" class="grid"/>
+  <text class="small" x="818" y="1513" text-anchor="middle">1</text>
+  <line x1="723.333" y1="1520" x2="723.333" y2="1520" class="range"/>
+  <circle cx="723.333" cy="1520" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="676" y="1546">0.333 [0.333-0.333], n=6</text>
+  <line x1="919" y1="1520" x2="1061" y2="1520" class="axis"/>
+  <line x1="919" y1="1517" x2="919" y2="1523" class="grid"/>
+  <text class="small" x="919" y="1513" text-anchor="middle">0</text>
+  <line x1="990" y1="1517" x2="990" y2="1523" class="grid"/>
+  <text class="small" x="990" y="1513" text-anchor="middle">.5</text>
+  <line x1="1061" y1="1517" x2="1061" y2="1523" class="grid"/>
+  <text class="small" x="1061" y="1513" text-anchor="middle">1</text>
+  <line x1="919" y1="1520" x2="919" y2="1520" class="range"/>
+  <circle cx="919" cy="1520" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="919" y="1546">0.000 [0.000-0.000], n=6</text>
+  <text class="label" x="36" y="1586">strix</text>
+  <text class="small" x="36" y="1602">success 4/6</text>
+  <line x1="190" y1="1588" x2="332" y2="1588" class="axis"/>
+  <line x1="190" y1="1585" x2="190" y2="1591" class="grid"/>
+  <text class="small" x="190" y="1581" text-anchor="middle">0</text>
+  <line x1="261" y1="1585" x2="261" y2="1591" class="grid"/>
+  <text class="small" x="261" y="1581" text-anchor="middle">.5</text>
+  <line x1="332" y1="1585" x2="332" y2="1591" class="grid"/>
+  <text class="small" x="332" y="1581" text-anchor="middle">1</text>
+  <line x1="332" y1="1588" x2="332" y2="1588" class="range"/>
+  <circle cx="332" cy="1588" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="190" y="1614">1.000 [1.000-1.000], n=4</text>
+  <line x1="433" y1="1588" x2="575" y2="1588" class="axis"/>
+  <line x1="433" y1="1585" x2="433" y2="1591" class="grid"/>
+  <text class="small" x="433" y="1581" text-anchor="middle">0</text>
+  <line x1="504" y1="1585" x2="504" y2="1591" class="grid"/>
+  <text class="small" x="504" y="1581" text-anchor="middle">.5</text>
+  <line x1="575" y1="1585" x2="575" y2="1591" class="grid"/>
+  <text class="small" x="575" y="1581" text-anchor="middle">1</text>
+  <line x1="480.333" y1="1588" x2="575" y2="1588" class="range"/>
+  <circle cx="504" cy="1588" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="433" y="1614">0.500 [0.333-1.000], n=4</text>
+  <line x1="676" y1="1588" x2="818" y2="1588" class="axis"/>
+  <line x1="676" y1="1585" x2="676" y2="1591" class="grid"/>
+  <text class="small" x="676" y="1581" text-anchor="middle">0</text>
+  <line x1="747" y1="1585" x2="747" y2="1591" class="grid"/>
+  <text class="small" x="747" y="1581" text-anchor="middle">.5</text>
+  <line x1="818" y1="1585" x2="818" y2="1591" class="grid"/>
+  <text class="small" x="818" y="1581" text-anchor="middle">1</text>
+  <line x1="723.333" y1="1588" x2="818" y2="1588" class="range"/>
+  <circle cx="747" cy="1588" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="676" y="1614">0.500 [0.333-1.000], n=4</text>
+  <line x1="919" y1="1588" x2="1061" y2="1588" class="axis"/>
+  <line x1="919" y1="1585" x2="919" y2="1591" class="grid"/>
+  <text class="small" x="919" y="1581" text-anchor="middle">0</text>
+  <line x1="990" y1="1585" x2="990" y2="1591" class="grid"/>
+  <text class="small" x="990" y="1581" text-anchor="middle">.5</text>
+  <line x1="1061" y1="1585" x2="1061" y2="1591" class="grid"/>
+  <text class="small" x="1061" y="1581" text-anchor="middle">1</text>
+  <line x1="919" y1="1588" x2="919" y2="1588" class="range"/>
+  <circle cx="919" cy="1588" r="5" fill="#17202a" stroke="#ffffff" stroke-width="1.5"/>
+  <text class="value" x="919" y="1614">0.000 [0.000-0.000], n=4</text>
+  <line x1="36" y1="1648" x2="1164" y2="1648" class="grid"/>
+  <text class="small" x="36" y="1692">Outcome bars use the common repetition denominator. Quality excludes failed, timeout, partial, and invalid runs rather than scoring them as zero.</text>
+  <text class="small" x="36" y="1711">The JSON comparison and full aggregates are normative; this deterministic SVG is a derived presentation.</text>
+</svg>

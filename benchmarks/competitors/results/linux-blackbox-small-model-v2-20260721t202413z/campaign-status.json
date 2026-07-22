@@ -1,0 +1,15 @@
+{
+  "cleanup_status": "succeeded",
+  "executed_runs": 48,
+  "fingerprint": "benchmark-campaign://sha256/8365fd19986dae1b7a4867f5088ac064e3a533ca514a5cda1da45ed3e8e7aeef",
+  "matrix_id": "competitor-matrix://sha256/e76d05e8c0197489f3f3b9fb2b90b35d344d3be674d8c585c8130cd1d45dd7d0",
+  "policy_violations": 0,
+  "resumed_runs": 0,
+  "schema_version": "1.0",
+  "status": "completed_with_failures",
+  "status_counts": {
+    "failed": 5,
+    "succeeded": 36,
+    "timeout": 7
+  }
+}

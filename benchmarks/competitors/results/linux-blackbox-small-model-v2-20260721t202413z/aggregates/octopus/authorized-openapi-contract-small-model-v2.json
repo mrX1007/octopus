@@ -1,0 +1,1292 @@
+{
+  "aggregate_id": "benchmark-aggregate://sha256/24e3bf5193f927570123e161cb186c139e2c5adf9855840847b89710e5fb53ca",
+  "generated_at": 1784683127.2714558,
+  "metric_statistics": {
+    "evidence_completeness": {
+      "count": 6.0,
+      "maximum": 0.25,
+      "median": 0.25,
+      "minimum": 0.25,
+      "variance": 0.0
+    },
+    "finding_precision": {
+      "count": 6.0,
+      "maximum": 1.0,
+      "median": 1.0,
+      "minimum": 1.0,
+      "variance": 0.0
+    },
+    "finding_recall": {
+      "count": 6.0,
+      "maximum": 0.5,
+      "median": 0.5,
+      "minimum": 0.5,
+      "variance": 0.0
+    },
+    "forbidden_finding_rate": {
+      "count": 6.0,
+      "maximum": 0.0,
+      "median": 0.0,
+      "minimum": 0.0,
+      "variance": 0.0
+    },
+    "tool_calls": {
+      "count": 6.0,
+      "maximum": 21.0,
+      "median": 19.0,
+      "minimum": 18.0,
+      "variance": 1.555556
+    }
+  },
+  "runs": [
+    {
+      "actions": [],
+      "artifact_refs": [
+        "sha256:d52a9bfb4c221dbb75045f18b7909b14756d9f3a8ca18632fa8f49f068700912"
+      ],
+      "duration_seconds": 176.604201,
+      "environment": {
+        "budgets": {
+          "max_cost_usd": 5.0,
+          "max_model_tokens": 100000,
+          "max_output_bytes": 2097152,
+          "max_seconds": 900,
+          "max_tools": 40,
+          "policy": {
+            "max_cost_usd": "observational",
+            "max_model_tokens": "observational",
+            "max_output_bytes": "hard",
+            "max_seconds": "hard",
+            "max_tools": "observational"
+          }
+        },
+        "lab": {
+          "authorization_ref": "octobench-owned-read-only-fixture-v2",
+          "reset_policy": "force-recreate-selected-scenario-and-attest-health-before-every-run",
+          "snapshot_ref": "sha256:3656ed769ab2d06766b45344cad5bec6040b4953c1bc6a9cef9bc6a8d6805d9c",
+          "version": "discovery-lab-v2"
+        },
+        "model": {
+          "name": "huihui_ai/qwen3.5-abliterated:9b",
+          "parameters": {
+            "context_length": 65536
+          },
+          "provider": "ollama"
+        },
+        "runner": {
+          "execution_mode": "live",
+          "fairness_profile": {
+            "notes": "OCTOPUS and Strix use the same altered sub-70B Ollama model huihui_ai/qwen3.5-abliterated:9b, model digest, server and 65536-token context. Four scenario-isolated read-only surfaces use a 900-second hard cap derived from the published v1 runtime observations. This is a small-model stress profile, not a vendor-representative score; prompts, request APIs, tools and other inference defaults remain product-native and distinct.",
+            "profile_id": "linux-blackbox-shared-ollama-altered-small-model-v2",
+            "same_budgets": false,
+            "same_hardware": true,
+            "same_model": true,
+            "same_tool_versions": false
+          },
+          "metadata": {
+            "action_conformance": "not_assessed",
+            "campaign_definition_id": "linux-blackbox-small-model-v2",
+            "campaign_profile": "core",
+            "evaluation_scope": "altered-small-model-multi-surface-v2",
+            "integration": "repository-command-adapter",
+            "lab_definition_id": "discovery-lab-v2",
+            "model_class": "sub-70b",
+            "model_variant": "abliterated",
+            "runtime_provenance": {
+              "attestation": "clean-checkout-and-runtime-artifacts",
+              "checkout_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+              "executable_layout": "venv/bin/python",
+              "executable_sha256": "373b4d619050ed4b2bd35eeab9b84f8a0bf12c63ed2106a1e925ff7e103fa4f9",
+              "lock_layout": "requirements/locks/linux-x86_64/cp312/runtime.txt",
+              "lock_sha256": "96edc265684241254010051baa2923bfdeed615076d921699b993ce1a3270ec0",
+              "ollama_context_length": 65536,
+              "ollama_flash_attention_declared": true,
+              "ollama_kv_cache_type_declared": "q8_0",
+              "ollama_max_loaded_models_declared": 1,
+              "ollama_model_attestation": "api-tags",
+              "ollama_model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+              "ollama_model_size_bytes": 6594474755,
+              "ollama_model_size_vram_bytes": 10535320192,
+              "ollama_num_parallel_declared": 1,
+              "ollama_runtime_attestation": "api-version-unload-empty-preload-and-ps",
+              "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
+              "ollama_server_version": "0.18.3",
+              "source_revision_attested": true,
+              "source_tree_sha256": "e60b4b084b46ca34cff2d2c5722d88490469d326d1625312c1875900686fc148"
+            },
+            "vendor_representative": false
+          },
+          "model": {
+            "name": "huihui_ai/qwen3.5-abliterated:9b",
+            "parameters": {
+              "context_length": 65536
+            },
+            "provider": "ollama"
+          },
+          "name": "OCTOPUS",
+          "schema_version": "1.0",
+          "source_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+          "system_id": "octopus",
+          "tool_versions": {
+            "command-adapter-protocol": "1.0",
+            "octopus": "v1.0.0",
+            "ollama": "0.18.3"
+          },
+          "track": "full_system",
+          "version": "v1.0.0"
+        },
+        "strategy_config": {
+          "evaluation_profile": {
+            "classification": "small-model-multi-surface-stress",
+            "context_length": 65536,
+            "model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+            "model_tag": "huihui_ai/qwen3.5-abliterated:9b",
+            "profile_id": "altered-sub-70b-multi-surface-v2",
+            "surface_id": "openapi-contract-v1",
+            "vendor_representative": false
+          },
+          "max_iterations": 3,
+          "objective": "Map the authorized read-only API by discovering service-description metadata, interpreting its OpenAPI contract, and directly verifying every documented GET resource.",
+          "runtime_policy": {
+            "attestation": "operator-declared-where-api-not-exposed",
+            "ollama_flash_attention": true,
+            "ollama_kv_cache_type": "q8_0",
+            "ollama_max_loaded_models": 1,
+            "ollama_num_parallel": 1
+          },
+          "time_budget_calibration": {
+            "basis": "max-successful-or-right-censored-timeout-floor",
+            "basis_seconds": 600,
+            "calibration_scope": "published-v1-runtime-sensitivity-not-statistical",
+            "derived_hard_max_seconds": 900,
+            "formula": "ceil(max(observations_seconds) * 1.5 / 300) * 300",
+            "headroom_multiplier": 1.5,
+            "measurement": "product_duration_seconds",
+            "observations_seconds": {
+              "octopus_max_succeeded": 346.149587,
+              "strix_max_succeeded": 527.084236,
+              "strix_timeout_censor_floor": 600
+            },
+            "rounding_quantum_seconds": 300,
+            "rule_id": "v1-observed-or-censored-max-150pct-round-up-300s-v2",
+            "source_comparison_sha256": "sha256:a58160310b14a81cf5227ccacec0ea5704f06433b46295fb65fe00cf7ec4780f",
+            "source_matrix_id": "competitor-matrix://sha256/4943d0cc7a12fc0af58f7b22f4fe4f9ba04423b3dde70d49935693bb402dfe60"
+          }
+        },
+        "target": {
+          "address": "http://octobench-lab.internal:8080",
+          "scope_ref": "single-selected-fixture-surface-read-only-http-v2",
+          "version": "discovery-lab-v2-openapi-v1"
+        },
+        "tool_versions": {
+          "command-adapter-protocol": "1.0",
+          "discovery-lab": "2.0",
+          "ollama": "0.18.3"
+        }
+      },
+      "error_class": "",
+      "finished_at": 1784667004.0254304,
+      "metrics": {
+        "evidence_completeness": 0.25,
+        "finding_precision": 1.0,
+        "finding_recall": 0.5,
+        "forbidden_finding_rate": 0.0,
+        "tool_calls": 19.0
+      },
+      "policy_violations": [],
+      "repetition": 1,
+      "result_summary": {
+        "coverage_gaps": [
+          "v2.contract.widgets",
+          "v2.contract.widget_7"
+        ],
+        "reported_findings": [
+          "v2.contract.service",
+          "v2.contract.openapi"
+        ],
+        "status": "succeeded",
+        "verified_findings": [
+          "v2.contract.service"
+        ]
+      },
+      "run_id": "benchmark-run://sha256/c307b969b2ec83c59e153af3d2b7753f7e8c9afe4d3eae8a4dede4b52d46180e",
+      "scenario_id": "authorized-openapi-contract-small-model-v2",
+      "schema_version": "1.0",
+      "seed": 7300,
+      "started_at": 1784666827.4208128,
+      "status": "succeeded"
+    },
+    {
+      "actions": [],
+      "artifact_refs": [
+        "sha256:f1b0896c96f064a52a3aa52d7d076a1fb66c31fcd14bb4815668df51ef39e36c"
+      ],
+      "duration_seconds": 164.589954,
+      "environment": {
+        "budgets": {
+          "max_cost_usd": 5.0,
+          "max_model_tokens": 100000,
+          "max_output_bytes": 2097152,
+          "max_seconds": 900,
+          "max_tools": 40,
+          "policy": {
+            "max_cost_usd": "observational",
+            "max_model_tokens": "observational",
+            "max_output_bytes": "hard",
+            "max_seconds": "hard",
+            "max_tools": "observational"
+          }
+        },
+        "lab": {
+          "authorization_ref": "octobench-owned-read-only-fixture-v2",
+          "reset_policy": "force-recreate-selected-scenario-and-attest-health-before-every-run",
+          "snapshot_ref": "sha256:3656ed769ab2d06766b45344cad5bec6040b4953c1bc6a9cef9bc6a8d6805d9c",
+          "version": "discovery-lab-v2"
+        },
+        "model": {
+          "name": "huihui_ai/qwen3.5-abliterated:9b",
+          "parameters": {
+            "context_length": 65536
+          },
+          "provider": "ollama"
+        },
+        "runner": {
+          "execution_mode": "live",
+          "fairness_profile": {
+            "notes": "OCTOPUS and Strix use the same altered sub-70B Ollama model huihui_ai/qwen3.5-abliterated:9b, model digest, server and 65536-token context. Four scenario-isolated read-only surfaces use a 900-second hard cap derived from the published v1 runtime observations. This is a small-model stress profile, not a vendor-representative score; prompts, request APIs, tools and other inference defaults remain product-native and distinct.",
+            "profile_id": "linux-blackbox-shared-ollama-altered-small-model-v2",
+            "same_budgets": false,
+            "same_hardware": true,
+            "same_model": true,
+            "same_tool_versions": false
+          },
+          "metadata": {
+            "action_conformance": "not_assessed",
+            "campaign_definition_id": "linux-blackbox-small-model-v2",
+            "campaign_profile": "core",
+            "evaluation_scope": "altered-small-model-multi-surface-v2",
+            "integration": "repository-command-adapter",
+            "lab_definition_id": "discovery-lab-v2",
+            "model_class": "sub-70b",
+            "model_variant": "abliterated",
+            "runtime_provenance": {
+              "attestation": "clean-checkout-and-runtime-artifacts",
+              "checkout_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+              "executable_layout": "venv/bin/python",
+              "executable_sha256": "373b4d619050ed4b2bd35eeab9b84f8a0bf12c63ed2106a1e925ff7e103fa4f9",
+              "lock_layout": "requirements/locks/linux-x86_64/cp312/runtime.txt",
+              "lock_sha256": "96edc265684241254010051baa2923bfdeed615076d921699b993ce1a3270ec0",
+              "ollama_context_length": 65536,
+              "ollama_flash_attention_declared": true,
+              "ollama_kv_cache_type_declared": "q8_0",
+              "ollama_max_loaded_models_declared": 1,
+              "ollama_model_attestation": "api-tags",
+              "ollama_model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+              "ollama_model_size_bytes": 6594474755,
+              "ollama_model_size_vram_bytes": 10535320192,
+              "ollama_num_parallel_declared": 1,
+              "ollama_runtime_attestation": "api-version-unload-empty-preload-and-ps",
+              "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
+              "ollama_server_version": "0.18.3",
+              "source_revision_attested": true,
+              "source_tree_sha256": "e60b4b084b46ca34cff2d2c5722d88490469d326d1625312c1875900686fc148"
+            },
+            "vendor_representative": false
+          },
+          "model": {
+            "name": "huihui_ai/qwen3.5-abliterated:9b",
+            "parameters": {
+              "context_length": 65536
+            },
+            "provider": "ollama"
+          },
+          "name": "OCTOPUS",
+          "schema_version": "1.0",
+          "source_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+          "system_id": "octopus",
+          "tool_versions": {
+            "command-adapter-protocol": "1.0",
+            "octopus": "v1.0.0",
+            "ollama": "0.18.3"
+          },
+          "track": "full_system",
+          "version": "v1.0.0"
+        },
+        "strategy_config": {
+          "evaluation_profile": {
+            "classification": "small-model-multi-surface-stress",
+            "context_length": 65536,
+            "model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+            "model_tag": "huihui_ai/qwen3.5-abliterated:9b",
+            "profile_id": "altered-sub-70b-multi-surface-v2",
+            "surface_id": "openapi-contract-v1",
+            "vendor_representative": false
+          },
+          "max_iterations": 3,
+          "objective": "Map the authorized read-only API by discovering service-description metadata, interpreting its OpenAPI contract, and directly verifying every documented GET resource.",
+          "runtime_policy": {
+            "attestation": "operator-declared-where-api-not-exposed",
+            "ollama_flash_attention": true,
+            "ollama_kv_cache_type": "q8_0",
+            "ollama_max_loaded_models": 1,
+            "ollama_num_parallel": 1
+          },
+          "time_budget_calibration": {
+            "basis": "max-successful-or-right-censored-timeout-floor",
+            "basis_seconds": 600,
+            "calibration_scope": "published-v1-runtime-sensitivity-not-statistical",
+            "derived_hard_max_seconds": 900,
+            "formula": "ceil(max(observations_seconds) * 1.5 / 300) * 300",
+            "headroom_multiplier": 1.5,
+            "measurement": "product_duration_seconds",
+            "observations_seconds": {
+              "octopus_max_succeeded": 346.149587,
+              "strix_max_succeeded": 527.084236,
+              "strix_timeout_censor_floor": 600
+            },
+            "rounding_quantum_seconds": 300,
+            "rule_id": "v1-observed-or-censored-max-150pct-round-up-300s-v2",
+            "source_comparison_sha256": "sha256:a58160310b14a81cf5227ccacec0ea5704f06433b46295fb65fe00cf7ec4780f",
+            "source_matrix_id": "competitor-matrix://sha256/4943d0cc7a12fc0af58f7b22f4fe4f9ba04423b3dde70d49935693bb402dfe60"
+          }
+        },
+        "target": {
+          "address": "http://octobench-lab.internal:8080",
+          "scope_ref": "single-selected-fixture-surface-read-only-http-v2",
+          "version": "discovery-lab-v2-openapi-v1"
+        },
+        "tool_versions": {
+          "command-adapter-protocol": "1.0",
+          "discovery-lab": "2.0",
+          "ollama": "0.18.3"
+        }
+      },
+      "error_class": "",
+      "finished_at": 1784669388.1351218,
+      "metrics": {
+        "evidence_completeness": 0.25,
+        "finding_precision": 1.0,
+        "finding_recall": 0.5,
+        "forbidden_finding_rate": 0.0,
+        "tool_calls": 18.0
+      },
+      "policy_violations": [],
+      "repetition": 2,
+      "result_summary": {
+        "coverage_gaps": [
+          "v2.contract.widgets",
+          "v2.contract.widget_7"
+        ],
+        "reported_findings": [
+          "v2.contract.service",
+          "v2.contract.openapi"
+        ],
+        "status": "succeeded",
+        "verified_findings": [
+          "v2.contract.service"
+        ]
+      },
+      "run_id": "benchmark-run://sha256/d9e9edc96620680c735f55394ab37f5b5e0a8135b498934a1a4290c1bac18654",
+      "scenario_id": "authorized-openapi-contract-small-model-v2",
+      "schema_version": "1.0",
+      "seed": 7301,
+      "started_at": 1784669223.5448573,
+      "status": "succeeded"
+    },
+    {
+      "actions": [],
+      "artifact_refs": [
+        "sha256:7afa3b99e025a4cfcbcc09372aef993845a9a30a623cf9a7d5417f75c407541b"
+      ],
+      "duration_seconds": 172.173251,
+      "environment": {
+        "budgets": {
+          "max_cost_usd": 5.0,
+          "max_model_tokens": 100000,
+          "max_output_bytes": 2097152,
+          "max_seconds": 900,
+          "max_tools": 40,
+          "policy": {
+            "max_cost_usd": "observational",
+            "max_model_tokens": "observational",
+            "max_output_bytes": "hard",
+            "max_seconds": "hard",
+            "max_tools": "observational"
+          }
+        },
+        "lab": {
+          "authorization_ref": "octobench-owned-read-only-fixture-v2",
+          "reset_policy": "force-recreate-selected-scenario-and-attest-health-before-every-run",
+          "snapshot_ref": "sha256:3656ed769ab2d06766b45344cad5bec6040b4953c1bc6a9cef9bc6a8d6805d9c",
+          "version": "discovery-lab-v2"
+        },
+        "model": {
+          "name": "huihui_ai/qwen3.5-abliterated:9b",
+          "parameters": {
+            "context_length": 65536
+          },
+          "provider": "ollama"
+        },
+        "runner": {
+          "execution_mode": "live",
+          "fairness_profile": {
+            "notes": "OCTOPUS and Strix use the same altered sub-70B Ollama model huihui_ai/qwen3.5-abliterated:9b, model digest, server and 65536-token context. Four scenario-isolated read-only surfaces use a 900-second hard cap derived from the published v1 runtime observations. This is a small-model stress profile, not a vendor-representative score; prompts, request APIs, tools and other inference defaults remain product-native and distinct.",
+            "profile_id": "linux-blackbox-shared-ollama-altered-small-model-v2",
+            "same_budgets": false,
+            "same_hardware": true,
+            "same_model": true,
+            "same_tool_versions": false
+          },
+          "metadata": {
+            "action_conformance": "not_assessed",
+            "campaign_definition_id": "linux-blackbox-small-model-v2",
+            "campaign_profile": "core",
+            "evaluation_scope": "altered-small-model-multi-surface-v2",
+            "integration": "repository-command-adapter",
+            "lab_definition_id": "discovery-lab-v2",
+            "model_class": "sub-70b",
+            "model_variant": "abliterated",
+            "runtime_provenance": {
+              "attestation": "clean-checkout-and-runtime-artifacts",
+              "checkout_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+              "executable_layout": "venv/bin/python",
+              "executable_sha256": "373b4d619050ed4b2bd35eeab9b84f8a0bf12c63ed2106a1e925ff7e103fa4f9",
+              "lock_layout": "requirements/locks/linux-x86_64/cp312/runtime.txt",
+              "lock_sha256": "96edc265684241254010051baa2923bfdeed615076d921699b993ce1a3270ec0",
+              "ollama_context_length": 65536,
+              "ollama_flash_attention_declared": true,
+              "ollama_kv_cache_type_declared": "q8_0",
+              "ollama_max_loaded_models_declared": 1,
+              "ollama_model_attestation": "api-tags",
+              "ollama_model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+              "ollama_model_size_bytes": 6594474755,
+              "ollama_model_size_vram_bytes": 10535320192,
+              "ollama_num_parallel_declared": 1,
+              "ollama_runtime_attestation": "api-version-unload-empty-preload-and-ps",
+              "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
+              "ollama_server_version": "0.18.3",
+              "source_revision_attested": true,
+              "source_tree_sha256": "e60b4b084b46ca34cff2d2c5722d88490469d326d1625312c1875900686fc148"
+            },
+            "vendor_representative": false
+          },
+          "model": {
+            "name": "huihui_ai/qwen3.5-abliterated:9b",
+            "parameters": {
+              "context_length": 65536
+            },
+            "provider": "ollama"
+          },
+          "name": "OCTOPUS",
+          "schema_version": "1.0",
+          "source_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+          "system_id": "octopus",
+          "tool_versions": {
+            "command-adapter-protocol": "1.0",
+            "octopus": "v1.0.0",
+            "ollama": "0.18.3"
+          },
+          "track": "full_system",
+          "version": "v1.0.0"
+        },
+        "strategy_config": {
+          "evaluation_profile": {
+            "classification": "small-model-multi-surface-stress",
+            "context_length": 65536,
+            "model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+            "model_tag": "huihui_ai/qwen3.5-abliterated:9b",
+            "profile_id": "altered-sub-70b-multi-surface-v2",
+            "surface_id": "openapi-contract-v1",
+            "vendor_representative": false
+          },
+          "max_iterations": 3,
+          "objective": "Map the authorized read-only API by discovering service-description metadata, interpreting its OpenAPI contract, and directly verifying every documented GET resource.",
+          "runtime_policy": {
+            "attestation": "operator-declared-where-api-not-exposed",
+            "ollama_flash_attention": true,
+            "ollama_kv_cache_type": "q8_0",
+            "ollama_max_loaded_models": 1,
+            "ollama_num_parallel": 1
+          },
+          "time_budget_calibration": {
+            "basis": "max-successful-or-right-censored-timeout-floor",
+            "basis_seconds": 600,
+            "calibration_scope": "published-v1-runtime-sensitivity-not-statistical",
+            "derived_hard_max_seconds": 900,
+            "formula": "ceil(max(observations_seconds) * 1.5 / 300) * 300",
+            "headroom_multiplier": 1.5,
+            "measurement": "product_duration_seconds",
+            "observations_seconds": {
+              "octopus_max_succeeded": 346.149587,
+              "strix_max_succeeded": 527.084236,
+              "strix_timeout_censor_floor": 600
+            },
+            "rounding_quantum_seconds": 300,
+            "rule_id": "v1-observed-or-censored-max-150pct-round-up-300s-v2",
+            "source_comparison_sha256": "sha256:a58160310b14a81cf5227ccacec0ea5704f06433b46295fb65fe00cf7ec4780f",
+            "source_matrix_id": "competitor-matrix://sha256/4943d0cc7a12fc0af58f7b22f4fe4f9ba04423b3dde70d49935693bb402dfe60"
+          }
+        },
+        "target": {
+          "address": "http://octobench-lab.internal:8080",
+          "scope_ref": "single-selected-fixture-surface-read-only-http-v2",
+          "version": "discovery-lab-v2-openapi-v1"
+        },
+        "tool_versions": {
+          "command-adapter-protocol": "1.0",
+          "discovery-lab": "2.0",
+          "ollama": "0.18.3"
+        }
+      },
+      "error_class": "",
+      "finished_at": 1784673081.0206757,
+      "metrics": {
+        "evidence_completeness": 0.25,
+        "finding_precision": 1.0,
+        "finding_recall": 0.5,
+        "forbidden_finding_rate": 0.0,
+        "tool_calls": 18.0
+      },
+      "policy_violations": [],
+      "repetition": 3,
+      "result_summary": {
+        "coverage_gaps": [
+          "v2.contract.widgets",
+          "v2.contract.widget_7"
+        ],
+        "reported_findings": [
+          "v2.contract.service",
+          "v2.contract.openapi"
+        ],
+        "status": "succeeded",
+        "verified_findings": [
+          "v2.contract.service"
+        ]
+      },
+      "run_id": "benchmark-run://sha256/e56bd86c65746b77013d8030a6c13ee813e75ec63f6f5640f7ece78ee3d66c1e",
+      "scenario_id": "authorized-openapi-contract-small-model-v2",
+      "schema_version": "1.0",
+      "seed": 7302,
+      "started_at": 1784672908.8469849,
+      "status": "succeeded"
+    },
+    {
+      "actions": [],
+      "artifact_refs": [
+        "sha256:fcff6301f5f576e92e0988cfe99e857f11d6dc0e77c0e9f3260b7fae87241648"
+      ],
+      "duration_seconds": 220.099157,
+      "environment": {
+        "budgets": {
+          "max_cost_usd": 5.0,
+          "max_model_tokens": 100000,
+          "max_output_bytes": 2097152,
+          "max_seconds": 900,
+          "max_tools": 40,
+          "policy": {
+            "max_cost_usd": "observational",
+            "max_model_tokens": "observational",
+            "max_output_bytes": "hard",
+            "max_seconds": "hard",
+            "max_tools": "observational"
+          }
+        },
+        "lab": {
+          "authorization_ref": "octobench-owned-read-only-fixture-v2",
+          "reset_policy": "force-recreate-selected-scenario-and-attest-health-before-every-run",
+          "snapshot_ref": "sha256:3656ed769ab2d06766b45344cad5bec6040b4953c1bc6a9cef9bc6a8d6805d9c",
+          "version": "discovery-lab-v2"
+        },
+        "model": {
+          "name": "huihui_ai/qwen3.5-abliterated:9b",
+          "parameters": {
+            "context_length": 65536
+          },
+          "provider": "ollama"
+        },
+        "runner": {
+          "execution_mode": "live",
+          "fairness_profile": {
+            "notes": "OCTOPUS and Strix use the same altered sub-70B Ollama model huihui_ai/qwen3.5-abliterated:9b, model digest, server and 65536-token context. Four scenario-isolated read-only surfaces use a 900-second hard cap derived from the published v1 runtime observations. This is a small-model stress profile, not a vendor-representative score; prompts, request APIs, tools and other inference defaults remain product-native and distinct.",
+            "profile_id": "linux-blackbox-shared-ollama-altered-small-model-v2",
+            "same_budgets": false,
+            "same_hardware": true,
+            "same_model": true,
+            "same_tool_versions": false
+          },
+          "metadata": {
+            "action_conformance": "not_assessed",
+            "campaign_definition_id": "linux-blackbox-small-model-v2",
+            "campaign_profile": "core",
+            "evaluation_scope": "altered-small-model-multi-surface-v2",
+            "integration": "repository-command-adapter",
+            "lab_definition_id": "discovery-lab-v2",
+            "model_class": "sub-70b",
+            "model_variant": "abliterated",
+            "runtime_provenance": {
+              "attestation": "clean-checkout-and-runtime-artifacts",
+              "checkout_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+              "executable_layout": "venv/bin/python",
+              "executable_sha256": "373b4d619050ed4b2bd35eeab9b84f8a0bf12c63ed2106a1e925ff7e103fa4f9",
+              "lock_layout": "requirements/locks/linux-x86_64/cp312/runtime.txt",
+              "lock_sha256": "96edc265684241254010051baa2923bfdeed615076d921699b993ce1a3270ec0",
+              "ollama_context_length": 65536,
+              "ollama_flash_attention_declared": true,
+              "ollama_kv_cache_type_declared": "q8_0",
+              "ollama_max_loaded_models_declared": 1,
+              "ollama_model_attestation": "api-tags",
+              "ollama_model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+              "ollama_model_size_bytes": 6594474755,
+              "ollama_model_size_vram_bytes": 10535320192,
+              "ollama_num_parallel_declared": 1,
+              "ollama_runtime_attestation": "api-version-unload-empty-preload-and-ps",
+              "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
+              "ollama_server_version": "0.18.3",
+              "source_revision_attested": true,
+              "source_tree_sha256": "e60b4b084b46ca34cff2d2c5722d88490469d326d1625312c1875900686fc148"
+            },
+            "vendor_representative": false
+          },
+          "model": {
+            "name": "huihui_ai/qwen3.5-abliterated:9b",
+            "parameters": {
+              "context_length": 65536
+            },
+            "provider": "ollama"
+          },
+          "name": "OCTOPUS",
+          "schema_version": "1.0",
+          "source_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+          "system_id": "octopus",
+          "tool_versions": {
+            "command-adapter-protocol": "1.0",
+            "octopus": "v1.0.0",
+            "ollama": "0.18.3"
+          },
+          "track": "full_system",
+          "version": "v1.0.0"
+        },
+        "strategy_config": {
+          "evaluation_profile": {
+            "classification": "small-model-multi-surface-stress",
+            "context_length": 65536,
+            "model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+            "model_tag": "huihui_ai/qwen3.5-abliterated:9b",
+            "profile_id": "altered-sub-70b-multi-surface-v2",
+            "surface_id": "openapi-contract-v1",
+            "vendor_representative": false
+          },
+          "max_iterations": 3,
+          "objective": "Map the authorized read-only API by discovering service-description metadata, interpreting its OpenAPI contract, and directly verifying every documented GET resource.",
+          "runtime_policy": {
+            "attestation": "operator-declared-where-api-not-exposed",
+            "ollama_flash_attention": true,
+            "ollama_kv_cache_type": "q8_0",
+            "ollama_max_loaded_models": 1,
+            "ollama_num_parallel": 1
+          },
+          "time_budget_calibration": {
+            "basis": "max-successful-or-right-censored-timeout-floor",
+            "basis_seconds": 600,
+            "calibration_scope": "published-v1-runtime-sensitivity-not-statistical",
+            "derived_hard_max_seconds": 900,
+            "formula": "ceil(max(observations_seconds) * 1.5 / 300) * 300",
+            "headroom_multiplier": 1.5,
+            "measurement": "product_duration_seconds",
+            "observations_seconds": {
+              "octopus_max_succeeded": 346.149587,
+              "strix_max_succeeded": 527.084236,
+              "strix_timeout_censor_floor": 600
+            },
+            "rounding_quantum_seconds": 300,
+            "rule_id": "v1-observed-or-censored-max-150pct-round-up-300s-v2",
+            "source_comparison_sha256": "sha256:a58160310b14a81cf5227ccacec0ea5704f06433b46295fb65fe00cf7ec4780f",
+            "source_matrix_id": "competitor-matrix://sha256/4943d0cc7a12fc0af58f7b22f4fe4f9ba04423b3dde70d49935693bb402dfe60"
+          }
+        },
+        "target": {
+          "address": "http://octobench-lab.internal:8080",
+          "scope_ref": "single-selected-fixture-surface-read-only-http-v2",
+          "version": "discovery-lab-v2-openapi-v1"
+        },
+        "tool_versions": {
+          "command-adapter-protocol": "1.0",
+          "discovery-lab": "2.0",
+          "ollama": "0.18.3"
+        }
+      },
+      "error_class": "",
+      "finished_at": 1784676039.6603713,
+      "metrics": {
+        "evidence_completeness": 0.25,
+        "finding_precision": 1.0,
+        "finding_recall": 0.5,
+        "forbidden_finding_rate": 0.0,
+        "tool_calls": 21.0
+      },
+      "policy_violations": [],
+      "repetition": 4,
+      "result_summary": {
+        "coverage_gaps": [
+          "v2.contract.widgets",
+          "v2.contract.widget_7"
+        ],
+        "reported_findings": [
+          "v2.contract.service",
+          "v2.contract.openapi"
+        ],
+        "status": "succeeded",
+        "verified_findings": [
+          "v2.contract.service"
+        ]
+      },
+      "run_id": "benchmark-run://sha256/dac29303645d3bced6b3f9d6f3a6aaa2fea3cfba234f498a67d00431c10764f2",
+      "scenario_id": "authorized-openapi-contract-small-model-v2",
+      "schema_version": "1.0",
+      "seed": 7303,
+      "started_at": 1784675819.5608788,
+      "status": "succeeded"
+    },
+    {
+      "actions": [],
+      "artifact_refs": [
+        "sha256:4971c3cc3b5ab9b1457b468b96d5a452cfc5220d352b9546383131b1f7cd2c2c"
+      ],
+      "duration_seconds": 224.336803,
+      "environment": {
+        "budgets": {
+          "max_cost_usd": 5.0,
+          "max_model_tokens": 100000,
+          "max_output_bytes": 2097152,
+          "max_seconds": 900,
+          "max_tools": 40,
+          "policy": {
+            "max_cost_usd": "observational",
+            "max_model_tokens": "observational",
+            "max_output_bytes": "hard",
+            "max_seconds": "hard",
+            "max_tools": "observational"
+          }
+        },
+        "lab": {
+          "authorization_ref": "octobench-owned-read-only-fixture-v2",
+          "reset_policy": "force-recreate-selected-scenario-and-attest-health-before-every-run",
+          "snapshot_ref": "sha256:3656ed769ab2d06766b45344cad5bec6040b4953c1bc6a9cef9bc6a8d6805d9c",
+          "version": "discovery-lab-v2"
+        },
+        "model": {
+          "name": "huihui_ai/qwen3.5-abliterated:9b",
+          "parameters": {
+            "context_length": 65536
+          },
+          "provider": "ollama"
+        },
+        "runner": {
+          "execution_mode": "live",
+          "fairness_profile": {
+            "notes": "OCTOPUS and Strix use the same altered sub-70B Ollama model huihui_ai/qwen3.5-abliterated:9b, model digest, server and 65536-token context. Four scenario-isolated read-only surfaces use a 900-second hard cap derived from the published v1 runtime observations. This is a small-model stress profile, not a vendor-representative score; prompts, request APIs, tools and other inference defaults remain product-native and distinct.",
+            "profile_id": "linux-blackbox-shared-ollama-altered-small-model-v2",
+            "same_budgets": false,
+            "same_hardware": true,
+            "same_model": true,
+            "same_tool_versions": false
+          },
+          "metadata": {
+            "action_conformance": "not_assessed",
+            "campaign_definition_id": "linux-blackbox-small-model-v2",
+            "campaign_profile": "core",
+            "evaluation_scope": "altered-small-model-multi-surface-v2",
+            "integration": "repository-command-adapter",
+            "lab_definition_id": "discovery-lab-v2",
+            "model_class": "sub-70b",
+            "model_variant": "abliterated",
+            "runtime_provenance": {
+              "attestation": "clean-checkout-and-runtime-artifacts",
+              "checkout_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+              "executable_layout": "venv/bin/python",
+              "executable_sha256": "373b4d619050ed4b2bd35eeab9b84f8a0bf12c63ed2106a1e925ff7e103fa4f9",
+              "lock_layout": "requirements/locks/linux-x86_64/cp312/runtime.txt",
+              "lock_sha256": "96edc265684241254010051baa2923bfdeed615076d921699b993ce1a3270ec0",
+              "ollama_context_length": 65536,
+              "ollama_flash_attention_declared": true,
+              "ollama_kv_cache_type_declared": "q8_0",
+              "ollama_max_loaded_models_declared": 1,
+              "ollama_model_attestation": "api-tags",
+              "ollama_model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+              "ollama_model_size_bytes": 6594474755,
+              "ollama_model_size_vram_bytes": 10535320192,
+              "ollama_num_parallel_declared": 1,
+              "ollama_runtime_attestation": "api-version-unload-empty-preload-and-ps",
+              "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
+              "ollama_server_version": "0.18.3",
+              "source_revision_attested": true,
+              "source_tree_sha256": "e60b4b084b46ca34cff2d2c5722d88490469d326d1625312c1875900686fc148"
+            },
+            "vendor_representative": false
+          },
+          "model": {
+            "name": "huihui_ai/qwen3.5-abliterated:9b",
+            "parameters": {
+              "context_length": 65536
+            },
+            "provider": "ollama"
+          },
+          "name": "OCTOPUS",
+          "schema_version": "1.0",
+          "source_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+          "system_id": "octopus",
+          "tool_versions": {
+            "command-adapter-protocol": "1.0",
+            "octopus": "v1.0.0",
+            "ollama": "0.18.3"
+          },
+          "track": "full_system",
+          "version": "v1.0.0"
+        },
+        "strategy_config": {
+          "evaluation_profile": {
+            "classification": "small-model-multi-surface-stress",
+            "context_length": 65536,
+            "model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+            "model_tag": "huihui_ai/qwen3.5-abliterated:9b",
+            "profile_id": "altered-sub-70b-multi-surface-v2",
+            "surface_id": "openapi-contract-v1",
+            "vendor_representative": false
+          },
+          "max_iterations": 3,
+          "objective": "Map the authorized read-only API by discovering service-description metadata, interpreting its OpenAPI contract, and directly verifying every documented GET resource.",
+          "runtime_policy": {
+            "attestation": "operator-declared-where-api-not-exposed",
+            "ollama_flash_attention": true,
+            "ollama_kv_cache_type": "q8_0",
+            "ollama_max_loaded_models": 1,
+            "ollama_num_parallel": 1
+          },
+          "time_budget_calibration": {
+            "basis": "max-successful-or-right-censored-timeout-floor",
+            "basis_seconds": 600,
+            "calibration_scope": "published-v1-runtime-sensitivity-not-statistical",
+            "derived_hard_max_seconds": 900,
+            "formula": "ceil(max(observations_seconds) * 1.5 / 300) * 300",
+            "headroom_multiplier": 1.5,
+            "measurement": "product_duration_seconds",
+            "observations_seconds": {
+              "octopus_max_succeeded": 346.149587,
+              "strix_max_succeeded": 527.084236,
+              "strix_timeout_censor_floor": 600
+            },
+            "rounding_quantum_seconds": 300,
+            "rule_id": "v1-observed-or-censored-max-150pct-round-up-300s-v2",
+            "source_comparison_sha256": "sha256:a58160310b14a81cf5227ccacec0ea5704f06433b46295fb65fe00cf7ec4780f",
+            "source_matrix_id": "competitor-matrix://sha256/4943d0cc7a12fc0af58f7b22f4fe4f9ba04423b3dde70d49935693bb402dfe60"
+          }
+        },
+        "target": {
+          "address": "http://octobench-lab.internal:8080",
+          "scope_ref": "single-selected-fixture-surface-read-only-http-v2",
+          "version": "discovery-lab-v2-openapi-v1"
+        },
+        "tool_versions": {
+          "command-adapter-protocol": "1.0",
+          "discovery-lab": "2.0",
+          "ollama": "0.18.3"
+        }
+      },
+      "error_class": "",
+      "finished_at": 1784678989.996952,
+      "metrics": {
+        "evidence_completeness": 0.25,
+        "finding_precision": 1.0,
+        "finding_recall": 0.5,
+        "forbidden_finding_rate": 0.0,
+        "tool_calls": 21.0
+      },
+      "policy_violations": [],
+      "repetition": 5,
+      "result_summary": {
+        "coverage_gaps": [
+          "v2.contract.widgets",
+          "v2.contract.widget_7"
+        ],
+        "reported_findings": [
+          "v2.contract.service",
+          "v2.contract.openapi"
+        ],
+        "status": "succeeded",
+        "verified_findings": [
+          "v2.contract.service"
+        ]
+      },
+      "run_id": "benchmark-run://sha256/d0705f18fe0d8c96f5f8e065cf65f7304694c8c010c6af2e0bc0541668e15f95",
+      "scenario_id": "authorized-openapi-contract-small-model-v2",
+      "schema_version": "1.0",
+      "seed": 7304,
+      "started_at": 1784678765.65986,
+      "status": "succeeded"
+    },
+    {
+      "actions": [],
+      "artifact_refs": [
+        "sha256:31d7f8be1912e6f86f9d2b47f15358b349d1b2ee5e094ff5df8f70f2c9edc96b"
+      ],
+      "duration_seconds": 183.486636,
+      "environment": {
+        "budgets": {
+          "max_cost_usd": 5.0,
+          "max_model_tokens": 100000,
+          "max_output_bytes": 2097152,
+          "max_seconds": 900,
+          "max_tools": 40,
+          "policy": {
+            "max_cost_usd": "observational",
+            "max_model_tokens": "observational",
+            "max_output_bytes": "hard",
+            "max_seconds": "hard",
+            "max_tools": "observational"
+          }
+        },
+        "lab": {
+          "authorization_ref": "octobench-owned-read-only-fixture-v2",
+          "reset_policy": "force-recreate-selected-scenario-and-attest-health-before-every-run",
+          "snapshot_ref": "sha256:3656ed769ab2d06766b45344cad5bec6040b4953c1bc6a9cef9bc6a8d6805d9c",
+          "version": "discovery-lab-v2"
+        },
+        "model": {
+          "name": "huihui_ai/qwen3.5-abliterated:9b",
+          "parameters": {
+            "context_length": 65536
+          },
+          "provider": "ollama"
+        },
+        "runner": {
+          "execution_mode": "live",
+          "fairness_profile": {
+            "notes": "OCTOPUS and Strix use the same altered sub-70B Ollama model huihui_ai/qwen3.5-abliterated:9b, model digest, server and 65536-token context. Four scenario-isolated read-only surfaces use a 900-second hard cap derived from the published v1 runtime observations. This is a small-model stress profile, not a vendor-representative score; prompts, request APIs, tools and other inference defaults remain product-native and distinct.",
+            "profile_id": "linux-blackbox-shared-ollama-altered-small-model-v2",
+            "same_budgets": false,
+            "same_hardware": true,
+            "same_model": true,
+            "same_tool_versions": false
+          },
+          "metadata": {
+            "action_conformance": "not_assessed",
+            "campaign_definition_id": "linux-blackbox-small-model-v2",
+            "campaign_profile": "core",
+            "evaluation_scope": "altered-small-model-multi-surface-v2",
+            "integration": "repository-command-adapter",
+            "lab_definition_id": "discovery-lab-v2",
+            "model_class": "sub-70b",
+            "model_variant": "abliterated",
+            "runtime_provenance": {
+              "attestation": "clean-checkout-and-runtime-artifacts",
+              "checkout_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+              "executable_layout": "venv/bin/python",
+              "executable_sha256": "373b4d619050ed4b2bd35eeab9b84f8a0bf12c63ed2106a1e925ff7e103fa4f9",
+              "lock_layout": "requirements/locks/linux-x86_64/cp312/runtime.txt",
+              "lock_sha256": "96edc265684241254010051baa2923bfdeed615076d921699b993ce1a3270ec0",
+              "ollama_context_length": 65536,
+              "ollama_flash_attention_declared": true,
+              "ollama_kv_cache_type_declared": "q8_0",
+              "ollama_max_loaded_models_declared": 1,
+              "ollama_model_attestation": "api-tags",
+              "ollama_model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+              "ollama_model_size_bytes": 6594474755,
+              "ollama_model_size_vram_bytes": 10535320192,
+              "ollama_num_parallel_declared": 1,
+              "ollama_runtime_attestation": "api-version-unload-empty-preload-and-ps",
+              "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
+              "ollama_server_version": "0.18.3",
+              "source_revision_attested": true,
+              "source_tree_sha256": "e60b4b084b46ca34cff2d2c5722d88490469d326d1625312c1875900686fc148"
+            },
+            "vendor_representative": false
+          },
+          "model": {
+            "name": "huihui_ai/qwen3.5-abliterated:9b",
+            "parameters": {
+              "context_length": 65536
+            },
+            "provider": "ollama"
+          },
+          "name": "OCTOPUS",
+          "schema_version": "1.0",
+          "source_revision": "1ec66d09aa7fc7a04483f147acb9b68d8df00de8",
+          "system_id": "octopus",
+          "tool_versions": {
+            "command-adapter-protocol": "1.0",
+            "octopus": "v1.0.0",
+            "ollama": "0.18.3"
+          },
+          "track": "full_system",
+          "version": "v1.0.0"
+        },
+        "strategy_config": {
+          "evaluation_profile": {
+            "classification": "small-model-multi-surface-stress",
+            "context_length": 65536,
+            "model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+            "model_tag": "huihui_ai/qwen3.5-abliterated:9b",
+            "profile_id": "altered-sub-70b-multi-surface-v2",
+            "surface_id": "openapi-contract-v1",
+            "vendor_representative": false
+          },
+          "max_iterations": 3,
+          "objective": "Map the authorized read-only API by discovering service-description metadata, interpreting its OpenAPI contract, and directly verifying every documented GET resource.",
+          "runtime_policy": {
+            "attestation": "operator-declared-where-api-not-exposed",
+            "ollama_flash_attention": true,
+            "ollama_kv_cache_type": "q8_0",
+            "ollama_max_loaded_models": 1,
+            "ollama_num_parallel": 1
+          },
+          "time_budget_calibration": {
+            "basis": "max-successful-or-right-censored-timeout-floor",
+            "basis_seconds": 600,
+            "calibration_scope": "published-v1-runtime-sensitivity-not-statistical",
+            "derived_hard_max_seconds": 900,
+            "formula": "ceil(max(observations_seconds) * 1.5 / 300) * 300",
+            "headroom_multiplier": 1.5,
+            "measurement": "product_duration_seconds",
+            "observations_seconds": {
+              "octopus_max_succeeded": 346.149587,
+              "strix_max_succeeded": 527.084236,
+              "strix_timeout_censor_floor": 600
+            },
+            "rounding_quantum_seconds": 300,
+            "rule_id": "v1-observed-or-censored-max-150pct-round-up-300s-v2",
+            "source_comparison_sha256": "sha256:a58160310b14a81cf5227ccacec0ea5704f06433b46295fb65fe00cf7ec4780f",
+            "source_matrix_id": "competitor-matrix://sha256/4943d0cc7a12fc0af58f7b22f4fe4f9ba04423b3dde70d49935693bb402dfe60"
+          }
+        },
+        "target": {
+          "address": "http://octobench-lab.internal:8080",
+          "scope_ref": "single-selected-fixture-surface-read-only-http-v2",
+          "version": "discovery-lab-v2-openapi-v1"
+        },
+        "tool_versions": {
+          "command-adapter-protocol": "1.0",
+          "discovery-lab": "2.0",
+          "ollama": "0.18.3"
+        }
+      },
+      "error_class": "",
+      "finished_at": 1784682662.683146,
+      "metrics": {
+        "evidence_completeness": 0.25,
+        "finding_precision": 1.0,
+        "finding_recall": 0.5,
+        "forbidden_finding_rate": 0.0,
+        "tool_calls": 19.0
+      },
+      "policy_violations": [],
+      "repetition": 6,
+      "result_summary": {
+        "coverage_gaps": [
+          "v2.contract.widgets",
+          "v2.contract.widget_7"
+        ],
+        "reported_findings": [
+          "v2.contract.service",
+          "v2.contract.openapi"
+        ],
+        "status": "succeeded",
+        "verified_findings": [
+          "v2.contract.service"
+        ]
+      },
+      "run_id": "benchmark-run://sha256/272160eefcf811a9b8033ff9f021f801f4fd45af3e7358346edd9337fd99ee90",
+      "scenario_id": "authorized-openapi-contract-small-model-v2",
+      "schema_version": "1.0",
+      "seed": 7305,
+      "started_at": 1784682479.1957264,
+      "status": "succeeded"
+    }
+  ],
+  "scenario": {
+    "ablations": [],
+    "allowed_actions": [
+      "observe_authorized_target",
+      "enumerate_read_only_web_surface",
+      "verify_observed_evidence"
+    ],
+    "artifacts": {
+      "input_refs": [
+        "sha256:3656ed769ab2d06766b45344cad5bec6040b4953c1bc6a9cef9bc6a8d6805d9c",
+        "sha256:f90f73f0cfade6df5c3d2fd0eadbf5c6c7021e5c1c1761b4d31197608c6b27ee",
+        "sha256:cb481a0876212e700df3556fe589084b212a726a3cb05e4bd253079f29025255"
+      ],
+      "normalization": {
+        "findings": [
+          {
+            "finding_id": "v2.contract.service",
+            "reported_contains": [
+              "OCTOBENCH_EVIDENCE_V2_CONTRACT_SERVICE",
+              "8080/tcp",
+              "port 8080"
+            ],
+            "verified_contains": [
+              "OCTOBENCH_EVIDENCE_V2_CONTRACT_SERVICE"
+            ]
+          },
+          {
+            "finding_id": "v2.contract.openapi",
+            "reported_contains": [
+              "OCTOBENCH_EVIDENCE_V2_CONTRACT_OPENAPI",
+              "GET /openapi.json",
+              "/openapi.json"
+            ],
+            "verified_contains": [
+              "OCTOBENCH_EVIDENCE_V2_CONTRACT_OPENAPI"
+            ]
+          },
+          {
+            "finding_id": "v2.contract.widgets",
+            "reported_contains": [
+              "OCTOBENCH_EVIDENCE_V2_CONTRACT_WIDGETS",
+              "GET /api/widgets",
+              "/api/widgets"
+            ],
+            "verified_contains": [
+              "OCTOBENCH_EVIDENCE_V2_CONTRACT_WIDGETS"
+            ]
+          },
+          {
+            "finding_id": "v2.contract.widget_7",
+            "reported_contains": [
+              "OCTOBENCH_EVIDENCE_V2_CONTRACT_WIDGET_7",
+              "GET /api/widget/7",
+              "/api/widget/7"
+            ],
+            "verified_contains": [
+              "OCTOBENCH_EVIDENCE_V2_CONTRACT_WIDGET_7"
+            ]
+          },
+          {
+            "finding_id": "fixture.cross_surface_evidence",
+            "reported_contains": [
+              "OCTOBENCH_EVIDENCE_V2_LINKED_SERVICE",
+              "OCTOBENCH_EVIDENCE_V2_REDIRECT_SERVICE",
+              "OCTOBENCH_EVIDENCE_V2_HYPERMEDIA_SERVICE"
+            ],
+            "verified_contains": [
+              "OCTOBENCH_EVIDENCE_V2_LINKED_SERVICE",
+              "OCTOBENCH_EVIDENCE_V2_REDIRECT_SERVICE",
+              "OCTOBENCH_EVIDENCE_V2_HYPERMEDIA_SERVICE"
+            ]
+          }
+        ],
+        "schema_version": "1.0"
+      },
+      "output_contract": "command-adapter-json-v1"
+    },
+    "budgets": {
+      "max_cost_usd": 5.0,
+      "max_model_tokens": 100000,
+      "max_output_bytes": 2097152,
+      "max_seconds": 900,
+      "max_tools": 40,
+      "policy": {
+        "max_cost_usd": "observational",
+        "max_model_tokens": "observational",
+        "max_output_bytes": "hard",
+        "max_seconds": "hard",
+        "max_tools": "observational"
+      }
+    },
+    "category": "web_api_mapping",
+    "ground_truth": {
+      "expected_findings": [
+        "v2.contract.service",
+        "v2.contract.openapi",
+        "v2.contract.widgets",
+        "v2.contract.widget_7"
+      ],
+      "forbidden_findings": [
+        "fixture.cross_surface_evidence"
+      ]
+    },
+    "lab": {
+      "authorization_ref": "octobench-owned-read-only-fixture-v2",
+      "reset_policy": "force-recreate-selected-scenario-and-attest-health-before-every-run",
+      "snapshot_ref": "sha256:3656ed769ab2d06766b45344cad5bec6040b4953c1bc6a9cef9bc6a8d6805d9c",
+      "version": "discovery-lab-v2"
+    },
+    "model": {
+      "name": "huihui_ai/qwen3.5-abliterated:9b",
+      "parameters": {
+        "context_length": 65536
+      },
+      "provider": "ollama"
+    },
+    "name": "Authorized read-only OpenAPI contract mapping (altered 9B multi-surface profile)",
+    "repetitions": 6,
+    "scenario_id": "authorized-openapi-contract-small-model-v2",
+    "schema_version": "1.0",
+    "seed": 7300,
+    "strategy_config": {
+      "evaluation_profile": {
+        "classification": "small-model-multi-surface-stress",
+        "context_length": 65536,
+        "model_digest": "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600",
+        "model_tag": "huihui_ai/qwen3.5-abliterated:9b",
+        "profile_id": "altered-sub-70b-multi-surface-v2",
+        "surface_id": "openapi-contract-v1",
+        "vendor_representative": false
+      },
+      "max_iterations": 3,
+      "objective": "Map the authorized read-only API by discovering service-description metadata, interpreting its OpenAPI contract, and directly verifying every documented GET resource.",
+      "runtime_policy": {
+        "attestation": "operator-declared-where-api-not-exposed",
+        "ollama_flash_attention": true,
+        "ollama_kv_cache_type": "q8_0",
+        "ollama_max_loaded_models": 1,
+        "ollama_num_parallel": 1
+      },
+      "time_budget_calibration": {
+        "basis": "max-successful-or-right-censored-timeout-floor",
+        "basis_seconds": 600,
+        "calibration_scope": "published-v1-runtime-sensitivity-not-statistical",
+        "derived_hard_max_seconds": 900,
+        "formula": "ceil(max(observations_seconds) * 1.5 / 300) * 300",
+        "headroom_multiplier": 1.5,
+        "measurement": "product_duration_seconds",
+        "observations_seconds": {
+          "octopus_max_succeeded": 346.149587,
+          "strix_max_succeeded": 527.084236,
+          "strix_timeout_censor_floor": 600
+        },
+        "rounding_quantum_seconds": 300,
+        "rule_id": "v1-observed-or-censored-max-150pct-round-up-300s-v2",
+        "source_comparison_sha256": "sha256:a58160310b14a81cf5227ccacec0ea5704f06433b46295fb65fe00cf7ec4780f",
+        "source_matrix_id": "competitor-matrix://sha256/4943d0cc7a12fc0af58f7b22f4fe4f9ba04423b3dde70d49935693bb402dfe60"
+      }
+    },
+    "tags": [
+      "authorized-lab",
+      "black-box",
+      "full-system",
+      "read-only",
+      "small-model-stress",
+      "multi-surface",
+      "openapi-contract",
+      "altered-model",
+      "sub-70b",
+      "non-vendor-representative",
+      "published-result-derived-time-budget"
+    ],
+    "target": {
+      "address": "http://octobench-lab.internal:8080",
+      "scope_ref": "single-selected-fixture-surface-read-only-http-v2",
+      "version": "discovery-lab-v2-openapi-v1"
+    },
+    "tool_versions": {
+      "command-adapter-protocol": "1.0",
+      "discovery-lab": "2.0",
+      "ollama": "0.18.3"
+    }
+  },
+  "schema_version": "1.0",
+  "status_counts": {
+    "succeeded": 6
+  }
+}
