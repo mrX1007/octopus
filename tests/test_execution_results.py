@@ -23,6 +23,8 @@ from core.execution.results import MAX_ARTIFACT_BYTES, MAX_ARTIFACT_REFS, MAX_ME
 from core.killchain.exploits.base import ExploitResult
 from core.plugins.base import PluginResult
 
+pytestmark = pytest.mark.contract
+
 
 @dataclass
 class FirstToolResult:

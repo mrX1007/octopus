@@ -393,14 +393,30 @@ class KnowledgeGraph:
             if value in (None, ""):
                 continue
             if key in union_keys:
-                previous = merged.get(key) or []
-                left = previous if isinstance(previous, list) else [previous]
+                previous_items = merged.get(key) or []
+                left_items = (
+                    previous_items
+                    if isinstance(previous_items, list)
+                    else [previous_items]
+                )
                 right = value if isinstance(value, list) else [value]
-                merged[key] = list(dict.fromkeys((*left, *right)))
+                merged[key] = list(dict.fromkeys((*left_items, *right)))
             elif key == "first_seen" and merged.get(key) is not None:
                 merged[key] = min(float(merged[key]), float(value))
             elif key == "last_seen" and merged.get(key) is not None:
                 merged[key] = max(float(merged[key]), float(value))
+            elif key == "provenance" and isinstance(value, dict):
+                previous_provenance = merged.get(key)
+                existing_provenance = (
+                    previous_provenance
+                    if isinstance(previous_provenance, dict)
+                    else {}
+                )
+                # Each fact owns one current provenance record. Replacing an
+                # incoming fact's record is required for one-way redaction:
+                # recursively merging it would retain superseded plaintext
+                # execution identifiers from the prior projection.
+                merged[key] = {**existing_provenance, **value}
             elif isinstance(value, dict) and isinstance(merged.get(key), dict):
                 merged[key] = cls._merge_properties(merged[key], value)
             elif key.startswith("current_"):
@@ -418,8 +434,10 @@ class KnowledgeGraph:
     ) -> dict[str, Any]:
         """Derive the current edge/node judgement from per-fact provenance.
 
-        Top-level lists deliberately retain historical references.  The
-        ``current_*`` fields and ``assessment_status`` describe only the
+        Top-level lists deliberately retain historical references, except for
+        source execution identifiers: those are rebuilt from each fact's
+        current provenance so late redaction can purge superseded plaintext.
+        The ``current_*`` fields and ``assessment_status`` describe only the
         currently effective support, so a contradicted fact cannot erase a
         second fact that still verifies the same relationship.
         """
@@ -451,17 +469,27 @@ class KnowledgeGraph:
         else:
             normalized["contradiction_state"] = "none"
 
-        def collect(key: str) -> list[Any]:
+        def collect(key: str, source_records: list[dict[str, Any]]) -> list[Any]:
             values: list[Any] = []
-            for record in effective_records:
+            for record in source_records:
                 raw = record.get(f"current_{key}") or record.get(key) or []
                 items = raw if isinstance(raw, list) else [raw]
                 values.extend(item for item in items if item not in (None, ""))
             return list(dict.fromkeys(values))
 
-        normalized["current_assessment_refs"] = collect("assessment_refs")
-        normalized["current_evidence_fact_ids"] = collect("evidence_fact_ids")
-        normalized["current_source_execution_ids"] = collect("source_execution_ids")
+        normalized["source_execution_ids"] = collect("source_execution_ids", records)
+        normalized["current_assessment_refs"] = collect(
+            "assessment_refs",
+            effective_records,
+        )
+        normalized["current_evidence_fact_ids"] = collect(
+            "evidence_fact_ids",
+            effective_records,
+        )
+        normalized["current_source_execution_ids"] = collect(
+            "source_execution_ids",
+            effective_records,
+        )
         confidences = [
             int(item.get("confidence", 0) or 0)
             for item in effective_records
@@ -789,7 +817,7 @@ class KnowledgeGraph:
         } for r in rows]
 
     def get_edges_from(self, node_id: str,
-                       edge_type: EdgeType = None) -> list[dict]:
+                       edge_type: EdgeType | None = None) -> list[dict]:
         """Get all outgoing edges from a node."""
         with self._connect() as conn:
             canonical_id = self._resolve_node_id_in_conn(conn, node_id)
@@ -811,7 +839,7 @@ class KnowledgeGraph:
         } for r in rows]
 
     def get_edges_to(self, node_id: str,
-                     edge_type: EdgeType = None) -> list[dict]:
+                     edge_type: EdgeType | None = None) -> list[dict]:
         """Get all incoming edges to a node."""
         with self._connect() as conn:
             canonical_id = self._resolve_node_id_in_conn(conn, node_id)

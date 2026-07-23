@@ -5,6 +5,9 @@
 # `requirements/test.txt`; production deployments should select only the
 # optional profiles they actually enable.
 -r requirements/runtime.txt
+-r requirements/c2.txt
+-r requirements/reporting.txt
+-r requirements/osint-browser.txt
 -r requirements/dev.txt
 -r requirements/mysql.txt
 -r requirements/external-tools.txt

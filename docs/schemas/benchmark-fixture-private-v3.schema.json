@@ -1,0 +1,62 @@
+{
+  "$id": "https://octopus.local/schemas/benchmark-fixture-private-v3.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "generator": {
+      "additionalProperties": false,
+      "properties": {
+        "matched_fixture_seed": { "minimum": 0, "type": "integer" },
+        "version": { "const": "matched-variant-v1" }
+      },
+      "required": ["matched_fixture_seed", "version"],
+      "type": "object"
+    },
+    "lab_version": { "const": "discovery-lab-v3" },
+    "private_evaluation": {
+      "additionalProperties": false,
+      "properties": {
+        "completion_rule": { "type": "object" },
+        "truth_claims": { "items": { "type": "object" }, "type": "array" }
+      },
+      "required": ["completion_rule", "truth_claims"],
+      "type": "object"
+    },
+    "routes": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "body": { "type": "string" },
+          "content_type": { "type": "string" },
+          "delay_ms": { "maximum": 10000, "minimum": 0, "type": "integer" },
+          "evidence_ids": { "items": { "type": "string" }, "type": "array" },
+          "headers": { "additionalProperties": { "type": "string" }, "type": "object" },
+          "response_statuses": { "items": { "maximum": 599, "minimum": 100, "type": "integer" }, "type": "array" },
+          "route_id": { "type": "string" },
+          "status": { "maximum": 599, "minimum": 100, "type": "integer" },
+          "target": { "pattern": "^/", "type": "string" }
+        },
+        "required": ["body", "content_type", "delay_ms", "evidence_ids", "headers", "response_statuses", "route_id", "status", "target"],
+        "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+    },
+    "scenario": {
+      "additionalProperties": false,
+      "properties": {
+        "entry_target": { "pattern": "^/", "type": "string" },
+        "family": { "enum": ["canonical_alias_dedup", "clean_negative", "deep_navigation", "discovery_metadata", "documented_missing", "multi_service", "noisy_openapi", "pagination_cycle", "redirect_loop", "slow_dead_end", "static_js_discovery", "transient_recovery"] },
+        "scenario_id": { "type": "string" }
+      },
+      "required": ["entry_target", "family", "scenario_id"],
+      "type": "object"
+    },
+    "schema_version": { "const": "2.0" },
+    "variant_digest": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+    "variant_id": { "type": "string" }
+  },
+  "required": ["generator", "lab_version", "private_evaluation", "routes", "scenario", "schema_version", "variant_digest", "variant_id"],
+  "title": "OCTOPUS Benchmark v3 controller-private fixture",
+  "type": "object"
+}

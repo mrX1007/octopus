@@ -5,9 +5,17 @@ from contextlib import contextmanager, suppress
 from datetime import datetime
 from typing import Any, Optional, TypedDict
 
+from core.secrets import redact_data, redact_text
+
+mysql: Any
+MySQLConnectionPool: Any
+
 try:
-    import mysql.connector
-    from mysql.connector.pooling import MySQLConnectionPool
+    import mysql as _mysql_package
+    from mysql.connector.pooling import MySQLConnectionPool as _MySQLConnectionPool
+
+    mysql = _mysql_package
+    MySQLConnectionPool = _MySQLConnectionPool
 except ModuleNotFoundError as exc:
     # MariaDB/MySQL persistence is an optional deployment profile.  Keep the
     # module importable for unrelated unit tests and non-DB commands, while
@@ -16,8 +24,6 @@ except ModuleNotFoundError as exc:
         raise
     mysql = None
     MySQLConnectionPool = None
-
-from core.secrets import redact_data, redact_text
 
 logger = logging.getLogger("octopus.db")
 
@@ -401,9 +407,9 @@ def init_db():
                 conn.close()
 
 
-# Run migration on import
-with suppress(Exception):
-    init_db()
+# Schema migration is an explicit lifecycle operation.  Importing this module
+# must remain safe for collection, reporting-only commands, and read-only
+# environments that do not have a provisioned MySQL service.
 
 
 # WRITE FUNCTIONS
@@ -818,6 +824,7 @@ def get_session_analytics(sl_no: int) -> dict:
 
 if __name__ == "__main__":
     try:
+        init_db()
         conn = get_connection()
         print("[+] MariaDB connection successful.")
         print("[+] Database: octopus")

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.ai.evaluated_facts import EvaluatedFactSnapshot
+from core.ai.mission_store import TASK_DEFINITION_SCHEMA_VERSION
 from core.ai.pipeline_types import PipelineMixinBase
 from core.ai.task_scoring import TaskScoringSignals
 from core.execution import (
@@ -105,15 +107,33 @@ class PipelinePlanningMixin(PipelineMixinBase):
         scan_id: str,
         target: str,
         context: dict[str, Any],
+        *,
+        evaluated_fact_snapshot: EvaluatedFactSnapshot | None = None,
     ) -> list[dict[str, Any]]:
         """Reject hard provider failures before final execution policy checks."""
+        planning_snapshot = (
+            evaluated_fact_snapshot
+            if evaluated_fact_snapshot is not None
+            else EvaluatedFactSnapshot.build(
+                scan_id,
+                target,
+                self.fact_store.get_facts(scan_id, target),
+            )
+        )
+        facts = list(planning_snapshot.decision_facts())
+        if self.mission_id:
+            self.mission_store.store_evaluated_fact_snapshot(
+                self.mission_id,
+                planning_snapshot,
+            )
         compilation = self.plan_compiler.compile(
             plan,
             target=target,
-            facts=self.fact_store.get_facts(scan_id, target),
+            facts=facts,
             context=context,
             execution_context=self._execution_context(scan_id, target),
         )
+        evaluated_snapshot_ref = planning_snapshot.snapshot_ref
         for rejection in compilation.rejected:
             rejection_dict = dict(rejection)
             self.plan_rejections.append(rejection_dict)
@@ -138,7 +158,13 @@ class PipelinePlanningMixin(PipelineMixinBase):
                 f"({rejection_dict.get('reason')}"
                 f"{': ' + reasons if reasons else ''})"
             )
-        return [dict(step) for step in compilation.plan]
+        compiled_plan = []
+        for step in compilation.plan:
+            compiled_step = dict(step)
+            if evaluated_snapshot_ref:
+                compiled_step["evaluated_snapshot_ref"] = evaluated_snapshot_ref
+            compiled_plan.append(compiled_step)
+        return compiled_plan
 
     def _normalize_plan(self, plan, goal: str = ""):
         """Normalize LLM task names before execution and history tracking."""
@@ -260,13 +286,24 @@ class PipelinePlanningMixin(PipelineMixinBase):
             return forced_plan
 
         optimized = []
-        seen_tasks = set()
+        seen_tasks: set[tuple[str, str, Any, str]] = set()
         for step in plan:
             agent = step.get("agent")
             task = self.tool_registry.canonical_task(step.get("task"))
             if not agent or not task:
                 continue
-            if task in seen_tasks:
+            task_identity = (
+                str(agent),
+                task,
+                self._mission_task_scope_identity(
+                    self._mission_task_scope(step)
+                ),
+                str(
+                    step.get("task_definition_version")
+                    or TASK_DEFINITION_SCHEMA_VERSION
+                ),
+            )
+            if task_identity in seen_tasks:
                 continue
             if agent == "AnalysisAgent" and task != "analyze_vulnerabilities":
                 print(f"     [!] Dropping incompatible AnalysisAgent task: {task}")
@@ -274,7 +311,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
             if agent != "AnalysisAgent" and not self.tool_registry.has_task(task):
                 print(f"     [!] Dropping unknown planner task: {task}")
                 continue
-            seen_tasks.add(task)
+            seen_tasks.add(task_identity)
             optimized.append({**step, "task": task})
 
         return self._enrich_plan(optimized, goal, context)

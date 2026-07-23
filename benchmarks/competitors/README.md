@@ -4,6 +4,10 @@ This directory defines the publication contract for comparing OCTOPUS with
 other systems in an authorized, resettable lab. It is a live/integration track,
 not an extension of the built-in hermetic replay catalog.
 
+The additive [Benchmark v3 methodology](../../docs/benchmarks/benchmark-v3.md)
+defines generated blinded fixtures, schema-2.0 outcomes, frozen statistics,
+and non-mergeable tracks. The checked-in v1/v2 result bundles remain unchanged.
+
 The default `python -m core.benchmarks` command remains an in-process,
 deterministic OCTOPUS regression benchmark. It does not launch OCTOPUS as a
 scanner, call a model provider, use a network, or run a competitor. Never cite
@@ -32,7 +36,25 @@ out of normal JSON scenario/manifest discovery.
 
 ## Published live campaigns
 
-The first checked-in live result is the complete, checksum-verified
+The latest checked-in live result is the complete, checksum-verified
+[`linux-blackbox-small-model-v2-20260721t202413z`](results/linux-blackbox-small-model-v2-20260721t202413z/comparison.md)
+bundle. It contains 48 executions across four isolated read-only surfaces, six
+repetitions per system/scenario, and the same pinned altered Qwen 9B/Ollama
+profile used by v1.
+
+| System | Process terminal outcomes |
+| --- | --- |
+| OCTOPUS | 24 succeeded |
+| Strix 1.1.0 | 12 succeeded, 5 failed, 7 timed out at 900 s |
+
+These figures are execution-stability evidence, not task-completion results.
+Schema 1.1/v2 did not represent an independent task outcome, so a `succeeded`
+process must not be read as proof that its discovery task completed. The v2
+bundle also reports success-conditional precision, recall, and evidence values
+per surface, but it does not support a v3-style completed-task or verified-
+recall claim and declares no winner.
+
+The earlier v1 result is the complete, checksum-verified
 [`linux-blackbox-small-model-v1-20260721t134205z`](results/linux-blackbox-small-model-v1-20260721t134205z/comparison.md)
 bundle. It ran the authorized read-only discovery scenario six times per
 system on one Linux host with the exact altered Qwen 9B model/digest, Ollama
@@ -46,9 +68,10 @@ system on one Linux host with the exact altered Qwen 9B model/digest, Ollama
 ![Published OCTOPUS and Strix terminal outcomes with successful-run quality ranges](../../docs/benchmarks/linux-blackbox-small-model-v1-20260721t134205z.svg)
 
 The SVG above is a deterministic, non-normative derivative of the immutable
-v1 bundle; the bundle itself remains byte-for-byte unchanged. Every newly
-generated bundle embeds and checksums its own `comparison.svg` from
-`comparison.md`, so GitHub renders the graph beside the report.
+v1 bundle; the bundle itself remains byte-for-byte unchanged. New schema-1.1
+bundles embed and checksum `comparison.svg` from `comparison.md`. V3 has no
+`comparison.md`; it generates and checksums `comparison.svg` directly from the
+frozen analysis plan and statistics.
 
 The campaign status is intentionally `completed_with_failures`: all 12 runs,
 reset attestations, both aggregates and cleanup evidence are present, while
@@ -98,6 +121,13 @@ it is not part of this strict open-source comparison.
 
 ## Linux quick start
 
+Confirm the launcher flags against the current CLI before following the
+runbook:
+
+```bash
+./venv/bin/python -m core.benchmarks.competitors.launch --help
+```
+
 The supported launcher targets Linux x86_64 with glibc 2.34 or newer. Before
 starting, install Git, Docker with Compose and an accessible running daemon,
 CPython 3.12 and the model services or provider accounts you intend to use. GitHub and PyPI
@@ -144,10 +174,11 @@ detects one private host address and binds the lab only there;
 standalone lab control defaults to `127.0.0.1`. Optional explicit host, bind
 and port overrides are documented as comments in the template.
 
-For the calibrated `linux-blackbox-small-model-v1` and multi-surface
-`linux-blackbox-small-model-v2` definitions, use this exact
-private env configuration. The two acknowledgement values below are valid only
-after you have personally confirmed authorization and host isolation:
+For the calibrated `linux-blackbox-small-model-v1`, multi-surface
+`linux-blackbox-small-model-v2`, and generated blinded
+`linux-blackbox-small-model-v3` definitions, use this exact private env
+configuration. The two acknowledgement values below are valid only after you
+have personally confirmed authorization and host isolation:
 
 ```dotenv
 OCTOBENCH_ACK_AUTHORIZED=YES
@@ -169,8 +200,8 @@ LLM_API_BASE=http://127.0.0.1:11434
 LLM_API_KEY=
 ```
 
-Both small-model definitions are intentionally separate altered-model stress
-profiles. They require the exact tag
+All three small-model definitions are intentionally separate altered-model
+stress profiles. They require the exact tag
 `huihui_ai/qwen3.5-abliterated:9b`, server version `0.18.3`, context `65536`,
 flash attention `1`, and KV cache type `q8_0`; the live launcher also pins the
 attested model digest and fails closed if any value differs.
@@ -233,8 +264,8 @@ provenance records those values and model/VRAM byte sizes.
 Ollama does not expose those service settings through the API. Run the campaign
 against a dedicated idle Ollama endpoint; provenance marks the declarations as
 not independently API-attested.
-Both `linux-blackbox-small-model-v1` and
-`linux-blackbox-small-model-v2` additionally require and record
+The `linux-blackbox-small-model-v1`, `linux-blackbox-small-model-v2`, and
+`linux-blackbox-small-model-v3` definitions additionally require and record
 `OCTOBENCH_OLLAMA_FLASH_ATTENTION=1` and
 `OCTOBENCH_OLLAMA_KV_CACHE_TYPE=q8_0`; these must match the service drop-in.
 The context value is also passed to OCTOPUS, while Strix uses the verified
@@ -260,7 +291,33 @@ running a system:
   --prepare-only
 ```
 
-Three checked-in definitions are available. `linux-blackbox-v1` is the
+For v3, first add a private 32–64-character hexadecimal base seed. Batch and
+host IDs are optional attested design labels; they default to `batch-1` and a
+deterministic local runtime identity:
+
+```dotenv
+OCTOBENCH_V3_BASE_FIXTURE_SEED=<32-to-64-hexadecimal-characters>
+OCTOBENCH_V3_BATCH_ID=batch-1
+OCTOBENCH_V3_HOST_ID=<lowercase-host-attestation-id>
+```
+
+Then inspect its generated scenarios and frozen plan without launching either
+product:
+
+```bash
+./venv/bin/python -m core.benchmarks.competitors.launch \
+  --campaign-id linux-blackbox-small-model-v3-check \
+  --campaign-definition linux-blackbox-small-model-v3 \
+  --profile core \
+  --environment-file benchmarks/competitors/secrets.env \
+  --prepare-only
+```
+
+The launcher requires the v3 base seed but never serializes it directly. Do
+not reuse a prepared campaign ID for a later run: generated state is
+write-once, so use a fresh ID.
+
+Four checked-in definitions are available. `linux-blackbox-v1` is the
 backward-compatible default 300-second smoke contract. The explicitly selected
 `linux-blackbox-small-model-v1` freezes the altered 9B model tag/digest,
 Ollama 0.18.3, 65536-token context, q8_0 KV policy and a 600-second hard cap.
@@ -271,7 +328,13 @@ definition retains those runtime pins and adds four scenario-isolated surfaces:
 linked navigation, OpenAPI contract discovery, same-origin relative redirects
 and JSON hypermedia pagination. Its shared 900-second hard cap is derived with
 the same 150%/300-second rule from the published v1 maximum successful duration
-and its right-censored 600-second timeouts.
+and its right-censored 600-second timeouts. The v3 definition retains the
+pinned small-model runtime and 900-second per-run cap, but moves to 12 generated
+blinded read-only fixture families, schema-2.0 outcomes, an independently
+frozen plan, and 12 paired repetitions per system/scenario. It schedules 288
+product executions and belongs only to `small-model-stress-v3`; its sequential
+worst-case product-time allowance is 72 hours before reset, health, cleanup,
+and publication overhead.
 
 Use a fresh immutable ID for the repeated small-model campaign:
 
@@ -305,6 +368,34 @@ git push -u origin "$(git branch --show-current)"
 `git status --short` must print nothing before a publishable run; the launcher
 rejects a dirty attested source checkout. Ignored benchmark state and the
 private env file do not appear there.
+
+Run v3 only under a fresh ID after reviewing the generated plan and the
+[v3 campaign contract](campaigns/linux-blackbox-small-model-v3/README.md):
+
+```bash
+git status --short
+CAMPAIGN_ID="linux-blackbox-small-model-v3-$(date -u +%Y%m%dt%H%M%Sz)"
+./venv/bin/python -m core.benchmarks.competitors.launch \
+  --campaign-id "$CAMPAIGN_ID" \
+  --campaign-definition linux-blackbox-small-model-v3 \
+  --profile core \
+  --environment-file benchmarks/competitors/secrets.env
+
+BUNDLE="benchmarks/competitors/results/$CAMPAIGN_ID"
+./venv/bin/python -c \
+  'import json,sys; from core.benchmarks.v3 import verify_v3_results; print(json.dumps(verify_v3_results(sys.argv[1]), sort_keys=True))' \
+  "$BUNDLE"
+```
+
+The accepted verifier output identifies `small-model-stress-v3` and all 288
+scheduled runs. V3 publication checksum-covers the frozen plan, summary run
+table, full schema-2.0 run records, controller request-ledger chains,
+statistics, deterministic `comparison.svg`, publication manifest, and sanitized campaign
+context with reset/health/cleanup evidence, provenance, and post-closure
+fixture reveals. Verification regenerates the summaries from those raw records
+and validates each ledger chain. There is no published v3 bundle in this
+repository today; do not cite the runnable definition as a result or
+superiority claim.
 
 `--campaign-definition` selects the checked-in contract;
 `--campaign-id` identifies one execution and all of its generated, journal and
@@ -439,9 +530,9 @@ has no dirty-tree override.
 
 Bootstrap and live execution are not free. Initial source downloads, Python
 environments and container images can consume multiple gigabytes and take tens
-of minutes. The balanced launcher runs six repetitions per system for both
-profiles; a campaign can take tens of minutes to hours and
-can incur model-provider, cloud and tool charges. The
+of minutes. The v1/v2 launcher runs six repetitions per system/scenario; the
+full v3 definition runs 12. A campaign can take tens of minutes to days and can
+incur model-provider, cloud and tool charges. The
 launcher hard-bounds wall time and captured output. Vendor CLIs do not expose a
 uniform enforceable token/tool/cost cutoff, so those declared budgets are
 conformance targets, not spending guarantees; `same_budgets` is therefore
@@ -563,6 +654,17 @@ The output object uses the existing `BenchmarkRunner` mapping:
 }
 ```
 
+V3 adds a bounded `reported_claims` list whose source is the product-native
+final report. Text-report adapters include only the complete values of explicit
+final `Claim:`/`Finding:` records. OCTOPUS includes only complete `detail`
+values from the canonical machine report assertion sections
+`verified_vulnerabilities`, `access_findings`, `misconfigurations`,
+`observations`, and `hypotheses_candidates`. Neither adapter searches raw tool
+output or the fact store for claims. In particular, observing an
+`OCTOBENCH_V3_...` nonce is not itself a claim; the product must assert it in
+its final native report. Full record text is preserved, so extra invented text
+remains an unsupported claim instead of being stripped away.
+
 Action and finding IDs must be canonical campaign IDs. For shipped third-party
 black-box agents, internal per-tool action conformance is `N/A` (`not
 assessed`): the adapter must not fabricate an action stream or claim
@@ -598,8 +700,9 @@ catalog. A valid campaign scenario must:
 
 Restore the same lab snapshot before every repetition, clear product state and
 caches, and verify lab health before starting the timed interval. The supported
-launcher records a deterministic forward/reverse rotation: six repetitions in
-either profile give every system every schedule position equally often.
+launcher records a deterministic balanced rotation. V1/v2 use six repetitions
+per system/scenario; v3 uses 12 paired repetitions and gives both systems every
+schedule position equally often.
 Custom low-level campaigns must publish their own counterbalancing policy.
 Preserve a failed reset as a campaign failure; do not continue on a
 contaminated target.
@@ -671,6 +774,8 @@ violation. Timeout and partial counts are published separately and included in
 
 ## Publication layout
 
+Schema-1.1 v1/v2 bundles use this layout:
+
 Use one immutable campaign ID and keep inputs beside outputs:
 
 ```text
@@ -693,6 +798,25 @@ benchmarks/competitors/results/<campaign-id>/
 ├── schedule.json
 └── SHA256SUMS
 ```
+
+V3 bundles are deliberately separate and flat:
+
+```text
+benchmarks/competitors/results/<campaign-id>/
+├── analysis-plan.json
+├── campaign-context.json
+├── comparison.svg
+├── ledgers.jsonl
+├── publication.json
+├── runs.csv
+├── runs.jsonl
+├── statistics.json
+└── SHA256SUMS
+```
+
+The v3 verifier checksum-validates the exact file set, rebuilds statistics and
+`comparison.svg`, and validates every controller ledger against the run
+records. It does not expect `comparison.md` or schema-1.1 aggregate folders.
 
 `comparison.json` is the machine-readable matrix and embeds public system,
 scenario, execution-mode, fairness and completeness metadata. It excludes

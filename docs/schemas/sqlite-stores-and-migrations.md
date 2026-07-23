@@ -6,9 +6,9 @@ schema semantics do not change.
 
 | Store owner | Version | Principal tables | Authority and retention |
 | --- | --- | --- | --- |
-| `FactStore` | evolving compatible base schema | `facts`, `fact_observations`, `hypotheses`, `command_results` | Durable evidence and execution-result source of truth. Canonical fact uniqueness is `(scan_id, host, type, value)`; observations remain separate. |
+| `FactStore` | evolving compatible base schema | `facts`, `fact_observations`, `fact_observation_executions`, `hypotheses`, `command_results`, `scan_completion_generations`, `command_completion_claims`, `fact_assessment_projection_outbox` | Durable evidence and execution-result source of truth. Canonical fact uniqueness is `(scan_id, host, type, value)`; observations retain source/method/execution provenance. Retained keyed scan generations and completion claims fence reset races and conflicting idempotency-key reuse before parsing, while the outbox durably repairs the graph read model after assessment changes. |
 | `FactAssessmentStore` | `1.1` | `fact_assessment_schema`, `fact_assessments`, `fact_assessment_evidence`, `fact_assessment_executions`, `fact_assessment_heads` | Immutable judgement history plus one current head and stable rule ID per fact. Stored in the FactStore database. |
-| `MissionStore` | `1.0` | `mission_lifecycle_schema`, `missions`, `mission_tasks`, `mission_task_dependencies`, `mission_task_attempts` | Crash-recoverable mission/task state, dependency graph, attempts, outcomes, and evidence/execution references. |
+| `MissionStore` facade; schema/migrations in `core.ai.mission_store_schema` | `1.4` | `mission_lifecycle_schema`, `missions`, `mission_tasks`, `mission_task_dependencies`, `mission_task_attempts`, `mission_task_retry_commands`, `mission_evaluated_fact_snapshots` | Crash-recoverable mission/task state, scoped versioned task identity, retry/backoff scheduling, attempts, outcomes, and complete content-addressed evaluated-fact snapshots referenced by tasks. The facade composes focused task, replan, codec, and maintenance layers without creating another store. |
 | `KnowledgeGraph` | `2.0` | `knowledge_graph_schema`, `nodes`, `edges`, `node_aliases`, `graph_fact_projections` | Rebuildable semantic projection with canonical entity normalization metadata. |
 | `ProviderTelemetryStore` | `1.0` | `provider_telemetry_schema`, `provider_telemetry_events` | Bounded provider/capability/target-class observations used for selection; not mission truth. |
 | `DecisionTraceStore` | `1.0` | `decision_trace_schema`, `decision_events` | Bounded, idempotent decision events. Metrics are calculated from these events and the report projection. |
@@ -21,10 +21,28 @@ schema semantics do not change.
   instead of guessing a downgrade.
 - Fact ingestion serializes first observation and uses a database unique index,
   so concurrent duplicate input converges on one canonical fact.
+- Versioned execution completion reserves a hashed idempotency key before
+  parsing. Its scope and request fingerprint are immutable; exact replay reads
+  the completed result, while an abandoned pending owner can be replaced only
+  after its bounded lease expires. Each completion-owned fact insert validates
+  and renews that owner in the same immediate write transaction. `clear_scan()`
+  rejects an unexpired pending owner, advances a retained generation keyed from
+  the scan identity, and fences pre-claim or expired owners before deleting scan
+  state. Production captures that generation before dispatch; generation-only
+  tokens protect legacy completions without an idempotency key as well.
 - Assessment transitions use deterministic transition keys. Replaying one
   transition does not create a second assessment.
-- Mission identities, task keys, and attempt numbers are stable. Only one
-  running attempt per task is permitted by a partial unique index.
+- Fact batches read facts, observations, assessment heads/provenance, and
+  execution outcomes inside one explicit deferred transaction and evaluate
+  freshness at one captured instant.
+- Mission identities, scoped/versioned task keys, and attempt numbers are
+  stable. Only one running attempt per task is permitted by a partial unique
+  index. Compatibility `agent/task` keys are deliberately non-unique and may
+  be used without a typed scope only when they resolve to one row.
+- Typed task-scope entity IDs must pass the canonical graph identity validator;
+  legacy labels use a distinct keyed legacy-scope codec. Evaluated snapshot
+  payloads are mission-owned and checked against their content-addressed
+  reference when resolved after restart.
 - Graph projection identity is `(fact_id, assessment_id,
   normalization_version)` and stores a projection fingerprint.
 - Provider and decision events use stable unique event keys/IDs and enforce

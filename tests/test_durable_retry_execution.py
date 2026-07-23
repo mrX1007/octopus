@@ -14,11 +14,19 @@ from core.ai.mission_store import (
 )
 from core.ai.outcomes import TaskOutcome
 from core.ai.pipeline import AIPipeline
+from core.tools.registry import get_tool
 
 pytestmark = pytest.mark.contract
 
 TARGET = "10.0.0.5"
 RETRY_COMMAND = f"nuclei_safe http://{TARGET}"
+
+
+def _make_registered_tools_hermetic(monkeypatch, *names: str) -> None:
+    for name in names:
+        tool_def = get_tool(name)
+        assert tool_def is not None
+        monkeypatch.setattr(tool_def, "is_available", lambda: True)
 
 
 def _failed(agent: str, task: str) -> TaskOutcome:
@@ -144,7 +152,11 @@ def test_retry_scheduler_reauthorizes_policy_before_using_grant():
     assert decision.retry is False
 
 
-def test_timeout_retry_allowlist_survives_restart_and_executes_command_once(tmp_path):
+def test_timeout_retry_allowlist_survives_restart_and_executes_command_once(
+    tmp_path,
+    monkeypatch,
+):
+    _make_registered_tools_hermetic(monkeypatch, "nuclei_safe")
     db_path = tmp_path / "restart-retry.db"
     calls = []
 
@@ -188,6 +200,20 @@ def test_timeout_retry_allowlist_survives_restart_and_executes_command_once(tmp_
     pending = first.mission_store.snapshot(first.mission_id).tasks[0]
     assert pending.status == "pending"
     assert pending.retry_count == 1
+    scoped_sibling = first.mission_store.register_task(
+        first.mission_id,
+        "DiscoveryAgent",
+        "service_verification",
+        scope="service:http",
+        capability="service.verification",
+    )
+    first.mission_store.block_task(
+        first.mission_id,
+        scoped_sibling.agent,
+        scoped_sibling.task,
+        "not_selected",
+        task_id=scoped_sibling.task_id,
+    )
     first._interrupt_mission("simulated_restart")
 
     def success_runner(command):
@@ -203,19 +229,28 @@ def test_timeout_retry_allowlist_survives_restart_and_executes_command_once(tmp_
     resumed._reset_runtime_state()
     resumed._start_mission("scan-restart-retry", TARGET)
     resume_plan = resumed._resumable_mission_plan()
-    assert resume_plan == [
-        {"agent": "DiscoveryAgent", "task": "service_verification"}
-    ]
+    assert [
+        {"agent": step["agent"], "task": step["task"]}
+        for step in resume_plan
+    ] == [{"agent": "DiscoveryAgent", "task": "service_verification"}]
+    assert resume_plan[0]["task_id"] == pending.task_id
+    assert resume_plan[0]["task_scope"] == pending.task_scope
     resumed._register_mission_plan(resume_plan)
 
-    hydrated = resumed.mission_store.snapshot(resumed.mission_id).tasks[0]
+    hydrated = next(
+        task
+        for task in resumed.mission_store.snapshot(resumed.mission_id).tasks
+        if task.task_id == pending.task_id
+    )
     assert hydrated.scope == "service:https"
     assert hydrated.capability == "service.verification"
     assert hydrated.retry_budget == 2
     assert resumed._begin_task_attempt(
         "DiscoveryAgent",
         "service_verification",
+        task_id=hydrated.task_id,
     ).attempt_number == 2
+    assert resumed._active_task_id == hydrated.task_id
     assert resumed._active_retry_command_keys == {
         resumed.command_scheduler.command_key(RETRY_COMMAND)
     }
@@ -251,8 +286,15 @@ def test_timeout_retry_allowlist_survives_restart_and_executes_command_once(tmp_
     assert repeated["command_result"]["skipped"] is True
     assert repeated["command_result"]["skip_reason"] == "duplicate_command_key"
     final = resumed.mission_store.snapshot(resumed.mission_id)
-    assert final.tasks[0].status == "completed"
-    assert [attempt.status for attempt in final.attempts] == ["failed", "completed"]
+    assert next(
+        task for task in final.tasks if task.task_id == pending.task_id
+    ).status == "completed"
+    assert [
+        attempt.status
+        for attempt in final.attempts
+        if attempt.task_id == pending.task_id
+    ] == ["failed", "completed"]
+    assert resumed._active_task_id is None
 
 
 class _Registry:
@@ -285,7 +327,11 @@ class _Registry:
         }
 
 
-def test_retrying_prerequisite_defers_then_releases_dependent_task(tmp_path):
+def test_retrying_prerequisite_defers_then_releases_dependent_task(
+    tmp_path,
+    monkeypatch,
+):
+    _make_registered_tools_hermetic(monkeypatch, "nuclei_safe", "nmap")
     calls = []
     parent_calls = 0
 

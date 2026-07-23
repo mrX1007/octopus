@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from core.ai.command_scheduler import CommandDecision
 from core.ai.fact_store import FactStore
 from core.ai.runtime import PipelineRuntime
 from core.execution import ExecutionContext, ExecutionStatus
+
+pytestmark = pytest.mark.contract
 
 
 class StubScheduler:

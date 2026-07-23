@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from core.ai.evidence import EvidenceVerifier
-from core.ai.fact_assessment import AssessmentStatus
+from core.ai.fact_assessment import AssessmentStatus, FreshnessPolicy
 from core.ai.fact_store import FactStore
 from core.ai.reporting import build_finding_groups
 from core.ai.state_resolver import StateResolver
@@ -395,6 +395,64 @@ def test_evidence_verifier_persists_chain_and_execution_provenance(tmp_path):
     )
     assert rejected["status"] == "rejected"
     assert "mandatory" in rejected["reason"]
+
+
+@pytest.mark.parametrize("invalidity", ["stale", "degraded"])
+def test_evidence_verifier_rejects_non_current_service_evidence(
+    tmp_path,
+    invalidity,
+):
+    store = FactStore(
+        str(tmp_path / f"{invalidity}.db"),
+        assessment_policy=FreshnessPolicy(
+            default_max_age_seconds=1.0,
+            max_age_by_type=(("port_open", 1.0),),
+        ),
+        assessment_clock=lambda: 100.0,
+    )
+    fact_id = store.add_fact(
+        "scan",
+        "host",
+        "port_open",
+        "443/tcp (https)",
+        "nmap",
+        source_execution_ids=(f"exec-{invalidity}",),
+    )
+    if invalidity == "stale":
+        with store._get_conn() as conn:
+            conn.execute("UPDATE facts SET timestamp = 0 WHERE id = ?", (fact_id,))
+            conn.execute(
+                "UPDATE fact_observations SET timestamp = 0 WHERE fact_id = ?",
+                (fact_id,),
+            )
+    else:
+        store.add_command_result(
+            "scan",
+            "host",
+            "nmap",
+            "nmap host",
+            "f" * 64,
+            status="timeout",
+            execution_id="exec-degraded",
+        )
+
+    source = store.get_facts("scan", "host")[0]
+    result = EvidenceVerifier(store).verify_claim(
+        "scan",
+        "host",
+        "https_service_active",
+        ["https_service_active", "services_include_https"],
+    )
+
+    if invalidity == "stale":
+        assert source["freshness_status"] == "stale"
+    else:
+        assert source["coverage_status"] == "degraded"
+    assert result["status"] == "rejected"
+    assert all(
+        fact["type"] not in {"verified_claim", "inferred_claim"}
+        for fact in store.get_facts("scan", "host")
+    )
 
 
 def test_candidate_fact_cannot_promote_itself_to_verified(tmp_path):

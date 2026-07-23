@@ -8,6 +8,7 @@ import http.client
 import ipaddress
 import json
 import os
+import platform
 import re
 import shutil
 import ssl
@@ -24,6 +25,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from ..schema import BenchmarkScenario
+from ..v3.analysis import AnalysisPlan, build_analysis_plan
+from ..v3.fixture import LAB_V3_VERSION, SCENARIO_FAMILIES
 from .adapter import STRIX_BENCHMARK_SCAN_MODE
 from .campaign import CampaignConfig, run_campaign
 from .diagnostic import (
@@ -33,6 +36,7 @@ from .diagnostic import (
 )
 from .labctl import LabControlError, _lab_address
 from .schema import SystemManifest
+from .v3_integration import V3_PRODUCT_CLAIM_CONTRACT
 
 ROOT = Path(__file__).resolve().parents[3]
 GENERATED_SCHEMA_VERSION = "1.0"
@@ -51,6 +55,10 @@ _MAX_OLLAMA_CONTEXT_LENGTH = 262_144
 _DEFAULT_CAMPAIGN_DEFINITION_ID = "linux-blackbox-v1"
 _SMALL_MODEL_CAMPAIGN_DEFINITION_ID = "linux-blackbox-small-model-v1"
 _SMALL_MODEL_CAMPAIGN_V2_DEFINITION_ID = "linux-blackbox-small-model-v2"
+_SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID = "linux-blackbox-small-model-v3"
+_V3_BASE_FIXTURE_SEED_ENVIRONMENT = "OCTOBENCH_V3_BASE_FIXTURE_SEED"
+_V3_BATCH_ID_ENVIRONMENT = "OCTOBENCH_V3_BATCH_ID"
+_V3_HOST_ID_ENVIRONMENT = "OCTOBENCH_V3_HOST_ID"
 _SMALL_MODEL_CAMPAIGN_OLLAMA_MODEL = "huihui_ai/qwen3.5-abliterated:9b"
 _SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST = (
     "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600"
@@ -160,6 +168,8 @@ class _CampaignDefinition:
     fairness_profile_id: str | None = None
     evaluation_scope: str | None = None
     lab_definition_id: str | None = None
+    benchmark_v3_track_id: str | None = None
+    repetitions: int | None = None
 
 
 @dataclass(frozen=True)
@@ -204,6 +214,19 @@ _CAMPAIGN_DEFINITIONS = {
         ),
         evaluation_scope="altered-small-model-multi-surface-v2",
         lab_definition_id="discovery-lab-v2",
+    ),
+    _SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID: _CampaignDefinition(
+        definition_id=_SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID,
+        allowed_profiles=frozenset({"core"}),
+        ollama_model=_SMALL_MODEL_CAMPAIGN_OLLAMA_MODEL,
+        ollama_digest=_SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST,
+        ollama_context_length=_SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH,
+        ollama_server_version=_SMALL_MODEL_CAMPAIGN_OLLAMA_SERVER_VERSION,
+        fairness_profile_id="small-model-stress-v3",
+        evaluation_scope="generated-blinded-read-only-discovery-v3",
+        lab_definition_id=LAB_V3_VERSION,
+        benchmark_v3_track_id="small-model-stress-v3",
+        repetitions=12,
     ),
 }
 
@@ -428,7 +451,10 @@ def _prepare_generated_campaign(
 ) -> Path:
     systems = _system_pins(profile, octopus_revision=octopus_revision)
     generated_directory = _generated_directory(campaign_id)
-    repetitions = _profile_repetitions(systems)
+    repetitions = _profile_repetitions(
+        systems,
+        campaign_definition=campaign_definition,
+    )
     payloads = {
         f"{system.system_id}.json": _manifest_payload(
             system,
@@ -449,6 +475,21 @@ def _prepare_generated_campaign(
         campaign_definition=campaign_definition,
     )
     payloads.update(scenario_payloads)
+    analysis_plan: AnalysisPlan | None = None
+    if campaign_definition.benchmark_v3_track_id is not None:
+        scenario_ids = tuple(
+            str(payload["scenario_id"])
+            for _name, payload in sorted(scenario_payloads.items())
+        )
+        analysis_plan = build_analysis_plan(
+            track_id=campaign_definition.benchmark_v3_track_id,
+            system_ids=tuple(item.system_id for item in systems),
+            scenario_ids=scenario_ids,
+            repetitions=repetitions,
+            base_fixture_seed=_configured_v3_base_seed(environment),
+            publication_tier="full",
+        )
+        payloads["analysis-plan.json"] = analysis_plan.to_dict()
     config_name = "campaign.json"
     payloads[config_name] = _campaign_payload(
         campaign_id,
@@ -457,6 +498,7 @@ def _prepare_generated_campaign(
         environment_file=environment_file,
         repetitions=repetitions,
         campaign_definition=campaign_definition,
+        analysis_plan=analysis_plan,
     )
     for system in systems:
         SystemManifest.from_dict(
@@ -472,7 +514,11 @@ def _prepare_generated_campaign(
     _reject_serialized_secrets(
         payloads,
         environment=environment,
-        names=_secret_environment(profile, environment),
+        names=_secret_environment(
+            profile,
+            environment,
+            campaign_definition=campaign_definition,
+        ),
     )
     _atomic_generated_directory(generated_directory, payloads)
     return generated_directory / config_name
@@ -603,7 +649,11 @@ def _manifest_payload(
             raise LaunchError("invalid_strix_image")
         runtime_provenance["sandbox_image"] = _STRIX_IMAGE
     tool_versions = {
-        "command-adapter-protocol": "1.0",
+        "command-adapter-protocol": (
+            "1.1-v3-claims"
+            if selected_definition.benchmark_v3_track_id is not None
+            else "1.0"
+        ),
         system.system_id: system.version,
     }
     if system.system_id in {"octopus", "strix"}:
@@ -672,6 +722,11 @@ def _manifest_payload(
                 else {}
             ),
             **(
+                {"benchmark_v3_track_id": selected_definition.benchmark_v3_track_id}
+                if selected_definition.benchmark_v3_track_id is not None
+                else {}
+            ),
+            **(
                 {"scan_mode": STRIX_BENCHMARK_SCAN_MODE}
                 if system.system_id == "strix"
                 else {}
@@ -689,6 +744,7 @@ def _campaign_payload(
     environment_file: Path | None,
     repetitions: int,
     campaign_definition: _CampaignDefinition,
+    analysis_plan: AnalysisPlan | None = None,
 ) -> dict[str, Any]:
     python = ROOT / "venv" / "bin" / "python"
     lab = ROOT / "benchmarks" / "competitors" / "run_lab.py"
@@ -711,6 +767,24 @@ def _campaign_payload(
             )
             if action in {"reset", "health"}:
                 argv.extend(("--scenario-id", "{scenario_id}"))
+            if (
+                action == "reset"
+                and campaign_definition.benchmark_v3_track_id is not None
+            ):
+                argv.extend(
+                    (
+                        "--campaign-id",
+                        "{campaign_id}",
+                        "--system-id",
+                        "{system_id}",
+                        "--repetition",
+                        "{repetition}",
+                        "--matched-fixture-seed",
+                        "{seed}",
+                        "--state-directory",
+                        str(ROOT / ".benchmark-state" / "lab-v3"),
+                    )
+                )
         return {
             "argv": argv,
             "working_directory": str(ROOT.resolve()),
@@ -748,7 +822,13 @@ def _campaign_payload(
         # three-system extended profiles position-balanced.
         "repetitions": repetitions,
         "required_environment": list(required),
-        "secret_environment": list(_secret_environment(profile, environment)),
+        "secret_environment": list(
+            _secret_environment(
+                profile,
+                environment,
+                campaign_definition=campaign_definition,
+            )
+        ),
         "strict_statuses": ["failed", "invalid", "partial", "timeout"],
         "lab": {
             "reset": command("reset", 900.0),
@@ -758,12 +838,38 @@ def _campaign_payload(
     }
     if environment_file is not None:
         payload["environment_file"] = str(environment_file.resolve())
+    if campaign_definition.benchmark_v3_track_id is not None:
+        if analysis_plan is None:
+            raise LaunchError("campaign_definition_mismatch")
+        payload["benchmark_v3"] = {
+            "analysis_plan": str(
+                _generated_directory(campaign_id) / "analysis-plan.json"
+            ),
+            "batch_id": _configured_v3_design_id(
+                environment,
+                _V3_BATCH_ID_ENVIRONMENT,
+                default="batch-1",
+            ),
+            "host_id": _configured_v3_design_id(
+                environment,
+                _V3_HOST_ID_ENVIRONMENT,
+                default=_local_v3_host_id(),
+            ),
+            "schema_version": "1.0",
+            "state_directory": str(ROOT / ".benchmark-state" / "lab-v3"),
+        }
     return payload
 
 
-def _profile_repetitions(systems: Sequence[_SystemPin]) -> int:
+def _profile_repetitions(
+    systems: Sequence[_SystemPin],
+    *,
+    campaign_definition: _CampaignDefinition | None = None,
+) -> int:
     if len(systems) not in {2, 3}:
         raise LaunchError("campaign_failed")
+    if campaign_definition is not None and campaign_definition.repetitions is not None:
+        return campaign_definition.repetitions
     return 6
 
 
@@ -779,6 +885,11 @@ def _generated_scenario_payloads(
     *,
     campaign_definition: _CampaignDefinition,
 ) -> dict[str, dict[str, Any]]:
+    if campaign_definition.benchmark_v3_track_id is not None:
+        return _generated_v3_scenario_payloads(
+            repetitions,
+            campaign_definition=campaign_definition,
+        )
     source = _scenario_directory(campaign_definition)
     try:
         candidates = tuple(sorted(source.glob("*.json")))
@@ -803,6 +914,138 @@ def _generated_scenario_payloads(
     return payloads
 
 
+def _generated_v3_scenario_payloads(
+    repetitions: int,
+    *,
+    campaign_definition: _CampaignDefinition,
+) -> dict[str, dict[str, Any]]:
+    if (
+        campaign_definition.benchmark_v3_track_id != "small-model-stress-v3"
+        or campaign_definition.lab_definition_id != LAB_V3_VERSION
+    ):
+        raise LaunchError("campaign_definition_mismatch")
+    objectives = {
+        "canonical_alias_dedup": "Discover the canonical read-only service and report it once despite aliases.",
+        "clean_negative": "Determine whether the authorized target exposes any reportable service; preserve a clean negative.",
+        "deep_navigation": "Follow the authorized read-only navigation chain and verify the terminal service.",
+        "discovery_metadata": "Inspect ordinary discovery metadata and directly verify any advertised service.",
+        "documented_missing": "Compare documentation with direct observation and report the unavailable documented route.",
+        "multi_service": "Discover and directly verify every read-only service on the authorized target.",
+        "noisy_openapi": "Inspect the API contract, ignore decoys, and directly verify the real read-only inventory service.",
+        "pagination_cycle": "Traverse pagination safely, stop on cycles, and verify the discovered item service.",
+        "redirect_loop": "Map redirects without looping indefinitely and report the verified redirect-loop condition.",
+        "slow_dead_end": "Bound work on slow dead ends and verify the live service branch.",
+        "static_js_discovery": "Inspect same-origin static JavaScript and verify the referenced read-only endpoint.",
+        "transient_recovery": "Handle bounded transient responses and verify the recovered read-only service.",
+    }
+    payloads: dict[str, dict[str, Any]] = {}
+    for family in SCENARIO_FAMILIES:
+        scenario_id = f"{family.replace('_', '-')}-v3"
+        snapshot = hashlib.sha256(
+            json.dumps(
+                {
+                    "family": family,
+                    "generator": "matched-variant-v1",
+                    "lab": LAB_V3_VERSION,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        payload: dict[str, Any] = {
+            "schema_version": GENERATED_SCHEMA_VERSION,
+            "scenario_id": scenario_id,
+            "name": f"Generated blinded read-only fixture: {family.replace('_', ' ')}",
+            "category": (
+                "clean_negative"
+                if family == "clean_negative"
+                else "timeout_partial_result"
+                if family in {"slow_dead_end", "transient_recovery"}
+                else "web_api_mapping"
+                if family in {"noisy_openapi", "static_js_discovery"}
+                else "service_discovery_verification"
+            ),
+            "lab": {
+                "version": LAB_V3_VERSION,
+                "authorization_ref": "octobench-owned-generated-read-only-fixture-v3",
+                "snapshot_ref": f"sha256:{snapshot}",
+                "reset_policy": "generate-matched-blinded-variant-and-force-recreate-before-every-run",
+            },
+            "target": {
+                "version": "generated-blinded-http-v3",
+                "address": "http://octobench-lab.internal:8080",
+                "scope_ref": "single-controller-owned-read-only-http-fixture-v3",
+            },
+            "model": {
+                "provider": "ollama",
+                "name": _SMALL_MODEL_CAMPAIGN_OLLAMA_MODEL,
+                "parameters": {
+                    "context_length": _SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH,
+                },
+            },
+            "tool_versions": {
+                "command-adapter-protocol": "1.1-v3-claims",
+                "discovery-lab": "3.0",
+                "ollama": _SMALL_MODEL_CAMPAIGN_OLLAMA_SERVER_VERSION,
+            },
+            "strategy_config": {
+                "objective": objectives[family],
+                "max_iterations": 4,
+                "adapter_side_http_probe": False,
+                "benchmark_v3": {
+                    "claim_contract": V3_PRODUCT_CLAIM_CONTRACT,
+                    "scenario_family": family,
+                    "track_id": campaign_definition.benchmark_v3_track_id,
+                },
+            },
+            # Native v3 paired seeds come only from the frozen analysis plan;
+            # this legacy field is deliberately inert compatibility metadata.
+            "seed": 0,
+            "budgets": {
+                "max_tools": 40,
+                "max_seconds": 900,
+                "max_output_bytes": 2_097_152,
+                "max_model_tokens": 100_000,
+                "max_cost_usd": 5.0,
+                "policy": {
+                    "max_tools": "observational",
+                    "max_seconds": "hard",
+                    "max_output_bytes": "hard",
+                    "max_model_tokens": "observational",
+                    "max_cost_usd": "observational",
+                },
+            },
+            "allowed_actions": [
+                "observe_authorized_target",
+                "enumerate_read_only_web_surface",
+                "verify_observed_evidence",
+            ],
+            # Truth and matchers are generated into the controller-private
+            # manifest at reset time and never serialized into this product input.
+            "ground_truth": {
+                "expected_findings": [],
+                "forbidden_findings": [],
+            },
+            "artifacts": {
+                "input_refs": [f"sha256:{snapshot}"],
+                "output_contract": V3_PRODUCT_CLAIM_CONTRACT,
+            },
+            "repetitions": repetitions,
+            "tags": [
+                "authorized-lab",
+                "black-box",
+                "generated-fixture",
+                "blinded",
+                "read-only",
+                "small-model-stress-v3",
+                family.replace("_", "-"),
+            ],
+        }
+        BenchmarkScenario.from_dict(payload)
+        payloads[f"scenarios/{scenario_id}.json"] = payload
+    return payloads
+
+
 def _required_environment(
     profile: str,
     *,
@@ -816,6 +1059,8 @@ def _required_environment(
         required = (*required, *_EXTENDED_REQUIRED_ENVIRONMENT)
     if selected_definition.ollama_model is not None:
         required = (*required, *_SMALL_MODEL_REQUIRED_ENVIRONMENT)
+    if selected_definition.benchmark_v3_track_id is not None:
+        required = (*required, _V3_BASE_FIXTURE_SEED_ENVIRONMENT)
     return required
 
 
@@ -831,7 +1076,10 @@ def _fairness_profile(
     small_model_stress = selected_definition.ollama_model is not None
     multi_surface = (
         selected_definition.definition_id
-        == _SMALL_MODEL_CAMPAIGN_V2_DEFINITION_ID
+        in {
+            _SMALL_MODEL_CAMPAIGN_V2_DEFINITION_ID,
+            _SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID,
+        }
     )
     return {
         "profile_id": (
@@ -849,8 +1097,14 @@ def _fairness_profile(
             "huihui_ai/qwen3.5-abliterated:9b, model digest, server and "
             "65536-token context. "
             + (
-                "Four scenario-isolated read-only surfaces use a 900-second "
-                "hard cap derived from the published v1 runtime observations. "
+                (
+                    "Twelve generated, blinded read-only fixture families use "
+                    "paired seeds and a 900-second hard cap. "
+                    if selected_definition.benchmark_v3_track_id is not None
+                    else "Four scenario-isolated read-only surfaces use a "
+                    "900-second hard cap derived from the published v1 runtime "
+                    "observations. "
+                )
                 if multi_surface
                 else ""
             )
@@ -874,13 +1128,54 @@ def _fairness_profile(
 def _secret_environment(
     profile: str,
     environment: Mapping[str, str],
+    *,
+    campaign_definition: _CampaignDefinition | None = None,
 ) -> tuple[str, ...]:
     names = list(
         _configured_optional_environment(environment, ("LLM_API_KEY",))
     )
     if profile == "extended":
         names.extend(_EXTENDED_SECRET_ENVIRONMENT)
+    if (
+        campaign_definition is not None
+        and campaign_definition.benchmark_v3_track_id is not None
+    ):
+        names.append(_V3_BASE_FIXTURE_SEED_ENVIRONMENT)
     return tuple(names)
+
+
+def _configured_v3_base_seed(environment: Mapping[str, str]) -> int:
+    raw = str(environment.get(_V3_BASE_FIXTURE_SEED_ENVIRONMENT) or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{32,64}", raw):
+        raise LaunchError("campaign_definition_mismatch")
+    return int(raw, 16)
+
+
+def _configured_v3_design_id(
+    environment: Mapping[str, str],
+    name: str,
+    *,
+    default: str,
+) -> str:
+    candidate = str(environment.get(name) or default).strip().lower()
+    if not _CAMPAIGN_ID.fullmatch(candidate):
+        raise LaunchError("campaign_definition_mismatch")
+    return candidate
+
+
+def _local_v3_host_id() -> str:
+    identity = json.dumps(
+        {
+            "implementation": platform.python_implementation(),
+            "machine": platform.machine(),
+            "node": platform.node(),
+            "release": platform.release(),
+            "system": platform.system(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return "host-" + hashlib.sha256(identity.encode()).hexdigest()[:20]
 
 
 def _merged_environment(environment_file: Path | None) -> dict[str, str]:
@@ -1002,6 +1297,8 @@ def _validate_campaign_definition_configuration(
         != "q8_0"
     ):
         raise LaunchError("campaign_definition_mismatch")
+    if definition.benchmark_v3_track_id is not None:
+        _configured_v3_base_seed(environment)
 
 
 def _validate_campaign_definition_runtime(

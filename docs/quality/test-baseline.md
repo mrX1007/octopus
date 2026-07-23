@@ -6,6 +6,10 @@ Git revision: `7a402f4`
 Worktree note: two pre-existing dirty vendor submodules were present; the
 baseline was therefore not claimed as a pristine checkout.
 
+This file is an append-only historical verification record. Current CI and
+coverage requirements live in `docs/quality/ci-and-vendor-integrity.md`; older
+counts below describe only their dated revision and are not current gates.
+
 ## Environment
 
 | Component | Observed value |
@@ -130,8 +134,8 @@ rg --files -g '*.py' -g '!tests/**' -g '!venv/**' -g '!vendor/**' -g '!data/**' 
 TOTAL  24872 statements  13919 missed  9248 branches  1121 partial  42.71%
 ```
 
-This is the honest repository-wide baseline for the current checkout. There is
-no coverage gate yet, and Phase 0.1 does not claim to improve this percentage.
+This was the honest repository-wide baseline at revision `7a402f4`. Phase 0.1
+did not yet have a coverage gate; it must not be read as the current floor.
 
 There are currently no live `mysql`, `external_tools`, or `platform` tests in
 the collected suite.  When such tests are added, they must have explicit skip
@@ -142,7 +146,6 @@ reasons if their provisioned dependency is unavailable.
 | Category | Count | Reason |
 |---|---:|---|
 | Failed | 0 | No baseline failures |
-| Skipped | 0 | No implicit environment skips |
 | Fast-suite deselected | 16 | Explicit marker selection described above |
 | Environment collection failures | 0 | Optional integrations do not break collection |
 
@@ -229,3 +232,20 @@ The focused benchmark suite reported `28 passed`. Repository-wide Ruff,
 compileall, `pip check`, and `git diff --check` remained clean; the configured
 mypy ratchet reported no issues across 55 source files. The single warning is
 the previously documented urllib3/LibreSSL environment warning.
+
+## Quality-ratchet measurement (2026-07-23)
+
+The current working tree was measured with branch coverage in an isolated
+coverage data file so the repository's existing `.coverage` artifact was not
+overwritten:
+
+```text
+1177 passed, 3 skipped, 1 warning in 428.33s
+plain coverage.py report: 61.10%
+canonical 227-source coverage gate: 59.88%
+package coverage: core/actions 84.84%, core/execution 95.68%, core/benchmarks 79.07%
+```
+
+The canonical measurement supports the 59.50% global regression floor and is
+the current green full-suite baseline. The single warning is the documented
+urllib3/LibreSSL environment warning.

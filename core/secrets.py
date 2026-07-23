@@ -470,6 +470,17 @@ def _reference_identifier(reference: str) -> str:
 
 def _is_sensitive_field(field: str) -> bool:
     normalized = re.sub(r"[^a-z0-9_-]+", "_", field.lower()).strip("_")
+    # Authorization is sensitive when it contains credential material (for
+    # example an ``Authorization`` header), but decision metadata is part of
+    # the auditable policy contract and must remain readable.  Treat opaque
+    # references and the small set of structural authorization fields as
+    # metadata; their nested values are still recursively redacted.
+    if normalized.endswith(("_ref", "_refs")) or normalized in {
+        "authorization_decision",
+        "authorization_phase",
+        "authorization_reason",
+    }:
+        return False
     return bool(normalized and _SENSITIVE_FIELD_RE.search(normalized))
 
 

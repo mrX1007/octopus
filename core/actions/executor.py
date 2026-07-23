@@ -30,6 +30,7 @@ from .models import (
     CheckStatus,
     CleanupStatus,
     OutcomeStatus,
+    PolicyDenial,
     VerificationStatus,
 )
 
@@ -92,10 +93,13 @@ class ActionExecutor:
         requirements = adapter.descriptor.requirements
         if run_check and requirements.supports_check:
             decision = self._authorize(adapter, request, "check")
-            report.policy_decision_refs.append(self._policy_ref(decision, "check"))
+            decision_ref = self._policy_ref(decision, "check")
+            report.policy_decision_refs.append(decision_ref)
             if not decision.allowed:
+                denial = PolicyDenial.create("check", decision.reason, decision_ref)
+                report.policy_denials.append(denial)
                 lifecycle.check = CheckStatus.BLOCKED
-                lifecycle.record("check_blocked", reason=decision.reason)
+                lifecycle.record("check_blocked", reason=denial.reason_code)
                 return report
             try:
                 with bind_execution_context(request.execution_context):
@@ -142,11 +146,14 @@ class ActionExecutor:
         # immediately before the provider call. Planner/candidate selection is
         # never an execution authorization.
         decision = self._authorize(adapter, request, "execute")
-        report.policy_decision_refs.append(self._policy_ref(decision, "execute"))
+        decision_ref = self._policy_ref(decision, "execute")
+        report.policy_decision_refs.append(decision_ref)
         if not decision.allowed:
+            denial = PolicyDenial.create("execute", decision.reason, decision_ref)
+            report.policy_denials.append(denial)
             lifecycle.attempt = AttemptStatus.BLOCKED
             lifecycle.outcome = OutcomeStatus.BLOCKED
-            lifecycle.record("execution_blocked", reason=decision.reason)
+            lifecycle.record("execution_blocked", reason=denial.reason_code)
             return report
 
         lifecycle.attempt = AttemptStatus.ATTEMPTED

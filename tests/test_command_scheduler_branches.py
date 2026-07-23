@@ -1,6 +1,10 @@
 """Complete deterministic branch coverage for command scheduling helpers."""
 
+import pytest
+
 from core.ai.command_scheduler import CommandScheduler
+
+pytestmark = pytest.mark.unit
 
 
 def test_scheduler_empty_and_command_key_canonicalization_branches():

@@ -737,8 +737,13 @@ class ToolRegistry:
         """Classify registry coverage without treating gated/manual tools as bugs."""
         if registered_tools is None:
             try:
-                import tools  # noqa: F401 - loads @tool decorators
                 from core.tools.registry import list_tools
+
+                # Importing ``core.tools.registry`` initializes the
+                # ``core.tools`` package first, whose canonical leaf-module
+                # imports register every built-in decorator tool.  The
+                # top-level ``tools.py`` compatibility facade is unnecessary
+                # here and must not remain a first-party dependency.
                 registered_tools = [tool_def.name for tool_def in list_tools()]
             except Exception:
                 registered_tools = []

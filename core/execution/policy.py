@@ -86,6 +86,31 @@ _NON_NETWORK_TARGET_TOOLS = {
     "zap_import",
 }
 
+
+def registered_tool_requires_approval(
+    name: str,
+    argv: Sequence[str] = (),
+) -> bool:
+    """Classify whether one registered invocation is active/manual-gated.
+
+    This is deliberately the same pure classification used by
+    :meth:`ExecutionPolicy.authorize_registered`.  Action/provider ranking can
+    therefore account for active risk without maintaining a second, drifting
+    list of sensitive tools.  The helper grants no authority and performs no
+    dispatch.
+    """
+
+    normalized = str(name or "").strip().casefold()
+    arguments = tuple(str(item) for item in argv)
+    requires_approval = normalized in _MANUAL_APPROVAL_TOOLS
+    if normalized == "cpanel_exploit":
+        action = arguments[2].casefold() if len(arguments) > 2 else "cmd"
+        requires_approval = action not in {"scan", "check"}
+    if normalized == "plugin":
+        action = arguments[3].casefold() if len(arguments) > 3 else "scan"
+        requires_approval = action not in {"list", "ls", "scan", "check", "summary"}
+    return requires_approval
+
 class InvalidInvocation(ValueError):
     """Raised when a command cannot be represented as a typed invocation."""
 
@@ -300,13 +325,10 @@ class ExecutionPolicy:
             return self._decision(False, "missing_capability:registered_tool", context, invocation)
 
         name = invocation.registered_name or invocation.executable
-        requires_approval = name in _MANUAL_APPROVAL_TOOLS
-        if name == "cpanel_exploit":
-            action = invocation.argv[2].lower() if len(invocation.argv) > 2 else "cmd"
-            requires_approval = action not in {"scan", "check"}
-        if name == "plugin":
-            action = invocation.argv[3].lower() if len(invocation.argv) > 3 else "scan"
-            requires_approval = action not in {"list", "ls", "scan", "check", "summary"}
+        requires_approval = registered_tool_requires_approval(
+            name,
+            invocation.argv,
+        )
         if requires_approval and (
             not context.has(CAP_ACTIVE_TOOL)
             or not context.approved

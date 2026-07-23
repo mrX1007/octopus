@@ -1,43 +1,16 @@
 # OCTOPUS mandatory Python runtime (CPython 3.9 baseline)
 
-# Core framework
-fastapi>=0.111.0
-uvicorn>=0.30.0
-click>=8.1.0
+# Configuration and CLI
 PyYAML>=6.0
 python-dotenv>=1.0.0
 rich>=13.7.0
-typing_extensions>=4.9.0
 
 # Cryptography
-cryptography>=42.0.0
-pycryptodome>=3.20.0
+cryptography>=44.0.0
 
 # Networking and HTTP
 requests>=2.31.0
-httpx[socks]>=0.27.0
-httpcore>=1.0.0
 urllib3>=2.2.0
-PySocks>=1.7.1
-certifi>=2024.2.0
-charset-normalizer>=3.3.0
-idna>=3.11
-anyio>=4.3.0
-h11>=0.14.0
 
-# Parsing and reporting
-beautifulsoup4>=4.12.0
-lxml>=5.1.0
-soupsieve>=2.5.0
-reportlab>=4.1.0
-pillow>=10.2.0
-Pygments>=2.17.0
-markdown-it-py>=3.0.0
-mdurl>=0.1.0
-
-# AI, memory, search and remote access
-litellm>=1.35.0
-chromadb>=0.5.0
-ddgs>=9.0.1,<9.8.0; python_version < "3.10"
-ddgs>=9.14.4; python_version >= "3.10"
+# Remote access used by the supported SSH providers
 paramiko>=3.0

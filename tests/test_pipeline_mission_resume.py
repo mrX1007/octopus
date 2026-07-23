@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import copy
 import json
+import time
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from core.ai.mission_store import MissionStoreError
+from core.ai.mission_store import MissionStoreError, TaskScope
 from core.ai.pipeline import AIPipeline
+from core.knowledge.identity import canonical_asset, canonical_service
 
 pytestmark = pytest.mark.contract
 
@@ -240,6 +242,115 @@ def test_child_before_parent_plan_executes_in_dependency_order(tmp_path):
     assert snapshot.mission.status == "completed"
 
 
+def test_scoped_same_name_dependencies_resolve_and_execute_by_typed_scope(tmp_path):
+    asset_scope = TaskScope(
+        entity_ids=(canonical_asset(TARGET).entity_id,),
+        legacy_scope=f"asset:{TARGET}",
+    )
+    service_scope = TaskScope(
+        entity_ids=(canonical_service(TARGET, 443).entity_id,),
+        legacy_scope=f"service:{TARGET}:443/tcp",
+    )
+    plan = [
+        {
+            "agent": "DiscoveryAgent",
+            "task": "child",
+            "task_scope": asset_scope,
+            "depends_on": ["parent"],
+        },
+        {
+            "agent": "DiscoveryAgent",
+            "task": "child",
+            "task_scope": service_scope,
+            "depends_on": ["parent"],
+        },
+        {
+            "agent": "DiscoveryAgent",
+            "task": "parent",
+            "task_scope": asset_scope,
+        },
+        {
+            "agent": "DiscoveryAgent",
+            "task": "parent",
+            "task_scope": service_scope,
+        },
+    ]
+    harness = _configure_pipeline(
+        AIPipeline(str(tmp_path / "scoped-dependency-order.db")),
+        goals=["work", "conclude"],
+        plan=plan,
+    )
+
+    harness.pipeline.run_scan(
+        "scan-scoped-dependency-order",
+        TARGET,
+        max_iterations=2,
+    )
+
+    snapshot = harness.pipeline.mission_store.snapshot(harness.pipeline.mission_id)
+    tasks = {
+        (task.task, task.task_scope): task
+        for task in snapshot.tasks
+    }
+    assert harness.executed_tasks == ["parent", "parent", "child", "child"]
+    assert tasks[("child", asset_scope)].depends_on == (
+        tasks[("parent", asset_scope)].task_id,
+    )
+    assert tasks[("child", service_scope)].depends_on == (
+        tasks[("parent", service_scope)].task_id,
+    )
+    assert {task.status for task in snapshot.tasks} == {"no_new_facts"}
+    assert snapshot.mission.status == "completed"
+
+
+def test_invalid_scoped_parent_does_not_poison_valid_sibling_dependency(tmp_path):
+    asset_scope = TaskScope(
+        entity_ids=(canonical_asset(TARGET).entity_id,),
+        legacy_scope=f"asset:{TARGET}",
+    )
+    service_scope = TaskScope(
+        entity_ids=(canonical_service(TARGET, 443).entity_id,),
+        legacy_scope=f"service:{TARGET}:443/tcp",
+    )
+    pipeline = AIPipeline(str(tmp_path / "scoped-invalid-propagation.db"))
+    pipeline._reset_runtime_state()
+    pipeline._start_mission("scan-scoped-invalid-propagation", TARGET)
+
+    pipeline._register_mission_plan(
+        [
+            {
+                "agent": "DiscoveryAgent",
+                "task": "parent",
+                "task_scope": asset_scope,
+                "depends_on": ["missing"],
+            },
+            {
+                "agent": "DiscoveryAgent",
+                "task": "parent",
+                "task_scope": service_scope,
+            },
+            {
+                "agent": "DiscoveryAgent",
+                "task": "child",
+                "task_scope": service_scope,
+                "depends_on": ["parent"],
+            },
+        ]
+    )
+
+    snapshot = pipeline.mission_store.snapshot(pipeline.mission_id)
+    tasks = {
+        (task.task, task.task_scope): task
+        for task in snapshot.tasks
+    }
+    assert tasks[("parent", asset_scope)].status == "blocked"
+    assert tasks[("parent", service_scope)].status == "pending"
+    assert tasks[("child", service_scope)].status == "pending"
+    assert tasks[("child", service_scope)].depends_on == (
+        tasks[("parent", service_scope)].task_id,
+    )
+
+
 @pytest.mark.parametrize("parent_status", ["blocked", "failed"])
 def test_terminally_unsatisfied_parent_durably_blocks_child_without_scan_crash(
     tmp_path,
@@ -402,7 +513,7 @@ def test_interrupted_attempt_provenance_restores_tool_budget_before_resume(tmp_p
     assert interrupted_attempt.execution_ids == ("exec-before-crash",)
 
 
-def test_same_task_name_under_multiple_agents_has_one_durable_owner(tmp_path):
+def test_same_task_name_under_multiple_agents_has_distinct_durable_ids(tmp_path):
     plan = [
         {"agent": "DiscoveryAgent", "task": "shared_task"},
         {"agent": "VerificationAgent", "task": "shared_task"},
@@ -418,12 +529,98 @@ def test_same_task_name_under_multiple_agents_has_one_durable_owner(tmp_path):
     ordered = harness.pipeline._register_mission_plan(plan)
     snapshot = harness.pipeline.mission_store.snapshot(harness.pipeline.mission_id)
 
-    assert ordered == [{"agent": "DiscoveryAgent", "task": "shared_task"}]
-    assert len(snapshot.tasks) == 1
-    assert snapshot.tasks[0].agent == "DiscoveryAgent"
+    assert [step["agent"] for step in ordered] == [
+        "DiscoveryAgent",
+        "VerificationAgent",
+    ]
+    assert len(snapshot.tasks) == 2
+    assert len({step["task_id"] for step in ordered}) == 2
+    assert {task.agent for task in snapshot.tasks} == {
+        "DiscoveryAgent",
+        "VerificationAgent",
+    }
 
 
-def test_running_check_fact_restores_command_deduplication_after_crash(tmp_path):
+def test_same_task_name_with_typed_scopes_keeps_ids_through_scan_loop(tmp_path):
+    asset_scope = TaskScope(
+        entity_ids=(canonical_asset(TARGET).entity_id,),
+        legacy_scope=f"asset:{TARGET}",
+    )
+    service_scope = TaskScope(
+        entity_ids=(canonical_service(TARGET, 443).entity_id,),
+        legacy_scope=f"service:{TARGET}:443/tcp",
+    )
+    plan = [
+        {
+            "agent": "DiscoveryAgent",
+            "task": "shared_task",
+            "task_scope": asset_scope,
+        },
+        {
+            "agent": "DiscoveryAgent",
+            "task": "shared_task",
+            "task_scope": service_scope,
+        },
+    ]
+    harness = _configure_pipeline(
+        AIPipeline(str(tmp_path / "typed-scope-loop.db")),
+        goals=["work", "conclude"],
+        plan=plan,
+    )
+
+    harness.pipeline.run_scan(
+        "scan-typed-scope-loop",
+        TARGET,
+        max_iterations=2,
+    )
+
+    snapshot = harness.pipeline.mission_store.snapshot(harness.pipeline.mission_id)
+    assert harness.executed_tasks == ["shared_task", "shared_task"]
+    assert len(snapshot.tasks) == 2
+    assert {task.task_scope for task in snapshot.tasks} == {
+        asset_scope,
+        service_scope,
+    }
+    assert len({task.task_id for task in snapshot.tasks}) == 2
+    assert [attempt.task_id for attempt in snapshot.attempts] == [
+        task.task_id for task in snapshot.tasks
+    ]
+    assert {task.status for task in snapshot.tasks} == {"no_new_facts"}
+
+
+def test_future_not_before_task_stops_as_resumable_deferred_work(tmp_path):
+    db_path = tmp_path / "future-not-before.db"
+    plan = [
+        {
+            "agent": "DiscoveryAgent",
+            "task": "future_task",
+            "not_before": time.time() + 3_600,
+        }
+    ]
+    first = _configure_pipeline(AIPipeline(str(db_path)), goals=[], plan=plan)
+    _prime_interrupted_mission(first, "scan-future-not-before", plan)
+    first.pipeline._interrupt_mission("simulated_restart")
+
+    resumed = _configure_pipeline(
+        AIPipeline(str(db_path)),
+        goals=["conclude"],
+        plan=[],
+    )
+    resumed.pipeline.run_scan(
+        "scan-future-not-before",
+        TARGET,
+        max_iterations=2,
+    )
+
+    snapshot = resumed.pipeline.mission_store.snapshot(resumed.pipeline.mission_id)
+    assert resumed.director_calls == []
+    assert resumed.executed_tasks == []
+    assert snapshot.mission.status == "interrupted"
+    assert snapshot.mission.reason == "tasks_deferred"
+    assert snapshot.tasks[0].status == "pending"
+
+
+def test_running_predispatch_marker_does_not_suppress_command_after_crash(tmp_path):
     db_path = tmp_path / "resume-command-key.db"
     first = AIPipeline(str(db_path))
     first._reset_runtime_state()
@@ -449,4 +646,4 @@ def test_running_check_fact_restores_command_deduplication_after_crash(tmp_path)
     resumed._reset_runtime_state()
     resumed._start_mission("scan-command-key", TARGET)
 
-    assert "probe:target" in resumed.executed_command_keys
+    assert "probe:target" not in resumed.executed_command_keys

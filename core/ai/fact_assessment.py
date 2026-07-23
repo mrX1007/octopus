@@ -282,12 +282,18 @@ class FactAssessmentStore:
         redactor: Redactor,
         freshness_policy: FreshnessPolicy | None = None,
         clock: Callable[[], float] | None = None,
+        transition_hook: (
+            Callable[[sqlite3.Connection, Sequence[int]], Any] | None
+        ) = None,
+        post_commit_hook: Callable[[Sequence[int]], Any] | None = None,
     ) -> None:
         self.db_path = db_path
         self.secret_store = secret_store
         self.redactor = redactor
         self.freshness_policy = freshness_policy or FreshnessPolicy()
         self._clock = clock or time.time
+        self._transition_hook = transition_hook
+        self._post_commit_hook = post_commit_hook
         self._init_db()
 
     @contextmanager
@@ -305,6 +311,7 @@ class FactAssessmentStore:
             conn.close()
 
     def _init_db(self) -> None:
+        projection_fact_ids: tuple[int, ...] = ()
         with self._get_conn() as conn:
             conn.executescript(
                 """
@@ -400,8 +407,13 @@ class FactAssessmentStore:
                 """,
                 (FACT_ASSESSMENT_SCHEMA_VERSION, time.time()),
             )
-            self._redact_existing_rows(conn)
-            self._backfill_legacy_facts(conn)
+            changed_fact_ids = set(self._redact_existing_rows(conn))
+            changed_fact_ids.update(self._backfill_legacy_facts(conn))
+            projection_fact_ids = tuple(sorted(changed_fact_ids))
+            if projection_fact_ids and self._transition_hook is not None:
+                self._transition_hook(conn, projection_fact_ids)
+        if projection_fact_ids and self._post_commit_hook is not None:
+            self._post_commit_hook(projection_fact_ids)
 
     @staticmethod
     def _ensure_column(
@@ -417,7 +429,17 @@ class FactAssessmentStore:
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
-    def _redact_existing_rows(self, conn: sqlite3.Connection) -> None:
+    def _redact_existing_rows(
+        self,
+        conn: sqlite3.Connection,
+    ) -> tuple[int, ...]:
+        current_fact_by_assessment = {
+            str(assessment_id): int(fact_id)
+            for fact_id, assessment_id in conn.execute(
+                "SELECT fact_id, assessment_id FROM fact_assessment_heads"
+            ).fetchall()
+        }
+        changed_current_fact_ids: set[int] = set()
         for assessment_id, reason, assessor in conn.execute(
             "SELECT assessment_id, reason, assessor FROM fact_assessments"
         ).fetchall():
@@ -437,6 +459,9 @@ class FactAssessmentStore:
                     """,
                     (safe_reason, safe_assessor, assessment_id),
                 )
+                fact_id = current_fact_by_assessment.get(str(assessment_id))
+                if fact_id is not None:
+                    changed_current_fact_ids.add(fact_id)
         for assessment_id, ordinal, execution_id in conn.execute(
             """
             SELECT assessment_id, ordinal, execution_id
@@ -455,8 +480,15 @@ class FactAssessmentStore:
                     """,
                     (safe_execution_id, assessment_id, ordinal),
                 )
+                fact_id = current_fact_by_assessment.get(str(assessment_id))
+                if fact_id is not None:
+                    changed_current_fact_ids.add(fact_id)
+        return tuple(sorted(changed_current_fact_ids))
 
-    def _backfill_legacy_facts(self, conn: sqlite3.Connection) -> None:
+    def _backfill_legacy_facts(
+        self,
+        conn: sqlite3.Connection,
+    ) -> tuple[int, ...]:
         rows = conn.execute(
             """
             SELECT f.id, f.confidence, f.derived_from
@@ -491,6 +523,7 @@ class FactAssessmentStore:
                 source_execution_ids=(),
                 previous_id=None,
             )
+        return tuple(int(row[0]) for row in rows)
 
     def _valid_derived_ids(
         self,
@@ -590,11 +623,13 @@ class FactAssessmentStore:
     ) -> FactAssessment:
         """Apply conservative corroboration and contradiction rules atomically.
 
-        Independence is based on keyed execution provenance, never provider
-        labels. Contradiction is intentionally limited to recognized opposite
-        assertions with the same scan, canonical target, type, subject, and
-        configured time window. The later assertion supersedes only the older
-        assertion's assessment; neither base fact confidence is rewritten.
+        Corroboration requires successful keyed executions tied to distinct
+        source-identity/observation-method provenance, rather than execution
+        cardinality alone. Contradiction is intentionally limited to recognized
+        opposite assertions with the same scan, canonical target, type,
+        subject, and configured time window. The later assertion supersedes
+        only the older assertion's assessment; neither base fact confidence is
+        rewritten.
         """
 
         row = conn.execute(
@@ -616,7 +651,12 @@ class FactAssessmentStore:
             current.assessment_id,
         )
         if (
-            len(execution_keys) >= 2
+            self._has_independent_observation_provenance(
+                conn,
+                fact_id=int(fact_id),
+                assessment_id=current.assessment_id,
+                successful_execution_keys=execution_keys,
+            )
             and current.status in {AssessmentStatus.OBSERVED, AssessmentStatus.INFERRED}
             and self._corroboration_within_window(conn, current)
         ):
@@ -627,7 +667,8 @@ class FactAssessmentStore:
                 confidence=current.confidence,
                 rule_id="fact.corroborated.independent_execution.v1",
                 reason=(
-                    "Independent execution provenance corroborated the same "
+                    "Independent source identity or observation method, backed "
+                    "by separate successful executions, corroborated the same "
                     "target-scoped fact within the policy window."
                 ),
                 assessor="fact_assessment.rules",
@@ -767,6 +808,55 @@ class FactAssessmentStore:
             ).fetchall()
         }
 
+    @staticmethod
+    def _has_independent_observation_provenance(
+        conn: sqlite3.Connection,
+        *,
+        fact_id: int,
+        assessment_id: str,
+        successful_execution_keys: set[str],
+    ) -> bool:
+        """Require two successful executions from distinct source/method pairs."""
+
+        if len(successful_execution_keys) < 2:
+            return False
+        placeholders = ",".join("?" for _ in successful_execution_keys)
+        rows = conn.execute(
+            f"""
+            SELECT DISTINCT foe.execution_key, o.source_identity,
+                            o.observation_method
+            FROM fact_observations AS o
+            JOIN fact_observation_executions AS foe
+              ON foe.observation_id = o.id
+            JOIN fact_assessment_executions AS ae
+              ON ae.execution_key = foe.execution_key
+             AND ae.assessment_id = ?
+            WHERE o.fact_id = ?
+              AND foe.execution_key IN ({placeholders})
+            ORDER BY o.timestamp, o.id, foe.execution_key
+            """,
+            (
+                str(assessment_id),
+                int(fact_id),
+                *sorted(successful_execution_keys),
+            ),
+        ).fetchall()
+        provenance = [
+            (
+                str(execution_key),
+                str(source_identity or "").strip().casefold(),
+                str(observation_method or "").strip().casefold(),
+            )
+            for execution_key, source_identity, observation_method in rows
+            if str(source_identity or "").strip()
+            and str(observation_method or "").strip()
+        ]
+        return any(
+            left[0] != right[0] and left[1:] != right[1:]
+            for index, left in enumerate(provenance)
+            for right in provenance[index + 1 :]
+        )
+
     def apply_automatic_rules_for_execution_in_connection(
         self,
         conn: sqlite3.Connection,
@@ -781,6 +871,37 @@ class FactAssessmentStore:
         makes the outcome and any resulting assessment transitions visible as
         one atomic commit, regardless of whether opposing outcomes arrived in
         chronological order.
+        """
+
+        impacted = self.automatic_rule_fact_ids_for_execution_in_connection(
+            conn,
+            execution_key=execution_key,
+            scan_id=scan_id,
+            host=host,
+        )
+        transitions: list[FactAssessment] = []
+        for fact_id in impacted:
+            before = self._current_in_connection(conn, fact_id)
+            if before is None:
+                continue
+            after = self._apply_automatic_rules_in_connection(conn, fact_id, before)
+            if after.assessment_id != before.assessment_id:
+                transitions.append(after)
+        return tuple(transitions)
+
+    def automatic_rule_fact_ids_for_execution_in_connection(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        execution_key: str,
+        scan_id: str,
+        host: str,
+    ) -> tuple[int, ...]:
+        """Return facts whose current graph projection an outcome may affect.
+
+        This deliberately includes candidates whose head did not transition.
+        Callers can therefore replay a persisted execution to repair a missed
+        post-commit projection without creating another assessment transition.
         """
 
         if not str(execution_key or ""):
@@ -835,15 +956,7 @@ class FactAssessmentStore:
                 impacted[int(candidate_id)] = candidate_order
             impacted[int(fact_id)] = (observed, int(fact_id))
 
-        transitions: list[FactAssessment] = []
-        for fact_id in sorted(impacted, key=impacted.__getitem__):
-            before = self._current_in_connection(conn, fact_id)
-            if before is None:
-                continue
-            after = self._apply_automatic_rules_in_connection(conn, fact_id, before)
-            if after.assessment_id != before.assessment_id:
-                transitions.append(after)
-        return tuple(transitions)
+        return tuple(sorted(impacted, key=impacted.__getitem__))
 
     def _corroboration_within_window(
         self,
@@ -878,9 +991,14 @@ class FactAssessmentStore:
         return self.freshness_policy.evaluate(
             fact_type,
             observed_at=observed_at,
-            now=float(self._clock()) if now is None else now,
+            now=self.freshness_evaluation_time() if now is None else now,
             execution_statuses=execution_statuses,
         )
+
+    def freshness_evaluation_time(self) -> float:
+        """Capture the policy clock once for a coherent batch evaluation."""
+
+        return float(self._clock())
 
     def assess_fact(
         self,
@@ -904,7 +1022,7 @@ class FactAssessmentStore:
 
         with self._get_conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            return self._assess_in_connection(
+            result = self._assess_in_connection(
                 conn,
                 fact_id=int(fact_id),
                 status=self._status(status),
@@ -915,6 +1033,11 @@ class FactAssessmentStore:
                 evidence_fact_ids=evidence_fact_ids,
                 source_execution_ids=source_execution_ids,
             )
+        # An idempotent semantic replay can still have performed one-way display
+        # redaction and transactionally enqueued the unchanged current head.
+        if self._post_commit_hook is not None:
+            self._post_commit_hook((int(fact_id),))
+        return result
 
     def _assess_in_connection(
         self,
@@ -994,6 +1117,8 @@ class FactAssessmentStore:
             previous_id=current.assessment_id if current else None,
             semantic_key=semantic_key,
         )
+        if self._transition_hook is not None:
+            self._transition_hook(conn, (int(fact_id),))
         return assessment, True
 
     def _refresh_display_redaction(
@@ -1040,6 +1165,8 @@ class FactAssessmentStore:
             )
         if not changed:
             return assessment
+        if self._transition_hook is not None:
+            self._transition_hook(conn, (int(assessment.fact_id),))
         refreshed = self._current_in_connection(conn, assessment.fact_id)
         return refreshed or assessment
 
@@ -1195,46 +1322,65 @@ class FactAssessmentStore:
                     int(fact_id),
                     current,
                 )
-                return refreshed, refreshed.assessment_id != current.assessment_id
-            updated, created = self._assess_in_connection(
-                conn,
-                fact_id=current.fact_id,
-                status=current.status,
-                confidence=current.confidence,
-                rule_id=current.rule_id,
-                reason=current.reason,
-                assessor=current.assessor,
-                evidence_fact_ids=current.evidence_fact_ids,
-                source_execution_ids=merged,
-            )
-            refreshed = self._apply_automatic_rules_in_connection(
-                conn,
-                int(fact_id),
-                updated,
-            )
-            return refreshed, created or refreshed.assessment_id != updated.assessment_id
+                result = (
+                    refreshed,
+                    refreshed.assessment_id != current.assessment_id,
+                )
+            else:
+                updated, created = self._assess_in_connection(
+                    conn,
+                    fact_id=current.fact_id,
+                    status=current.status,
+                    confidence=current.confidence,
+                    rule_id=current.rule_id,
+                    reason=current.reason,
+                    assessor=current.assessor,
+                    evidence_fact_ids=current.evidence_fact_ids,
+                    source_execution_ids=merged,
+                )
+                refreshed = self._apply_automatic_rules_in_connection(
+                    conn,
+                    int(fact_id),
+                    updated,
+                )
+                result = (
+                    refreshed,
+                    created or refreshed.assessment_id != updated.assessment_id,
+                )
+        if result[1] and self._post_commit_hook is not None:
+            self._post_commit_hook((int(fact_id),))
+        return result
 
     def current_for_facts(
         self,
         fact_ids: Iterable[int],
     ) -> dict[int, FactAssessment]:
+        with self._get_conn() as conn:
+            return self.current_for_facts_in_connection(conn, fact_ids)
+
+    def current_for_facts_in_connection(
+        self,
+        conn: sqlite3.Connection,
+        fact_ids: Iterable[int],
+    ) -> dict[int, FactAssessment]:
+        """Read current assessment heads on a caller-owned SQLite snapshot."""
+
         ids = self._positive_ids(fact_ids)
         if not ids:
             return {}
         placeholders = ",".join("?" for _ in ids)
-        with self._get_conn() as conn:
-            rows = conn.execute(
-                f"""
-                SELECT a.assessment_id, a.fact_id, a.status, a.confidence,
-                       a.rule_id, a.reason, a.assessor,
-                       a.supersedes_assessment_id, a.created_at, a.schema_version
-                FROM fact_assessment_heads AS h
-                JOIN fact_assessments AS a ON a.assessment_id = h.assessment_id
-                WHERE h.fact_id IN ({placeholders})
-                """,
-                ids,
-            ).fetchall()
-            assessments = self._hydrate(conn, rows)
+        rows = conn.execute(
+            f"""
+            SELECT a.assessment_id, a.fact_id, a.status, a.confidence,
+                   a.rule_id, a.reason, a.assessor,
+                   a.supersedes_assessment_id, a.created_at, a.schema_version
+            FROM fact_assessment_heads AS h
+            JOIN fact_assessments AS a ON a.assessment_id = h.assessment_id
+            WHERE h.fact_id IN ({placeholders})
+            """,
+            ids,
+        ).fetchall()
+        assessments = self._hydrate(conn, rows)
         return {item.fact_id: item for item in assessments}
 
     def history(self, fact_id: int) -> tuple[FactAssessment, ...]:

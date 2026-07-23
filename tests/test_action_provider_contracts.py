@@ -669,20 +669,37 @@ def test_msf_login_check_without_creds_is_short_skip():
     assert "Short check not run" in output
 
 
-def test_msf_login_check_options_disable_fragile_session_creation_with_known_creds():
-    from core.tools.post_tools import _scope_msf_login_check
+def test_msf_login_check_options_use_typed_credential_reference(monkeypatch):
+    from core.credentials import CredentialStore, register_credential
+    from core.secrets import SecretStore
+    from core.tools.post_tools import _prepare_msf_login_check
 
-    output = _scope_msf_login_check(
-        "10.0.0.5",
-        "auxiliary/scanner/ssh/ssh_login",
-        "RHOSTS=10.0.0.5 RPORT=22 USERNAME=support PASSWORD=qweqwe123",
-    )
+    host = "10.0.0.5"
+    canary = "msf-password-must-not-enter-options"
+    secret_store = SecretStore(":memory:", key=b"m" * 32)
+    store = CredentialStore(secret_store=secret_store, hydrate=False)
+    monkeypatch.setattr(CredentialStore, "_instance", store)
+    try:
+        register_credential("ssh", host, "support", canary, quiet=True)
 
-    assert "USERNAME=support" in output
-    assert "PASSWORD=qweqwe123" in output
-    assert "STOP_ON_SUCCESS=true" in output
-    assert "VERBOSE=false" in output
-    assert "CreateSession=false" in output
+        options, credential, error = _prepare_msf_login_check(
+            host,
+            "auxiliary/scanner/ssh/ssh_login",
+            f"RHOSTS={host} RPORT=22",
+        )
+    finally:
+        secret_store.close()
+
+    assert error == ""
+    assert credential is not None
+    assert credential.username == "support"
+    assert credential.handle.startswith("credential://")
+    assert canary not in options
+    assert "secret://" not in options
+    assert "credential://" not in options
+    assert "STOP_ON_SUCCESS=true" in options
+    assert "VERBOSE=false" in options
+    assert "CreateSession=false" in options
 
 
 def test_run_msf_login_check_script_disables_session_creation_and_exits(monkeypatch):

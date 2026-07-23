@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Regression tests for AI evidence parsing."""
 
+import pytest
+
+pytestmark = pytest.mark.contract
+
 
 def test_ssh_session_output_seeds_credentials_service_and_privesc():
     from core.ai.evidence import OutputParser

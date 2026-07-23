@@ -9,6 +9,7 @@ from collections.abc import Callable, Iterable, Mapping
 from typing import Any, ClassVar
 
 from core.execution import ExecutionContext, ExecutionResult
+from core.execution.policy import registered_tool_requires_approval
 
 from .base import ActionAdapter
 from .models import (
@@ -18,6 +19,7 @@ from .models import (
     ActionKind,
     ActionRequest,
     ActionRequirements,
+    ActiveRiskClass,
     ApplicabilityResult,
 )
 
@@ -106,7 +108,7 @@ class RegisteredToolAdapter(ActionAdapter):
         name = str(tool_def.name)
         is_killchain = name.startswith("killchain_")
         kind = ActionKind.KILLCHAIN if is_killchain else ActionKind.REGISTERED_TOOL
-        active = is_killchain and name not in {"killchain_vuln_assess"}
+        active = registered_tool_requires_approval(name, (name,))
         action_id = f"killchain:{name}" if is_killchain else f"tool:{name}"
         self.descriptor = ActionDescriptor(
             action_id=action_id,
@@ -149,19 +151,41 @@ class RegisteredToolAdapter(ActionAdapter):
             self.descriptor.name.casefold(),
             *(alias.casefold() for alias in self.descriptor.aliases),
         }
-        if request.command:
+        provider_command = request.provider_command_for(self.descriptor.action_id)
+        if not provider_command:
+            provider_command = request.provider_command_for(self.descriptor.name)
+        command = provider_command or request.command
+        if command:
             try:
-                parts = shlex.split(request.command, posix=True)
+                parts = shlex.split(command, posix=True)
             except ValueError as exc:
                 raise ValueError("invalid_action_command_quoting") from exc
             if not parts or parts[0].casefold() not in allowed_names:
                 raise ValueError("action_command_does_not_match_descriptor")
-            return request.command
+            return command
         parts = [self.descriptor.name]
         if request.target and self.descriptor.requirements.target_required:
             parts.append(request.target)
         parts.extend(str(item) for item in request.arguments)
         return shlex.join(parts)
+
+    def active_risk_class(
+        self,
+        request: ActionRequest,
+        phase: str = "execute",
+    ) -> ActiveRiskClass:
+        try:
+            invocation = self.invocation(request, phase)
+        except (TypeError, ValueError):
+            return super().active_risk_class(request, phase)
+        return (
+            ActiveRiskClass.ACTIVE
+            if registered_tool_requires_approval(
+                invocation.registered_name or invocation.executable,
+                invocation.argv,
+            )
+            else ActiveRiskClass.READ_ONLY
+        )
 
     def invocation(self, request: ActionRequest, phase: str):
         return self.registered_invocation(

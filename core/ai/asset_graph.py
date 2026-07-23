@@ -6,7 +6,7 @@ import hashlib
 import ipaddress
 import json
 import re
-from typing import Any
+from typing import Any, Union, cast
 from urllib.parse import urlparse
 
 from core.knowledge.identity import (
@@ -228,7 +228,7 @@ class AssetGraph:
             if kind == "service":
                 return canonical_service(
                     str(attrs.get("host") or str(node_id).split(":", 1)[0]),
-                    attrs.get("port"),
+                    cast(Union[int, str], attrs.get("port")),
                     str(attrs.get("proto") or attrs.get("protocol") or "tcp"),
                 ).entity_id
             if kind == "endpoint":

@@ -36,6 +36,8 @@ from core.plugins.base import PluginResult
 from core.secrets import Redactor, SecretStore
 from core.tools.registry import ToolDef
 
+pytestmark = [pytest.mark.contract, pytest.mark.security]
+
 
 def automatic(target: str = "example.com") -> ExecutionContext:
     return ExecutionContext.automatic(
@@ -176,6 +178,9 @@ def test_final_policy_denial_blocks_provider_even_after_candidate_selection():
     assert report.lifecycle.attempt is AttemptStatus.BLOCKED
     assert report.lifecycle.outcome is OutcomeStatus.BLOCKED
     assert report.lifecycle.verification is VerificationStatus.NOT_RUN
+    assert len(report.policy_denials) == 1
+    assert report.policy_denials[0].phase == "execute"
+    assert report.policy_denials[0].reason_code == "active_tool_requires_approval"
 
 
 def test_cleanup_failure_does_not_relabel_success_or_verification():

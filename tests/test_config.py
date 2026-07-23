@@ -4,6 +4,10 @@
 import os
 from unittest.mock import patch
 
+import pytest
+
+pytestmark = pytest.mark.unit
+
 
 class TestLoadDefaults:
     """Test that default config values are correct."""
@@ -15,6 +19,23 @@ class TestLoadDefaults:
         assert "user" in DEFAULTS["db"]
         assert "password" in DEFAULTS["db"]
         assert "database" in DEFAULTS["db"]
+
+    def test_defaults_do_not_embed_a_database_password(self):
+        from config import DEFAULTS
+
+        assert DEFAULTS["db"]["password"] == ""
+
+    def test_checked_in_config_does_not_embed_a_database_password(self):
+        from pathlib import Path
+
+        import yaml
+
+        import config
+
+        checked_in = yaml.safe_load(
+            Path(config.__file__).with_name("config.yaml").read_text(encoding="utf-8")
+        )
+        assert checked_in["db"]["password"] == ""
 
     def test_defaults_have_ollama_section(self):
         from config import DEFAULTS

@@ -46,7 +46,7 @@ DEFAULTS = {
     "db": {
         "host": "localhost",
         "user": "octopus",
-        "password": "123",
+        "password": "",
         "database": "octopus",
     },
     "ollama": {

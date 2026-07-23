@@ -29,10 +29,19 @@ _TEST_TAXONOMY = {
 
 
 def pytest_collection_modifyitems(items):
-    """Give otherwise-unclassified hermetic tests the explicit unit marker."""
-    for item in items:
-        if not any(item.get_closest_marker(name) for name in _TEST_TAXONOMY):
-            item.add_marker(pytest.mark.unit)
+    """Reject tests that do not declare an explicit taxonomy marker."""
+
+    unclassified = [
+        item.nodeid
+        for item in items
+        if not any(item.get_closest_marker(name) for name in _TEST_TAXONOMY)
+    ]
+    if unclassified:
+        rendered = "\n  - ".join(unclassified)
+        raise pytest.UsageError(
+            "unclassified tests must declare an explicit pytest marker:\n"
+            f"  - {rendered}"
+        )
 
 
 # ─── Sample Data Fixtures ───────────────────────────────

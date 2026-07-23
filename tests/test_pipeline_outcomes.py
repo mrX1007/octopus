@@ -10,6 +10,8 @@ from core.ai.outcomes import (
     has_blocked_stage_fact,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def _command(*, failed=False, skipped=False, reason="", fact_pairs=None, name="tool target"):
     result = {
@@ -208,4 +210,3 @@ def test_in_memory_store_appends_legacy_dicts_and_updates_indexes_exactly():
     assert task_outcomes == [first, second, third]
     assert failed_commands == ["nmap 10.0.0.5"]
     assert no_fact_tasks == ["web_vulnerability_testing"]
-

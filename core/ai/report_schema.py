@@ -12,6 +12,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from core.ai.evaluated_facts import fact_is_decision_usable
 from core.secrets import redact_data
 
 EVIDENCE_REPORT_SCHEMA_VERSION = "1.0"
@@ -357,7 +358,13 @@ def _fact_item(
         text_limit=_MAX_TEXT_BYTES,
     )
     assessment_refs = _refs([_assessment_ref(fact)])
-    if status == "verified" and not (chain and source_execution_ids and reasons):
+    coverage_status = str(fact.get("coverage_status") or "").strip().lower()
+    freshness_status = str(fact.get("freshness_status") or "").strip().lower()
+    if coverage_status == "degraded":
+        report_status = "degraded"
+    elif freshness_status == "stale":
+        report_status = "stale"
+    elif status == "verified" and not (chain and source_execution_ids and reasons):
         report_status = "verification_metadata_incomplete"
     else:
         report_status = status
@@ -690,7 +697,7 @@ def _report_verified(
     fact: Mapping[str, Any],
     evidence_by_fact: Mapping[int | None, Mapping[str, Any]],
 ) -> bool:
-    if _assessment_status(fact) != "verified":
+    if _assessment_status(fact) != "verified" or not fact_is_decision_usable(fact):
         return False
     assessment = _assessment(fact)
     return bool(
@@ -707,6 +714,10 @@ def _verification_gap(
     status = _assessment_status(fact)
     if status == "contradicted":
         return "current_assessment_contradicted"
+    if str(fact.get("coverage_status") or "").strip().lower() == "degraded":
+        return "degraded_evidence_coverage"
+    if str(fact.get("freshness_status") or "").strip().lower() == "stale":
+        return "stale_evidence"
     if status != "verified":
         return f"current_assessment_{status}"
     if not _evidence_chain(fact, evidence_by_fact):

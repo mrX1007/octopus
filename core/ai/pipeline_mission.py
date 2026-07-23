@@ -7,16 +7,23 @@ legacy in-memory compatibility projections.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import time
 from typing import Any
 
 from core.ai.mission_store import (
+    TASK_DEFINITION_SCHEMA_VERSION,
     MissionTaskDefinition,
     RetryErrorClass,
+    TaskBackoff,
     TaskDependenciesIncomplete,
+    TaskDependencyRef,
     TaskRetryPolicy,
+    TaskScope,
 )
 from core.ai.pipeline_types import PipelineMixinBase
+from core.knowledge.identity import canonical_asset
 
 
 class PipelineMissionMixin(PipelineMixinBase):
@@ -27,6 +34,8 @@ class PipelineMissionMixin(PipelineMixinBase):
         self._current_target = str(target)
         mission = self.mission_store.open_mission(scan_id, target, recover=True)
         self.mission_id = mission.mission_id
+        self._state_replan_count = mission.state_replan_count
+        self._state_replan_signatures = set(mission.state_replan_signatures)
         self._mission_was_completed = mission.status == "completed"
         self._mission_was_resumed = bool(
             previous is not None and previous.status != "completed"
@@ -100,7 +109,11 @@ class PipelineMissionMixin(PipelineMixinBase):
                 check = json.loads(str(fact.get("value") or ""))
             except (TypeError, ValueError, json.JSONDecodeError):
                 continue
-            if isinstance(check, dict) and check.get("command_key"):
+            if (
+                isinstance(check, dict)
+                and check.get("command_key")
+                and str(check.get("status") or "").casefold() != "running"
+            ):
                 self.executed_command_keys.add(str(check["command_key"]))
         return mission
 
@@ -112,86 +125,290 @@ class PipelineMissionMixin(PipelineMixinBase):
         if not self.mission_id:
             return plan
         snapshot = self.mission_store.snapshot(self.mission_id)
-        records_by_key = {
-            (record.agent, record.task): record for record in snapshot.tasks
-        }
-        records_by_name = {record.task: record for record in snapshot.tasks}
         records_by_id = {record.task_id: record for record in snapshot.tasks}
 
-        selected: list[tuple[str, str, dict[str, Any]]] = []
-        selected_by_name: dict[str, tuple[str, str]] = {}
+        explicit_task_ids = [str(step.get("task_id") or "") for step in plan]
+        if plan and all(explicit_task_ids):
+            for step, task_id in zip(plan, explicit_task_ids):
+                record = records_by_id.get(task_id)
+                if record is None or (
+                    record.agent != str(step.get("agent") or "")
+                    or record.task != str(step.get("task") or "")
+                ):
+                    raise ValueError("ordered mission plan contains an unknown task_id")
+            return self._ordered_mission_plan(task_ids=explicit_task_ids)
+
+        selected: list[
+            tuple[
+                tuple[Any, ...],
+                str,
+                str,
+                dict[str, Any],
+                Any,
+                TaskScope,
+                str,
+            ]
+        ] = []
+        selected_identities: set[tuple[Any, ...]] = set()
         for step in plan:
             agent = str(step.get("agent") or "")
             task = str(step.get("task") or "")
-            if not agent or not task or task in selected_by_name:
+            if not agent or not task:
                 continue
-            existing = records_by_name.get(task)
+            requested_scope = self._mission_task_scope(step)
+            requested_version = str(
+                step.get("task_definition_version")
+                or TASK_DEFINITION_SCHEMA_VERSION
+            )
+            requested_task_id = str(step.get("task_id") or "")
+            identity: tuple[Any, ...]
+            if requested_task_id:
+                existing = records_by_id.get(requested_task_id)
+                if existing is None or existing.task != task:
+                    raise ValueError("mission plan contains an unknown task_id")
+                identity = ("task_id", existing.task_id)
+            else:
+                candidates = [
+                    record
+                    for record in snapshot.tasks
+                    if record.agent == agent
+                    and record.task == task
+                    and self._mission_task_scope_identity(record.task_scope)
+                    == self._mission_task_scope_identity(requested_scope)
+                    and record.task_definition_version == requested_version
+                ]
+                existing = candidates[0] if candidates else None
+                identity = (
+                    "definition",
+                    agent,
+                    task,
+                    self._mission_task_scope_identity(requested_scope),
+                    requested_version,
+                )
+            if identity in selected_identities:
+                continue
             effective = (
                 (existing.agent, existing.task) if existing else (agent, task)
             )
-            selected_by_name[task] = effective
-            selected.append((effective[0], effective[1], step))
+            selected_identities.add(identity)
+            selected.append(
+                (
+                    identity,
+                    effective[0],
+                    effective[1],
+                    step,
+                    existing,
+                    existing.task_scope if existing is not None else requested_scope,
+                    (
+                        existing.task_definition_version
+                        if existing is not None
+                        else requested_version
+                    ),
+                )
+            )
 
-        available_by_name = {
-            **{name: (record.agent, record.task) for name, record in records_by_name.items()},
-            **selected_by_name,
+        available_entries: dict[tuple[Any, ...], TaskDependencyRef] = {
+            ("task_id", record.task_id): TaskDependencyRef(
+                agent=record.agent,
+                task=record.task,
+                scope=record.task_scope,
+                task_definition_version=record.task_definition_version,
+                task_id=record.task_id,
+            )
+            for record in snapshot.tasks
         }
-        available_by_key = {
-            **{key: (record.agent, record.task) for key, record in records_by_key.items()},
-            **{value: value for value in selected_by_name.values()},
-        }
-        dependencies_by_task: dict[str, list[tuple[str, str]]] = {}
-        invalid_reasons: dict[str, list[str]] = {}
-        for _, task, step in selected:
+        for identity, agent, task, _, existing, scope, version in selected:
+            token = (
+                ("task_id", existing.task_id)
+                if existing is not None
+                else identity
+            )
+            available_entries[token] = TaskDependencyRef(
+                agent=agent,
+                task=task,
+                scope=scope,
+                task_definition_version=version,
+                task_id=existing.task_id if existing is not None else "",
+            )
+        identities_by_name: dict[str, list[TaskDependencyRef]] = {}
+        identities_by_key: dict[tuple[str, str], list[TaskDependencyRef]] = {}
+        for reference in available_entries.values():
+            identities_by_name.setdefault(reference.task, []).append(reference)
+            identities_by_key.setdefault(
+                (reference.agent, reference.task),
+                [],
+            ).append(reference)
+
+        dependencies_by_identity: dict[
+            tuple[Any, ...], list[TaskDependencyRef]
+        ] = {}
+        invalid_reasons: dict[tuple[Any, ...], list[str]] = {}
+        for identity, _, _task, step, existing, scope, version in selected:
             raw_dependencies = step.get("depends_on") or ()
             if isinstance(raw_dependencies, str):
                 raw_dependencies = (raw_dependencies,)
-            existing = records_by_name.get(task)
             if not raw_dependencies and existing is not None:
-                dependencies_by_task[task] = [
-                    (records_by_id[dependency_id].agent, records_by_id[dependency_id].task)
+                dependencies_by_identity[identity] = [
+                    TaskDependencyRef(
+                        agent=records_by_id[dependency_id].agent,
+                        task=records_by_id[dependency_id].task,
+                        scope=records_by_id[dependency_id].task_scope,
+                        task_definition_version=(
+                            records_by_id[dependency_id].task_definition_version
+                        ),
+                        task_id=dependency_id,
+                    )
                     for dependency_id in existing.depends_on
                     if dependency_id in records_by_id
                 ]
                 continue
-            resolved_dependencies: list[tuple[str, str]] = []
+            resolved_dependencies: list[TaskDependencyRef] = []
+
+            def select_reference(
+                candidates: list[TaskDependencyRef],
+                *,
+                current_scope: TaskScope = scope,
+                current_version: str = version,
+            ) -> TaskDependencyRef | None:
+                if len(candidates) == 1:
+                    return candidates[0]
+                same_scope = [
+                    candidate
+                    for candidate in candidates
+                    if isinstance(candidate.scope, TaskScope)
+                    and self._mission_task_scope_identity(candidate.scope)
+                    == self._mission_task_scope_identity(current_scope)
+                ]
+                same_definition = [
+                    candidate
+                    for candidate in same_scope
+                    if (
+                        candidate.task_definition_version
+                        or TASK_DEFINITION_SCHEMA_VERSION
+                    )
+                    == current_version
+                ]
+                if len(same_definition) == 1:
+                    return same_definition[0]
+                if len(same_scope) == 1:
+                    return same_scope[0]
+                return None
+
             for dependency in raw_dependencies:
                 dependency_text = str(dependency)
-                dependency_identity = available_by_name.get(dependency_text)
-                if dependency_identity is None and ":" in dependency_text:
-                    dep_agent, dep_task = dependency_text.split(":", 1)
-                    dependency_identity = available_by_key.get((dep_agent, dep_task))
+                dependency_identity: TaskDependencyRef | None
+                if isinstance(dependency, TaskDependencyRef):
+                    dependency_identity = dependency
+                elif isinstance(dependency, dict):
+                    raw_dependency_scope = dependency.get(
+                        "task_scope",
+                        dependency.get("scope"),
+                    )
+                    dependency_identity = TaskDependencyRef(
+                        agent=str(dependency.get("agent") or ""),
+                        task=str(dependency.get("task") or ""),
+                        scope=(
+                            self._mission_task_scope(
+                                {"task_scope": raw_dependency_scope}
+                            )
+                            if raw_dependency_scope is not None
+                            else None
+                        ),
+                        task_definition_version=(
+                            str(dependency["task_definition_version"])
+                            if dependency.get("task_definition_version") is not None
+                            else None
+                        ),
+                        task_id=str(dependency.get("task_id") or ""),
+                    )
+                elif (
+                    isinstance(dependency, (list, tuple))
+                    and len(dependency) == 2
+                ):
+                    dep_agent, dep_task = dependency
+                    dependency_identity = select_reference(
+                        identities_by_key.get(
+                            (str(dep_agent), str(dep_task)),
+                            [],
+                        )
+                    )
+                elif dependency_text in records_by_id:
+                    dependency_identity = available_entries.get(
+                        ("task_id", dependency_text)
+                    )
+                else:
+                    dependency_identity = select_reference(
+                        identities_by_name.get(dependency_text, [])
+                    )
+                    if dependency_identity is None and ":" in dependency_text:
+                        dep_agent, dep_task = dependency_text.split(":", 1)
+                        dependency_identity = select_reference(
+                            identities_by_key.get((dep_agent, dep_task), [])
+                        )
                 if dependency_identity is None:
-                    invalid_reasons.setdefault(task, []).append(dependency_text)
+                    invalid_reasons.setdefault(identity, []).append(dependency_text)
                 else:
                     resolved_dependencies.append(dependency_identity)
-            dependencies_by_task[task] = resolved_dependencies
+            dependencies_by_identity[identity] = resolved_dependencies
+
+        selected_by_task_id = {
+            existing.task_id: identity
+            for identity, _, _, _, existing, _, _ in selected
+            if existing is not None
+        }
+        selected_by_definition = {
+            (
+                agent,
+                task,
+                self._mission_task_scope_identity(scope),
+                version,
+            ): identity
+            for identity, agent, task, _, _, scope, version in selected
+        }
+
+        def selected_dependency_identity(
+            dependency: TaskDependencyRef,
+        ) -> tuple[Any, ...] | None:
+            if dependency.task_id:
+                return selected_by_task_id.get(dependency.task_id)
+            if not dependency.agent or not dependency.task or dependency.scope is None:
+                return None
+            dependency_scope = (
+                dependency.scope
+                if isinstance(dependency.scope, TaskScope)
+                else self._mission_task_scope({"task_scope": dependency.scope})
+            )
+            return selected_by_definition.get(
+                (
+                    dependency.agent,
+                    dependency.task,
+                    self._mission_task_scope_identity(dependency_scope),
+                    (
+                        dependency.task_definition_version
+                        or TASK_DEFINITION_SCHEMA_VERSION
+                    ),
+                )
+            )
 
         changed = True
         while changed:
             changed = False
-            for _, task, _ in selected:
-                if task in invalid_reasons:
+            for identity, _, _, _, _, _, _ in selected:
+                if identity in invalid_reasons:
                     continue
                 invalid_dependencies = [
-                    dependency_task
-                    for _, dependency_task in dependencies_by_task[task]
-                    if dependency_task in invalid_reasons
+                    dependency.task or dependency.task_id
+                    for dependency in dependencies_by_identity[identity]
+                    if selected_dependency_identity(dependency) in invalid_reasons
                 ]
                 if invalid_dependencies:
-                    invalid_reasons[task] = invalid_dependencies
+                    invalid_reasons[identity] = invalid_dependencies
                     changed = True
 
         definitions: list[MissionTaskDefinition] = []
-        blocked_reasons: dict[tuple[str, str], str] = {}
+        blocked_reasons_by_position: dict[int, str] = {}
         default_retry_policy = self._mission_task_retry_policy()
-        for agent, task, step in selected:
-            existing = records_by_name.get(task)
-            scope = (
-                existing.scope
-                if existing is not None
-                else self._mission_task_scope(step)
-            )
+        for identity, agent, task, step, existing, scope, version in selected:
             capability = (
                 existing.capability
                 if existing is not None
@@ -205,9 +422,9 @@ class PipelineMissionMixin(PipelineMixinBase):
                 if existing is not None
                 else default_retry_policy
             )
-            if task in invalid_reasons:
+            if identity in invalid_reasons:
                 reason = "unknown_dependencies:" + ",".join(
-                    sorted(dict.fromkeys(invalid_reasons[task]))
+                    sorted(dict.fromkeys(invalid_reasons[identity]))
                 )
                 definitions.append(
                     MissionTaskDefinition(
@@ -215,29 +432,97 @@ class PipelineMissionMixin(PipelineMixinBase):
                         task=task,
                         scope=scope,
                         capability=capability,
+                        capability_id=(
+                            existing.capability_id
+                            if existing is not None
+                            else str(step.get("capability_id") or "")
+                        ),
+                        task_definition_version=(
+                            existing.task_definition_version if existing is not None else version
+                        ),
                         retry_policy=TaskRetryPolicy(),
+                        not_before=(
+                            existing.not_before
+                            if existing is not None
+                            else step.get("not_before")
+                        ),
+                        backoff=(
+                            existing.backoff
+                            if existing is not None
+                            else self._mission_task_backoff(step)
+                        ),
+                        provider_circuit_ref=(
+                            existing.provider_circuit_ref
+                            if existing is not None
+                            else str(step.get("provider_circuit_ref") or "")
+                        ),
+                        evaluated_snapshot_ref=(
+                            existing.evaluated_snapshot_ref
+                            if existing is not None
+                            else str(
+                                step.get("evaluated_snapshot_ref")
+                                or step.get("evaluated_fact_snapshot_ref")
+                                or ""
+                            )
+                        ),
                     )
                 )
-                blocked_reasons[(agent, task)] = reason
+                blocked_reasons_by_position[len(definitions) - 1] = reason
             else:
                 definitions.append(
                     MissionTaskDefinition(
                         agent=agent,
                         task=task,
-                        depends_on=tuple(dependencies_by_task[task]),
+                        depends_on=tuple(dependencies_by_identity[identity]),
                         scope=scope,
                         capability=capability,
+                        capability_id=(
+                            existing.capability_id
+                            if existing is not None
+                            else str(step.get("capability_id") or "")
+                        ),
+                        task_definition_version=(
+                            existing.task_definition_version if existing is not None else version
+                        ),
                         retry_policy=retry_policy,
+                        not_before=(
+                            existing.not_before
+                            if existing is not None
+                            else step.get("not_before")
+                        ),
+                        backoff=(
+                            existing.backoff
+                            if existing is not None
+                            else self._mission_task_backoff(step)
+                        ),
+                        provider_circuit_ref=(
+                            existing.provider_circuit_ref
+                            if existing is not None
+                            else str(step.get("provider_circuit_ref") or "")
+                        ),
+                        evaluated_snapshot_ref=(
+                            existing.evaluated_snapshot_ref
+                            if existing is not None
+                            else str(
+                                step.get("evaluated_snapshot_ref")
+                                or step.get("evaluated_fact_snapshot_ref")
+                                or ""
+                            )
+                        ),
                     )
                 )
 
-        records = self.mission_store.register_plan(
-            self.mission_id,
-            definitions,
-            blocked_reasons=blocked_reasons,
+        records = list(
+            self.mission_store.register_plan(
+                self.mission_id,
+                definitions,
+                blocked_reasons_by_position=blocked_reasons_by_position,
+            )
         )
-        if blocked_reasons:
+        if blocked_reasons_by_position:
             persisted = self.mission_store.snapshot(self.mission_id)
+            records_by_id = {record.task_id: record for record in persisted.tasks}
+            records = [records_by_id[record.task_id] for record in records]
             attempts_by_task_id = {
                 attempt.task_id: attempt
                 for attempt in persisted.attempts
@@ -250,12 +535,67 @@ class PipelineMissionMixin(PipelineMixinBase):
                 attempt = attempts_by_task_id.get(record.task_id)
                 if attempt is not None and attempt.outcome is not None:
                     self.task_outcome_store.record(attempt.outcome)
-        return self._ordered_mission_plan([record.task for record in records])
+        return self._ordered_mission_plan(
+            task_ids=[record.task_id for record in records]
+        )
 
-    def _mission_task_scope(self, step: dict[str, Any]) -> str:
-        raw_scope = step.get("scope")
+    def _mission_task_scope(self, step: dict[str, Any]) -> TaskScope:
+        raw_scope = step.get("task_scope", step.get("scope"))
+        if isinstance(raw_scope, TaskScope):
+            return raw_scope
+        raw_entity_ids = step.get("entity_ids") or step.get("canonical_entity_ids")
+        if raw_entity_ids:
+            values = (
+                (raw_entity_ids,)
+                if isinstance(raw_entity_ids, str)
+                else tuple(raw_entity_ids)
+            )
+            return TaskScope(
+                entity_ids=tuple(str(item) for item in values),
+                legacy_scope=self._legacy_scope_text(raw_scope),
+            )
         if raw_scope in (None, ""):
-            return f"target:{self._current_target}"
+            legacy_scope = f"target:{self._current_target}"
+            try:
+                return TaskScope(
+                    entity_ids=(canonical_asset(self._current_target).entity_id,),
+                    legacy_scope=legacy_scope,
+                )
+            except (TypeError, ValueError):
+                return TaskScope.from_legacy(legacy_scope)
+        if isinstance(raw_scope, dict) and (
+            raw_scope.get("entity_ids") or raw_scope.get("canonical_entity_ids")
+        ):
+            raw_ids = raw_scope.get("entity_ids") or raw_scope.get(
+                "canonical_entity_ids"
+            )
+            values = (
+                (raw_ids,)
+                if isinstance(raw_ids, str)
+                else tuple(raw_ids or ())
+            )
+            return TaskScope(
+                entity_ids=tuple(str(item) for item in values),
+                legacy_scope=str(raw_scope.get("legacy_scope") or ""),
+                schema_version=str(
+                    raw_scope.get("schema_version") or TaskScope().schema_version
+                ),
+            )
+        return TaskScope.from_legacy(self._legacy_scope_text(raw_scope))
+
+    @staticmethod
+    def _mission_task_scope_identity(
+        scope: TaskScope,
+    ) -> tuple[str, tuple[str, ...], str]:
+        """Mirror MissionStore identity while excluding typed-scope display aliases."""
+        return (
+            scope.schema_version,
+            scope.entity_ids,
+            "" if scope.entity_ids else scope.legacy_scope,
+        )
+
+    @staticmethod
+    def _legacy_scope_text(raw_scope: Any) -> str:
         if isinstance(raw_scope, (dict, list, tuple)):
             return json.dumps(
                 raw_scope,
@@ -264,6 +604,15 @@ class PipelineMissionMixin(PipelineMixinBase):
                 default=str,
             )
         return str(raw_scope)
+
+    @staticmethod
+    def _mission_task_backoff(step: dict[str, Any]) -> TaskBackoff:
+        raw = step.get("backoff")
+        if raw is None:
+            return TaskBackoff()
+        if not isinstance(raw, TaskBackoff):
+            raise ValueError("mission task backoff must be a TaskBackoff")
+        return raw
 
     def _mission_task_retry_policy(self) -> TaskRetryPolicy:
         from config import CFG
@@ -308,7 +657,12 @@ class PipelineMissionMixin(PipelineMixinBase):
     @staticmethod
     def _state_replan_signature(context: dict[str, Any]) -> str:
         stage_gates = context.get("stage_gates") or {}
-        assessment_counts = context.get("fact_assessment_counts") or {}
+        fact_assessments = context.get("fact_assessments") or {}
+        assessment_counts = (
+            fact_assessments.get("counts")
+            if isinstance(fact_assessments, dict)
+            else None
+        ) or context.get("fact_assessment_counts") or {}
         payload = {
             "state": str(context.get("state") or "unknown"),
             "next_required_capability": str(
@@ -326,6 +680,18 @@ class PipelineMissionMixin(PipelineMixinBase):
         }
         return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
+    @staticmethod
+    def _state_replan_transition_signature(
+        previous_signature: str,
+        current_signature: str,
+    ) -> str:
+        payload = json.dumps(
+            [previous_signature, current_signature],
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return hashlib.sha256(payload.encode("utf-8", "replace")).hexdigest()
+
     def _evaluate_state_change_replan(
         self,
         previous_context: dict[str, Any],
@@ -338,12 +704,34 @@ class PipelineMissionMixin(PipelineMixinBase):
         current_signature = self._state_replan_signature(current_context)
         if previous_signature == current_signature:
             return False
-        transition_key = f"{previous_signature}->{current_signature}"
+        transition_key = self._state_replan_transition_signature(
+            previous_signature,
+            current_signature,
+        )
         if transition_key in self._state_replan_signatures:
             return False
 
         maximum = self._max_state_replans()
-        if self._state_replan_count >= maximum:
+        if self.mission_id:
+            durable = self.mission_store.record_state_replan(
+                self.mission_id,
+                transition_key,
+                maximum,
+            )
+            self._state_replan_count = durable.count
+            self._state_replan_signatures = set(durable.signatures)
+            if durable.reason == "duplicate_transition":
+                return False
+            requested = durable.requested
+        elif self._state_replan_count >= maximum:
+            requested = False
+            self._state_replan_signatures.add(transition_key)
+        else:
+            requested = True
+            self._state_replan_count += 1
+            self._state_replan_signatures.add(transition_key)
+
+        if not requested:
             self.decision_trace.record(
                 {
                     "event_id": (
@@ -370,11 +758,8 @@ class PipelineMissionMixin(PipelineMixinBase):
                     },
                 }
             )
-            self._state_replan_signatures.add(transition_key)
             return False
 
-        self._state_replan_count += 1
-        self._state_replan_signatures.add(transition_key)
         self.decision_trace.record(
             {
                 "event_id": (
@@ -411,22 +796,47 @@ class PipelineMissionMixin(PipelineMixinBase):
     def _ordered_mission_plan(
         self,
         task_names: list[str] | None = None,
+        *,
+        task_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         if not self.mission_id:
             return []
         snapshot = self.mission_store.snapshot(self.mission_id)
         records = list(snapshot.tasks)
         by_id = {record.task_id: record for record in records}
-        if task_names is None:
+        now = time.time()
+        if task_names is None and task_ids is None:
             selected = {
                 record.task_id
                 for record in records
                 if record.status in {"pending", "interrupted"}
+                and (
+                    record.not_before is None
+                    or record.not_before <= now
+                )
+            }
+        elif task_ids is not None:
+            requested_ids = set(task_ids)
+            selected = {
+                record.task_id
+                for record in records
+                if record.task_id in requested_ids
+                and (
+                    record.not_before is None
+                    or record.not_before <= now
+                )
             }
         else:
+            assert task_names is not None
             requested = set(task_names)
             selected = {
-                record.task_id for record in records if record.task in requested
+                record.task_id
+                for record in records
+                if record.task in requested
+                and (
+                    record.not_before is None
+                    or record.not_before <= now
+                )
             }
         # A task with live prerequisite work is deferred to a later durable
         # drain pass.  Terminally unsatisfied prerequisites remain selected so
@@ -469,11 +879,13 @@ class PipelineMissionMixin(PipelineMixinBase):
                     ready.sort(key=order.__getitem__)
         if len(ordered) != len(selected):
             raise RuntimeError("persisted mission task dependency cycle")
-        # Keep the public planner-step shape stable.  ``_register_mission_plan``
-        # rehydrates scope, capability, dependencies, and retry policy from the
-        # matched durable TaskRecord instead of recomputing them from config.
         return [
-            {"agent": by_id[task_id].agent, "task": by_id[task_id].task}
+            {
+                "agent": by_id[task_id].agent,
+                "task": by_id[task_id].task,
+                "task_id": by_id[task_id].task_id,
+                "task_scope": by_id[task_id].task_scope,
+            }
             for task_id in ordered
         ]
 
@@ -481,10 +893,55 @@ class PipelineMissionMixin(PipelineMixinBase):
         """Return unfinished durable work before consulting Director or Planner."""
         return self._ordered_mission_plan()
 
-    def _block_registered_task(self, agent: str, task: str, reason: str):
+    def _next_deferred_mission_time(self) -> float | None:
+        """Return the earliest future durable task gate without sleeping in-process."""
         if not self.mission_id:
             return None
-        attempt = self.mission_store.block_task(self.mission_id, agent, task, reason)
+        now = time.time()
+        deferred = [
+            record.not_before
+            for record in self.mission_store.snapshot(self.mission_id).tasks
+            if record.status in {"pending", "interrupted"}
+            and record.not_before is not None
+            and record.not_before > now
+        ]
+        return min(deferred) if deferred else None
+
+    def _mission_plan_step_exhausted(self, step: dict[str, Any]) -> bool:
+        """Prefer durable task identity over the legacy name-only projections."""
+        task_id = str(step.get("task_id") or "")
+        if self.mission_id and task_id:
+            record = next(
+                (
+                    item
+                    for item in self.mission_store.snapshot(self.mission_id).tasks
+                    if item.task_id == task_id
+                ),
+                None,
+            )
+            if record is not None:
+                return record.status not in {"pending", "interrupted"}
+        return self._task_exhausted(str(step.get("task") or ""))
+
+    def _block_registered_task(
+        self,
+        agent: str,
+        task: str,
+        reason: str,
+        *,
+        task_id: str | None = None,
+        scope: TaskScope | str | None = None,
+    ):
+        if not self.mission_id:
+            return None
+        attempt = self.mission_store.block_task(
+            self.mission_id,
+            agent,
+            task,
+            reason,
+            task_id=task_id,
+            scope=scope,
+        )
         self.blocked_tasks.add(task)
         if attempt.outcome is not None:
             self.task_outcome_store.record(attempt.outcome)
@@ -534,12 +991,23 @@ class PipelineMissionMixin(PipelineMixinBase):
         if not self.mission_id:
             return
         snapshot = self.mission_store.snapshot(self.mission_id)
-        by_name = {record.task: record for record in snapshot.tasks}
+        by_id = {record.task_id: record for record in snapshot.tasks}
+        records_by_name: dict[str, list[Any]] = {}
+        for record in snapshot.tasks:
+            records_by_name.setdefault(record.task, []).append(record)
         for step in plan:
             task = str(step.get("task") or "")
             if not task or not self._task_exhausted(task):
                 continue
-            record = by_name.get(task)
+            task_id = str(step.get("task_id") or "")
+            same_name_records = records_by_name.get(task, [])
+            if task_id and len(same_name_records) > 1:
+                # A legacy name-only completion marker cannot identify which
+                # typed scope it intended to terminalize.
+                continue
+            record = by_id.get(task_id) if task_id else (
+                same_name_records[0] if len(same_name_records) == 1 else None
+            )
             if record is None or record.status not in {"pending", "interrupted"}:
                 continue
             if task in self.blocked_tasks:
@@ -547,6 +1015,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                     record.agent,
                     record.task,
                     "compatibility_state_blocked",
+                    task_id=record.task_id,
                 )
                 continue
             attempt = self.mission_store.skip_task(
@@ -554,18 +1023,32 @@ class PipelineMissionMixin(PipelineMixinBase):
                 record.agent,
                 record.task,
                 "compatibility_state_exhausted",
+                task_id=record.task_id,
             )
             if attempt.outcome is not None:
                 self.task_outcome_store.record(attempt.outcome)
 
-    def _begin_task_attempt(self, agent: str, task: str):
+    def _begin_task_attempt(
+        self,
+        agent: str,
+        task: str,
+        *,
+        task_id: str | None = None,
+        scope: TaskScope | str | None = None,
+    ):
         if not self.mission_id:
             return None
         if self._active_task_attempt_id:
             raise RuntimeError("a mission task attempt is already active")
         self._active_retry_command_keys.clear()
         try:
-            attempt = self.mission_store.begin_attempt(self.mission_id, agent, task)
+            attempt = self.mission_store.begin_attempt(
+                self.mission_id,
+                agent,
+                task,
+                task_id=task_id,
+                scope=scope,
+            )
         except TaskDependenciesIncomplete as exc:
             if all(
                 status in {"pending", "running", "interrupted"}
@@ -579,8 +1062,11 @@ class PipelineMissionMixin(PipelineMixinBase):
                 agent,
                 task,
                 f"dependency_unsatisfied:{details}",
+                task_id=task_id,
+                scope=scope,
             )
         self._active_task_attempt_id = attempt.attempt_id
+        self._active_task_id = attempt.task_id
         self._active_task_name = str(task)
         self._active_task_agent = str(agent)
         self._active_retry_command_keys = set(
@@ -588,6 +1074,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                 self.mission_id,
                 agent,
                 task,
+                task_id=attempt.task_id,
             )
         )
         return attempt
@@ -611,6 +1098,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                     "state_transition": {"from": "running", "to": "interrupted"},
                 })
         self._active_task_attempt_id = None
+        self._active_task_id = None
         self._active_task_name = ""
         self._active_task_agent = ""
         self._active_retry_command_keys.clear()
@@ -633,6 +1121,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                 })
             self._mission_was_completed = True
         self._active_task_attempt_id = None
+        self._active_task_id = None
         self._active_task_name = ""
         self._active_task_agent = ""
 

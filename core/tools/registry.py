@@ -43,7 +43,7 @@ import logging
 import os
 import shutil
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger("octopus.registry")
 
@@ -56,7 +56,7 @@ class ToolDef:
     name: str
     aliases: list[str] = field(default_factory=list)
     category: str = "recon"        # recon | exploit | post | osint | util
-    func: Callable = None
+    func: Optional[Callable[..., Any]] = None
     description: str = ""
     requires: list[str] = field(default_factory=list)  # system binary deps
     needs_target: bool = True
@@ -284,7 +284,7 @@ def print_registry_stats() -> None:
     """Print registry statistics for debugging."""
     unique = list_tools()
     available = list_tools(available_only=True)
-    categories = {}
+    categories: dict[str, list[ToolDef]] = {}
     for t in unique:
         categories.setdefault(t.category, []).append(t)
 

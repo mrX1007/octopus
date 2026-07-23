@@ -21,6 +21,10 @@ _UNRESERVED = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
 )
 _PERCENT_ESCAPE = re.compile(r"%([0-9a-fA-F]{2})")
+_CANONICAL_ENTITY_ID = re.compile(
+    r"^(?P<kind>asset|credential|endpoint|identity|service|session|vulnerability):"
+    r"v1:(?P<digest>[0-9a-f]{32})$"
+)
 
 
 class EntityKind(str, Enum):
@@ -52,6 +56,65 @@ class CanonicalEntityIdentity:
 
     def component(self, name: str, default: str = "") -> str:
         return dict(self.components).get(name, default)
+
+
+def validate_canonical_entity_id(value: str) -> str:
+    """Validate and return one versioned graph entity identity.
+
+    Typed mission scopes are an authority boundary: accepting an arbitrary
+    display label in ``entity_ids`` would recreate the alias collisions the
+    canonical graph is intended to prevent. Legacy display values must travel
+    through the explicit ``TaskScope.from_legacy`` adapter instead.
+    """
+
+    entity_id = str(value or "").strip()
+    match = _CANONICAL_ENTITY_ID.fullmatch(entity_id)
+    if match is None:
+        raise ValueError(f"Invalid canonical entity id: {value!r}")
+    # Keep the enum lookup here so additions to the regex cannot silently
+    # create an identity kind unknown to the graph model.
+    EntityKind(match.group("kind"))
+    return entity_id
+
+
+def canonicalize_scope_value(value: str) -> str:
+    """Canonicalize a host, HTTP(S) URL, or canonical graph identity.
+
+    This is the shared read-model scope representation. It intentionally keeps
+    a normalized address/URL for human-facing context while relying on the same
+    normalization functions that produce graph identities.
+    """
+
+    raw = unicodedata.normalize("NFKC", str(value or "")).strip()
+    if not raw:
+        raise ValueError("Scope value must not be empty")
+    try:
+        return validate_canonical_entity_id(raw)
+    except ValueError:
+        pass
+    if raw.casefold().startswith("endpoint:"):
+        raw = raw.split(":", 1)[1]
+    if raw.casefold().startswith("asset:"):
+        raw = raw.split(":", 1)[1]
+    parsed = urlsplit(raw)
+    if parsed.scheme.casefold() in {"http", "https"}:
+        return canonical_endpoint(raw).component("url")
+    return canonical_asset(raw).component("address")
+
+
+def canonicalize_scope_values(values: str | tuple[str, ...] | list[str]) -> tuple[str, ...]:
+    """Return sorted, de-duplicated canonical read-model scopes."""
+
+    items = (values,) if isinstance(values, str) else tuple(values)
+    return tuple(
+        sorted(
+            {
+                canonicalize_scope_value(item)
+                for item in items
+                if str(item or "").strip()
+            }
+        )
+    )
 
 
 def normalize_host(value: str) -> tuple[str, str]:

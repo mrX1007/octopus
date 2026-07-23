@@ -14,6 +14,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from core.ai.evaluated_facts import fact_is_decision_usable
 from core.ai.tool_registry import ToolRegistry
 from core.execution import ExecutionContext, ExecutionPolicy
 
@@ -190,7 +191,7 @@ class CapabilityResolver:
         fact_list = [
             dict(fact)
             for fact in facts or []
-            if str(fact.get("assessment_status") or "observed") != "contradicted"
+            if fact_is_decision_usable(fact)
         ]
         tasks = self._tasks_for_capability(canonical)
         requirements = self._requirements_for(canonical, tasks)

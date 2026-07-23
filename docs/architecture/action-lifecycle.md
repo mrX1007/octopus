@@ -40,6 +40,11 @@ requirements. Requirements separate dependency/target applicability from
 execution authority. `active=True` is classification metadata; it does not
 grant the active-tool capability.
 
+For decorator-registry adapters, static and argument-sensitive active risk is
+derived from the same `ExecutionPolicy` classification used by the approval
+gate. This prevents ordinary manual-gated tools from being mislabeled as
+read-only merely because they are not `killchain_*` entries.
+
 Canonical IDs are namespaced:
 
 - `tool:<registry-name>`;

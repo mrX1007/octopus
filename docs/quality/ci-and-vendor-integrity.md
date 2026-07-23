@@ -1,6 +1,6 @@
 # CI and vendor integrity contract
 
-Effective date: 2026-07-14.
+Effective date: 2026-07-14. Last verified: 2026-07-23.
 
 This document describes the bounded Phase 0.3 quality and supply-chain gates.
 It does not change application startup, execution policy, or the automatic C2
@@ -47,10 +47,19 @@ human-maintained resolver inputs; they are not used as CI installation inputs.
 0.1 denominator honest. The gate explicitly discovers and reports every
 first-party Python file, including files that coverage.py cannot discover as an
 importable package and therefore measured at zero. Tests, generated data, local
-environments, and vendor submodules are the only excluded trees. The initial
-threshold is **42.70%**, just below the measured 42.71% baseline to avoid
-rounding ambiguity. It is a regression floor, not the final target and not a
-claim of 100% coverage.
+environments, generated build outputs, and vendor submodules are the only
+excluded trees. The global threshold is **59.50%**. A complete green local
+measurement on 2026-07-23 reported 59.88% across all 227 explicitly discovered
+first-party sources; the plain coverage.py report was 61.10%. The explicit
+helper result is the authoritative denominator. The 1.88-point margin keeps
+the ratchet independent of display rounding. It is a regression floor, not
+the final target or a claim that coverage is 100%.
+
+The same CI step also enforces package floors for `core/actions`,
+`core/execution`, and `core/benchmarks`, plus 80% coverage on executable Python
+lines changed from the resolved Git base. The same measurement reported
+84.84%, 95.68%, and 79.07% for those three packages respectively. Raising a package or global floor
+must update its focused tests and this contract in the same logical change.
 
 Raise the threshold in the same logical change that adds tests. Never exclude
 a production module merely to satisfy the gate. The long-term test wave still
@@ -105,10 +114,13 @@ venv/bin/python -m pytest -q tests/test_vendor_verification.py
 venv/bin/python -m ruff check scripts/quality tests/test_vendor_verification.py
 venv/bin/python -m mypy
 python scripts/lock_requirements.py validate
-venv/bin/python scripts/quality/coverage_gate.py --root . --fail-under 42.70
+venv/bin/python scripts/quality/coverage_gate.py --root . --fail-under 59.50
 python -I scripts/quality/import_smoke.py
 python -I scripts/quality/verify_vendor.py --platform all --allow-dirty
 ```
+
+Pass `--data-file /absolute/path/to/measurement.coverage` to validate an
+isolated measurement without replacing the repository-local `.coverage` file.
 
 The Go commands require Go 1.21 and network-resolved modules. They are evidence
 from Linux CI until that toolchain is installed in the macOS development

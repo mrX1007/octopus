@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 
 import hashlib
+import inspect
 import json
 import logging
 import re
+from collections.abc import Mapping, Sequence
 from typing import Any, Optional
 from urllib.parse import urljoin, urlparse, urlunparse
 
@@ -13,7 +15,9 @@ from core.ai.credential_sync import RuntimeCredentialSynchronizer
 from core.ai.director import DirectorLLM
 from core.ai.evidence import EvidenceVerifier
 from core.ai.exploit_applicability import assess_exploit_command
+from core.ai.fact_store import CommandCompletionClaim
 from core.ai.outcomes import InMemoryTaskOutcomeStore
+from core.ai.pipeline_followups import PipelineFollowupsMixin
 from core.ai.pipeline_mission import PipelineMissionMixin
 from core.ai.pipeline_observability import PipelineObservabilityMixin
 from core.ai.pipeline_planning import PipelinePlanningMixin
@@ -26,9 +30,11 @@ from core.ai.state_resolver import StateResolver
 from core.ai.task_agents import AnalysisAgent, DiscoveryAgent, VerificationAgent
 from core.ai.task_scoring import TaskScorer
 from core.ai.tool_registry import ToolRegistry
+from core.credentials import CredentialRef
 from core.execution import (
     CancellationContext,
     ExecutionCancelled,
+    ExecutionContext,
     ExecutionResult,
     ExecutionStatus,
 )
@@ -39,7 +45,10 @@ logger = logging.getLogger("octopus.pipeline")
 try:
     from tools import run_arbitrary_cmd
 except ImportError:
-    def run_arbitrary_cmd(cmd: str) -> str:
+    def run_arbitrary_cmd(
+        cmd_str: str,
+        execution_context: Optional[ExecutionContext] = None,
+    ) -> str:
         raise FileNotFoundError("OCTOPUS tool runtime is unavailable")
 
 class AIPipeline(
@@ -47,6 +56,7 @@ class AIPipeline(
     PipelinePlanningMixin,
     PipelineReplayMixin,
     PipelineObservabilityMixin,
+    PipelineFollowupsMixin,
 ):
     def __init__(self, db_path: str = "data/facts.db"):
         self.runtime = PipelineRuntime(db_path, runner=lambda command: run_arbitrary_cmd(command))
@@ -128,9 +138,9 @@ class AIPipeline(
         self.tools_run_count = 0
         self.scan_start_time = 0
         self.total_new_facts = 0
-        self.task_outcomes = []
-        self.failed_commands = []
-        self.no_fact_tasks = []
+        self.task_outcomes: list[dict[str, Any]] = []
+        self.failed_commands: list[str] = []
+        self.no_fact_tasks: list[str] = []
         self.task_outcome_store = InMemoryTaskOutcomeStore(
             self.task_outcomes,
             self.failed_commands,
@@ -154,6 +164,7 @@ class AIPipeline(
         self.consecutive_llm_failures = 0
         self.mission_id = None
         self._active_task_attempt_id = None
+        self._active_task_id = None
         self._active_task_name = ""
         self._active_task_agent = ""
         self._mission_was_completed = False
@@ -214,12 +225,46 @@ class AIPipeline(
         new_facts = 0
         parsed_facts = 0
         command_results = []
+        fallback_attempted_actions: set[str] = set()
         prefix = "[Running Verification]" if verification else "[Running]"
 
         for raw_cmd in cmds:
             for cmd in self._expand_command_with_context(raw_cmd, scan_id, target):
                 cmd = self._augment_command_with_context(cmd, scan_id, target)
-                result = self._execute_pipeline_command(scan_id, target, cmd, fact_label, prefix)
+                if fallback_attempted_actions:
+                    try:
+                        resolved = self.runtime.action_catalog.resolve(
+                            self._command_tool_name(cmd)
+                        )
+                    except Exception:
+                        resolved = None
+                    if (
+                        resolved is not None
+                        and resolved.canonical_id in fallback_attempted_actions
+                    ):
+                        continue
+                provider_commands = self._task_provider_commands(
+                    cmd,
+                    cmds,
+                    scan_id,
+                    target,
+                    excluded_action_ids=fallback_attempted_actions,
+                )
+                result = self._execute_pipeline_command(
+                    scan_id,
+                    target,
+                    cmd,
+                    fact_label,
+                    prefix,
+                    provider_commands=provider_commands,
+                )
+                fallback_attempted_actions.update(
+                    str(item)
+                    for item in result.pop(
+                        "_provider_fallback_attempt_action_ids",
+                        (),
+                    )
+                )
                 parsed_facts += result["parsed_facts"]
                 new_facts += result["new_facts"]
                 command_results.append(result["command_result"])
@@ -282,8 +327,74 @@ class AIPipeline(
             "reason": self._command_result_reason(command_results, parsed_facts, new_facts),
         }
 
+    def _task_provider_commands(
+        self,
+        current_command: str,
+        raw_commands: Sequence[str],
+        scan_id: str,
+        target: str,
+        *,
+        excluded_action_ids: Optional[set[str]] = None,
+    ) -> tuple[str, ...]:
+        """Build bounded in-memory alternatives for production fallback.
+
+        Runtime resolves these strings to typed registry actions and excludes
+        active/manual-gated alternatives. They are never written to selection
+        telemetry or action audit payloads.
+        """
+
+        if not self.mission_id:
+            return ()
+        task_name = self.tool_registry.canonical_task(self._active_task_name)
+        task_profile_resolver = getattr(self.tool_registry, "task_profile", None)
+        if not callable(task_profile_resolver):
+            # Registry-compatible test doubles and integrations predate task
+            # profiles.  Missing risk metadata must disable fallback rather
+            # than failing the task or treating an unknown task as safe.
+            return ()
+        task_profile = task_profile_resolver(task_name)
+        if not isinstance(task_profile, Mapping):
+            return ()
+        task_risk = str(task_profile.get("risk") or "").strip().casefold()
+        if task_risk not in {
+            "check_only",
+            "passive",
+            "post_access_read",
+            "safe",
+        }:
+            return ()
+        candidates = [current_command]
+        excluded = excluded_action_ids or set()
+        for raw_command in raw_commands:
+            for expanded in self._expand_command_with_context(
+                raw_command,
+                scan_id,
+                target,
+            ):
+                candidate = self._augment_command_with_context(
+                    expanded,
+                    scan_id,
+                    target,
+                )
+                if excluded:
+                    try:
+                        resolved = self.runtime.action_catalog.resolve(
+                            self._command_tool_name(candidate)
+                        )
+                    except Exception:
+                        resolved = None
+                    if resolved is not None and resolved.canonical_id in excluded:
+                        continue
+                candidates.append(candidate)
+        bounded = list(dict.fromkeys(candidates))[:64]
+        if self._max_tools_budget is not None:
+            remaining = max(1, self._max_tools_budget - self.tools_run_count)
+            bounded = bounded[:remaining]
+        return tuple(bounded)
+
     def _execute_pipeline_command(self, scan_id: str, target: str, cmd: str,
-                                  fact_label: str, prefix: str) -> dict[str, Any]:
+                                  fact_label: str, prefix: str, *,
+                                  provider_commands: Sequence[str] = ()) -> dict[str, Any]:
         self._current_scan_id = str(scan_id)
         self._current_target = str(target)
         if (
@@ -293,7 +404,7 @@ class AIPipeline(
             self._mission_stop_reason = "max_tools_reached"
             raise ToolBudgetReached("max_tools_reached")
         execution_context = self._execution_context(scan_id, target)
-        current_facts = self.fact_store.get_facts(scan_id, target)
+        current_facts = self._accepted_task_decision_facts(scan_id, target)
         decision = self.runtime.decide(
             cmd,
             current_facts,
@@ -313,6 +424,7 @@ class AIPipeline(
         if decision.action == "execute" and decision.retry:
             consumed = bool(
                 self.mission_id
+                and self._active_task_id
                 and self._active_task_agent
                 and self._active_task_name
                 and self.mission_store.consume_retry_command(
@@ -320,6 +432,7 @@ class AIPipeline(
                     self._active_task_agent,
                     self._active_task_name,
                     decision.key,
+                    task_id=self._active_task_id,
                 )
             )
             if consumed:
@@ -337,120 +450,311 @@ class AIPipeline(
 
         self.executed_command_keys.add(decision.key)
         print(f"     {prefix} {audit_cmd}")
+        completion_fence = self.fact_store.capture_scan_completion_fence(scan_id)
         running_fact = self._command_check_result_fact(
             cmd=audit_cmd,
             target=target,
             command_key=decision.key,
             status="running",
         )
-        running_store = self._store_fact(scan_id, target, running_fact, audit_cmd)
-        dispatch_result = self.runtime.execute(decision, execution_context)
-        if dispatch_result.execution_id:
-            for running_fact_id in running_store["fact_ids"]:
-                self.fact_assessments.attach_source_executions(
-                    int(running_fact_id),
-                    (dispatch_result.execution_id,),
+        running_store = self._store_fact(
+            scan_id,
+            target,
+            running_fact,
+            audit_cmd,
+            completion_claim=completion_fence,
+        )
+        partial_ingestion = {
+            "parsed_facts": 0,
+            "new_facts": 0,
+        }
+        partial_ingested_facts: list[dict[str, Any]] = []
+        partial_fact_ids: list[int] = []
+
+        def ingest_partial_provider(
+            partial_result: ExecutionResult,
+            action_id: str,
+            action_request,
+        ) -> dict[str, int]:
+            provider_command = action_request.command_for(action_id) or audit_cmd
+            provider_key = self.runtime.scheduler.command_key(provider_command)
+            provider_output = self._output_text(partial_result)
+            provider_failed = self._command_failed(partial_result, provider_output)
+
+            def prepare_partial_facts(
+                parsed: list[dict[str, Any]],
+            ) -> list[dict[str, Any]]:
+                status = self._command_check_status(
+                    provider_command,
+                    provider_output,
+                    provider_failed,
+                    len(parsed),
+                    partial_result,
                 )
-            self.runtime.project_fact_ids(running_store["fact_ids"])
-        if self._active_task_attempt_id and dispatch_result.execution_id:
-            self.mission_store.record_attempt_progress(
-                self._active_task_attempt_id,
-                execution_ids=(dispatch_result.execution_id,),
+                return [
+                    *parsed,
+                    *self._command_end_check_results(
+                        provider_command,
+                        target,
+                        provider_key,
+                        status,
+                        provider_output,
+                        parsed,
+                    ),
+                ]
+
+            completion = self.runtime.complete_execution(
+                scan_id,
+                target,
+                provider_key,
+                provider_command,
+                partial_result,
+                source=provider_command,
+                prepare_facts=prepare_partial_facts,
+                normalize_fact=self._scope_normalized_fact,
+                derive_facts=self._derived_facts_from_fact,
+                failed=provider_failed,
+                command_result_fields={
+                    "provider_action_id": action_id,
+                    "provider_partial_ingestion": True,
+                },
+                attempt_id=self._active_task_attempt_id,
+                idempotency_key=(
+                    f"execution:{partial_result.execution_id}"
+                    if partial_result.execution_id
+                    else ""
+                ),
+                completion_fence=completion_fence,
+                after_facts=lambda facts: self._sync_runtime_credentials_from_facts(
+                    target,
+                    list(facts),
+                ),
             )
-        self.tools_run_count += 1
+            partial_ingestion["parsed_facts"] += int(
+                completion.get("parsed_facts", 0) or 0
+            )
+            partial_ingestion["new_facts"] += int(
+                completion.get("new_facts", 0) or 0
+            )
+            partial_ingested_facts.extend(
+                dict(item) for item in completion.get("facts", ())
+            )
+            partial_fact_ids.extend(
+                int(item)
+                for item in completion.get("command_result", {}).get("fact_ids", ())
+            )
+            self.executed_command_keys.add(provider_key)
+            return {
+                "parsed_facts": int(completion.get("parsed_facts", 0) or 0),
+                "useful_facts": int(completion.get("new_facts", 0) or 0),
+                "duplicate_facts": max(
+                    0,
+                    int(completion.get("parsed_facts", 0) or 0)
+                    - int(completion.get("new_facts", 0) or 0),
+                ),
+                "parser_items": int(completion.get("parsed_facts", 0) or 0),
+            }
+
+        if self.mission_id:
+            dispatch_result = self._execute_runtime_compatibly(
+                decision,
+                execution_context,
+                facts=current_facts,
+                capability=self._active_task_name or fact_label,
+                provider_commands=provider_commands,
+                partial_result_ingest=ingest_partial_provider,
+            )
+        else:
+            # Compatibility callers that invoke one command outside a durable
+            # mission keep the historical two-argument seam.  Production
+            # mission dispatch carries the typed action context above.
+            decision.invocation = None
+            dispatch_result = self.runtime.execute(decision, execution_context)
+        provider_attempts = int(
+            dispatch_result.metadata.get("provider_attempts", 1) or 1
+        )
+        self.tools_run_count += max(1, provider_attempts)
+        self.executed_command_keys.update(
+            str(item)
+            for item in dispatch_result.metadata.get(
+                "provider_attempt_command_keys",
+                (),
+            )
+        )
         if cmd.startswith("ssh_inventory "):
             self.executed_post_access_commands.add(cmd)
         output_str = self._output_text(dispatch_result)
-        output_hash = self._output_fingerprint(output_str)
         failed = self._command_failed(dispatch_result, output_str)
-        facts = self.runtime.parse_output(cmd, dispatch_result)
-        parsed_output_facts = len(facts)
-        status = self._command_check_status(
-            cmd,
-            output_str,
-            failed,
-            parsed_output_facts,
-            dispatch_result,
-        )
-        facts.extend(self._command_end_check_results(audit_cmd, target, decision.key, status, output_str, facts))
-        for fact in facts:
-            fact.setdefault("source", audit_cmd)
-        stored_facts = [running_fact, *list(facts)]
-        command_new_facts = running_store["new_facts"]
-        command_fact_ids = list(running_store["fact_ids"])
+        completion_state: dict[str, str] = {}
 
-        source_execution_ids = (
-            (dispatch_result.execution_id,) if dispatch_result.execution_id else ()
-        )
-        for f in facts:
-            stored = self._store_fact(
-                scan_id,
-                target,
-                f,
-                audit_cmd,
-                source_execution_ids=source_execution_ids,
+        def prepare_completion_facts(
+            parsed: list[dict[str, Any]],
+        ) -> list[dict[str, Any]]:
+            parsed_output_facts = len(parsed)
+            status = self._command_check_status(
+                cmd,
+                output_str,
+                failed,
+                parsed_output_facts,
+                dispatch_result,
             )
-            stored_facts.extend(stored["derived_facts"])
-            command_fact_ids.extend(stored["fact_ids"])
-            if stored["created"] and f.get("type") != "check_result":
-                safe_fact = stored["fact"]
-                print(f"     [+] {fact_label}: {safe_fact['type']} -> {safe_fact['value']}")
-            command_new_facts += stored["new_facts"]
-        self._sync_runtime_credentials_from_facts(target, facts)
-        _result_id, unique_output = self.fact_store.add_command_result(
-            scan_id=scan_id,
-            host=target,
-            command_key=decision.key,
-            command=audit_cmd,
-            output_hash=output_hash,
-            output_bytes=len(output_str.encode("utf-8", "ignore")),
-            parsed_facts=parsed_output_facts,
-            new_facts=command_new_facts,
+            completion_state["check_status"] = status
+            prepared = list(parsed)
+            prepared.extend(
+                self._command_end_check_results(
+                    audit_cmd,
+                    target,
+                    decision.key,
+                    status,
+                    output_str,
+                    parsed,
+                )
+            )
+            return prepared
+
+        def sync_completion_side_effects(
+            facts: Sequence[dict[str, Any]],
+        ) -> None:
+            # Runtime completion callbacks are at-least-once. Each operation
+            # here is deliberately idempotent so lease recovery can repeat it.
+            if dispatch_result.execution_id:
+                for running_fact_id in running_store["fact_ids"]:
+                    self.fact_assessments.attach_source_executions(
+                        int(running_fact_id),
+                        (dispatch_result.execution_id,),
+                    )
+                self.runtime.project_fact_ids(running_store["fact_ids"])
+            self._sync_runtime_credentials_from_facts(target, list(facts))
+
+        result = self.runtime.complete_execution(
+            scan_id,
+            target,
+            decision.key,
+            audit_cmd,
+            dispatch_result,
+            source=audit_cmd,
+            prepare_facts=prepare_completion_facts,
+            normalize_fact=self._scope_normalized_fact,
+            derive_facts=self._derived_facts_from_fact,
+            initial_fact_ids=running_store["fact_ids"],
+            initial_new_facts=running_store["new_facts"],
+            initial_facts=(running_fact,),
             failed=failed,
-            execution_result=dispatch_result,
+            attempt_id=self._active_task_attempt_id,
             idempotency_key=(
                 f"execution:{dispatch_result.execution_id}"
                 if dispatch_result.execution_id
                 else ""
             ),
+            completion_fence=completion_fence,
+            after_facts=sync_completion_side_effects,
         )
-
-        result = {
-            "facts": stored_facts,
-            "new_facts": command_new_facts,
-            "parsed_facts": parsed_output_facts,
-            "command_result": {
-                "command": audit_cmd,
-                "failed": failed,
-                "schema_version": dispatch_result.schema_version,
-                "status": dispatch_result.status.value,
-                "partial": dispatch_result.partial,
-                "execution_id": dispatch_result.execution_id,
-                "request_id": dispatch_result.request_id,
-                "policy_decision_ref": dispatch_result.policy_decision_ref,
-                "error_class": dispatch_result.error_class,
-                "exit_code": dispatch_result.exit_code,
-                "duration": dispatch_result.duration,
-                "output_bytes": len(dispatch_result.stdout.encode("utf-8", "ignore")),
-                "stderr_bytes": len(dispatch_result.stderr.encode("utf-8", "ignore")),
-                "output_hash": output_hash,
-                "duplicate_output": not unique_output,
-                "parsed_facts": parsed_output_facts,
-                "new_facts": command_new_facts,
-                "fact_ids": list(dict.fromkeys(command_fact_ids)),
-                "fact_pairs": [(fact.get("type"), fact.get("value")) for fact in facts],
-                "check_status": status,
-            },
-        }
-        if self._active_task_attempt_id:
-            self.mission_store.record_attempt_progress(
-                self._active_task_attempt_id,
-                fact_ids=tuple(dict.fromkeys(command_fact_ids)),
+        result["command_result"]["check_status"] = completion_state.get(
+            "check_status"
+        ) or self._command_check_status(
+            cmd,
+            output_str,
+            failed,
+            int(result.get("parsed_facts", 0) or 0),
+            dispatch_result,
+        )
+        if partial_ingestion["parsed_facts"] or partial_ingestion["new_facts"]:
+            result["facts"] = [*partial_ingested_facts, *result.get("facts", ())]
+            result["parsed_facts"] = int(result.get("parsed_facts", 0) or 0) + int(
+                partial_ingestion["parsed_facts"]
             )
+            result["new_facts"] = int(result.get("new_facts", 0) or 0) + int(
+                partial_ingestion["new_facts"]
+            )
+            result["command_result"]["provider_partial_parsed_facts"] = int(
+                partial_ingestion["parsed_facts"]
+            )
+            result["command_result"]["provider_partial_new_facts"] = int(
+                partial_ingestion["new_facts"]
+            )
+            result["command_result"]["fact_ids"] = list(dict.fromkeys([
+                *partial_fact_ids,
+                *result["command_result"].get("fact_ids", ()),
+            ]))
+        for stored in result.pop("stored_base_facts", []):
+            safe_fact = stored["fact"]
+            if stored["created"] and safe_fact.get("type") != "check_result":
+                print(
+                    f"     [+] {fact_label}: "
+                    f"{safe_fact['type']} -> {safe_fact['value']}"
+                )
+        result.pop("graph_projection", None)
+        result["_provider_fallback_attempt_action_ids"] = list(
+            dispatch_result.metadata.get(
+                "provider_fallback_attempt_action_ids",
+                (),
+            )
+        )
         self._record_command_trace(decision.to_dict(), result["command_result"])
         if dispatch_result.status is ExecutionStatus.CANCELLED:
             raise ExecutionCancelled("provider_cancelled")
         return result
+
+    def _accepted_task_decision_facts(
+        self,
+        scan_id: str,
+        target: str,
+    ) -> list[dict[str, Any]]:
+        """Use the task's accepted durable snapshot when one is resolvable."""
+
+        if self.mission_id and self._active_task_id:
+            task = next(
+                (
+                    item
+                    for item in self.mission_store.snapshot(self.mission_id).tasks
+                    if item.task_id == self._active_task_id
+                ),
+                None,
+            )
+            if task is not None and task.evaluated_snapshot_ref:
+                snapshot = self.mission_store.resolve_evaluated_fact_snapshot(
+                    self.mission_id,
+                    task.evaluated_snapshot_ref,
+                )
+                if snapshot is not None:
+                    if snapshot.scan_id != str(scan_id):
+                        raise RuntimeError(
+                            "active task snapshot belongs to a different scan"
+                        )
+                    return list(snapshot.decision_facts())
+        return self.fact_store.get_facts(scan_id, target)
+
+    def _execute_runtime_compatibly(
+        self,
+        decision,
+        execution_context,
+        *,
+        facts: Sequence[dict[str, Any]],
+        capability: str,
+        provider_commands: Sequence[str] = (),
+        partial_result_ingest=None,
+    ):
+        """Keep injected two-argument runtimes compatible without weakening production."""
+
+        execute = self.runtime.execute
+        try:
+            parameters = dict(inspect.signature(execute).parameters)
+        except (TypeError, ValueError):
+            parameters = {}
+        supports_arbitrary_keywords = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+        keyword_arguments: dict[str, Any] = {}
+        if supports_arbitrary_keywords or "facts" in parameters:
+            keyword_arguments["facts"] = facts
+        if supports_arbitrary_keywords or "capability" in parameters:
+            keyword_arguments["capability"] = capability
+        if supports_arbitrary_keywords or "provider_commands" in parameters:
+            keyword_arguments["provider_commands"] = provider_commands
+        if supports_arbitrary_keywords or "partial_result_ingest" in parameters:
+            keyword_arguments["partial_result_ingest"] = partial_result_ingest
+        return execute(decision, execution_context, **keyword_arguments)
 
     def _skipped_command_result(self, cmd: str, reason: str) -> dict[str, Any]:
         return {
@@ -663,6 +967,7 @@ class AIPipeline(
         source: str,
         *,
         source_execution_ids: tuple[str, ...] = (),
+        completion_claim: Optional[CommandCompletionClaim] = None,
     ) -> dict[str, Any]:
         """Store a parsed fact plus normalized derived facts.
 
@@ -683,6 +988,7 @@ class AIPipeline(
             confidence=safe_fact.get("confidence", 100),
             session_id=safe_fact.get("session_id", "none"),
             source_execution_ids=source_execution_ids,
+            completion_claim=completion_claim,
         )
         new_facts = 1 if created else 0
         fact_ids = [fact_id]
@@ -694,6 +1000,7 @@ class AIPipeline(
                 session_id=fact.get("session_id", "none"),
                 derived_from=[fact_id],
                 source_execution_ids=source_execution_ids,
+                completion_claim=completion_claim,
             )
             fact_ids.append(derived_id)
             if derived_created:
@@ -1661,7 +1968,7 @@ class AIPipeline(
         """Mirror concrete SSH credentials from parsed facts into the tool cache."""
         self.credential_synchronizer.sync_from_facts(target, facts)
 
-    def _known_credentials_for_target(self, target: str) -> dict[str, list[tuple]]:
+    def _known_credentials_for_target(self, target: str) -> dict[str, list[CredentialRef]]:
         """Read known credentials from the unified store/legacy cache."""
         return self.credential_synchronizer.known_for_target(target)
 
@@ -1677,95 +1984,6 @@ class AIPipeline(
         for announcement in result.announcements:
             print(f"    [+] Known Credential: {announcement}")
         return result.seeded
-
-    def _run_controlled_post_access_followups(
-        self, scan_id: str, target: str, facts: list[dict[str, Any]]
-    ) -> dict[str, Any]:
-        parsed_facts = 0
-        new_facts = 0
-        command_results = []
-        result_facts = []
-        for cmd in self._controlled_post_access_commands_from_facts(target, facts):
-            result = self._execute_pipeline_command(
-                scan_id, target, cmd, "Post-Access Fact", "[Running Controlled Post-Access]"
-            )
-            parsed_facts += result["parsed_facts"]
-            new_facts += result["new_facts"]
-            command_results.append(result["command_result"])
-            result_facts.extend(result["facts"])
-        return {
-            "parsed_facts": parsed_facts,
-            "new_facts": new_facts,
-            "commands": command_results,
-            "facts": result_facts,
-        }
-
-    def _controlled_post_access_commands_from_facts(
-        self, target: str, facts: list[dict[str, Any]]
-    ) -> list[str]:
-        """Run read-only SSH inventory once after confirmed SSH authentication."""
-        from core.ai.followups import PostAccessFollowupRules
-
-        # Preserve the legacy fact predicate while the typed rule becomes the
-        # proposal owner.  Cached credentials are intentionally insufficient on
-        # this controlled, post-verification path.
-        enabled = self._auto_ssh_inventory_enabled()
-        confirmed_facts = facts if enabled and self._facts_confirm_ssh_access(facts) else []
-        proposals = PostAccessFollowupRules().propose(
-            target,
-            confirmed_facts,
-            enabled=enabled,
-            inventory_seen=False,
-            already_executed=self.executed_post_access_commands,
-            allow_cached_credentials=False,
-        )
-        commands = [proposal.command for proposal in proposals]
-        self.executed_post_access_commands.update(commands)
-        return commands
-
-    def _facts_confirm_ssh_access(self, facts: list[dict[str, Any]]) -> bool:
-        for fact in facts:
-            ftype = str(fact.get("type", "")).lower()
-            value = str(fact.get("value", "")).lower()
-            if ftype == "credential" and value.startswith("ssh_login_success:"):
-                return True
-            if ftype == "service_status" and value == "ssh_authenticated":
-                return True
-        return False
-
-    def _auto_ssh_inventory_enabled(self) -> bool:
-        try:
-            from config import CFG
-        except ImportError:
-            CFG = {}
-        strategy = CFG.get("strategy", {})
-        return bool(strategy.get(
-            "auto_post_access_inventory",
-            strategy.get("auto_ssh_inventory", True),
-        ))
-
-    def _strategy_enabled(self, key: str, default: bool = False) -> bool:
-        try:
-            from config import CFG
-        except ImportError:
-            CFG = {}
-        return bool(CFG.get("strategy", {}).get(key, default))
-
-    def _strategy_limit(self, key: str, default=None):
-        try:
-            from config import CFG
-        except ImportError:
-            CFG = {}
-        raw = CFG.get("strategy", {}).get(key, default)
-        if raw is None:
-            return None
-        if str(raw).strip().lower() in {"", "0", "-1", "none", "unlimited", "false"}:
-            return None
-        try:
-            value = int(raw)
-        except (TypeError, ValueError):
-            return None
-        return None if value <= 0 else max(1, value)
 
     def _active_commands_from_facts(self, facts: list[dict[str, Any]]) -> list[str]:
         """Collect gated active commands for later execution after verification."""

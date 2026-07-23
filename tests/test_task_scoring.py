@@ -15,6 +15,8 @@ from core.ai.task_scoring import (
     TaskScoringWeights,
 )
 
+pytestmark = pytest.mark.unit
+
 
 def scoring_config(**overrides: float) -> dict:
     weights = {

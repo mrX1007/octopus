@@ -1,0 +1,20 @@
+{
+  "$id": "https://octopus.local/schemas/benchmark-fixture-product-view-v3.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "allowed_methods": { "const": ["GET", "HEAD"] },
+    "base_url": { "type": "string" },
+    "entry_target": { "pattern": "^/", "type": "string" },
+    "lab_version": { "const": "discovery-lab-v3" },
+    "mutation_response": { "const": 405 },
+    "read_only": { "const": true },
+    "scenario_family": { "type": "string" },
+    "scenario_id": { "type": "string" },
+    "schema_version": { "const": "2.0" },
+    "variant_id": { "type": "string" }
+  },
+  "required": ["allowed_methods", "base_url", "entry_target", "lab_version", "mutation_response", "read_only", "scenario_family", "scenario_id", "schema_version", "variant_id"],
+  "title": "OCTOPUS Benchmark v3 blinded product view",
+  "type": "object"
+}

@@ -26,6 +26,9 @@ from ..schema import (
     BenchmarkSchemaError,
     load_scenarios,
 )
+from ..v3.analysis import AnalysisPlan
+from ..v3.publication import publish_v3_results, verify_v3_results
+from ..v3.schema import BenchmarkRunV3, BenchmarkV3SchemaError
 from .lab import (
     CommandLabController,
     LabCommand,
@@ -47,6 +50,14 @@ from .schema import (
     load_system_manifest,
 )
 from .state import CampaignJournal, campaign_fingerprint, schedule_run_key
+from .v3_integration import (
+    BenchmarkV3CampaignConfig,
+    build_v3_run,
+    controller_ledger_records,
+    fixture_reveals,
+    planned_fixture_seed,
+    validate_campaign_plan,
+)
 
 CAMPAIGN_CONFIG_SCHEMA_VERSION = "1.0"
 _KNOWN_STRICT_STATUSES = frozenset({"failed", "invalid", "partial", "timeout"})
@@ -55,6 +66,7 @@ _ERROR_CLASS = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 _CAMPAIGN_CONFIG_KEYS = frozenset(
     {
         "$schema",
+        "benchmark_v3",
         "campaign_id",
         "campaign_definition",
         "environment_file",
@@ -101,6 +113,7 @@ class CampaignConfig:
     secret_environment: tuple[str, ...] = ()
     environment_file: Path | None = None
     campaign_definition: str | None = None
+    benchmark_v3: BenchmarkV3CampaignConfig | None = None
     strict_statuses: tuple[str, ...] = tuple(sorted(_KNOWN_STRICT_STATUSES))
     source_path: Path | None = None
     schema_version: str = CAMPAIGN_CONFIG_SCHEMA_VERSION
@@ -185,6 +198,20 @@ class CampaignConfig:
             if raw_campaign_definition
             else None
         )
+        raw_benchmark_v3 = payload.get("benchmark_v3")
+        if raw_benchmark_v3 is not None and not isinstance(raw_benchmark_v3, Mapping):
+            raise CampaignConfigError("invalid:benchmark_v3")
+        try:
+            benchmark_v3 = (
+                BenchmarkV3CampaignConfig.from_dict(
+                    raw_benchmark_v3,
+                    base_directory=base,
+                )
+                if isinstance(raw_benchmark_v3, Mapping)
+                else None
+            )
+        except BenchmarkV3SchemaError as exc:
+            raise CampaignConfigError(str(exc)) from exc
         strict_statuses = tuple(
             sorted(
                 set(
@@ -211,6 +238,7 @@ class CampaignConfig:
             secret_environment=secret_environment,
             environment_file=environment_file,
             campaign_definition=campaign_definition,
+            benchmark_v3=benchmark_v3,
             strict_statuses=strict_statuses,
             source_path=Path(source_path).resolve() if source_path is not None else None,
         )
@@ -235,6 +263,8 @@ class CampaignConfig:
         }
         if self.campaign_definition is not None:
             payload["campaign_definition"] = self.campaign_definition
+        if self.benchmark_v3 is not None:
+            payload["benchmark_v3"] = self.benchmark_v3.fingerprint_payload()
         return payload
 
     def public_payload(self) -> dict[str, Any]:
@@ -259,6 +289,8 @@ class CampaignConfig:
         }
         if self.campaign_definition is not None:
             payload["campaign_definition"] = self.campaign_definition
+        if self.benchmark_v3 is not None:
+            payload["benchmark_v3"] = self.benchmark_v3.public_payload()
         return payload
 
 
@@ -299,6 +331,16 @@ def run_campaign(
     resolved = load_campaign_config(config) if isinstance(config, (str, Path)) else config
     manifests = tuple(load_system_manifest(path) for path in resolved.system_manifest_paths)
     scenarios = load_scenarios(resolved.scenario_directory)
+    v3_plan = (
+        validate_campaign_plan(
+            resolved.benchmark_v3,
+            system_ids=tuple(item.system_id for item in manifests),
+            scenarios=scenarios,
+            repetitions=resolved.repetitions,
+        )
+        if resolved.benchmark_v3 is not None
+        else None
+    )
     effective_environment = _effective_environment(resolved, environment)
     required_environment = tuple(
         sorted(
@@ -342,7 +384,12 @@ def run_campaign(
     )
     preflight.raise_for_failure()
 
-    schedule = _build_schedule(resolved, manifests, scenarios)
+    schedule = _build_schedule(
+        resolved,
+        manifests,
+        scenarios,
+        v3_plan=v3_plan,
+    )
     controller_source_identity = _controller_source_identity()
     fingerprint = campaign_fingerprint(
         {
@@ -452,6 +499,22 @@ def run_campaign(
                     # the original (potentially minutes-long) duration.
                     result["started_at"] = started_at
                     result["finished_at"] = float(clock())
+                    v3_run = (
+                        build_v3_run(
+                            config=resolved.benchmark_v3,
+                            plan=v3_plan,
+                            scenario=scenario,
+                            system_id=system_id,
+                            repetition=context.repetition,
+                            seed=context.seed,
+                            result={**result, "error_class": error_class},
+                            started_at=started_at,
+                            finished_at=float(result["finished_at"]),
+                            reset_attestation=attestation.to_dict(),
+                        )
+                        if resolved.benchmark_v3 is not None and v3_plan is not None
+                        else None
+                    )
                     journal.write_run(
                         run_key,
                         {
@@ -461,6 +524,11 @@ def run_campaign(
                             "seed": context.seed,
                             "error_class": error_class,
                             "result": result,
+                            **(
+                                {"benchmark_v3": v3_run.to_dict()}
+                                if v3_run is not None
+                                else {}
+                            ),
                         },
                     )
                     executed_runs += 1
@@ -516,7 +584,7 @@ def run_campaign(
             manifests,
             scenarios,
             repetitions=resolved.repetitions,
-            runner_factory=_journal_runner_factory(journal),
+            runner_factory=_journal_runner_factory(journal, v3_plan=v3_plan),
             clock=clock,
         )
         status_counts = Counter(
@@ -525,15 +593,30 @@ def run_campaign(
             for aggregate in aggregates.values()
             for run in aggregate.runs
         )
-        policy_violations = sum(
-            len(run.policy_violations)
-            for aggregates in matrix.aggregates.values()
-            for aggregate in aggregates.values()
-            for run in aggregate.runs
+        v3_runs = (
+            _journal_v3_runs(journal, schedule)
+            if v3_plan is not None
+            else ()
         )
+        if v3_runs:
+            status_counts = Counter(run.execution_status for run in v3_runs)
+            task_status_counts = Counter(run.task_status for run in v3_runs)
+            policy_violations = sum(
+                len(run.policy_violations) for run in v3_runs
+            )
+        else:
+            task_status_counts = Counter()
+            policy_violations = sum(
+                len(run.policy_violations)
+                for aggregates in matrix.aggregates.values()
+                for aggregate in aggregates.values()
+                for run in aggregate.runs
+            )
         run_failure = policy_violations > 0 or any(
             status_counts.get(status, 0) > 0 for status in resolved.strict_statuses
         )
+        if v3_runs and task_status_counts.get("completed", 0) != len(v3_runs):
+            run_failure = True
         strict_failure = run_failure or cleanup_failed
         campaign_outcome_status = (
             "partial"
@@ -545,6 +628,11 @@ def run_campaign(
         campaign_status = {
             "status": campaign_outcome_status,
             "status_counts": dict(sorted(status_counts.items())),
+            **(
+                {"task_status_counts": dict(sorted(task_status_counts.items()))}
+                if v3_runs
+                else {}
+            ),
             "policy_violations": policy_violations,
             "executed_runs": executed_runs,
             "resumed_runs": resumed_runs,
@@ -558,25 +646,62 @@ def run_campaign(
             controller_source_identity=controller_source_identity,
         )
         try:
-            bundle = publish_campaign_bundle(
-                destination=resolved.output_directory,
-                matrix=matrix,
-                campaign=resolved.public_payload(),
-                fingerprint=fingerprint,
-                manifests=manifests,
-                scenarios=scenarios,
-                preflight=preflight.to_dict(),
-                schedule=schedule,
-                attestations=journal.read_attestations(),
-                cleanup=cleanup_attestation,
-                provenance=provenance,
-                campaign_status=campaign_status,
-                secret_canaries=secret_canaries,
-            )
+            if v3_plan is not None:
+                v3_config = resolved.benchmark_v3
+                if v3_config is None:
+                    raise CampaignConfigError("missing_benchmark_v3_config")
+                campaign_context = {
+                    "attestations": journal.read_attestations(),
+                    "campaign": resolved.public_payload(),
+                    "campaign_status": campaign_status,
+                    "cleanup": cleanup_attestation,
+                    "fingerprint": fingerprint,
+                    "fixture_reveals": fixture_reveals(
+                        v3_config,
+                        v3_plan,
+                        campaign_id=resolved.campaign_id,
+                    ),
+                    "preflight": preflight.to_dict(),
+                    "provenance": provenance,
+                    "scenarios": [item.to_dict() for item in scenarios],
+                    "schema_version": "1.0",
+                    "systems": [item.to_dict() for item in manifests],
+                }
+                if _contains_secret_canary(campaign_context, secret_canaries):
+                    raise CampaignConfigError("secret_canary_detected")
+                bundle = publish_v3_results(
+                    v3_plan,
+                    v3_runs,
+                    resolved.output_directory,
+                    campaign_context=campaign_context,
+                    controller_ledgers=controller_ledger_records(
+                        v3_config,
+                        v3_runs,
+                        campaign_id=resolved.campaign_id,
+                    ),
+                )
+                verify_v3_results(bundle)
+            else:
+                bundle = publish_campaign_bundle(
+                    destination=resolved.output_directory,
+                    matrix=matrix,
+                    campaign=resolved.public_payload(),
+                    fingerprint=fingerprint,
+                    manifests=manifests,
+                    scenarios=scenarios,
+                    preflight=preflight.to_dict(),
+                    schedule=schedule,
+                    attestations=journal.read_attestations(),
+                    cleanup=cleanup_attestation,
+                    provenance=provenance,
+                    campaign_status=campaign_status,
+                    secret_canaries=secret_canaries,
+                )
         except Exception as exc:
             journal.set_status("publication_failed", reason=type(exc).__name__)
             raise
-        verify_campaign_bundle(bundle)
+        if v3_plan is None:
+            verify_campaign_bundle(bundle)
         journal.set_status(
             "published",
             matrix_id=matrix.matrix_id,
@@ -616,6 +741,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 3
     except (
         BenchmarkSchemaError,
+        BenchmarkV3SchemaError,
         CampaignConfigError,
         CompetitorSchemaError,
         LabControlError,
@@ -631,12 +757,22 @@ def _build_schedule(
     config: CampaignConfig,
     manifests: Sequence[SystemManifest],
     scenarios: Sequence[BenchmarkScenario],
+    *,
+    v3_plan: AnalysisPlan | None = None,
 ) -> tuple[dict[str, Any], ...]:
     schedule: list[dict[str, Any]] = []
     order = 0
     for repetition in range(1, config.repetitions + 1):
         for scenario in scenarios:
-            seed = scenario.seed + repetition - 1
+            seed = (
+                planned_fixture_seed(
+                    v3_plan,
+                    scenario_id=scenario.scenario_id,
+                    repetition=repetition,
+                )
+                if v3_plan is not None
+                else scenario.seed + repetition - 1
+            )
             for manifest in _counterbalanced_order(manifests, repetition):
                 order += 1
                 schedule.append(
@@ -708,6 +844,8 @@ def _counterbalanced_order(
 
 def _journal_runner_factory(
     journal: CampaignJournal,
+    *,
+    v3_plan: AnalysisPlan | None = None,
 ) -> Callable[[SystemManifest], BenchmarkRunner]:
     def factory(manifest: SystemManifest) -> BenchmarkRunner:
         def replay(
@@ -715,11 +853,20 @@ def _journal_runner_factory(
             repetition: int,
             seed: int,
         ) -> Mapping[str, Any]:
+            scheduled_seed = (
+                planned_fixture_seed(
+                    v3_plan,
+                    scenario_id=scenario.scenario_id,
+                    repetition=repetition,
+                )
+                if v3_plan is not None
+                else seed
+            )
             run_key = schedule_run_key(
                 manifest.system_id,
                 scenario.scenario_id,
                 repetition,
-                seed,
+                scheduled_seed,
             )
             record = journal.read_run(run_key)
             if record is None:
@@ -736,6 +883,20 @@ def _journal_runner_factory(
         return replay
 
     return factory
+
+
+def _journal_v3_runs(
+    journal: CampaignJournal,
+    schedule: Sequence[Mapping[str, Any]],
+) -> tuple[BenchmarkRunV3, ...]:
+    runs: list[BenchmarkRunV3] = []
+    for scheduled in schedule:
+        record = journal.read_run(str(scheduled["run_key"]))
+        payload = record.get("benchmark_v3") if isinstance(record, Mapping) else None
+        if not isinstance(payload, Mapping):
+            raise BenchmarkV3SchemaError("campaign_v3_run_missing")
+        runs.append(BenchmarkRunV3.from_dict(payload))
+    return tuple(runs)
 
 
 def _effective_environment(
@@ -858,6 +1019,7 @@ def _controller_source_identity() -> dict[str, str]:
     benchmark_root = competitor_root.parent
     sources = [
         *sorted(competitor_root.glob("*.py")),
+        *sorted((benchmark_root / "v3").glob("*.py")),
         benchmark_root / "harness.py",
         benchmark_root / "schema.py",
     ]

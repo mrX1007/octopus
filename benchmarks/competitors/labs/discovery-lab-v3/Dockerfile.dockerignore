@@ -1,0 +1,15 @@
+**
+!core/
+!core/__init__.py
+!core/version.py
+!core/benchmarks/
+!core/benchmarks/__init__.py
+!core/benchmarks/v3/
+!core/benchmarks/v3/**
+!benchmarks/
+!benchmarks/competitors/
+!benchmarks/competitors/labs/
+!benchmarks/competitors/labs/discovery-lab-v3/
+!benchmarks/competitors/labs/discovery-lab-v3/Dockerfile
+!benchmarks/competitors/labs/discovery-lab-v3/Dockerfile.dockerignore
+!benchmarks/competitors/labs/discovery-lab-v3/app.py

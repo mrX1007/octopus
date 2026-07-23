@@ -28,6 +28,7 @@ _MAX_RESULT_TEXT_BYTES = 4_096
 _RESULT_IDENTIFIER = __import__("re").compile(r"^[a-z0-9][a-z0-9_.:-]{0,255}$")
 _ERROR_CLASS = __import__("re").compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
 _RESULT_STATUSES = frozenset({"succeeded", "failed", "timeout", "partial", "invalid"})
+_V3_LAB_VERSION = "discovery-lab-v3"
 
 
 class SystemRunnerError(RuntimeError):
@@ -94,13 +95,19 @@ class CommandSystemRunner:
                 scenario_path = root / "scenario.json"
                 output_path = root / "result.json"
                 _write_scenario(scenario, scenario_path)
+                blinded_v3 = (
+                    str(scenario.lab.get("version") or "") == _V3_LAB_VERSION
+                )
                 argv = self._argv(
                     scenario_path=scenario_path,
                     output_path=output_path,
                     repetition=repetition,
                     seed=seed,
+                    blinded_v3=blinded_v3,
                 )
-                cwd = self._working_directory()
+                # Keep the product outside the generated campaign directory;
+                # that directory also contains the controller-only v3 plan.
+                cwd = root.resolve() if blinded_v3 else self._working_directory()
                 environment = self._environment(
                     scenario=scenario,
                     scenario_path=scenario_path,
@@ -232,7 +239,10 @@ class CommandSystemRunner:
         output_path: Path,
         repetition: int,
         seed: int,
+        blinded_v3: bool = False,
     ) -> list[str]:
+        if blinded_v3 and any("{seed}" in item for item in self.manifest.adapter.argv):
+            raise SystemProtocolError()
         substitutions = {
             "scenario_path": str(scenario_path),
             "output_path": str(output_path),
@@ -272,9 +282,10 @@ class CommandSystemRunner:
                 "OCTOPUS_BENCHMARK_SCENARIO_PATH": str(scenario_path),
                 "OCTOPUS_BENCHMARK_OUTPUT_PATH": str(output_path),
                 "OCTOPUS_BENCHMARK_REPETITION": str(repetition),
-                "OCTOPUS_BENCHMARK_SEED": str(seed),
             }
         )
+        if str(scenario.lab.get("version") or "") != _V3_LAB_VERSION:
+            environment["OCTOPUS_BENCHMARK_SEED"] = str(seed)
         return environment
 
 
@@ -512,6 +523,7 @@ def _normalize_result(
     return {
         "status": status,
         "actions": actions,
+        "reported_claims": _text_list(result.get("reported_claims") or []),
         "reported_findings": _identifier_list(
             result.get("reported_findings") or []
         ),
@@ -596,6 +608,7 @@ def _empty_result(
     return {
         "status": status,
         "actions": [],
+        "reported_claims": [],
         "reported_findings": [],
         "verified_findings": [],
         "coverage_gaps": [],

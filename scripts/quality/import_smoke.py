@@ -14,18 +14,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_MODULES = (
     "config",
     "db",
-    "export",
-    "memory",
-    "search",
-    "shodan_module",
     "core.ai.pipeline",
     "core.ai.runtime",
-    "core.c2.builder",
-    "core.c2.daemon",
     "core.plugins.loader",
     "core.tools",
     "octopus",
 )
+
+PROFILE_MODULES = {
+    "runtime": DEFAULT_MODULES,
+    "c2": ("core.c2", "core.c2.builder", "core.c2.daemon"),
+    "reporting": ("export",),
+    "osint-browser": ("search", "shodan_module", "core.osint.shardbrowser"),
+    "mysql": ("db",),
+}
 
 
 @dataclass(frozen=True)
@@ -65,12 +67,18 @@ def _argument_parser() -> argparse.ArgumentParser:
         dest="modules",
         help="module to import; repeat to override the default entrypoint set",
     )
+    parser.add_argument(
+        "--profile",
+        choices=tuple(PROFILE_MODULES),
+        default="runtime",
+        help="declared optional dependency profile to import",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _argument_parser().parse_args(argv)
-    modules = tuple(args.modules or DEFAULT_MODULES)
+    modules = tuple(args.modules or PROFILE_MODULES[args.profile])
     failures = run_import_smoke(modules)
     if failures:
         for failure in failures:

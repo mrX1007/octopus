@@ -6,6 +6,7 @@ import re
 from typing import Any
 from urllib.parse import urlparse, urlunparse
 
+from core.ai.evaluated_facts import EvaluatedFactSnapshot
 from core.ai.parsers import ParserFamilyPipeline
 
 logger = logging.getLogger("octopus.evidence")
@@ -163,11 +164,12 @@ class EvidenceVerifier:
         """
         Verify if a high-level claim is supported by hard evidence in the Fact Store.
         """
-        facts = [
-            fact
-            for fact in self.fact_store.get_facts(scan_id, host)
-            if str(fact.get("assessment_status") or "observed") != "contradicted"
-        ]
+        snapshot = EvaluatedFactSnapshot.build(
+            scan_id,
+            host,
+            self.fact_store.get_facts(scan_id, host),
+        )
+        facts = list(snapshot.decision_facts())
         facts_by_id = {
             int(fact["id"]): fact
             for fact in facts
@@ -352,6 +354,8 @@ class EvidenceVerifier:
         supporting: list[int] = []
         for fact in facts:
             raw_id = fact.get("id")
+            if raw_id is None:
+                continue
             try:
                 fact_id = int(raw_id)
             except (TypeError, ValueError):
@@ -646,6 +650,21 @@ class RegexParser:
     """
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[dict[str, Any]]:
         facts = []
+        # Benchmark v3 evidence is a native observation, not automatically a
+        # reported claim.  The competitor adapter derives claims only from the
+        # canonical final report, so merely seeing a nonce in tool output cannot
+        # inflate reported recall.
+        for token in dict.fromkeys(
+            re.findall(r"OCTOBENCH_V3_[A-Z0-9]{16,160}", raw_output)
+        ):
+            facts.append(
+                {
+                    "type": "benchmark_observation",
+                    "value": token,
+                    "confidence": 100,
+                    "session_id": session_id,
+                }
+            )
         tool_lower = tool_name.lower()
         raw_lower = raw_output.lower()
         is_exfil_stage = (

@@ -245,143 +245,205 @@ def test_post_exploit_task_templates_do_not_force_root_without_password():
     assert registry.task_map["exfiltrate_data"] == [("killchain_exfil {target}", "killchain_exfil")]
 
 
-def test_credential_ranking_prefers_password_login_over_root_key_marker():
-    import uuid
-
-    from core.tools import exploit_tools
-
-    host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
-    old_get_store = exploit_tools._get_cred_store
-    exploit_tools._KNOWN_CREDS[("ssh", host)] = [
-        ("root", "__KEY_AUTH__"),
-        ("support", "fixture-password-123"),
-    ]
-
-    try:
-        exploit_tools._get_cred_store = lambda: None
-        assert exploit_tools.get_best_creds_for_target(host, "ssh") == ("support", "fixture-password-123")
-    finally:
-        exploit_tools._get_cred_store = old_get_store
-        exploit_tools._KNOWN_CREDS.pop(("ssh", host), None)
-
-
-def test_credential_lookup_merges_unified_store_and_legacy_cache():
-    import uuid
-
-    from core.tools import exploit_tools
-
-    host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
-    old_get_store = exploit_tools._get_cred_store
-
-    class FakeStore:
-        def get(self, service, target):
-            if service == "ssh" and target == host:
-                return [("root", "__KEY_AUTH__")]
-            return []
-
-    try:
-        exploit_tools._get_cred_store = lambda: FakeStore()
-        exploit_tools._KNOWN_CREDS[("ssh", host)] = [("support", "fixture-password-123")]
-        assert exploit_tools.get_known_creds("ssh", host) == [
-            ("root", "__KEY_AUTH__"),
-            ("support", "fixture-password-123"),
-        ]
-        assert exploit_tools.get_best_creds_for_target(host, "ssh") == ("support", "fixture-password-123")
-    finally:
-        exploit_tools._get_cred_store = old_get_store
-        exploit_tools._KNOWN_CREDS.pop(("ssh", host), None)
-
-
-def test_unified_credential_store_prefers_password_over_root_key_marker():
-    import uuid
-
+@pytest.fixture
+def reference_credential_store(monkeypatch):
+    """Install an isolated reference-only store for compatibility callers."""
     from core.credentials import CredentialStore
+    from core.secrets import SecretStore
+
+    secret_store = SecretStore(":memory:", key=b"a" * 32)
+    store = CredentialStore(secret_store=secret_store, hydrate=False)
+    monkeypatch.setattr(CredentialStore, "_instance", store)
+    yield store
+    secret_store.close()
+
+
+def test_credential_ranking_prefers_password_login_over_root_key_marker(
+    reference_credential_store,
+):
+    import uuid
+    from dataclasses import replace
+
+    from core.credential_ranking import KEY_AUTH_MARKER
+    from core.credentials import CredentialRef
 
     host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
-    store = CredentialStore()
-    store._cache[("ssh", host)] = [
-        ("root", "__KEY_AUTH__"),
-        ("support", "fixture-password-123"),
-    ]
+    password = "fixture-password-123"
+    reference_credential_store.add("ssh", host, "root", KEY_AUTH_MARKER, quiet=True)
+    reference_credential_store.add("ssh", host, "support", password, quiet=True)
 
-    assert store.get_best(host) == ("support", "fixture-password-123")
+    selected = reference_credential_store.best_ref(host, "ssh")
+
+    assert isinstance(selected, CredentialRef)
+    assert selected.username == "support"
+    assert selected.auth_kind == "password"
+    assert password not in repr(reference_credential_store._cache)
+    assert password not in repr(selected)
+    with reference_credential_store.material_for_execution(selected) as material:
+        assert material.username == "support"
+        assert material.target == host
+        assert material.password == password
+        assert password not in repr(material)
+    assert material.password == ""
+    with pytest.raises(
+        KeyError, match="unknown credential handle"
+    ), reference_credential_store.material_for_execution(
+        replace(selected, target="192.0.2.254")
+    ):
+        pass
 
 
-def test_pipeline_syncs_root_key_fact_into_ssh_credential_cache():
+def test_credential_lookup_is_reference_only_without_legacy_cache(
+    reference_credential_store,
+):
+    import uuid
+
+    from core.credentials import CredentialRef
+    from core.tools import exploit_tools
+
+    host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
+    password = "fixture-password-123"
+    reference_credential_store.add("ssh", host, "support", password, quiet=True)
+
+    with pytest.warns(FutureWarning, match="no longer reveals plaintext"):
+        credentials = exploit_tools.get_known_creds("ssh", host)
+    with pytest.warns(FutureWarning, match="now returns CredentialRef"):
+        selected = exploit_tools.get_best_creds_for_target(host, "ssh")
+
+    assert credentials == (selected,)
+    assert all(isinstance(item, CredentialRef) for item in credentials)
+    assert password not in repr(credentials)
+    assert not hasattr(exploit_tools, "_KNOWN_CREDS")
+
+
+def test_unified_credential_store_compatibility_getter_returns_reference(
+    reference_credential_store,
+):
+    import uuid
+
+    from core.credential_ranking import KEY_AUTH_MARKER
+    from core.credentials import CredentialRef
+
+    host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
+    password = "fixture-password-123"
+    reference_credential_store.add("ssh", host, "root", KEY_AUTH_MARKER, quiet=True)
+    reference_credential_store.add("ssh", host, "support", password, quiet=True)
+
+    with pytest.warns(FutureWarning, match="now returns CredentialRef"):
+        selected = reference_credential_store.get_best(host, "ssh")
+
+    assert isinstance(selected, CredentialRef)
+    assert selected.username == "support"
+    assert password not in repr(reference_credential_store._cache)
+    assert password not in repr(selected)
+
+
+def test_pipeline_syncs_root_key_fact_into_reference_only_credential_store(
+    reference_credential_store,
+):
     import uuid
 
     from core.ai.pipeline import AIPipeline
+    from core.credentials import CredentialRef, get_credential_refs
     from core.tools import exploit_tools
 
     host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
-    exploit_tools._KNOWN_CREDS.pop(("ssh", host), None)
+    canary = "session-plaintext-must-not-be-cached"
     pipeline = AIPipeline(f"/tmp/octopus_pipeline_root_key_{uuid.uuid4().hex}.db")
 
-    pipeline._sync_runtime_credentials_from_facts(host, [
-        {"type": "credential", "value": f"ssh_key_available:root@{host}"},
-        {"type": "credential", "value": "whm_session:nllWuSD9KpP7C1kL"},
-    ])
+    pipeline._sync_runtime_credentials_from_facts(
+        host,
+        [
+            {"type": "credential", "value": f"ssh_key_available:root@{host}"},
+            {"type": "credential", "value": f"whm_session:{canary}"},
+        ],
+    )
 
-    creds = exploit_tools.get_known_creds("ssh", host)
-    assert ("root", "__KEY_AUTH__") in creds
-    assert all(user != "whm_session" for user, _pwd in creds)
+    credentials = get_credential_refs("ssh", host)
+    assert len(credentials) == 1
+    assert isinstance(credentials[0], CredentialRef)
+    assert credentials[0].username == "root"
+    assert credentials[0].auth_kind == "ssh_key"
+    assert canary not in repr(reference_credential_store._cache)
+    assert canary not in repr(pipeline.fact_store.get_facts("scan-root-key", host))
+    assert not hasattr(exploit_tools, "_KNOWN_CREDS")
 
 
-def test_get_all_known_creds_reads_unified_store_and_legacy_cache():
+def test_get_all_known_creds_returns_grouped_references_only(
+    reference_credential_store,
+):
     import uuid
 
+    from core.credential_ranking import KEY_AUTH_MARKER
+    from core.credentials import CredentialRef
     from core.tools import exploit_tools
 
     host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
-    old_get_store = exploit_tools._get_cred_store
-    old_legacy = dict(exploit_tools._KNOWN_CREDS)
+    ssh_password = "fixture-password-123"
+    db_password = "dbpass"
+    reference_credential_store.add("ssh", host, "support", ssh_password, quiet=True)
+    reference_credential_store.add("ssh", host, "root", KEY_AUTH_MARKER, quiet=True)
+    reference_credential_store.add("postgres", host, "app", db_password, quiet=True)
 
-    class FakeStore:
-        def get_all(self, target):
-            if target == host:
-                return {
-                    "ssh": [("support", "fixture-password-123")],
-                    "postgres": [("app", "dbpass")],
-                }
-            return {}
+    with pytest.warns(FutureWarning, match="now returns CredentialRef objects"):
+        credentials = exploit_tools.get_all_known_creds_for_target(host)
 
-    try:
-        exploit_tools._get_cred_store = lambda: FakeStore()
-        exploit_tools._KNOWN_CREDS[("ssh", host)] = [("root", "__KEY_AUTH__")]
-        creds = exploit_tools.get_all_known_creds_for_target(host)
-    finally:
-        exploit_tools._get_cred_store = old_get_store
-        exploit_tools._KNOWN_CREDS.clear()
-        exploit_tools._KNOWN_CREDS.update(old_legacy)
-
-    assert creds["ssh"] == [("support", "fixture-password-123"), ("root", "__KEY_AUTH__")]
-    assert creds["postgres"] == [("app", "dbpass")]
+    assert [item.username for item in credentials["ssh"]] == ["support", "root"]
+    assert [item.username for item in credentials["postgres"]] == ["app"]
+    assert all(
+        isinstance(item, CredentialRef)
+        for grouped in credentials.values()
+        for item in grouped
+    )
+    assert ssh_password not in repr(credentials)
+    assert db_password not in repr(credentials)
+    assert not hasattr(exploit_tools, "_KNOWN_CREDS")
 
 
-def test_pipeline_seeds_cached_ssh_creds_and_verifies_instead_of_bruteforce():
+def test_pipeline_seeds_reference_only_ssh_credential_and_verifies_instead_of_bruteforce(
+    reference_credential_store,
+):
     import uuid
 
     from core.ai.pipeline import AIPipeline
+    from core.credentials import credential_material_for_execution
     from core.tools import exploit_tools
 
     host = f"192.0.2.{uuid.uuid4().int % 200 + 1}"
-    old_get_store = exploit_tools._get_cred_store
-    old_legacy = dict(exploit_tools._KNOWN_CREDS)
-    exploit_tools._get_cred_store = lambda: None
-    exploit_tools._KNOWN_CREDS[("ssh", host)] = [("support", "fixture-password-123")]
-    try:
-        pipeline = AIPipeline(f"/tmp/octopus_pipeline_cached_creds_{uuid.uuid4().hex}.db")
-        seeded = pipeline._seed_known_credentials("scan-cached-creds", host)
-        facts = pipeline.fact_store.get_facts("scan-cached-creds", host)
-        expanded = pipeline._expand_command_with_context(f"bruteforce ssh {host}", "scan-cached-creds", host)
-    finally:
-        exploit_tools._get_cred_store = old_get_store
-        exploit_tools._KNOWN_CREDS.clear()
-        exploit_tools._KNOWN_CREDS.update(old_legacy)
+    password = "fixture-password-123"
+    credential, created = reference_credential_store.register(
+        "ssh",
+        host,
+        "support",
+        password,
+        quiet=True,
+    )
+    assert created is True
+    pipeline = AIPipeline(f"/tmp/octopus_pipeline_cached_creds_{uuid.uuid4().hex}.db")
+
+    seeded = pipeline._seed_known_credentials("scan-cached-creds", host)
+    facts = pipeline.fact_store.get_facts("scan-cached-creds", host)
+    expanded = pipeline._expand_command_with_context(
+        f"bruteforce ssh {host}",
+        "scan-cached-creds",
+        host,
+    )
 
     pairs = {(fact["type"], fact["value"]) for fact in facts}
     assert seeded == 1
-    credential_values = [value for fact_type, value in pairs if fact_type == "credential"]
-    assert any(value.startswith("support:secret://") and value.endswith(" (cached)") for value in credential_values)
-    assert "fixture-password-123" not in repr(credential_values)
+    availability_values = [
+        value
+        for fact_type, value in pairs
+        if fact_type == "credential" and value.startswith("ssh_credential_available:")
+    ]
+    assert len(availability_values) == 1
+    assert availability_values[0].startswith("ssh_credential_available:secret://")
+    assert "support" not in availability_values[0]
+    assert password not in repr(facts)
+    assert password not in repr(reference_credential_store._cache)
+    assert not hasattr(exploit_tools, "_KNOWN_CREDS")
+    with credential_material_for_execution(credential) as material:
+        assert material.password == password
+        assert password not in repr(material)
+    assert material.password == ""
     assert expanded == [f"ssh_session {host}"]

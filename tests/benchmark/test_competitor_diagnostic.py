@@ -15,6 +15,8 @@ from core.benchmarks.competitors.lab import LabCommand
 from core.benchmarks.competitors.schema import SystemManifest
 from core.benchmarks.schema import load_scenario
 
+pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
+
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SCENARIO_PATH = (
     REPOSITORY_ROOT

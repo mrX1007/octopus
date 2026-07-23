@@ -1,3 +1,95 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "octopus-security"
+version = "1.1.0"
+description = "Evidence-driven, policy-gated security assessment orchestration"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "OCTOPUS contributors"}]
+dependencies = [
+    "cryptography>=44.0.0",
+    "paramiko>=3.0",
+    "python-dotenv>=1.0.0",
+    "PyYAML>=6.0",
+    "requests>=2.31.0",
+    "rich>=13.7.0",
+    "urllib3>=2.2.0",
+]
+
+[project.optional-dependencies]
+c2 = [
+    "fastapi>=0.111.0",
+    "uvicorn>=0.30.0",
+]
+reporting = [
+    "reportlab>=4.1.0",
+]
+osint-browser = [
+    "beautifulsoup4>=4.12.0",
+    "ddgs>=9.0.1,<9.8.0; python_version < '3.10'",
+    "ddgs>=9.14.4; python_version >= '3.10'",
+    "httpx[socks]>=0.27.0",
+    "lxml>=5.1.0",
+    "patchright>=1.49.0",
+    "primp>=0.6.0",
+    "scrapling>=0.2.0",
+    "shodan>=1.31.0",
+]
+mysql = [
+    "mysql-connector-python>=9.0.0",
+]
+
+[project.scripts]
+octopus = "core.application:main"
+octopus-c2 = "core.c2.daemon:main"
+octobench = "core.benchmarks.__main__:main"
+octobench-competitors = "core.benchmarks.competitors.__main__:main"
+
+[tool.setuptools]
+include-package-data = true
+py-modules = [
+    "config",
+    "db",
+    "evasion",
+    "export",
+    "hash_cracker",
+    "memory",
+    "msf",
+    "octopus",
+    "search",
+    "shodan_module",
+    "tools",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["benchmarks*", "core*", "modules*", "plugins*", "scripts*"]
+namespaces = true
+
+[tool.setuptools.package-data]
+"benchmarks" = [
+    "results/*.json",
+    "scenarios/*.json",
+]
+"benchmarks.competitors" = [
+    "catalog.json",
+    "lab/Dockerfile",
+    "lab/compose.yaml",
+    "labs/*/Dockerfile",
+    "labs/*/Dockerfile.dockerignore",
+    "labs/*/README.md",
+    "labs/*/compose.yaml",
+    "campaigns/*/README.md",
+    "campaigns/*/scenarios/*.json",
+    "scenarios/*.example",
+    "systems/*.example",
+]
+
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"
 testpaths = ["tests"]
@@ -56,11 +148,19 @@ python_version = "3.9"
 ignore_missing_imports = true
 warn_unused_ignores = true
 warn_redundant_casts = true
+# Removal inventory: 164 errors in 36 files; see docs/quality/static-analysis-baseline.md.
 follow_imports = "skip"
+check_untyped_defs = true
 explicit_package_bases = true
 files = [
+    "core/application.py",
+    "core/version.py",
     "core/actions",
     "core/benchmarks",
+    "core/c2/protocol.py",
+    "core/cli/history.py",
+    "core/cli/main.py",
+    "core/cli/presentation.py",
     "core/execution",
     "core/plugins",
     "core/secrets.py",
@@ -69,16 +169,24 @@ files = [
     "core/ai/runtime.py",
     "core/ai/command_scheduler.py",
     "core/ai/credential_sync.py",
+    "core/ai/evaluated_facts.py",
     "core/ai/fact_assessment.py",
     "core/ai/fact_store.py",
     "core/knowledge/identity.py",
     "core/knowledge/graph.py",
     "core/knowledge/projection.py",
     "core/ai/mission_store.py",
+    "core/ai/mission_store_codecs.py",
+    "core/ai/mission_store_maintenance.py",
+    "core/ai/mission_store_models.py",
+    "core/ai/mission_store_replans.py",
+    "core/ai/mission_store_schema.py",
+    "core/ai/mission_store_tasks.py",
     "core/ai/outcomes.py",
     "core/ai/capability_assessment.py",
     "core/ai/exploit_applicability.py",
     "core/ai/pipeline_mission.py",
+    "core/ai/pipeline_followups.py",
     "core/ai/pipeline_observability.py",
     "core/ai/pipeline_planning.py",
     "core/ai/pipeline_replay.py",

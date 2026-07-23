@@ -1,0 +1,2 @@
+# Optional document/PDF reporting profile.
+reportlab>=4.1.0

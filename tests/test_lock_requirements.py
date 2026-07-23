@@ -30,6 +30,9 @@ def _write_inputs(root: Path) -> None:
     )
     contents = {
         "runtime.txt": "demo-runtime>=1.0\n",
+        "c2.txt": "demo-c2>=1.0\n",
+        "reporting.txt": "demo-reporting>=1.0\n",
+        "osint-browser.txt": "demo-osint>=1.0\nshodan>=1.0\n",
         "dev.txt": "demo-dev>=1.0\n",
         "mysql.txt": "demo-mysql>=1.0\n",
         "external-tools.txt": "demo-external>=1.0\n",
@@ -93,22 +96,28 @@ def test_update_builds_complete_matrix_with_safe_uv_argv(
         "sdist_policy": {
             "default": "deny",
             "allowlist_by_profile": {
-                "external-tools": ["shodan"],
+                "c2": [],
+                "external-tools": [],
                 "full": ["shodan"],
                 "mysql": [],
+                "osint-browser": ["shodan"],
                 "platform": [],
+                "reporting": [],
                 "runtime": [],
                 "test": [],
             },
         },
     }
-    assert len(manifest["locks"]) == 24
+    assert len(manifest["locks"]) == 36
 
     expected_paths = {
         f"requirements/locks/linux-x86_64/{python}/{profile}.txt"
         for python in ("cp39", "cp310", "cp311", "cp312")
         for profile in (
             "runtime",
+            "c2",
+            "reporting",
+            "osint-browser",
             "test",
             "mysql",
             "external-tools",
@@ -124,7 +133,7 @@ def test_update_builds_complete_matrix_with_safe_uv_argv(
         assert item["input_sha256"]
         assert b"--hash=sha256:" in lock_bytes
 
-    assert len(calls) == 25
+    assert len(calls) == 37
     compile_calls = calls[1:]
     for call in compile_calls:
         argv = call["argv"]
@@ -137,7 +146,7 @@ def test_update_builds_complete_matrix_with_safe_uv_argv(
         assert argv[argv.index("--default-index") + 1] == "https://pypi.org/simple"
         assert "@" not in argv[argv.index("--default-index") + 1]
         source_name = Path(argv[3]).name
-        if source_name.endswith(("-external-tools.in", "-full.in")):
+        if source_name.endswith(("-osint-browser.in", "-full.in")):
             assert argv[argv.index("--no-binary") + 1] == "shodan"
         else:
             assert "--no-binary" not in argv
@@ -253,8 +262,8 @@ def test_validate_requires_self_contained_binary_only_policy() -> None:
 def test_validate_allows_only_the_declared_profile_sdist_exception() -> None:
     header = lock_requirements.render_lock_header(
         target=lock_requirements.TARGETS[0],
-        profile="external-tools",
-        inputs=lock_requirements.PROFILE_INPUTS["external-tools"],
+        profile="osint-browser",
+        inputs=lock_requirements.PROFILE_INPUTS["osint-browser"],
     )
     pinned = "shodan==1.31.0 \\\n    --hash=sha256:" + _HASH + "\n"
     valid = header + "--only-binary :all:\n--no-binary shodan\n" + pinned

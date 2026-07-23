@@ -17,18 +17,19 @@ env:
 
 jobs:
   import-smoke:
-    name: Runtime-only import smoke (Python 3.9)
+    name: Minimal runtime import smoke (Python 3.9)
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - name: Checkout pinned dependencies
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           submodules: recursive
           persist-credentials: false
 
       - name: Set up Python 3.9
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.9"
 
@@ -41,7 +42,39 @@ jobs:
           python -m pip check
 
       - name: Import public runtime boundaries
-        run: python -I scripts/quality/import_smoke.py
+        run: python -I scripts/quality/import_smoke.py --profile runtime
+
+  profile-imports:
+    name: Optional profile import (${{ matrix.profile }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [c2, reporting, osint-browser, mysql]
+    steps:
+      - name: Checkout pinned dependencies
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.9"
+
+      - name: Validate dependency locks offline
+        run: python scripts/lock_requirements.py validate
+
+      - name: Install locked optional profile
+        run: |
+          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp39/${{ matrix.profile }}.txt
+          python -m pip check
+
+      - name: Import optional profile boundaries
+        run: python -I scripts/quality/import_smoke.py --profile '${{ matrix.profile }}'
 
   static-analysis:
     name: Configured Python quality gates
@@ -49,13 +82,14 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout pinned dependencies
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           submodules: recursive
           persist-credentials: false
 
       - name: Set up Python 3.9
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.9"
 
@@ -69,6 +103,17 @@ jobs:
 
       - name: Ruff (repository configuration)
         run: python -m ruff check .
+
+      - name: Formatter ratchet on changed Python
+        shell: bash
+        env:
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          change_base="${EVENT_BASE}"
+          if [[ ! "${change_base}" =~ ^[0-9a-f]{40}$ ]] || ! git cat-file -e "${change_base}^{commit}"; then
+            change_base="$(git rev-parse HEAD^)"
+          fi
+          python scripts/quality/format_gate.py --root . --base "${change_base}"
 
       - name: Mypy (repository configuration)
         run: python -m mypy
@@ -98,13 +143,14 @@ jobs:
             lock-tag: cp312
     steps:
       - name: Checkout pinned dependencies
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           submodules: recursive
           persist-credentials: false
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -119,21 +165,22 @@ jobs:
       - name: Run fast unit and contract tests
         run: >-
           python -m pytest -q
-          -m '(unit or contract) and not slow and not external_tools and not mysql and not platform'
+          -m '(unit or contract) and not slow and not integration and not external_tools and not mysql and not platform'
 
   full-suite:
-    name: Full suite and honest coverage gate (Python 3.9)
+    name: Full suite and coverage ratchets (Python 3.9)
     runs-on: ubuntu-22.04
-    timeout-minutes: 50
+    timeout-minutes: 60
     steps:
       - name: Checkout pinned dependencies
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           submodules: recursive
           persist-credentials: false
 
       - name: Set up Python 3.9
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.9"
 
@@ -150,13 +197,159 @@ jobs:
           python -m coverage erase
           python -m coverage run --rcfile=quality/coverage-ci.ini -m pytest -q
 
-      - name: Enforce the complete first-party coverage denominator
+      - name: Enforce global, package, and changed-line coverage
+        shell: bash
+        env:
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          change_base="${EVENT_BASE}"
+          if [[ ! "${change_base}" =~ ^[0-9a-f]{40}$ ]] || ! git cat-file -e "${change_base}^{commit}"; then
+            change_base="$(git rev-parse HEAD^)"
+          fi
+          python scripts/quality/coverage_gate.py \
+            --root . \
+            --config quality/coverage-ci.ini \
+            --fail-under 59.50 \
+            --package-fail-under core/actions=70 \
+            --package-fail-under core/execution=65 \
+            --package-fail-under core/benchmarks=45 \
+            --diff-base "${change_base}" \
+            --diff-fail-under 80 \
+            --xml coverage.xml
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-python39
+          path: coverage.xml
+          if-no-files-found: warn
+          retention-days: 14
+
+  mysql-integration:
+    name: MySQL integration contract
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: octopus_test
+          MYSQL_ROOT_PASSWORD: octopus-ci-root
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    steps:
+      - name: Checkout pinned dependencies
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.9"
+
+      - name: Install locked MySQL profile
+        run: |
+          python scripts/lock_requirements.py validate
+          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp39/mysql.txt
+          python -m pip check
+
+      - name: Run live MySQL tests
+        env:
+          OCTOPUS_TEST_MYSQL: "1"
+          DB_HOST: 127.0.0.1
+          DB_PORT: "3306"
+          DB_NAME: octopus_test
+          DB_USER: root
+          DB_PASSWORD: octopus-ci-root
+        run: python -m pytest -q -m mysql
+
+  packaging-docs:
+    name: Package metadata and documentation contracts
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout pinned dependencies
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.9"
+
+      - name: Install locked quality toolchain
+        run: |
+          python scripts/lock_requirements.py validate
+          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp39/test.txt
+          python -m pip check
+
+      - name: Validate docs, schemas, and shipped examples
+        run: python scripts/quality/docs_gate.py --root .
+
+      - name: Build wheel and source distribution offline
+        run: python -m build --no-isolation
+
+      - name: Install and smoke-test the built wheel
+        run: python scripts/quality/wheel_smoke.py dist/*.whl
+
+  dependency-security:
+    name: Dependency audit and deterministic SBOM
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout pinned dependencies
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.9"
+
+      - name: Install locked audit toolchain
+        run: |
+          python scripts/lock_requirements.py validate
+          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp39/test.txt
+          python -m pip check
+
+      - name: Audit exact full dependency graph
         run: >-
-          python scripts/quality/coverage_gate.py
-          --root .
-          --config quality/coverage-ci.ini
-          --fail-under 42.70
-          --xml coverage.xml
+          python -m pip_audit
+          --require-hashes --no-deps --disable-pip --strict
+          -r requirements/locks/linux-x86_64/cp39/full.txt
+          --format json --output dependency-audit.json
+
+      - name: Generate deterministic CycloneDX SBOM
+        run: >-
+          python scripts/quality/sbom.py
+          requirements/locks/linux-x86_64/cp39/full.txt
+          --output octopus-sbom.cdx.json
+
+      - name: Upload dependency evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-evidence-python39
+          path: |
+            dependency-audit.json
+            octopus-sbom.cdx.json
+          if-no-files-found: warn
+          retention-days: 30
 
   c2-go:
     name: C2 Go build, test, vet, and format
@@ -167,13 +360,14 @@ jobs:
         working-directory: core/c2
     steps:
       - name: Checkout pinned dependencies
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           submodules: recursive
           persist-credentials: false
 
       - name: Set up Go 1.21
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: "1.21.x"
           cache: false
@@ -208,13 +402,14 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout pinned dependencies recursively
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
+          fetch-depth: 0
           submodules: recursive
           persist-credentials: false
 
       - name: Set up Python 3.9
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.9"
 

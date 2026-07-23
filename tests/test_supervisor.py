@@ -11,6 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+pytestmark = pytest.mark.contract
+
 
 @pytest.fixture
 def supervisor_paths(monkeypatch, tmp_path):

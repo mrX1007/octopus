@@ -470,4 +470,10 @@ def test_mid_task_tool_budget_leaves_attempt_resumable(tmp_path):
     assert attempt.status == "interrupted"
     assert attempt.outcome is None
     assert attempt.execution_ids == ("exec-before-budget",)
-    assert pipeline._resumable_mission_plan() == [dict(TASK)]
+    resume_plan = pipeline._resumable_mission_plan()
+    assert [
+        {"agent": step["agent"], "task": step["task"]}
+        for step in resume_plan
+    ] == [dict(TASK)]
+    assert resume_plan[0]["task_id"] == task.task_id
+    assert resume_plan[0]["task_scope"] == task.task_scope

@@ -1,11 +1,15 @@
 import json
 
+import pytest
+
 from core.ai.pipeline_telemetry import (
     append_command_trace,
     append_goal_trace,
     persist_llm_health,
     print_efficiency_report,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def test_goal_and_command_events_append_in_call_order_with_legacy_shapes():
@@ -198,4 +202,3 @@ def test_efficiency_report_uses_injected_state_and_preserves_output_order():
         "    Last goal trace: goal=service_discovery state=recon_completed next=vulnerability_assessment",
         "    Command trace: decisions=3, skipped=1",
     ]
-

@@ -22,12 +22,18 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
+from ..v3.fixture import LAB_V3_HEALTH_EVIDENCE, LAB_V3_VERSION, SCENARIO_FAMILIES
+from ..v3.schema import BenchmarkV3SchemaError
+from .v3_integration import prepare_fixture_run
+
 COMPOSE_PROJECT_NAME = "octobench"
 LAB_PROTOCOL_VERSION = "1.0"
 LAB_VERSION = "discovery-lab-v1"
 LAB_HEALTH_EVIDENCE = "OCTOBENCH_EVIDENCE_ENDPOINT_HEALTH"
 V2_LAB_VERSION = "discovery-lab-v2"
 V2_LAB_HEALTH_EVIDENCE = "OCTOBENCH_EVIDENCE_V2_HEALTH"
+V3_LAB_VERSION = LAB_V3_VERSION
+V3_LAB_HEALTH_EVIDENCE = LAB_V3_HEALTH_EVIDENCE
 DEFAULT_PORT = 8080
 DEFAULT_HEALTH_TIMEOUT_SECONDS = 30.0
 MAX_HEALTH_TIMEOUT_SECONDS = 120.0
@@ -50,6 +56,14 @@ _V2_COMPOSE_PATH = (
     / V2_LAB_VERSION
     / "compose.yaml"
 )
+_V3_COMPOSE_PATH = (
+    Path(__file__).resolve().parents[3]
+    / "benchmarks"
+    / "competitors"
+    / "labs"
+    / V3_LAB_VERSION
+    / "compose.yaml"
+)
 _V2_SCENARIO_IDS = frozenset(
     {
         "authorized-hypermedia-pagination-small-model-v2",
@@ -57,6 +71,9 @@ _V2_SCENARIO_IDS = frozenset(
         "authorized-openapi-contract-small-model-v2",
         "authorized-relative-redirect-small-model-v2",
     }
+)
+_V3_SCENARIO_IDS = frozenset(
+    f"{family.replace('_', '-')}-v3" for family in SCENARIO_FAMILIES
 )
 _PASSTHROUGH_ENVIRONMENT = (
     "DOCKER_CONFIG",
@@ -100,6 +117,8 @@ class LabControlError(RuntimeError):
             "invalid_scenario",
             "invalid_target",
             "invalid_timeout",
+            "invalid_v3_context",
+            "v3_fixture_prepare_failed",
             "reset_failed",
             "target_required",
         }
@@ -143,12 +162,30 @@ def main(argv: Sequence[str] | None = None) -> int:
             scenario_id = _selected_scenario(definition, args.scenario_id)
             target = _target_url(args.target, environment)
             timeout = _health_timeout(args.timeout)
+            v3_run_directory: Path | None = None
+            fixture_digest = ""
+            if definition.definition_id == V3_LAB_VERSION:
+                try:
+                    variant, artifacts = prepare_fixture_run(
+                        args.state_directory,
+                        campaign_id=args.campaign_id,
+                        system_id=args.system_id,
+                        scenario_id=str(scenario_id or ""),
+                        repetition=_v3_positive_integer(args.repetition),
+                        seed=_v3_seed(args.matched_fixture_seed),
+                        base_url=target,
+                    )
+                except (BenchmarkV3SchemaError, OSError, TypeError, ValueError):
+                    raise LabControlError("v3_fixture_prepare_failed") from None
+                v3_run_directory = artifacts.run_directory
+                fixture_digest = variant.variant_digest
             _run_compose(
                 ("up", "-d", "--build", "--force-recreate"),
                 failure_code="reset_failed",
                 environment=environment,
                 lab_definition=definition,
                 scenario_id=scenario_id,
+                v3_run_directory=v3_run_directory,
             )
             health = _wait_for_health(
                 target,
@@ -165,6 +202,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             }
             if scenario_id is not None:
                 payload["scenario_id"] = scenario_id
+            if fixture_digest:
+                payload["fixture_variant_digest"] = fixture_digest
             _print_json(payload)
         elif args.command == "health":
             definition = _lab_definition(args.lab_definition)
@@ -232,6 +271,11 @@ def _argument_parser() -> argparse.ArgumentParser:
         default=DEFAULT_HEALTH_TIMEOUT_SECONDS,
         help="Bounded health wait in seconds.",
     )
+    reset.add_argument("--campaign-id")
+    reset.add_argument("--system-id")
+    reset.add_argument("--repetition")
+    reset.add_argument("--matched-fixture-seed")
+    reset.add_argument("--state-directory", type=Path)
 
     health = subparsers.add_parser("health", help="Validate the lab health endpoint.")
     _add_lab_selection(health, include_scenario=True)
@@ -270,7 +314,7 @@ def _add_lab_selection(
     if include_scenario:
         parser.add_argument(
             "--scenario-id",
-            help="required exact scenario surface for discovery-lab-v2",
+            help="required exact scenario surface for discovery-lab-v2/v3",
         )
 
 
@@ -281,6 +325,7 @@ def _run_compose(
     environment: Mapping[str, str],
     lab_definition: _LabDefinition | str | None = None,
     scenario_id: str | None = None,
+    v3_run_directory: Path | None = None,
 ) -> None:
     definition = _lab_definition(lab_definition)
     selected_scenario = (
@@ -307,6 +352,15 @@ def _run_compose(
     }
     if selected_scenario is not None:
         child_environment["OCTOBENCH_LAB_SCENARIO_ID"] = selected_scenario
+    if definition.definition_id == V3_LAB_VERSION:
+        if tuple(arguments[:1]) == ("up",) and v3_run_directory is None:
+            raise LabControlError("invalid_v3_context")
+        if v3_run_directory is not None:
+            child_environment["OCTOBENCH_V3_RUN_DIRECTORY"] = str(
+                v3_run_directory.resolve()
+            )
+            child_environment["OCTOBENCH_V3_UID"] = str(os.getuid())
+            child_environment["OCTOBENCH_V3_GID"] = str(os.getgid())
     try:
         process = subprocess.Popen(
             argv,
@@ -480,7 +534,36 @@ def _lab_definition(value: _LabDefinition | str | None) -> _LabDefinition:
             health_evidence=V2_LAB_HEALTH_EVIDENCE,
             scenario_ids=_V2_SCENARIO_IDS,
         )
+    if candidate == V3_LAB_VERSION:
+        return _LabDefinition(
+            definition_id=V3_LAB_VERSION,
+            project_name="octobench-v3",
+            compose_path=_V3_COMPOSE_PATH,
+            lab_version=V3_LAB_VERSION,
+            health_evidence=V3_LAB_HEALTH_EVIDENCE,
+            scenario_ids=_V3_SCENARIO_IDS,
+        )
     raise LabControlError("invalid_lab_definition")
+
+
+def _v3_positive_integer(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise LabControlError("invalid_v3_context") from None
+    if parsed < 1:
+        raise LabControlError("invalid_v3_context")
+    return parsed
+
+
+def _v3_seed(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        raise LabControlError("invalid_v3_context") from None
+    if not 0 <= parsed < 2**63:
+        raise LabControlError("invalid_v3_context")
+    return parsed
 
 
 def _selected_scenario(

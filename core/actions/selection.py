@@ -14,7 +14,12 @@ from core.execution import ExecutionPolicy, ExecutionResult, ExecutionStatus
 
 from .catalog import ActionCatalog
 from .executor import ActionExecutor
-from .models import ActionExecutionReport, ActionRequest
+from .models import (
+    ActionExecutionReport,
+    ActionRequest,
+    ActiveRiskClass,
+    PolicyDenial,
+)
 from .telemetry import (
     ProviderTelemetryEvent,
     ProviderTelemetryStore,
@@ -37,6 +42,8 @@ class ProviderDecision:
     scope_compatible: bool
     active_risk: float
     circuit_state: str
+    active_risk_class: ActiveRiskClass = ActiveRiskClass.READ_ONLY
+    policy_denial: PolicyDenial | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -49,7 +56,11 @@ class ProviderDecision:
             "dependency_available": self.dependency_available,
             "scope_compatible": self.scope_compatible,
             "active_risk": self.active_risk,
+            "active_risk_class": self.active_risk_class.value,
             "circuit_state": self.circuit_state,
+            "policy_denial": (
+                self.policy_denial.to_dict() if self.policy_denial else None
+            ),
         }
 
 
@@ -188,7 +199,15 @@ class ProviderSelector:
                 capability,
                 target_kind,
             )
-            active_risk = 1.0 if descriptor.requirements.active else 0.0
+            try:
+                active_risk_class = adapter.active_risk_class(request, "execute")
+            except Exception:
+                active_risk_class = (
+                    ActiveRiskClass.ACTIVE
+                    if descriptor.requirements.active
+                    else ActiveRiskClass.READ_ONLY
+                )
+            active_risk = active_risk_class.score
             try:
                 applicability = adapter.applicability(request)
             except Exception as exc:
@@ -208,14 +227,17 @@ class ProviderSelector:
                 )
 
             scope_compatible = False
+            policy_denial = None
             if dependency_available and circuit.allowed:
                 try:
                     decision = adapter.authorize(self.policy, request, "execute")
                     scope_compatible = decision.allowed
                     if not decision.allowed:
-                        reasons.append(
-                            f"authorization:{self._reason_code(decision.reason)}"
+                        policy_denial = PolicyDenial.create(
+                            "selection",
+                            decision.reason,
                         )
+                        reasons.append(f"authorization:{policy_denial.reason_code}")
                 except Exception as exc:
                     reasons.append(f"authorization_error:{type(exc).__name__}")
 
@@ -239,7 +261,9 @@ class ProviderSelector:
                 dependency_available=dependency_available,
                 scope_compatible=scope_compatible,
                 active_risk=active_risk,
+                active_risk_class=active_risk_class,
                 circuit_state=circuit.state,
+                policy_denial=policy_denial,
             )
             (rejected if hard_rejected else accepted).append(provider_decision)
 
@@ -281,6 +305,7 @@ class ProviderSelector:
             dependency_available=False,
             scope_compatible=False,
             active_risk=0.0,
+            active_risk_class=ActiveRiskClass.READ_ONLY,
             circuit_state="closed",
         )
 
@@ -421,18 +446,54 @@ class ProviderRunResult:
     trace: dict[str, Any] = field(default_factory=dict)
     schema_version: str = PROVIDER_SELECTION_SCHEMA_VERSION
 
+    @property
+    def effective_result(self) -> ExecutionResult | None:
+        if self.final_report is None:
+            return None
+        if self.final_report.policy_denials:
+            return None
+        return self.final_report.execution_result or self.final_report.check_result
+
+    @property
+    def policy_denial(self) -> PolicyDenial | None:
+        if self.final_report is not None and self.final_report.policy_denials:
+            return self.final_report.policy_denials[-1]
+        if self.attempts:
+            return None
+        for decision in self.selection.rejected:
+            if decision.policy_denial is not None:
+                return decision.policy_denial
+        return None
+
+    @property
+    def status(self) -> ExecutionStatus:
+        if self.policy_denial is not None:
+            return ExecutionStatus.BLOCKED
+        effective = self.effective_result
+        if effective is not None:
+            return effective.status
+        return ExecutionStatus.UNAVAILABLE
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
             "selection": self.selection.to_dict(),
             "attempts": [item.to_dict() for item in self.attempts],
             "final_report": self.final_report.to_dict() if self.final_report else None,
+            "status": self.status.value,
+            "policy_denial": (
+                self.policy_denial.to_dict() if self.policy_denial else None
+            ),
             "trace": dict(self.trace),
         }
 
 
 IngestCallback = Callable[
     [ExecutionResult, str],
+    "IngestionOutcome | Mapping[str, Any]",
+]
+PartialIngestCallback = Callable[
+    [ExecutionResult, str, ActionRequest],
     "IngestionOutcome | Mapping[str, Any]",
 ]
 
@@ -455,6 +516,7 @@ class ProviderFallbackExecutor:
         candidate_names: Sequence[str],
         *,
         ingest: IngestCallback | None = None,
+        partial_ingest: PartialIngestCallback | None = None,
         action_options: Mapping[str, Any] | None = None,
     ) -> ProviderRunResult:
         selection = self.selector.select(capability, request, candidate_names)
@@ -469,26 +531,40 @@ class ProviderFallbackExecutor:
                 **dict(action_options or {}),
             )
             final_report = report
-            effective = report.execution_result or report.check_result
-            ingestion = self._ingest(effective, decision.action_id, ingest)
-            retryable = RetryClassifier.is_retryable(effective)
-            partial_output_ingested = bool(
-                effective
-                and effective.partial
-                and not ingestion.error
-                and ingest is not None
+            effective = (
+                None
+                if report.policy_denials
+                else report.execution_result or report.check_result
             )
+            retryable = RetryClassifier.is_retryable(effective)
             has_more = index + 1 < len(ranked)
             output_requires_ingest = bool(
                 effective
                 and retryable
+                and has_more
                 and (effective.stdout or effective.stderr)
             )
+            partial_callback_used = bool(output_requires_ingest and partial_ingest)
+            if partial_callback_used:
+                ingestion = self._ingest_partial(
+                    effective,
+                    decision.action_id,
+                    request,
+                    partial_ingest,
+                )
+            else:
+                ingestion = self._ingest(effective, decision.action_id, ingest)
+            partial_output_ingested = bool(
+                effective
+                and effective.partial
+                and not ingestion.error
+                and (partial_callback_used or ingest is not None)
+            )
             ingest_blocked = bool(
-                retryable
+                output_requires_ingest
                 and (
                     ingestion.error
-                    or (output_requires_ingest and ingest is None)
+                    or (partial_ingest is None and ingest is None)
                 )
             )
             fallback_taken = bool(retryable and has_more and not ingest_blocked)
@@ -562,6 +638,20 @@ class ProviderFallbackExecutor:
         except Exception as exc:
             return IngestionOutcome(error=f"ingest_error:{type(exc).__name__}")
 
+    @staticmethod
+    def _ingest_partial(
+        result: ExecutionResult | None,
+        action_id: str,
+        request: ActionRequest,
+        callback: PartialIngestCallback | None,
+    ) -> IngestionOutcome:
+        if result is None or callback is None or not (result.stdout or result.stderr):
+            return IngestionOutcome()
+        try:
+            return IngestionOutcome.from_value(callback(result, action_id, request))
+        except Exception as exc:
+            return IngestionOutcome(error=f"ingest_error:{type(exc).__name__}")
+
     def _record_telemetry(
         self,
         capability: str,
@@ -601,6 +691,7 @@ class ProviderFallbackExecutor:
 __all__ = [
     "PROVIDER_SELECTION_SCHEMA_VERSION",
     "IngestionOutcome",
+    "PartialIngestCallback",
     "ProviderAttempt",
     "ProviderCircuitBreaker",
     "ProviderCircuitState",

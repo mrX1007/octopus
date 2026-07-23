@@ -1,0 +1,74 @@
+{
+  "$id": "https://octopus.local/schemas/benchmark-statistics-v3.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "analysis_plan_digest": { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+    "analysis_plan_id": { "type": "string" },
+    "automatic_winner": { "const": false },
+    "leaderboard_contract": {
+      "additionalProperties": false,
+      "properties": {
+        "merge_group": { "type": "string" },
+        "mixed_tracks": { "const": "forbidden" },
+        "track_id": { "type": "string" }
+      },
+      "required": ["merge_group", "mixed_tracks", "track_id"],
+      "type": "object"
+    },
+    "paired_effects": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "left_system_id": { "type": "string" },
+          "metric": { "type": "string" },
+          "population": { "enum": ["all_scheduled", "completion_conditional"] },
+          "right_system_id": { "type": "string" },
+          "statistics": { "type": "object" }
+        },
+        "required": ["left_system_id", "metric", "population", "right_system_id", "statistics"],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "run_count": { "minimum": 1, "type": "integer" },
+    "schema_version": { "const": "1.0" },
+    "systems": {
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "overall": { "$ref": "#/$defs/groupStatistics" },
+          "scenarios": {
+            "additionalProperties": { "$ref": "#/$defs/groupStatistics" },
+            "type": "object"
+          }
+        },
+        "required": ["overall", "scenarios"],
+        "type": "object"
+      },
+      "minProperties": 2,
+      "type": "object"
+    }
+  },
+  "required": ["analysis_plan_digest", "analysis_plan_id", "automatic_winner", "leaderboard_contract", "paired_effects", "run_count", "schema_version", "systems"],
+  "title": "OCTOPUS Benchmark v3 deterministic statistics",
+  "type": "object",
+  "$defs": {
+    "groupStatistics": {
+      "additionalProperties": false,
+      "properties": {
+        "action_telemetry": { "type": "object" },
+        "budget_enforcement": { "type": "object" },
+        "completion_by_deadline": { "type": "object" },
+        "duration": { "type": "object" },
+        "execution_outcomes": { "type": "object" },
+        "metrics": { "type": "object" },
+        "model_seed": { "type": "object" },
+        "run_count": { "minimum": 1, "type": "integer" },
+        "task_outcomes": { "type": "object" }
+      },
+      "required": ["action_telemetry", "budget_enforcement", "completion_by_deadline", "duration", "execution_outcomes", "metrics", "model_seed", "run_count", "task_outcomes"],
+      "type": "object"
+    }
+  }
+}

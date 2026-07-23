@@ -7,10 +7,15 @@ import re
 import sys
 import tempfile
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
+
+shodan: Any
+mysql: Any
 
 try:
-    import shodan
+    import shodan as _shodan_module
+
+    shodan = _shodan_module
 except ImportError:
     shodan = None
 
@@ -18,10 +23,14 @@ try:
     from config import CFG, get_secret
 except ImportError:
     CFG = {}
-    def get_secret(k, d=""): return os.environ.get(k, d)
+
+    def get_secret(key: str, default: str = "") -> str:
+        return os.environ.get(key, default)
 
 try:
-    import mysql.connector
+    import mysql as _mysql_package
+
+    mysql = _mysql_package
 except ImportError:
     mysql = None
 
@@ -57,8 +66,8 @@ class ShodanRecon:
         self.max_results = self.cfg.get("max_results", 100)
         self.timeout = self.cfg.get("timeout", 30)
         self.results_dir = self.cfg.get("results_dir", "/tmp/octopus_shodan")
-        self._last_results = []
-        self._db_conn = None
+        self._last_results: list[dict[str, Any]] = []
+        self._db_conn: Any = None
 
         if not self.api_key:
             print(f"  {C_YELLOW}[!] No Shodan API key. Set SHODAN_API_KEY in .env{C_RESET}")
@@ -92,7 +101,7 @@ class ShodanRecon:
             self._db_conn = mysql.connector.connect(
                 host=db_cfg.get("host", "localhost"),
                 user=db_cfg.get("user", "octopus"),
-                password=db_cfg.get("password", "123"),
+                password=db_cfg.get("password", ""),
                 database=db_cfg.get("database", "octopus"),
                 connect_timeout=5,
             )
@@ -626,7 +635,7 @@ def run_shodan_range(cidr: str) -> str:
     output += f"  Total hosts found: {len(targets)}\n"
 
     # Group by port for quick overview
-    port_counts = {}
+    port_counts: dict[Any, int] = {}
     for t in targets:
         for p in t.get("ports", []):
             port_counts[p] = port_counts.get(p, 0) + 1

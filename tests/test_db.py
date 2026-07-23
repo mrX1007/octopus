@@ -10,9 +10,48 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.unit
+
 
 class TestGetConnection:
     """Test database connection management."""
+
+    @pytest.mark.contract
+    @pytest.mark.integration
+    def test_import_does_not_connect_or_run_schema_migration(self):
+        project_root = Path(__file__).resolve().parents[1]
+        script = textwrap.dedent(
+            f"""
+            import mysql.connector
+            import mysql.connector.pooling
+            import sys
+
+            calls = []
+
+            def forbidden(kind):
+                def call(*_args, **_kwargs):
+                    calls.append(kind)
+                    raise AssertionError(f"import attempted {{kind}}")
+                return call
+
+            mysql.connector.connect = forbidden("direct MySQL connection")
+            mysql.connector.pooling.MySQLConnectionPool = forbidden("MySQL pool")
+            sys.path.insert(0, {str(project_root)!r})
+
+            import db
+
+            assert calls == []
+            """
+        )
+
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", script],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        assert result.returncode == 0, result.stderr
 
     @patch("db.mysql")
     @patch("db._get_db_config")

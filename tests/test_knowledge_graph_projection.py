@@ -6,6 +6,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from core.ai.asset_graph import AssetGraph
 from core.ai.fact_assessment import AssessmentStatus
 from core.ai.fact_store import FactStore
@@ -18,6 +20,8 @@ from core.knowledge.identity import (
     canonical_service,
 )
 from core.knowledge.models import EdgeType, NodeType
+
+pytestmark = [pytest.mark.contract, pytest.mark.replay]
 
 
 def stores(tmp_path: Path) -> tuple[FactStore, KnowledgeGraph, GraphProjectionService]:

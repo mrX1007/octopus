@@ -243,6 +243,98 @@ def test_concurrent_first_time_schema_initialization_is_serialized(tmp_path):
     assert version == (MISSION_LIFECYCLE_SCHEMA_VERSION,)
 
 
+def test_v12_migration_adds_backward_compatible_state_replan_state(tmp_path):
+    db_path = tmp_path / "missions.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE mission_lifecycle_schema (
+                component TEXT PRIMARY KEY,
+                version TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO mission_lifecycle_schema(component, version)
+            VALUES ('mission_store', '1.2')
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE missions (
+                mission_id TEXT PRIMARY KEY,
+                scan_key TEXT NOT NULL UNIQUE,
+                scan_id TEXT NOT NULL,
+                target_key TEXT NOT NULL,
+                target TEXT NOT NULL,
+                status TEXT NOT NULL,
+                reason TEXT NOT NULL DEFAULT '',
+                reason_key TEXT NOT NULL DEFAULT '',
+                owner_id TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL,
+                updated_at REAL NOT NULL,
+                started_at REAL NOT NULL,
+                finished_at REAL,
+                run_count INTEGER NOT NULL DEFAULT 1,
+                schema_version TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO missions(
+                mission_id, scan_key, scan_id, target_key, target, status,
+                owner_id, created_at, updated_at, started_at, run_count,
+                schema_version
+            ) VALUES (
+                'mis-v12', 'scan-key', 'scan-v12', 'target-key', '10.0.0.5',
+                'running', 'owner', 1.0, 1.0, 1.0, 1, '1.2'
+            )
+            """
+        )
+
+    store = MissionStore(str(db_path), owner_id="owner")
+    migrated = store.snapshot("mis-v12").mission
+    assert migrated.state_replan_count == 0
+    assert migrated.state_replan_signatures == ()
+
+    reserved = store.record_state_replan("mis-v12", "transition-one", 1)
+    assert reserved.requested is True
+    duplicate = store.record_state_replan("mis-v12", "transition-one", 1)
+    exhausted = store.record_state_replan("mis-v12", "transition-two", 1)
+    assert duplicate.requested is False
+    assert duplicate.reason == "duplicate_transition"
+    assert exhausted.requested is False
+    assert exhausted.reason == "budget_exhausted"
+    assert exhausted.count == 1
+    reopened = MissionStore(str(db_path), owner_id="observer").snapshot(
+        "mis-v12"
+    ).mission
+
+    with sqlite3.connect(db_path) as conn:
+        version = conn.execute(
+            """
+            SELECT version FROM mission_lifecycle_schema
+            WHERE component = 'mission_store'
+            """
+        ).fetchone()
+        columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(missions)")
+        }
+
+    assert version == (MISSION_LIFECYCLE_SCHEMA_VERSION,)
+    assert {
+        "state_replan_count",
+        "state_replan_signatures_json",
+    }.issubset(columns)
+    assert reopened.state_replan_count == 1
+    assert reopened.state_replan_signatures == (
+        "transition-one",
+        "transition-two",
+    )
+
+
 def test_unsupported_schema_version_does_not_create_v1_tables(tmp_path):
     db_path = tmp_path / "missions.db"
     unsupported_version = "999.0"

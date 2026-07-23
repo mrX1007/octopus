@@ -228,7 +228,7 @@ def test_register_endpoint_requires_token_and_assigns_identity(tmp_path, monkeyp
     monkeypatch.setenv("OCTOPUS_C2_KEY_PASSPHRASE", "a" * 32)
     sys.modules.pop("core.c2.daemon", None)
     daemon = importlib.import_module("core.c2.daemon")
-    client = TestClient(daemon.app)
+    client = TestClient(daemon.create_app())
 
     private_key = x25519.X25519PrivateKey.generate()
     client_public = private_key.public_key().public_bytes(

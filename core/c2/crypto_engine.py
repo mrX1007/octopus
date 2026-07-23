@@ -3,22 +3,14 @@ import base64
 import os
 import struct
 import threading
+from typing import Any
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
-try:
-    from Crypto.Cipher import AES
-    _PYCRYPTO_OK = True
-except ImportError:
-    _PYCRYPTO_OK = False
-    # Fallback: use cryptography library's AES-GCM
-    try:
-        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-        _CRYPTOGRAPHY_AES_OK = True
-    except ImportError:
-        _CRYPTOGRAPHY_AES_OK = False
+from core.c2.protocol import C2_SESSION_KDF_CONTEXT
 
 
 class C2CryptoEngine:
@@ -37,37 +29,33 @@ class C2CryptoEngine:
         self._legacy_priv_path = os.path.join(key_dir, "server_x25519_private.pem")
         self._legacy_pub_path = os.path.join(key_dir, "server_x25519_public.pem")
         self.private_key = private_key
-        self.public_key = private_key.public_key() if private_key is not None else None
-        if private_key is None:
-            self._load_or_generate_legacy()
+        if private_key is not None:
+            if not isinstance(private_key, x25519.X25519PrivateKey):
+                raise TypeError("private_key must be an X25519 private key")
+            self.public_key = private_key.public_key()
+        else:
+            self.public_key = None
+            self._load_legacy_private_key()
 
         # agent_id -> {"key": bytes, "rx_seq": int, "tx_seq": int, "epoch": int}
-        self.agent_state = {}
+        self.agent_state: dict[str, dict[str, Any]] = {}
         self._state_lock = threading.RLock()
 
-    def _load_or_generate_legacy(self):
-        """Load or generate legacy X25519 keypair for backward compat."""
-        if os.path.exists(self._legacy_priv_path):
-            with open(self._legacy_priv_path, "rb") as f:
-                self.private_key = serialization.load_pem_private_key(f.read(), password=None)
-            self.public_key = self.private_key.public_key()
-        else:
-            self.private_key = x25519.X25519PrivateKey.generate()
-            self.public_key = self.private_key.public_key()
-
-            with open(self._legacy_priv_path, "wb") as f:
-                f.write(self.private_key.private_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PrivateFormat.PKCS8,
-                    encryption_algorithm=serialization.NoEncryption()
-                ))
-            os.chmod(self._legacy_priv_path, 0o600)
-            with open(self._legacy_pub_path, "wb") as f:
-                f.write(self.public_key.public_bytes(
-                    encoding=serialization.Encoding.PEM,
-                    format=serialization.PublicFormat.SubjectPublicKeyInfo
-                ))
-            os.chmod(self._legacy_pub_path, 0o644)
+    def _load_legacy_private_key(self):
+        """Load an existing legacy key, but never create plaintext key material."""
+        if not os.path.exists(self._legacy_priv_path):
+            raise RuntimeError(
+                "C2CryptoEngine requires an explicit X25519 private key; "
+                "load or create it with an unlocked KeyStore"
+            )
+        with open(self._legacy_priv_path, "rb") as handle:
+            loaded = serialization.load_pem_private_key(
+                handle.read(), password=None
+            )
+        if not isinstance(loaded, x25519.X25519PrivateKey):
+            raise ValueError("legacy C2 private key is not X25519")
+        self.private_key = loaded
+        self.public_key = loaded.public_key()
 
     def derive_shared_key(self, client_pub_bytes: bytes) -> bytes:
         """
@@ -82,7 +70,7 @@ class C2CryptoEngine:
             algorithm=hashes.SHA256(),
             length=32,
             salt=None,
-            info=b"octopus-session-v10",
+            info=C2_SESSION_KDF_CONTEXT,
         ).derive(raw_shared)
 
         return session_key
@@ -108,13 +96,8 @@ class C2CryptoEngine:
             if rx_seq <= state["rx_seq"]:
                 raise ValueError("Replay detected")
 
-            if _PYCRYPTO_OK:
-                cipher = AES.new(state["key"], AES.MODE_GCM, nonce=nonce)
-                cipher.update(seq_bytes)  # AAD
-                plaintext = cipher.decrypt_and_verify(data, tag)
-            else:
-                aesgcm = AESGCM(state["key"])
-                plaintext = aesgcm.decrypt(nonce, data + tag, seq_bytes)
+            aesgcm = AESGCM(state["key"])
+            plaintext = aesgcm.decrypt(nonce, data + tag, seq_bytes)
 
             state["rx_seq"] = rx_seq
             return plaintext.decode('utf-8')
@@ -129,16 +112,13 @@ class C2CryptoEngine:
             state["tx_seq"] += 1
             seq_bytes = struct.pack("<Q", state["tx_seq"])
 
-            if _PYCRYPTO_OK:
-                nonce = os.urandom(12)
-                cipher = AES.new(state["key"], AES.MODE_GCM, nonce=nonce)
-                cipher.update(seq_bytes)  # AAD
-                ciphertext, tag = cipher.encrypt_and_digest(plaintext.encode('utf-8'))
-                full_payload = seq_bytes + nonce + ciphertext + tag
-            else:
-                nonce = os.urandom(12)
-                aesgcm = AESGCM(state["key"])
-                ct_with_tag = aesgcm.encrypt(nonce, plaintext.encode('utf-8'), seq_bytes)
-                full_payload = seq_bytes + nonce + ct_with_tag
+            nonce = os.urandom(12)
+            aesgcm = AESGCM(state["key"])
+            ct_with_tag = aesgcm.encrypt(
+                nonce,
+                plaintext.encode("utf-8"),
+                seq_bytes,
+            )
+            full_payload = seq_bytes + nonce + ct_with_tag
 
-            return base64.b64encode(full_payload).decode('utf-8')
+            return base64.b64encode(full_payload).decode("utf-8")

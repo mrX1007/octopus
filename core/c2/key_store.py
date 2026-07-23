@@ -1,11 +1,11 @@
 """
 
-Encrypted Key Storage with Argon2id KDF.
+Encrypted key storage with a versioned Scrypt key envelope.
 
 Architecture:
   - Static Ed25519 identity key (signing/authentication only)
   - Ephemeral X25519 session keys (ECDH, in-memory only)
-  - Server identity key encrypted on disk via Argon2id-derived KEK
+  - Server identity key encrypted on disk via a Scrypt-derived KEK
   - Decrypted key lives only in memory, zeroed on shutdown
 
 NEVER stores decrypted keys in SQLite.
@@ -13,53 +13,101 @@ NEVER uses raw shared key as session key (always HKDF).
 """
 
 import base64
+import binascii
+import errno
+import hashlib
 import json
 import os
 import secrets
+from collections.abc import Iterator
+from contextlib import suppress
 from typing import Optional
 
+from cryptography.exceptions import InvalidTag, UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
-# Argon2id — try argon2-cffi first, fallback to cryptography's Scrypt
-try:
-    from argon2.low_level import Type, hash_secret_raw
-    _ARGON2_OK = True
-except ImportError:
-    _ARGON2_OK = False
+from core.c2.protocol import C2_SESSION_KDF_CONTEXT
 
+# Old, unversioned identity blobs selected a KDF from the import environment.
+# These optional implementations exist only to recognize and migrate those
+# blobs; all new envelopes use the mandatory Scrypt implementation above.
 try:
-    from cryptography.hazmat.primitives.kdf.scrypt import Scrypt as _Scrypt
-    _SCRYPT_OK = True
+    from argon2.low_level import Type as _Argon2Type
+    from argon2.low_level import hash_secret_raw as _argon2_hash_secret_raw
 except ImportError:
-    _SCRYPT_OK = False
+    _Argon2Type = None
+    _argon2_hash_secret_raw = None
+
+_KEY_ENVELOPE_MAGIC = b"OCTOPUS-C2-KEY-ENVELOPE\n"
+_KEY_ENVELOPE_VERSION = 1
+_KEY_ENVELOPE_KDF_ID = "scrypt"
+_KEY_ENVELOPE_KDF_PARAMS = {
+    "length": 32,
+    "n": 2**17,
+    "p": 1,
+    "r": 8,
+}
+_KEY_ENVELOPE_CIPHER_ID = "aes-256-gcm"
+_KEY_ENVELOPE_AAD_PREFIX = b"octopus-c2-identity-key-envelope-v1\x00"
+_MAX_KEY_ENVELOPE_BYTES = 4096
+
+
+def _canonical_json(value: dict) -> bytes:
+    return json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8")
+
+
+def _derive_scrypt_kek(passphrase: str, salt: bytes, params: dict) -> bytes:
+    """Derive a KEK with the parameters recorded in a validated envelope."""
+    return Scrypt(
+        salt=salt,
+        length=params["length"],
+        n=params["n"],
+        r=params["r"],
+        p=params["p"],
+    ).derive(passphrase.encode("utf-8"))
 
 
 def _derive_kek(passphrase: str, salt: bytes) -> bytes:
-    """Derive a 32-byte Key Encryption Key from passphrase using Argon2id."""
-    passphrase_bytes = passphrase.encode('utf-8')
+    """Derive the mandatory 32-byte Scrypt KEK for new key envelopes."""
+    return _derive_scrypt_kek(passphrase, salt, _KEY_ENVELOPE_KDF_PARAMS)
 
-    if _ARGON2_OK:
-        # Argon2id: 64MB memory, 3 iterations, 1 parallelism
-        return hash_secret_raw(
+
+def _derive_legacy_argon2id_kek(passphrase: str, salt: bytes) -> bytes:
+    """Reproduce the historical Argon2id settings when an implementation exists."""
+    passphrase_bytes = passphrase.encode("utf-8")
+    if _argon2_hash_secret_raw is not None and _Argon2Type is not None:
+        return _argon2_hash_secret_raw(
             secret=passphrase_bytes,
             salt=salt,
             time_cost=3,
-            memory_cost=65536,  # 64 MB
+            memory_cost=65536,
             parallelism=1,
             hash_len=32,
-            type=Type.ID
+            type=_Argon2Type.ID,
         )
-    elif _SCRYPT_OK:
-        # Fallback: Scrypt via cryptography lib (still better than PBKDF2)
-        kdf = _Scrypt(salt=salt, length=32, n=2**17, r=8, p=1)
-        return kdf.derive(passphrase_bytes)
-    else:
-        # Last resort: PBKDF2 with high iterations
-        import hashlib
-        return hashlib.pbkdf2_hmac('sha256', passphrase_bytes, salt, 600000, dklen=32)
+    return Argon2id(
+        salt=salt,
+        length=32,
+        iterations=3,
+        lanes=1,
+        memory_cost=65536,
+    ).derive(passphrase_bytes)
+
+
+def _legacy_kek_candidates(passphrase: str, salt: bytes) -> Iterator[bytes]:
+    """Yield each KEK that the historical environment-dependent code could use."""
+    with suppress(UnsupportedAlgorithm):
+        yield _derive_kek(passphrase, salt)
+    yield hashlib.pbkdf2_hmac(
+        "sha256", passphrase.encode("utf-8"), salt, 600000, dklen=32
+    )
+    with suppress(UnsupportedAlgorithm):
+        yield _derive_legacy_argon2id_kek(passphrase, salt)
 
 
 def _wipe_bytes(data: bytearray):
@@ -121,87 +169,215 @@ class KeyStore:
         """Check if an identity key has been generated."""
         return os.path.exists(self._identity_path)
 
-    def generate(self, passphrase: str):
-        """Generate a new Ed25519 identity and encrypt it to disk."""
-        private_key = ed25519.Ed25519PrivateKey.generate()
-        public_key = private_key.public_key()
+    @staticmethod
+    def _envelope_header(salt: bytes, nonce: bytes) -> dict:
+        return {
+            "cipher": {
+                "id": _KEY_ENVELOPE_CIPHER_ID,
+                "nonce": base64.b64encode(nonce).decode("ascii"),
+            },
+            "kdf": {
+                "id": _KEY_ENVELOPE_KDF_ID,
+                "params": dict(_KEY_ENVELOPE_KDF_PARAMS),
+                "salt": base64.b64encode(salt).decode("ascii"),
+            },
+            "version": _KEY_ENVELOPE_VERSION,
+        }
 
-        # Serialize private key to raw bytes
-        priv_bytes = private_key.private_bytes(
-            serialization.Encoding.Raw,
-            serialization.PrivateFormat.Raw,
-            serialization.NoEncryption()
-        )
-
-        # Derive KEK from passphrase
-        salt = secrets.token_bytes(32)
-        kek = _derive_kek(passphrase, salt)
-
-        # Encrypt private key with AES-256-GCM
-        aesgcm = AESGCM(kek)
-        nonce = secrets.token_bytes(12)
-        encrypted = aesgcm.encrypt(nonce, priv_bytes, None)
-
-        # Write encrypted blob: nonce || ciphertext
-        with open(self._identity_path, "wb") as f:
-            f.write(nonce + encrypted)
-        os.chmod(self._identity_path, 0o600)
-
-        # Write salt separately
-        with open(self._salt_path, "wb") as f:
-            f.write(salt)
-        os.chmod(self._salt_path, 0o600)
-
-        # Write public key as PEM (not secret)
-        with open(self._pub_path, "wb") as f:
-            f.write(public_key.public_bytes(
-                serialization.Encoding.PEM,
-                serialization.PublicFormat.SubjectPublicKeyInfo
-            ))
-        os.chmod(self._pub_path, 0o644)
-
-        # Load into memory
-        self._ed25519_private = private_key
-        self._ed25519_public = public_key
-        self._unlocked = True
-
-        # Wipe intermediate buffers
-        priv_mut = bytearray(priv_bytes)
-        _wipe_bytes(priv_mut)
-        kek_mut = bytearray(kek)
-        _wipe_bytes(kek_mut)
-
-    def unlock(self, passphrase: str) -> bool:
-        """Decrypt the identity key into memory. Returns True on success."""
-        if not self.exists():
-            return False
-
-        with open(self._salt_path, "rb") as f:
-            salt = f.read()
-        with open(self._identity_path, "rb") as f:
-            blob = f.read()
-
-        nonce = blob[:12]
-        ciphertext = blob[12:]
-
-        kek = _derive_kek(passphrase, salt)
-
+    @staticmethod
+    def _decode_envelope_bytes(value: object, field: str, length: int) -> bytes:
+        if not isinstance(value, str):
+            raise ValueError(f"invalid key envelope {field}")
         try:
-            aesgcm = AESGCM(kek)
-            priv_bytes = aesgcm.decrypt(nonce, ciphertext, None)
-        except Exception:
-            return False
+            decoded = base64.b64decode(value.encode("ascii"), validate=True)
+        except (UnicodeEncodeError, ValueError, binascii.Error) as exc:
+            raise ValueError(f"invalid key envelope {field}") from exc
+        if len(decoded) != length:
+            raise ValueError(f"invalid key envelope {field}")
+        return decoded
+
+    @classmethod
+    def _parse_identity_envelope(
+        cls, blob: bytes
+    ) -> tuple[bytes, bytes, bytes, bytes]:
+        if not blob.startswith(_KEY_ENVELOPE_MAGIC):
+            raise ValueError("invalid key envelope magic")
+        try:
+            envelope = json.loads(blob[len(_KEY_ENVELOPE_MAGIC):].decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise ValueError("invalid key envelope encoding") from exc
+        if not isinstance(envelope, dict) or set(envelope) != {
+            "cipher",
+            "kdf",
+            "version",
+        }:
+            raise ValueError("invalid key envelope schema")
+        if (
+            type(envelope["version"]) is not int
+            or envelope["version"] != _KEY_ENVELOPE_VERSION
+        ):
+            raise ValueError("unsupported key envelope version")
+
+        kdf = envelope["kdf"]
+        cipher = envelope["cipher"]
+        if not isinstance(kdf, dict) or set(kdf) != {"id", "params", "salt"}:
+            raise ValueError("invalid key envelope KDF")
+        if kdf["id"] != _KEY_ENVELOPE_KDF_ID:
+            raise ValueError("unsupported key envelope KDF")
+        params = kdf["params"]
+        if (
+            not isinstance(params, dict)
+            or set(params) != set(_KEY_ENVELOPE_KDF_PARAMS)
+            or any(type(value) is not int for value in params.values())
+            or params != _KEY_ENVELOPE_KDF_PARAMS
+        ):
+            raise ValueError("unsupported key envelope KDF parameters")
+        if not isinstance(cipher, dict) or set(cipher) != {
+            "ciphertext",
+            "id",
+            "nonce",
+        }:
+            raise ValueError("invalid key envelope cipher")
+        if cipher["id"] != _KEY_ENVELOPE_CIPHER_ID:
+            raise ValueError("unsupported key envelope cipher")
+
+        salt = cls._decode_envelope_bytes(kdf["salt"], "salt", 32)
+        nonce = cls._decode_envelope_bytes(cipher["nonce"], "nonce", 12)
+        ciphertext = cls._decode_envelope_bytes(
+            cipher["ciphertext"], "ciphertext", 48
+        )
+        header = cls._envelope_header(salt, nonce)
+        aad = _KEY_ENVELOPE_AAD_PREFIX + _canonical_json(header)
+        return salt, nonce, ciphertext, aad
+
+    @classmethod
+    def _encrypt_identity_envelope(
+        cls, passphrase: str, salt: bytes, private_bytes: bytes
+    ) -> bytes:
+        nonce = secrets.token_bytes(12)
+        header = cls._envelope_header(salt, nonce)
+        aad = _KEY_ENVELOPE_AAD_PREFIX + _canonical_json(header)
+        kek = _derive_kek(passphrase, salt)
+        try:
+            ciphertext = AESGCM(kek).encrypt(nonce, private_bytes, aad)
+        finally:
+            kek_mut = bytearray(kek)
+            _wipe_bytes(kek_mut)
+        envelope = {
+            **header,
+            "cipher": {
+                **header["cipher"],
+                "ciphertext": base64.b64encode(ciphertext).decode("ascii"),
+            },
+        }
+        return _KEY_ENVELOPE_MAGIC + _canonical_json(envelope)
+
+    @classmethod
+    def _decrypt_identity_envelope(
+        cls, passphrase: str, blob: bytes
+    ) -> Optional[bytes]:
+        salt, nonce, ciphertext, aad = cls._parse_identity_envelope(blob)
+        kek = _derive_scrypt_kek(passphrase, salt, _KEY_ENVELOPE_KDF_PARAMS)
+        try:
+            return AESGCM(kek).decrypt(nonce, ciphertext, aad)
+        except InvalidTag:
+            return None
         finally:
             kek_mut = bytearray(kek)
             _wipe_bytes(kek_mut)
 
-        self._ed25519_private = ed25519.Ed25519PrivateKey.from_private_bytes(priv_bytes)
-        self._ed25519_public = self._ed25519_private.public_key()
+    @staticmethod
+    def _decrypt_legacy_identity(
+        passphrase: str, salt: bytes, blob: bytes
+    ) -> Optional[bytes]:
+        if len(salt) != 32 or len(blob) != 60:
+            return None
+        nonce = blob[:12]
+        ciphertext = blob[12:]
+        for kek in _legacy_kek_candidates(passphrase, salt):
+            try:
+                private_bytes = AESGCM(kek).decrypt(nonce, ciphertext, None)
+            except InvalidTag:
+                continue
+            finally:
+                kek_mut = bytearray(kek)
+                _wipe_bytes(kek_mut)
+            if len(private_bytes) == 32:
+                return private_bytes
+        return None
+
+    def generate(self, passphrase: str):
+        """Generate an Ed25519 identity and persist a versioned key envelope."""
+        private_key = ed25519.Ed25519PrivateKey.generate()
+        public_key = private_key.public_key()
+        priv_bytes = private_key.private_bytes(
+            serialization.Encoding.Raw,
+            serialization.PrivateFormat.Raw,
+            serialization.NoEncryption(),
+        )
+        try:
+            salt = secrets.token_bytes(32)
+            envelope = self._encrypt_identity_envelope(
+                passphrase, salt, priv_bytes
+            )
+            self._atomic_write(self._identity_path, envelope, 0o600)
+            # Retain the historical sidecar for filesystem compatibility. The
+            # v1 envelope is self-contained and never reads this copy.
+            self._atomic_write(self._salt_path, salt, 0o600)
+            self._atomic_write(
+                self._pub_path,
+                public_key.public_bytes(
+                    serialization.Encoding.PEM,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                ),
+                0o644,
+            )
+        finally:
+            priv_mut = bytearray(priv_bytes)
+            _wipe_bytes(priv_mut)
+
+        self._ed25519_private = private_key
+        self._ed25519_public = public_key
         self._unlocked = True
 
-        priv_mut = bytearray(priv_bytes)
-        _wipe_bytes(priv_mut)
-        return True
+    def unlock(self, passphrase: str) -> bool:
+        """Decrypt the identity key and migrate a recognized legacy blob."""
+        if not self.exists():
+            return False
+        with open(self._identity_path, "rb") as handle:
+            blob = handle.read(_MAX_KEY_ENVELOPE_BYTES + 1)
+        if len(blob) > _MAX_KEY_ENVELOPE_BYTES:
+            return False
+
+        legacy = not blob.startswith(_KEY_ENVELOPE_MAGIC)
+        try:
+            if legacy:
+                if not os.path.exists(self._salt_path):
+                    return False
+                with open(self._salt_path, "rb") as handle:
+                    salt = handle.read()
+                priv_bytes = self._decrypt_legacy_identity(passphrase, salt, blob)
+            else:
+                priv_bytes = self._decrypt_identity_envelope(passphrase, blob)
+        except ValueError:
+            return False
+        if priv_bytes is None:
+            return False
+
+        try:
+            private_key = ed25519.Ed25519PrivateKey.from_private_bytes(priv_bytes)
+            if legacy:
+                migrated = self._encrypt_identity_envelope(
+                    passphrase, salt, priv_bytes
+                )
+                self._atomic_write(self._identity_path, migrated, 0o600)
+            self._ed25519_private = private_key
+            self._ed25519_public = private_key.public_key()
+            self._unlocked = True
+            return True
+        finally:
+            priv_mut = bytearray(priv_bytes)
+            _wipe_bytes(priv_mut)
 
     def lock(self):
         """Zero the identity key from memory."""
@@ -263,6 +439,52 @@ class KeyStore:
     def unseal_json(self, value: str, aad: bytes = b"") -> dict:
         return json.loads(self.unseal_bytes(value, aad=aad).decode("utf-8"))
 
+    @staticmethod
+    def _x25519_public_pem(
+        private_key: x25519.X25519PrivateKey,
+    ) -> bytes:
+        return private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+
+    def _repair_x25519_public_key(
+        self, private_key: x25519.X25519PrivateKey
+    ) -> None:
+        expected = self._x25519_public_pem(private_key)
+        try:
+            with open(self._x25519_pub_path, "rb") as handle:
+                current = handle.read()
+        except FileNotFoundError:
+            current = None
+        if current != expected:
+            self._atomic_write(self._x25519_pub_path, expected, 0o644)
+
+    def _remove_matching_legacy_x25519_key(
+        self, private_key: x25519.X25519PrivateKey
+    ) -> None:
+        if not os.path.exists(self._legacy_x25519_path):
+            return
+        with open(self._legacy_x25519_path, "rb") as handle:
+            legacy = serialization.load_pem_private_key(
+                handle.read(), password=None
+            )
+        if not isinstance(legacy, x25519.X25519PrivateKey):
+            raise ValueError("legacy C2 private key is not X25519")
+        expected_public = private_key.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
+        legacy_public = legacy.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
+        if not secrets.compare_digest(expected_public, legacy_public):
+            raise ValueError(
+                "legacy C2 private key does not match encrypted key"
+            )
+        self._durable_remove(self._legacy_x25519_path)
+
     def get_or_create_x25519_private_key(self) -> x25519.X25519PrivateKey:
         """Load the C2 handshake key from encrypted storage or create it.
 
@@ -275,9 +497,19 @@ class KeyStore:
         if os.path.exists(self._x25519_path):
             with open(self._x25519_path, encoding="ascii") as handle:
                 raw = self.unseal_bytes(handle.read(), aad=b"x25519-static-v1")
-            if len(raw) != 32:
-                raise ValueError("invalid encrypted X25519 private key")
-            return x25519.X25519PrivateKey.from_private_bytes(raw)
+            try:
+                if len(raw) != 32:
+                    raise ValueError("invalid encrypted X25519 private key")
+                private_key = x25519.X25519PrivateKey.from_private_bytes(raw)
+            finally:
+                raw_mut = bytearray(raw)
+                _wipe_bytes(raw_mut)
+            # A previous migration may have stopped after committing the
+            # encrypted key. Repair its public projection and finish removing
+            # a matching plaintext predecessor on every subsequent load.
+            self._repair_x25519_public_key(private_key)
+            self._remove_matching_legacy_x25519_key(private_key)
+            return private_key
 
         if os.path.exists(self._legacy_x25519_path):
             with open(self._legacy_x25519_path, "rb") as handle:
@@ -295,22 +527,49 @@ class KeyStore:
             serialization.PrivateFormat.Raw,
             serialization.NoEncryption(),
         )
-        sealed = self.seal_bytes(raw_private, aad=b"x25519-static-v1")
-        self._atomic_write(self._x25519_path, sealed.encode("ascii"), 0o600)
-        self._atomic_write(
-            self._x25519_pub_path,
-            private_key.public_key().public_bytes(
-                serialization.Encoding.PEM,
-                serialization.PublicFormat.SubjectPublicKeyInfo,
-            ),
-            0o644,
-        )
+        try:
+            sealed = self.seal_bytes(raw_private, aad=b"x25519-static-v1")
+            self._atomic_write(
+                self._x25519_path, sealed.encode("ascii"), 0o600
+            )
+            self._repair_x25519_public_key(private_key)
+            self._remove_matching_legacy_x25519_key(private_key)
+            return private_key
+        finally:
+            raw_mut = bytearray(raw_private)
+            _wipe_bytes(raw_mut)
 
-        if os.path.exists(self._legacy_x25519_path):
-            os.remove(self._legacy_x25519_path)
-        raw_mut = bytearray(raw_private)
-        _wipe_bytes(raw_mut)
-        return private_key
+    @staticmethod
+    def _fsync_parent_directory(path: str) -> None:
+        """Persist a rename/unlink directory entry where the platform allows it."""
+        if os.name == "nt":
+            return
+        directory = os.path.dirname(os.path.abspath(path))
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        unsupported = {
+            errno.EINVAL,
+            getattr(errno, "ENOTSUP", errno.EINVAL),
+            getattr(errno, "EOPNOTSUPP", errno.EINVAL),
+        }
+        try:
+            descriptor = os.open(directory, flags)
+        except OSError as exc:
+            if exc.errno in unsupported:
+                return
+            raise
+        try:
+            try:
+                os.fsync(descriptor)
+            except OSError as exc:
+                if exc.errno not in unsupported:
+                    raise
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _durable_remove(path: str) -> None:
+        os.remove(path)
+        KeyStore._fsync_parent_directory(path)
 
     @staticmethod
     def _atomic_write(path: str, payload: bytes, mode: int) -> None:
@@ -328,6 +587,7 @@ class KeyStore:
                 os.fsync(handle.fileno())
             os.chmod(temporary, mode)
             os.replace(temporary, path)
+            KeyStore._fsync_parent_directory(path)
         finally:
             if os.path.exists(temporary):
                 os.remove(temporary)
@@ -370,7 +630,7 @@ class KeyStore:
             algorithm=hashes.SHA256(),
             length=32,
             salt=None,
-            info=b"octopus-session-v10",
+            info=C2_SESSION_KDF_CONTEXT,
         ).derive(raw_shared)
 
         eph_pub_bytes = eph_public.public_bytes(
@@ -398,5 +658,5 @@ class KeyStore:
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
-            info=b"octopus-session-v10",
+            info=C2_SESSION_KDF_CONTEXT,
         ).derive(raw_shared)

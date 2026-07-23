@@ -85,6 +85,7 @@ class PipelineObservabilityMixin(PipelineMixinBase):
                 retry_command_keys=retry_command_keys,
             )
             self._active_task_attempt_id = None
+            self._active_task_id = None
             self._active_task_name = ""
             self._active_task_agent = ""
             self._active_retry_command_keys.clear()
@@ -334,7 +335,7 @@ class PipelineObservabilityMixin(PipelineMixinBase):
             "event_type": "command_decision",
             "mission_id": self.mission_id or "",
             "scan_id": self._current_scan_id,
-            "task_id": self._active_task_attempt_id or "",
+            "task_id": self._active_task_id or "",
             "task": self._active_task_name,
             "goal": str((self.goal_trace[-1] if self.goal_trace else {}).get("goal") or ""),
             "candidates": [tool] if tool else [],

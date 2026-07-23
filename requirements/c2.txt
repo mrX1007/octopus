@@ -1,0 +1,3 @@
+# Optional C2 control-plane profile.
+fastapi>=0.111.0
+uvicorn>=0.30.0

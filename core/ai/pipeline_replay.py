@@ -80,6 +80,7 @@ class PipelineReplayMixin(PipelineMixinBase):
     ) -> dict[str, Any]:
         """Replay legacy or canonical outputs through the runtime boundary."""
 
+        completion_fence = self.fact_store.capture_scan_completion_fence(scan_id)
         prepared = [self._prepare_replay_entry(entry) for entry in (outputs or [])]
         stored = 0
         parsed = 0
@@ -106,7 +107,7 @@ class PipelineReplayMixin(PipelineMixinBase):
                 max_output_bytes=execution_context.max_output_bytes,
             )
             output_text = self._output_text(canonical)
-            output_hash = self._output_fingerprint(output_text)
+            output_hash = self.runtime.output_fingerprint(output_text)
             identity_seed = "\0".join(
                 (scan_id, target, str(index), canonical.tool_name, output_hash)
             ).encode("utf-8", "replace")
@@ -116,32 +117,22 @@ class PipelineReplayMixin(PipelineMixinBase):
             if not supplied_execution_id:
                 canonical.execution_id = f"replay-execution-{identity[32:]}"
 
-            facts = self.runtime.parse_output(canonical.tool_name, canonical)
-            parsed += len(facts)
-            command_new_facts = 0
-            for fact in facts:
-                result = self._store_fact(
-                    scan_id,
-                    target,
-                    fact,
-                    f"replay:{canonical.tool_name}",
-                    source_execution_ids=(canonical.execution_id,),
-                )
-                stored += result["new_facts"]
-                command_new_facts += result["new_facts"]
             failed = self._command_failed(canonical, output_text)
-            _result_id, unique_output = self.fact_store.add_command_result(
-                scan_id=scan_id,
-                host=target,
-                command_key=f"replay:{canonical.tool_name}",
-                command=canonical.tool_name,
-                output_hash=output_hash,
-                output_bytes=len(canonical.stdout.encode("utf-8", "ignore")),
-                parsed_facts=len(facts),
-                new_facts=command_new_facts,
+            completion = self.runtime.complete_execution(
+                scan_id,
+                target,
+                f"replay:{canonical.tool_name}",
+                canonical.tool_name,
+                canonical,
+                source=f"replay:{canonical.tool_name}",
+                normalize_fact=self._scope_normalized_fact,
+                derive_facts=self._derived_facts_from_fact,
                 failed=failed,
-                execution_result=canonical,
+                completion_fence=completion_fence,
             )
+            parsed += completion["parsed_facts"]
+            stored += completion["new_facts"]
+            command_result = completion["command_result"]
             execution_results.append(
                 {
                     "schema_version": canonical.schema_version,
@@ -160,9 +151,9 @@ class PipelineReplayMixin(PipelineMixinBase):
                     "output_bytes": len(canonical.stdout.encode("utf-8", "ignore")),
                     "stderr_bytes": len(canonical.stderr.encode("utf-8", "ignore")),
                     "artifact_count": len(canonical.artifact_refs),
-                    "parsed_facts": len(facts),
-                    "new_facts": command_new_facts,
-                    "duplicate_output": not unique_output,
+                    "parsed_facts": completion["parsed_facts"],
+                    "new_facts": completion["new_facts"],
+                    "duplicate_output": command_result["duplicate_output"],
                 }
             )
         context = self.context_builder.build_context(scan_id, target)
@@ -200,7 +191,14 @@ class PipelineReplayMixin(PipelineMixinBase):
         return decisions
 
     def trace_report(self, scan_id: str, target: str) -> dict[str, Any]:
-        context = self.context_builder.build_context(scan_id, target)
+        evaluated_fact_snapshot = (
+            self.context_builder.build_evaluated_fact_snapshot(scan_id, target)
+        )
+        context = self.context_builder.build_context(
+            scan_id,
+            target,
+            evaluated_fact_snapshot=evaluated_fact_snapshot,
+        )
         return self.trace_reporter.build(
             scan_id,
             target,
@@ -212,6 +210,7 @@ class PipelineReplayMixin(PipelineMixinBase):
                 scan_id=scan_id,
                 limit=2_000,
             ),
+            evaluated_fact_snapshot=evaluated_fact_snapshot,
         )
 
     def trace_report_text(self, scan_id: str, target: str) -> str:

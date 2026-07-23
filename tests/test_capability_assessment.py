@@ -18,6 +18,8 @@ from core.ai.llm_context import compact_context_for_llm
 from core.ai.planner import MissionPlanCompiler
 from core.execution import ExecutionContext
 
+pytestmark = pytest.mark.contract
+
 TARGET = "10.0.0.5"
 
 

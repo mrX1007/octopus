@@ -60,7 +60,21 @@ TARGETS = (
 
 PROFILE_INPUTS: dict[str, tuple[str, ...]] = {
     "runtime": ("requirements/runtime.txt",),
-    "test": ("requirements/runtime.txt", "requirements/dev.txt"),
+    "c2": ("requirements/runtime.txt", "requirements/c2.txt"),
+    "reporting": (
+        "requirements/runtime.txt",
+        "requirements/reporting.txt",
+    ),
+    "osint-browser": (
+        "requirements/runtime.txt",
+        "requirements/osint-browser.txt",
+    ),
+    "test": (
+        "requirements/runtime.txt",
+        "requirements/c2.txt",
+        "requirements/reporting.txt",
+        "requirements/dev.txt",
+    ),
     "mysql": ("requirements/runtime.txt", "requirements/mysql.txt"),
     "external-tools": (
         "requirements/runtime.txt",
@@ -69,6 +83,9 @@ PROFILE_INPUTS: dict[str, tuple[str, ...]] = {
     "platform": ("requirements/runtime.txt", "requirements/platform.txt"),
     "full": (
         "requirements/runtime.txt",
+        "requirements/c2.txt",
+        "requirements/reporting.txt",
+        "requirements/osint-browser.txt",
         "requirements/dev.txt",
         "requirements/mysql.txt",
         "requirements/external-tools.txt",
@@ -77,9 +94,12 @@ PROFILE_INPUTS: dict[str, tuple[str, ...]] = {
 }
 PROFILE_SDIST_ALLOWLIST: dict[str, tuple[str, ...]] = {
     "runtime": (),
+    "c2": (),
+    "reporting": (),
+    "osint-browser": ("shodan",),
     "test": (),
     "mysql": (),
-    "external-tools": ("shodan",),
+    "external-tools": (),
     "platform": (),
     "full": ("shodan",),
 }

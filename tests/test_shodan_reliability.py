@@ -7,6 +7,10 @@ import threading
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
+pytestmark = pytest.mark.contract
+
 
 def test_worker_count_is_validated_and_clamped():
     import octopus

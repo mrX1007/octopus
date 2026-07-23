@@ -8,11 +8,13 @@ from typing import Any, Callable, Optional
 
 from core.ai.asset_graph import AssetGraph
 from core.ai.capability_assessment import CapabilityResolver
+from core.ai.evaluated_facts import EvaluatedFactSnapshot
 from core.ai.fact_store import FactStore
 from core.ai.state_resolver import StateResolver
 from core.ai.surface_state import SurfaceState
 from core.ai.target_model import TargetModel
 from core.execution import ExecutionContext
+from core.knowledge.identity import canonicalize_scope_value
 
 try:
     from config import CFG
@@ -67,6 +69,8 @@ class ContextBuilder:
         scan_id: str,
         host: str,
         execution_context: Optional[ExecutionContext] = None,
+        *,
+        evaluated_fact_snapshot: Optional[EvaluatedFactSnapshot] = None,
     ) -> dict[str, Any]:
         """
         Builds a concise summary of the current state, services, and open questions.
@@ -79,13 +83,19 @@ class ContextBuilder:
           "open_questions": ["web_vulnerabilities_unknown", "ftp_anonymous_unknown"]
         }
         """
-        state = self.state_resolver.resolve_state(scan_id, host)
-        all_facts = self.fact_store.get_facts(scan_id, host)
-        facts = [
-            fact
-            for fact in all_facts
-            if str(fact.get("assessment_status") or "observed") != "contradicted"
-        ]
+        snapshot = evaluated_fact_snapshot or self.build_evaluated_fact_snapshot(
+            scan_id,
+            host,
+        )
+        self._validate_evaluated_fact_snapshot(snapshot, scan_id, host)
+        all_facts = list(snapshot.historical_facts())
+        if hasattr(self.state_resolver, "resolve_snapshot"):
+            state = self.state_resolver.resolve_snapshot(snapshot)
+        else:
+            # Compatibility for external/test resolvers implementing the
+            # historical two-argument protocol.
+            state = self.state_resolver.resolve_state(scan_id, host)
+        facts = list(snapshot.decision_facts())
         target_model = TargetModel.from_facts(scan_id, host, facts).to_dict()
         asset_graph = AssetGraph.from_facts(host, facts).to_dict()
         surface_states = SurfaceState(facts).to_dict()
@@ -156,6 +166,8 @@ class ContextBuilder:
             "surface_states": surface_states,
             "target_model": target_model,
             "fact_assessments": self._fact_assessment_summary(all_facts),
+            "evaluated_fact_snapshot": snapshot.to_context(),
+            "evaluated_fact_snapshot_ref": snapshot.snapshot_ref,
         }
         if execution_context is None and self.execution_context_factory is not None:
             execution_context = self.execution_context_factory(scan_id, host)
@@ -168,6 +180,31 @@ class ContextBuilder:
             requested=True,
         ).to_dict()
         return context
+
+    def build_evaluated_fact_snapshot(
+        self,
+        scan_id: str,
+        host: str,
+    ) -> EvaluatedFactSnapshot:
+        """Capture the immutable fact view shared by context and reporting."""
+
+        return EvaluatedFactSnapshot.build(
+            scan_id,
+            host,
+            self.fact_store.get_facts(scan_id, host),
+        )
+
+    def _validate_evaluated_fact_snapshot(
+        self,
+        snapshot: EvaluatedFactSnapshot,
+        scan_id: str,
+        host: str,
+    ) -> None:
+        expected_host = canonicalize_scope_value(host) if str(host or "").strip() else ""
+        if snapshot.scan_id != str(scan_id):
+            raise ValueError("evaluated fact snapshot belongs to a different scan")
+        if expected_host and expected_host not in snapshot.canonical_scope:
+            raise ValueError("evaluated fact snapshot does not cover the requested host")
 
     def _fact_assessment_summary(self, facts: list[dict[str, Any]]) -> dict[str, Any]:
         counts = {

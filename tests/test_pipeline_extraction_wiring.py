@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import pytest
+
 from core.ai.credential_sync import CredentialSeedResult
 from core.ai.outcomes import InMemoryTaskOutcomeStore
 from core.ai.pipeline import AIPipeline
+
+pytestmark = pytest.mark.contract
 
 
 def test_runtime_reset_rebinds_outcome_store_to_fresh_legacy_views(tmp_path):

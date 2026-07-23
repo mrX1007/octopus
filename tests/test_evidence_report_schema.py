@@ -267,3 +267,42 @@ def test_report_snapshot_is_deterministic_and_incomplete_verification_is_not_pro
     candidate = first["sections"]["hypotheses_candidates"][0]
     assert candidate["verification_gap"] == "missing_source_execution_ids"
     assert candidate["status"] == "candidate"
+
+
+@pytest.mark.parametrize(
+    ("freshness_status", "coverage_status", "expected_status"),
+    [
+        ("stale", "complete", "stale"),
+        ("current", "degraded", "degraded"),
+    ],
+)
+def test_historical_misconfiguration_is_not_reported_as_current_verified_state(
+    freshness_status,
+    coverage_status,
+    expected_status,
+):
+    fact = {
+        "id": 11,
+        "scan_id": "scan",
+        "host": "host",
+        "type": "misconfiguration",
+        "value": "anonymous_admin_enabled",
+        "timestamp": 1.0,
+        "freshness_status": freshness_status,
+        "coverage_status": coverage_status,
+        "assessment_status": "verified",
+        "assessment": {
+            "assessment_id": "assessment-11",
+            "status": "verified",
+            "reason": "The setting was directly observed.",
+            "evidence_fact_ids": [11],
+            "source_execution_ids": ["exec-11"],
+        },
+    }
+
+    report = build_evidence_report("scan", "host", [fact])
+    item = report["sections"]["misconfigurations"][0]
+
+    assert item["assessment_status"] == "verified"
+    assert item["status"] == expected_status
+    assert report["summary"]["verified_items"] == 0

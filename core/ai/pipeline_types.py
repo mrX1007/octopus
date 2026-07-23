@@ -12,6 +12,7 @@ from typing import Any, Optional
 class PipelineMixinBase:
     _active_retry_command_keys: set[str]
     _active_task_attempt_id: Optional[str]
+    _active_task_id: Optional[str]
     _last_decision_state: str
     _state_replan_count: int
     _state_replan_signatures: set[str]

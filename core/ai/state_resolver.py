@@ -4,6 +4,8 @@
 import json
 from typing import Any
 
+from core.ai.evaluated_facts import EvaluatedFactSnapshot
+
 
 class StateResolver:
     def __init__(self, fact_store):
@@ -14,12 +16,19 @@ class StateResolver:
         Pulls all facts for a host and infers the current attack state.
         Returns a dictionary representing the state.
         """
-        all_facts: list[dict[str, Any]] = self.fact_store.get_facts(scan_id, host)
-        facts = [
-            fact
-            for fact in all_facts
-            if str(fact.get("assessment_status") or "observed") != "contradicted"
-        ]
+        snapshot = EvaluatedFactSnapshot.build(
+            scan_id,
+            host,
+            self.fact_store.get_facts(scan_id, host),
+        )
+        return self.resolve_snapshot(snapshot)
+
+    def resolve_snapshot(self, snapshot: EvaluatedFactSnapshot) -> dict[str, Any]:
+        """Resolve state from one already-evaluated immutable fact snapshot."""
+
+        all_facts = list(snapshot.historical_facts())
+        facts = list(snapshot.decision_facts())
+        host = snapshot.canonical_scope[0] if snapshot.canonical_scope else ""
         fact_values = [f['value'].lower() for f in facts]
         fact_types = [f['type'].lower() for f in facts]
 

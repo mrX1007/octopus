@@ -8,6 +8,8 @@ from core.ai.pipeline import AIPipeline
 from core.ai.scan_loop import ScanLifecycle
 from core.execution import CancellationContext, ExecutionCancelled
 
+pytestmark = pytest.mark.contract
+
 
 class _RegistryStub:
     def canonical_task(self, task):
@@ -284,3 +286,62 @@ def test_scan_lifecycle_preserves_four_observation_anti_loop_boundary(tmp_path):
     assert len(director_calls) == 4
     assert len(planner_calls) == 3
     assert pipeline.fact_history_counts == [0, 0, 0, 0]
+
+
+def test_scan_lifecycle_reuses_context_snapshot_for_plan_compilation(tmp_path):
+    pipeline = _configure_lifecycle(
+        AIPipeline(str(tmp_path / "planning-snapshot.db")),
+        goal="map",
+    )
+    snapshot = SimpleNamespace(historical_facts=lambda: ())
+    observed = {}
+
+    class Context:
+        @staticmethod
+        def build_evaluated_fact_snapshot(_scan_id, _target):
+            return snapshot
+
+        @staticmethod
+        def build_context(
+            _scan_id,
+            _target,
+            *,
+            evaluated_fact_snapshot=None,
+        ):
+            observed["context_snapshot"] = evaluated_fact_snapshot
+            return {
+                "state": "unknown",
+                "services": [],
+                "open_questions": [],
+                "stage_gates": {},
+                "next_required_capability": "service_discovery",
+            }
+
+    def compile_plan(
+        plan,
+        _scan_id,
+        _target,
+        _context,
+        *,
+        evaluated_fact_snapshot=None,
+    ):
+        observed["compiler_snapshot"] = evaluated_fact_snapshot
+        return plan
+
+    pipeline.context_builder = Context()
+    pipeline.planner = SimpleNamespace(
+        create_plan=lambda *_args: {"plan": [], "llm_status": "ok"}
+    )
+    pipeline._compile_plan = compile_plan
+
+    ScanLifecycle().run(
+        pipeline,
+        "scan-planning-snapshot",
+        "10.0.0.5",
+        max_iterations=1,
+    )
+
+    assert observed == {
+        "context_snapshot": snapshot,
+        "compiler_snapshot": snapshot,
+    }

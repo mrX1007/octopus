@@ -107,6 +107,25 @@ def test_recursive_redaction_preserves_shape_and_protects_sensitive_fields():
     assert redactor.redact_data(safe) == safe
 
 
+def test_policy_authorization_metadata_remains_auditable():
+    store = SecretStore(":memory:", key=b"policy-metadata-redaction-key")
+    redactor = Redactor(store)
+
+    safe = redactor.redact_data(
+        {
+            "authorization_phase": "pre_execute",
+            "authorization_decision": "denied",
+            "authorization_reason": "target_out_of_scope",
+            "authorization": "Bearer policy-secret-value",
+        }
+    )
+
+    assert safe["authorization_phase"] == "pre_execute"
+    assert safe["authorization_decision"] == "denied"
+    assert safe["authorization_reason"] == "target_out_of_scope"
+    assert str(safe["authorization"]).startswith("secret://")
+
+
 def test_fact_store_never_persists_plaintext_in_facts_observations_or_commands(tmp_path: Path):
     db_path = tmp_path / "facts.db"
     store = FactStore(str(db_path))

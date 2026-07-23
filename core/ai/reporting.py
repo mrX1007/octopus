@@ -5,6 +5,7 @@ import json
 import re
 from typing import Any, Optional
 
+from core.ai.evaluated_facts import fact_is_decision_usable
 from core.ai.report_schema import (
     EVIDENCE_REPORT_SCHEMA_VERSION,
     build_evidence_report,
@@ -382,6 +383,8 @@ def _fact_is_verified(
     *,
     legacy_default: bool = False,
 ) -> bool:
+    if not fact_is_decision_usable(fact):
+        return False
     if not _has_assessment(fact):
         return legacy_default
     return _assessment_status(fact) == "verified"

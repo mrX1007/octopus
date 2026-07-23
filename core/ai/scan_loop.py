@@ -80,6 +80,7 @@ class ScanLifecycle:
             "max_iterations_reached",
             "max_tools_reached",
             "max_time_reached",
+            "tasks_deferred",
         }:
             pipeline._interrupt_mission(stop_reason)
         else:
@@ -201,7 +202,25 @@ class ScanLifecycle:
             print(f"\n{'=' * 50}\n[LOOP {loop}/{loop_label}]")
 
             pipeline.state_resolver.resolve_state(scan_id, target)
-            context = pipeline.context_builder.build_context(scan_id, target)
+            snapshot_builder = getattr(
+                pipeline.context_builder,
+                "build_evaluated_fact_snapshot",
+                None,
+            )
+            evaluated_fact_snapshot = (
+                snapshot_builder(scan_id, target)
+                if callable(snapshot_builder)
+                else None
+            )
+            context = (
+                pipeline.context_builder.build_context(
+                    scan_id,
+                    target,
+                    evaluated_fact_snapshot=evaluated_fact_snapshot,
+                )
+                if evaluated_fact_snapshot is not None
+                else pipeline.context_builder.build_context(scan_id, target)
+            )
             print(
                 f"[*] Context: state={context['state']}, services={context['services']}, "
                 f"questions={context['open_questions']}"
@@ -209,6 +228,18 @@ class ScanLifecycle:
             pipeline._print_stage_gates(context)
 
             resume_plan = pipeline._resumable_mission_plan()
+            deferred_until = (
+                pipeline._next_deferred_mission_time()
+                if not resume_plan
+                else None
+            )
+            if deferred_until is not None:
+                pipeline._mission_stop_reason = "tasks_deferred"
+                print(
+                    "[*] Durable mission work is deferred until "
+                    f"{deferred_until:.6f}; leaving the mission resumable."
+                )
+                break
             durable_resuming = bool(resume_plan)
             if resume_plan:
                 goal = "resume_durable_tasks"
@@ -253,8 +284,15 @@ class ScanLifecycle:
                     print("[+] Scan concluded by Director.")
                     break
 
-                current_fact_count = len(
-                    pipeline.fact_store.get_facts(scan_id, target)
+                historical_facts = getattr(
+                    evaluated_fact_snapshot,
+                    "historical_facts",
+                    None,
+                )
+                current_fact_count = (
+                    len(historical_facts())
+                    if callable(historical_facts)
+                    else len(pipeline.fact_store.get_facts(scan_id, target))
                 )
                 pipeline.fact_history_counts.append(current_fact_count)
                 if (
@@ -280,7 +318,13 @@ class ScanLifecycle:
                 plan = pipeline._extract_plan_steps(plan_res)
                 plan = pipeline._normalize_plan(plan, goal)
                 plan = pipeline._optimize_plan(plan, goal, context)
-                plan = pipeline._compile_plan(plan, scan_id, target, context)
+                plan = pipeline._compile_plan(
+                    plan,
+                    scan_id,
+                    target,
+                    context,
+                    evaluated_fact_snapshot=evaluated_fact_snapshot,
+                )
 
             if not plan:
                 pipeline._mission_stop_reason = "planner_empty"
@@ -289,8 +333,17 @@ class ScanLifecycle:
 
             print(f"[*] Planner generated {len(plan)} tasks.")
             plan = pipeline._register_mission_plan(plan)
+            if not plan and pipeline._next_deferred_mission_time() is not None:
+                pipeline._mission_stop_reason = "tasks_deferred"
+                print(
+                    "[*] Registered mission work is deferred; leaving the "
+                    "mission resumable."
+                )
+                break
             pipeline._terminalize_compatibility_exhausted_tasks(plan)
-            all_skipped = all(pipeline._task_exhausted(step.get("task")) for step in plan)
+            all_skipped = all(
+                pipeline._mission_plan_step_exhausted(step) for step in plan
+            )
             if all_skipped:
                 print(f"[!] All tasks in plan already completed/blocked. Goal '{goal}' exhausted.")
                 loop += 1
@@ -302,14 +355,19 @@ class ScanLifecycle:
                 agent_name = step.get("agent")
                 task = step.get("task")
 
-                if pipeline._task_exhausted(task):
+                if pipeline._mission_plan_step_exhausted(step):
                     reason = "blocked" if task in pipeline.blocked_tasks else "already completed"
                     print(f"  -> [{agent_name}] Task: {task} - SKIPPED ({reason})")
                     continue
 
                 print(f"  -> [{agent_name}] Task: {task}")
                 pipeline.task_history.append(f"{agent_name}:{task}")
-                attempt = pipeline._begin_task_attempt(agent_name, task)
+                attempt = pipeline._begin_task_attempt(
+                    agent_name,
+                    task,
+                    task_id=str(step.get("task_id") or "") or None,
+                    scope=step.get("task_scope"),
+                )
                 if attempt is None:
                     print(
                         "     [*] Task deferred until durable prerequisites "

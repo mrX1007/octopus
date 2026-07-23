@@ -7,7 +7,12 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 from urllib.parse import urlparse, urlunparse
 
-from core.execution import ExecutionContext, ExecutionPolicy, redact_sensitive_command
+from core.execution import (
+    ExecutionContext,
+    ExecutionPolicy,
+    ToolInvocation,
+    redact_sensitive_command,
+)
 
 
 @dataclass
@@ -19,9 +24,18 @@ class CommandDecision:
     prerequisite: str = ""
     policy: dict[str, Any] = field(default_factory=dict)
     retry: bool = False
+    invocation: Optional[ToolInvocation] = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
+        # ``ToolInvocation.raw_command`` may contain a short-lived secret.  The
+        # typed object crosses scheduler/runtime boundaries in memory only; the
+        # policy payload already carries its bounded, secret-free audit view.
+        payload.pop("invocation", None)
         payload["command"] = self._redacted_command()
         return payload
 
@@ -48,6 +62,7 @@ class CommandScheduler:
             origin="automation",
         )
         policy_decision = self.execution_policy.authorize_command(command, context)
+        invocation = getattr(policy_decision, "invocation", None)
         key = self.command_key(command)
         retry_allowed = key in set(retry_command_keys)
         if not policy_decision.allowed:
@@ -58,6 +73,7 @@ class CommandScheduler:
                 f"policy_denied:{policy_decision.reason}",
                 "execution_authorization",
                 policy_decision.to_dict(),
+                invocation=invocation,
             )
         if key in executed_keys and not retry_allowed:
             return CommandDecision(
@@ -66,6 +82,7 @@ class CommandScheduler:
                 "skip",
                 "duplicate_command_key",
                 policy=policy_decision.to_dict(),
+                invocation=invocation,
             )
 
         block_reason = self._negative_fact_block(command, facts)
@@ -80,6 +97,7 @@ class CommandScheduler:
                 block_reason,
                 "confirmed_absent",
                 policy_decision.to_dict(),
+                invocation=invocation,
             )
 
         return CommandDecision(
@@ -89,6 +107,7 @@ class CommandScheduler:
             "durable_retry_command" if retry_allowed else "state_changed_or_unseen",
             policy=policy_decision.to_dict(),
             retry=retry_allowed,
+            invocation=invocation,
         )
 
     @staticmethod

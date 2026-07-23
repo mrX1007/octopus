@@ -18,7 +18,7 @@ class KnowledgeEnricher:
 
     def __init__(self, graph: KnowledgeGraph):
         self.graph = graph
-        self._processed = set()   # avoid duplicate processing
+        self._processed: set[str] = set()   # avoid duplicate processing
 
     def enrich_from_facts(self, target_ip: str, facts: list[tuple[str, str]]):
         """

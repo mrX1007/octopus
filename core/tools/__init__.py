@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tool package with backward-compatible public re-exports."""
 
+from core.credentials import register_credential
 from core.tools.base import (
     C_BLUE,
     C_CYAN,
@@ -22,7 +23,6 @@ from core.tools.exploit_tools import (
     get_all_known_creds_for_target,
     get_best_creds_for_target,
     get_known_creds,
-    register_credential,
     run_bruteforce,
     run_jmx2rce_cleanup,
     run_jmx2rce_rce,

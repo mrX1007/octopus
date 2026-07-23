@@ -17,6 +17,9 @@ from core.actions import (
     ActionCatalog,
     ActionExecutor,
     ActionRequest,
+    ActiveRiskClass,
+    PartialIngestCallback,
+    PolicyDenial,
     ProviderFallbackExecutor,
     ProviderRunResult,
     ProviderSelection,
@@ -27,7 +30,7 @@ from core.actions import (
 from core.ai.command_scheduler import CommandDecision, CommandScheduler
 from core.ai.decision_trace import DecisionTraceStore
 from core.ai.evidence import OutputParser
-from core.ai.fact_store import FactStore
+from core.ai.fact_store import CommandCompletionClaim, FactStore
 from core.ai.mission_store import MissionStore
 from core.ai.trace_report import TraceReporter
 from core.execution import (
@@ -37,9 +40,11 @@ from core.execution import (
     ExecutionPolicy,
     ExecutionResult,
     ExecutionStatus,
+    ToolInvocation,
     adapt_execution_result,
     bind_execution_context,
 )
+from core.execution.normalization import command_failed, output_text
 from core.knowledge import GraphProjectionService, KnowledgeGraph
 
 Runner = Callable[[str], Any]
@@ -93,6 +98,10 @@ class PipelineRuntime:
             self._knowledge_graph_path(self.facts.db_path)
         )
         self.graph_projector = GraphProjectionService(self.facts, self.knowledge_graph)
+        self.facts.register_assessment_projection_handler(
+            self.graph_projector.project_fact_ids
+        )
+        self.facts.drain_assessment_projection_outbox()
         self._runner = runner
         self._action_catalog: ActionCatalog | None = None
         self._action_executor: ActionExecutor | None = None
@@ -182,6 +191,7 @@ class PipelineRuntime:
         candidate_names: Sequence[str],
         *,
         ingest: Callable[[ExecutionResult, str], Any] | None = None,
+        partial_ingest: PartialIngestCallback | None = None,
         action_options: Mapping[str, Any] | None = None,
     ) -> ProviderRunResult:
         """Execute ranked providers with retry-class and ingestion boundaries."""
@@ -192,6 +202,7 @@ class PipelineRuntime:
             request,
             candidate_names,
             ingest=ingest,
+            partial_ingest=partial_ingest,
             action_options=action_options,
         )
         self._record_provider_decision(decision_trace, capability, request, result)
@@ -345,7 +356,16 @@ class PipelineRuntime:
             retry_command_keys=retry_keys,
         )
 
-    def execute(self, decision: CommandDecision, context: ExecutionContext) -> DispatchResult:
+    def execute(
+        self,
+        decision: CommandDecision,
+        context: ExecutionContext,
+        *,
+        facts: Iterable[dict[str, Any]] = (),
+        capability: str = "",
+        provider_commands: Sequence[str] = (),
+        partial_result_ingest: PartialIngestCallback | None = None,
+    ) -> DispatchResult:
         execution_id = uuid4().hex
         policy_ref = _policy_decision_ref(decision)
         if context.cancellation.cancelled:
@@ -354,6 +374,10 @@ class PipelineRuntime:
                     "status": ExecutionStatus.CANCELLED,
                     "error_class": "ExecutionCancelled",
                     "error_message": context.cancellation.reason_code,
+                    "metadata": {
+                        "decision_reason": "execution_cancelled",
+                        "authorization_phase": "pre_execute",
+                    },
                 },
                 decision=decision,
                 context=context,
@@ -363,12 +387,30 @@ class PipelineRuntime:
                 executed=False,
             )
         if decision.action == "skip":
+            denial = None
+            if decision.reason.startswith("policy_denied:"):
+                denial = PolicyDenial.create(
+                    "scheduler",
+                    decision.reason.split(":", 1)[1],
+                    policy_ref,
+                )
             return self._normalize_result(
                 {
                     "status": ExecutionStatus.BLOCKED,
                     "error_class": "ExecutionBlocked",
-                    "error_message": decision.reason,
-                    "metadata": {"decision_reason": decision.reason},
+                    "error_message": (
+                        denial.reason_code if denial is not None else decision.reason
+                    ),
+                    "metadata": {
+                        "decision_reason": (
+                            denial.reason_code
+                            if denial is not None
+                            else decision.reason
+                        ),
+                        "policy_denial": (
+                            denial.to_dict() if denial is not None else None
+                        ),
+                    },
                 },
                 decision=decision,
                 context=context,
@@ -377,6 +419,56 @@ class PipelineRuntime:
                 duration=0.0,
                 executed=False,
             )
+
+        # Decisions can spend time in a durable mission queue.  The typed
+        # invocation captured by CommandScheduler is therefore authorized
+        # again at the last possible in-process boundary.  Hand-constructed
+        # legacy decisions without an invocation retain the compatibility
+        # runner path until their public callers are retired.
+        invocation = decision.invocation
+        if invocation is not None:
+            final_decision = self.scheduler.execution_policy.authorize_command(
+                invocation.raw_command,
+                context,
+            )
+            policy_ref = self._execution_policy_ref(final_decision.to_dict())
+            if not final_decision.allowed:
+                denial = PolicyDenial.create(
+                    "pre_execute",
+                    final_decision.reason,
+                    policy_ref,
+                )
+                return self._normalize_result(
+                    {
+                        "status": ExecutionStatus.BLOCKED,
+                        "error_class": "ExecutionBlocked",
+                        "error_message": denial.reason_code,
+                        "metadata": {
+                            "decision_reason": denial.reason_code,
+                            "authorization_phase": "pre_execute",
+                            "policy_denial": denial.to_dict(),
+                        },
+                    },
+                    decision=decision,
+                    context=context,
+                    execution_id=execution_id,
+                    policy_ref=policy_ref,
+                    duration=0.0,
+                    executed=False,
+                )
+            invocation = final_decision.invocation
+            if invocation is not None and invocation.registered_name:
+                return self._execute_registered_action(
+                    decision,
+                    context,
+                    invocation,
+                    execution_id=execution_id,
+                    policy_ref=policy_ref,
+                    facts=facts,
+                    capability=capability,
+                    provider_commands=provider_commands,
+                    partial_result_ingest=partial_result_ingest,
+                )
 
         started = time.monotonic()
         try:
@@ -445,6 +537,237 @@ class PipelineRuntime:
             policy_ref=policy_ref,
             duration=time.monotonic() - started,
         )
+
+    @staticmethod
+    def _execution_policy_ref(payload: Mapping[str, Any]) -> str:
+        encoded = json.dumps(
+            dict(payload),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8", "replace")
+        return f"policy://sha256/{hashlib.sha256(encoded).hexdigest()}"
+
+    def _execute_registered_action(
+        self,
+        decision: CommandDecision,
+        context: ExecutionContext,
+        invocation: ToolInvocation,
+        *,
+        execution_id: str,
+        policy_ref: str,
+        facts: Iterable[dict[str, Any]],
+        capability: str,
+        provider_commands: Sequence[str],
+        partial_result_ingest: PartialIngestCallback | None,
+    ) -> DispatchResult:
+        """Run a scheduler-approved registered tool through the action catalog.
+
+        The catalog remains an adapter over the existing tool runner, but
+        production dispatch now observes the same applicability, selection,
+        final authorization, lifecycle, normalization, and telemetry contracts
+        as explicit action calls.
+        """
+
+        target = (
+            invocation.targets[0]
+            if invocation.targets
+            else (context.target_scope[0] if context.target_scope else "")
+        )
+        fact_items = tuple(dict(item) for item in facts)
+        candidate_names, command_by_action = self._registered_provider_candidates(
+            invocation,
+            context,
+            target=str(target),
+            facts=fact_items,
+            provider_commands=provider_commands,
+        )
+        request = ActionRequest(
+            target=str(target),
+            execution_context=context,
+            command=invocation.raw_command,
+            provider_commands=command_by_action,
+            facts=fact_items,
+        )
+        started = time.monotonic()
+        action_id = str(invocation.registered_name)
+        run = self.execute_with_fallback(
+            capability or action_id,
+            request,
+            candidate_names,
+            partial_ingest=partial_result_ingest,
+        )
+        report = run.final_report
+        effective = run.effective_result
+        if report is not None and report.policy_decision_refs:
+            policy_ref = report.policy_decision_refs[-1]
+
+        denial = run.policy_denial
+
+        lifecycle_metadata = {
+            "action_catalog": True,
+            "action_id": (
+                report.descriptor.action_id
+                if report is not None
+                else run.selection.chosen_action_id or action_id
+            ),
+            "capability": run.selection.capability,
+            "provider_selection_id": run.selection.selection_id,
+            "provider_attempts": len(run.attempts),
+            "provider_attempt_action_ids": [
+                attempt.action_id for attempt in run.attempts
+            ],
+            "provider_attempt_command_keys": [
+                self.scheduler.command_key(request.command_for(attempt.action_id))
+                for attempt in run.attempts
+            ],
+            "provider_fallback_attempt_action_ids": [
+                attempt.action_id
+                for attempt in run.attempts
+                if attempt.action_id != candidate_names[0]
+            ],
+            "provider_status": run.status.value,
+            "policy_denial": denial.to_dict() if denial is not None else None,
+            "action_lifecycle": (
+                report.lifecycle.to_dict() if report is not None else None
+            ),
+        }
+        if effective is None:
+            rejected_reasons = tuple(
+                reason for item in run.selection.rejected for reason in item.reasons
+            )
+            status = run.status
+            reason = (
+                denial.reason_code
+                if denial is not None
+                else rejected_reasons[0] if rejected_reasons else "provider_unavailable"
+            )
+            return self._normalize_result(
+                {
+                    "status": status,
+                    "error_class": (
+                        "ExecutionBlocked"
+                        if status is ExecutionStatus.BLOCKED
+                        else "ProviderUnavailable"
+                    ),
+                    "error_message": reason,
+                    "metadata": lifecycle_metadata,
+                },
+                decision=decision,
+                context=context,
+                execution_id=execution_id,
+                policy_ref=policy_ref,
+                duration=time.monotonic() - started,
+                executed=False,
+            )
+
+        payload = effective.to_dict()
+        payload["error_class"] = effective.error_class
+        payload["error_message"] = effective.error_message
+        payload["metadata"] = {
+            **dict(effective.metadata),
+            **lifecycle_metadata,
+        }
+        return self._normalize_result(
+            payload,
+            decision=decision,
+            context=context,
+            execution_id=execution_id,
+            policy_ref=policy_ref,
+            duration=(
+                effective.duration
+                if effective.duration > 0
+                else time.monotonic() - started
+            ),
+            executed=effective.executed,
+        )
+
+    def _registered_provider_candidates(
+        self,
+        invocation: ToolInvocation,
+        context: ExecutionContext,
+        *,
+        target: str,
+        facts: tuple[dict[str, Any], ...],
+        provider_commands: Sequence[str],
+    ) -> tuple[tuple[str, ...], dict[str, str]]:
+        """Resolve safe alternative commands to canonical catalog actions.
+
+        The already-authorized invocation is always retained. Additional
+        production fallback candidates must resolve to decorator-registry
+        actions and classify as read-only at the action boundary. This keeps
+        active/manual-gated actions on their existing explicit path.
+        """
+
+        primary = self.action_catalog.resolve(invocation.registered_name)
+        if primary is None:
+            return (str(invocation.registered_name),), {}
+        candidate_names = [primary.canonical_id]
+        command_by_action = {primary.canonical_id: invocation.raw_command}
+        primary_request = ActionRequest(
+            target=target,
+            execution_context=context,
+            command=invocation.raw_command,
+            provider_commands=command_by_action,
+            facts=facts,
+        )
+        try:
+            primary_risk = primary.adapter.active_risk_class(
+                primary_request,
+                "execute",
+            )
+        except Exception:
+            primary_risk = (
+                ActiveRiskClass.ACTIVE
+                if primary.adapter.descriptor.requirements.active
+                else ActiveRiskClass.READ_ONLY
+            )
+        if primary_risk is not ActiveRiskClass.READ_ONLY:
+            return tuple(candidate_names), command_by_action
+
+        for raw_command in tuple(provider_commands)[:64]:
+            command = str(raw_command or "").strip()
+            if not command or command == invocation.raw_command:
+                continue
+            preliminary = self.scheduler.execution_policy.authorize_command(
+                command,
+                context,
+            )
+            alternative_invocation = preliminary.invocation
+            if (
+                alternative_invocation is None
+                or not alternative_invocation.registered_name
+            ):
+                continue
+            resolved = self.action_catalog.resolve(
+                alternative_invocation.registered_name
+            )
+            if resolved is None or resolved.canonical_id in command_by_action:
+                continue
+            candidate_request = ActionRequest(
+                target=target,
+                execution_context=context,
+                command=invocation.raw_command,
+                provider_commands={resolved.canonical_id: command},
+                facts=facts,
+            )
+            try:
+                risk = resolved.adapter.active_risk_class(
+                    candidate_request,
+                    "execute",
+                )
+            except Exception:
+                risk = (
+                    ActiveRiskClass.ACTIVE
+                    if resolved.adapter.descriptor.requirements.active
+                    else ActiveRiskClass.READ_ONLY
+                )
+            if risk is not ActiveRiskClass.READ_ONLY:
+                continue
+            candidate_names.append(resolved.canonical_id)
+            command_by_action[resolved.canonical_id] = command
+
+        return tuple(candidate_names), command_by_action
 
     def _normalize_result(
         self,
@@ -593,6 +916,387 @@ class PipelineRuntime:
         output_text = output.stdout if isinstance(output, ExecutionResult) else str(output)
         return self.parser.parse_tool_output(command, output_text)
 
+    @staticmethod
+    def output_fingerprint(output: str) -> str:
+        """Return the stable compatibility fingerprint used for result dedupe."""
+
+        normalized = " ".join(str(output or "").split())
+        return hashlib.sha256(normalized.encode("utf-8", "ignore")).hexdigest()
+
+    def _persist_completion_fact(
+        self,
+        scan_id: str,
+        host: str,
+        fact: Mapping[str, Any],
+        source: str,
+        *,
+        source_execution_ids: Sequence[str] = (),
+        derived_facts: Sequence[Mapping[str, Any]] = (),
+        completion_claim: CommandCompletionClaim | None = None,
+    ) -> dict[str, Any]:
+        """Persist one prepared fact tree without projecting a partial view."""
+
+        prepared = dict(fact)
+        safe_fact = dict(prepared)
+        safe_value, secret_refs = self.facts.redactor.redact_fact(
+            str(safe_fact.get("type", "")),
+            safe_fact.get("value", ""),
+        )
+        safe_fact["value"] = safe_value
+        if secret_refs:
+            safe_fact["secret_refs"] = list(secret_refs)
+
+        fact_id, created = self.facts.add_fact_with_status(
+            scan_id,
+            host,
+            str(safe_fact.get("type", "observation")),
+            str(safe_fact.get("value", "")),
+            source,
+            confidence=int(safe_fact.get("confidence", 100) or 100),
+            session_id=str(safe_fact.get("session_id", "none")),
+            source_execution_ids=tuple(source_execution_ids),
+            source_identity=(
+                str(safe_fact["source_identity"])
+                if safe_fact.get("source_identity")
+                else None
+            ),
+            observation_method=(
+                str(safe_fact["observation_method"])
+                if safe_fact.get("observation_method")
+                else None
+            ),
+            completion_claim=completion_claim,
+        )
+        fact_ids = [fact_id]
+        new_facts = int(created)
+        safe_derived_items: list[dict[str, Any]] = []
+        for derived in derived_facts:
+            safe_derived = dict(derived)
+            derived_value, derived_refs = self.facts.redactor.redact_fact(
+                str(safe_derived.get("type", "observation")),
+                safe_derived.get("value", ""),
+            )
+            safe_derived["value"] = derived_value
+            if derived_refs:
+                safe_derived["secret_refs"] = list(derived_refs)
+            derived_id, derived_created = self.facts.add_fact_with_status(
+                scan_id,
+                host,
+                str(safe_derived.get("type", "observation")),
+                str(safe_derived.get("value", "")),
+                f"derived:{source}",
+                confidence=int(
+                    safe_derived.get("confidence", prepared.get("confidence", 80))
+                    or 80
+                ),
+                session_id=str(prepared.get("session_id", "none")),
+                derived_from=[fact_id],
+                source_execution_ids=tuple(source_execution_ids),
+                source_identity=(
+                    str(
+                        safe_derived.get("source_identity")
+                        or safe_fact.get("source_identity")
+                    )
+                    if (
+                        safe_derived.get("source_identity")
+                        or safe_fact.get("source_identity")
+                    )
+                    else None
+                ),
+                observation_method=(
+                    str(
+                        safe_derived.get("observation_method")
+                        or safe_fact.get("observation_method")
+                    )
+                    if (
+                        safe_derived.get("observation_method")
+                        or safe_fact.get("observation_method")
+                    )
+                    else None
+                ),
+                completion_claim=completion_claim,
+            )
+            fact_ids.append(derived_id)
+            new_facts += int(derived_created)
+            safe_derived_items.append(safe_derived)
+        return {
+            "created": created,
+            "new_facts": new_facts,
+            "derived_facts": safe_derived_items,
+            "fact": safe_fact,
+            "fact_ids": list(dict.fromkeys(fact_ids)),
+        }
+
+    def _replayed_completion(
+        self,
+        claim: CommandCompletionClaim,
+        *,
+        command_result_fields: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        if claim.command_result_id is None:
+            raise RuntimeError("Completed execution claim has no command result")
+        persisted = self.facts.get_command_result_by_id(claim.command_result_id)
+        if persisted is None:
+            raise RuntimeError("Completed execution result is no longer available")
+        fact_ids = tuple(dict.fromkeys(int(item) for item in claim.fact_ids))
+        facts = self.facts.get_facts_by_ids(fact_ids)
+        command_result = {
+            "command": persisted["command"],
+            "failed": persisted["failed"],
+            "schema_version": persisted["schema_version"],
+            "status": persisted["status"],
+            "partial": persisted["partial"],
+            "execution_id": persisted["execution_id"],
+            "request_id": persisted["request_id"],
+            "policy_decision_ref": persisted["policy_decision_ref"],
+            "error_class": persisted["error_class"],
+            "exit_code": persisted["exit_code"],
+            "duration": persisted["duration"],
+            "output_bytes": persisted["output_bytes"],
+            "stderr_bytes": persisted["stderr_bytes"],
+            "artifact_count": persisted["artifact_count"],
+            "output_hash": persisted["output_hash"],
+            "duplicate_output": True,
+            "parsed_facts": persisted["parsed_facts"],
+            "new_facts": 0,
+            "fact_ids": list(fact_ids),
+            "fact_pairs": [(fact.get("type"), fact.get("value")) for fact in facts],
+        }
+        if command_result_fields:
+            command_result.update(dict(command_result_fields))
+        return {
+            "facts": facts,
+            "new_facts": 0,
+            "parsed_facts": int(persisted["parsed_facts"]),
+            "command_result": command_result,
+            "stored_base_facts": [],
+            "graph_projection": [],
+        }
+
+    def complete_execution(
+        self,
+        scan_id: str,
+        host: str,
+        command_key: str,
+        command: str,
+        result: ExecutionResult,
+        *,
+        source: str | None = None,
+        prepare_facts: Callable[
+            [list[dict[str, Any]]], Sequence[dict[str, Any]]
+        ]
+        | None = None,
+        normalize_fact: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
+        derive_facts: Callable[
+            [str, dict[str, Any], str], Sequence[dict[str, Any]]
+        ]
+        | None = None,
+        initial_fact_ids: Iterable[int] = (),
+        initial_new_facts: int = 0,
+        initial_facts: Iterable[dict[str, Any]] = (),
+        failed: bool | None = None,
+        command_result_fields: Mapping[str, Any] | None = None,
+        attempt_id: str | None = None,
+        idempotency_key: str = "",
+        completion_fence: CommandCompletionClaim,
+        after_facts: Callable[[Sequence[dict[str, Any]]], None] | None = None,
+    ) -> dict[str, Any]:
+        """Commit one execution through the canonical completion ingress.
+
+        A scan-generation fence is checked before parsing and, when an
+        idempotency key is present, a durable completion claim is reserved.
+        Evidence writes renew that fence; the command-result row and durable
+        claim are finalized transactionally with automatic assessment and graph
+        repair work. Only then is the current graph view projected and
+        mission-attempt provenance advanced. ``completion_fence`` should be
+        captured before external dispatch so both its scan identity and
+        generation fence the returned work. The canonical ingress fails closed
+        when that bound token is missing.
+
+        ``after_facts`` is an at-least-once callback: it must be idempotent.
+        A crash after its external effect but before result finalization, or a
+        callback that outlives the claim lease, can cause lease recovery to
+        invoke it again. Exactly-once or long-running callbacks require a
+        transactional outbox and an idempotent consumer.
+        """
+
+        if not isinstance(result, ExecutionResult):
+            raise TypeError("complete_execution requires an ExecutionResult")
+        if not isinstance(completion_fence, CommandCompletionClaim):
+            raise TypeError("complete_execution requires a bound completion_fence")
+        combined_output = output_text(result)
+        output_hash = self.output_fingerprint(combined_output)
+        failed_value = (
+            command_failed(result, combined_output) if failed is None else bool(failed)
+        )
+        completion_claim = self.facts.claim_command_completion(
+            scan_id=scan_id,
+            host=host,
+            command_key=command_key,
+            command=command,
+            output_hash=output_hash,
+            status=result.status,
+            failed=failed_value,
+            partial=result.partial,
+            execution_id=result.execution_id,
+            idempotency_key=idempotency_key,
+            schema_version=result.schema_version,
+            request_id=result.request_id,
+            policy_decision_ref=result.policy_decision_ref,
+            exit_code=result.exit_code,
+            error_class=result.error_class,
+            artifact_count=len(result.artifact_refs),
+            completion_fence=completion_fence,
+        )
+        try:
+            self.facts.drain_assessment_projection_outbox()
+        except Exception:
+            if not completion_claim.replayed:
+                self.facts.release_command_completion_claim(completion_claim)
+            raise
+        if completion_claim.replayed:
+            replayed = self._replayed_completion(
+                completion_claim,
+                command_result_fields=command_result_fields,
+            )
+            if attempt_id:
+                replay_execution_ids = (
+                    (result.execution_id,) if result.execution_id else ()
+                )
+                self.missions.record_attempt_progress(
+                    attempt_id,
+                    fact_ids=completion_claim.fact_ids,
+                    execution_ids=replay_execution_ids,
+                )
+            return replayed
+
+        try:
+            parsed = [dict(item) for item in self.parse_output(command, result)]
+            parsed_fact_count = len(parsed)
+            prepared = (
+                [dict(item) for item in prepare_facts(parsed)]
+                if prepare_facts is not None
+                else parsed
+            )
+            prepared_trees: list[
+                tuple[dict[str, Any], tuple[dict[str, Any], ...]]
+            ] = []
+            for fact in prepared:
+                fact.setdefault("source", source or command)
+                normalized = (
+                    dict(normalize_fact(host, dict(fact)))
+                    if normalize_fact is not None
+                    else dict(fact)
+                )
+                derived = (
+                    tuple(
+                        dict(item)
+                        for item in derive_facts(host, normalized, source or command)
+                    )
+                    if derive_facts is not None
+                    else ()
+                )
+                prepared_trees.append((normalized, derived))
+        except Exception:
+            self.facts.release_command_completion_claim(completion_claim)
+            raise
+
+        execution_ids = (result.execution_id,) if result.execution_id else ()
+        fact_ids = [int(item) for item in initial_fact_ids]
+        new_fact_count = max(0, int(initial_new_facts))
+        stored_facts = [dict(item) for item in initial_facts]
+        stored_base_facts: list[dict[str, Any]] = []
+        self.facts.renew_command_completion_claim(completion_claim)
+        for fact, (normalized, derived) in zip(prepared, prepared_trees):
+            self.facts.renew_command_completion_claim(completion_claim)
+            stored = self._persist_completion_fact(
+                scan_id,
+                host,
+                normalized,
+                source or command,
+                source_execution_ids=execution_ids,
+                derived_facts=derived,
+                completion_claim=completion_claim,
+            )
+            new_fact_count += int(stored["new_facts"])
+            fact_ids.extend(int(item) for item in stored["fact_ids"])
+            stored_facts.append(dict(fact))
+            stored_facts.extend(dict(item) for item in stored["derived_facts"])
+            stored_base_facts.append(stored)
+
+        if after_facts is not None:
+            self.facts.renew_command_completion_claim(completion_claim)
+            after_facts(tuple(prepared))
+            self.facts.renew_command_completion_claim(completion_claim)
+
+        unique_fact_ids = tuple(dict.fromkeys(fact_ids))
+        self.facts.renew_command_completion_claim(completion_claim)
+        _result_id, unique_output = self.facts.add_command_result(
+            scan_id=scan_id,
+            host=host,
+            command_key=command_key,
+            command=command,
+            output_hash=output_hash,
+            output_bytes=len(combined_output.encode("utf-8", "ignore")),
+            parsed_facts=parsed_fact_count,
+            new_facts=new_fact_count,
+            failed=failed_value,
+            execution_result=result,
+            idempotency_key=idempotency_key,
+            fact_ids=unique_fact_ids,
+            completion_claim=completion_claim,
+        )
+
+        graph_projection: list[dict[str, Any]] = []
+        if unique_fact_ids:
+            try:
+                graph_projection = self.project_fact_ids(unique_fact_ids)
+            except Exception as exc:
+                # Facts and the result are authoritative and already committed.
+                # The assessment outbox repairs this read model on a later ingress.
+                logger.warning("Graph projection deferred (%s)", type(exc).__name__)
+        if attempt_id:
+            self.missions.record_attempt_progress(
+                attempt_id,
+                fact_ids=unique_fact_ids,
+                execution_ids=execution_ids,
+            )
+
+        command_result = {
+            "command": command,
+            "failed": failed_value,
+            "schema_version": result.schema_version,
+            "status": result.status.value,
+            "partial": result.partial,
+            "execution_id": result.execution_id,
+            "request_id": result.request_id,
+            "policy_decision_ref": result.policy_decision_ref,
+            "error_class": result.error_class,
+            "exit_code": result.exit_code,
+            "duration": result.duration,
+            "output_bytes": len(result.stdout.encode("utf-8", "ignore")),
+            "stderr_bytes": len(result.stderr.encode("utf-8", "ignore")),
+            "artifact_count": len(result.artifact_refs),
+            "output_hash": output_hash,
+            "duplicate_output": not unique_output,
+            "parsed_facts": parsed_fact_count,
+            "new_facts": new_fact_count,
+            "fact_ids": list(unique_fact_ids),
+            "fact_pairs": [
+                (fact.get("type"), fact.get("value")) for fact in prepared
+            ],
+        }
+        if command_result_fields:
+            command_result.update(dict(command_result_fields))
+        return {
+            "facts": stored_facts,
+            "new_facts": new_fact_count,
+            "parsed_facts": parsed_fact_count,
+            "command_result": command_result,
+            "stored_base_facts": stored_base_facts,
+            "graph_projection": graph_projection,
+        }
+
     def ingest_output(
         self,
         scan_id: str,
@@ -602,43 +1306,64 @@ class PipelineRuntime:
         *,
         source: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Parse and persist a simple tool result through the canonical path."""
-        stored: list[dict[str, Any]] = []
-        source_execution_ids = (
-            (output.execution_id,)
-            if isinstance(output, ExecutionResult) and output.execution_id
-            else ()
+        """Compatibility facade over :meth:`complete_execution`.
+
+        Historically this method performed a second parse/fact/projection
+        sequence and omitted the command result. In particular a timeout could
+        therefore leave positive facts with non-degraded coverage. Both typed
+        and legacy string results now cross the same completion boundary; only
+        the list-shaped return value remains for compatibility callers.
+        """
+
+        execution = (
+            output
+            if isinstance(output, ExecutionResult)
+            else self.normalize_result(output, tool_name=_tool_name(command))
         )
-        for fact in self.parse_output(command, output):
-            fact_id, created = self.facts.add_fact_with_status(
-                scan_id,
-                host,
-                str(fact.get("type", "observation")),
-                str(fact.get("value", "")),
-                source or command,
-                confidence=int(fact.get("confidence", 100) or 100),
-                session_id=str(fact.get("session_id", "none")),
-                source_execution_ids=source_execution_ids,
+        key_builder = getattr(self.scheduler, "command_key", None)
+        command_key = (
+            str(key_builder(command))
+            if callable(key_builder)
+            else CommandScheduler().command_key(command)
+        )
+        completion = self.complete_execution(
+            scan_id,
+            host,
+            command_key,
+            command,
+            execution,
+            source=source or command,
+            idempotency_key=(
+                f"execution:{execution.execution_id}"
+                if execution.execution_id
+                else ""
+            ),
+            completion_fence=self.facts.capture_scan_completion_fence(scan_id),
+        )
+        projected = {
+            int(item["fact_id"]): item
+            for item in completion.get("graph_projection") or ()
+            if item.get("fact_id") is not None
+        }
+        stored: list[dict[str, Any]] = []
+        for item in completion.get("stored_base_facts") or ():
+            fact_ids = [int(fact_id) for fact_id in item.get("fact_ids") or ()]
+            safe = dict(item["fact"])
+            safe.update(
+                {
+                    "id": fact_ids[0] if fact_ids else None,
+                    "created": bool(item.get("created")),
+                }
             )
-            safe = dict(fact)
-            safe_value, secret_refs = self.facts.redactor.redact_fact(
-                str(safe.get("type", "")), safe.get("value", "")
-            )
-            safe.update({"id": fact_id, "value": safe_value, "created": created})
-            if secret_refs:
-                safe["secret_refs"] = list(secret_refs)
+            if fact_ids:
+                safe["graph_projection"] = projected.get(fact_ids[0])
             stored.append(safe)
         if stored:
-            try:
-                projected = {
-                    int(item["fact_id"]): item
-                    for item in self.project_fact_ids(item["id"] for item in stored)
-                }
-                for item in stored:
-                    item["graph_projection"] = projected.get(int(item["id"]))
-            except Exception as exc:
-                # Facts are authoritative and already committed. A projection
-                # can be replayed safely, so do not turn a read-model outage
-                # into fact loss or a duplicate tool execution.
-                logger.warning("Graph projection deferred (%s)", type(exc).__name__)
-        return stored
+            return stored
+
+        # An idempotent replay has no newly persisted base rows. Preserve the
+        # historical list facade while making the replay state explicit.
+        return [
+            {**dict(fact), "created": False}
+            for fact in completion.get("facts") or ()
+        ]

@@ -222,18 +222,22 @@ def test_independent_execution_corroboration_promotes_same_scoped_fact(tmp_path)
         "host",
         "service_check",
         "ssh:confirmed_present",
-        "probe-a",
+        "shared-probe",
         confidence=78,
         source_execution_ids=("exec-a",),
+        source_identity="scanner-a",
+        observation_method="tcp-connect",
     )
     duplicate_id = store.add_fact(
         "scan",
         "host",
         "service_check",
         "ssh:confirmed_present",
-        "probe-b",
+        "shared-probe",
         confidence=78,
         source_execution_ids=("exec-b",),
+        source_identity="scanner-b",
+        observation_method="tcp-connect",
     )
     assert store.assessments.current_for_fact(fact_id).status is AssessmentStatus.OBSERVED
 
@@ -248,6 +252,49 @@ def test_independent_execution_corroboration_promotes_same_scoped_fact(tmp_path)
     assert assessment.rule_id == "fact.corroborated.independent_execution.v1"
     assert assessment.source_execution_ids == ("exec-a", "exec-b")
     assert store.get_facts("scan", "host")[0]["confidence"] == 78
+
+
+def test_distinct_execution_ids_from_same_observation_source_do_not_corroborate(
+    tmp_path,
+):
+    store = FactStore(str(tmp_path / "same-source.db"))
+    fact_id = store.add_fact(
+        "scan",
+        "host",
+        "service_check",
+        "ssh:confirmed_present",
+        "shared-probe",
+        source_execution_ids=("exec-a",),
+        source_identity="scanner-a",
+        observation_method="tcp-connect",
+    )
+    duplicate_id = store.add_fact(
+        "scan",
+        "host",
+        "service_check",
+        "ssh:confirmed_present",
+        "shared-probe",
+        source_execution_ids=("exec-b",),
+        source_identity="scanner-a",
+        observation_method="tcp-connect",
+    )
+
+    _record_execution(store, "exec-a")
+    _record_execution(store, "exec-b")
+
+    assessment = store.assessments.current_for_fact(fact_id)
+    observations = store.get_facts("scan", "host")[0]["observations"]
+    assert duplicate_id == fact_id
+    assert assessment is not None
+    assert assessment.status is AssessmentStatus.OBSERVED
+    assert {
+        (item["source_identity"], item["observation_method"])
+        for item in observations
+    } == {("scanner-a", "tcp-connect")}
+    assert all(
+        item.rule_id != "fact.corroborated.independent_execution.v1"
+        for item in store.assessments.history(fact_id)
+    )
 
 
 def test_command_result_and_automatic_rules_share_one_transaction(tmp_path, monkeypatch):

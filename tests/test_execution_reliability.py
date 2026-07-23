@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from core.ai.command_scheduler import CommandDecision
-from core.ai.fact_store import FactStore
+from core.ai.fact_store import CommandCompletionConflictError, FactStore
 from core.ai.pipeline import AIPipeline
 from core.ai.runtime import PipelineRuntime
 from core.execution import (
@@ -26,6 +26,8 @@ from core.execution import (
     cancellation_reason_code,
 )
 from core.tools.base import run_tool
+
+pytestmark = [pytest.mark.contract, pytest.mark.security]
 
 
 def automatic(
@@ -224,7 +226,7 @@ def test_pipeline_persists_cancelled_partial_result_before_interrupting(tmp_path
     assert b"partial-secret" not in db_path.read_bytes()
 
 
-def test_command_result_idempotency_key_is_hashed_and_at_most_once(tmp_path):
+def test_command_result_idempotency_key_is_hashed_and_rejects_conflicts(tmp_path):
     db_path = tmp_path / "facts.db"
     store = FactStore(str(db_path))
     first_id, first_unique = store.add_command_result(
@@ -236,20 +238,20 @@ def test_command_result_idempotency_key_is_hashed_and_at_most_once(tmp_path):
         status="succeeded",
         idempotency_key="execution:token=do-not-store",
     )
-    second_id, second_unique = store.add_command_result(
-        "scan",
-        "example.com",
-        "key",
-        "nmap example.com",
-        "b" * 64,
-        status="failed",
-        idempotency_key="execution:token=do-not-store",
-    )
+    with pytest.raises(CommandCompletionConflictError):
+        store.add_command_result(
+            "scan",
+            "example.com",
+            "key",
+            "nmap example.com",
+            "b" * 64,
+            status="failed",
+            idempotency_key="execution:token=do-not-store",
+        )
 
     rows = store.get_command_results("scan", "example.com")
-    assert first_id == second_id
     assert first_unique is True
-    assert second_unique is False
+    assert rows[0]["id"] == first_id
     assert len(rows) == 1
     assert len(rows[0]["idempotency_key"]) == 64
     assert "do-not-store" not in json.dumps(rows)
@@ -259,13 +261,13 @@ def test_command_result_idempotency_key_is_hashed_and_at_most_once(tmp_path):
 def test_concurrent_command_result_idempotency_converges_on_one_row(tmp_path):
     store = FactStore(str(tmp_path / "concurrent.db"))
 
-    def persist(index: int) -> int:
+    def persist(_index: int) -> int:
         result_id, _created = store.add_command_result(
             "scan",
             "example.com",
             "same-key",
             "nmap example.com",
-            f"{index:064x}",
+            "a" * 64,
             status="succeeded",
             idempotency_key="execution:shared",
         )

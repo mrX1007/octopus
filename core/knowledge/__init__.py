@@ -2,7 +2,13 @@
 
 from .enricher import KnowledgeEnricher
 from .graph import KnowledgeGraph
-from .identity import CanonicalEntityIdentity, EntityKind
+from .identity import (
+    CanonicalEntityIdentity,
+    EntityKind,
+    canonicalize_scope_value,
+    canonicalize_scope_values,
+    validate_canonical_entity_id,
+)
 from .models import Asset, Campaign, Credential, EdgeType, Endpoint, Identity, NodeType, Service, Session, Vulnerability
 from .projection import GraphProjectionService, ProjectionResult
 
@@ -23,4 +29,7 @@ __all__ = [
     "Service",
     "Session",
     "Vulnerability",
+    "canonicalize_scope_value",
+    "canonicalize_scope_values",
+    "validate_canonical_entity_id",
 ]

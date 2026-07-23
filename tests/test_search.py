@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Regression tests for the optional DuckDuckGo search dependency."""
 
+import pytest
+
+pytestmark = pytest.mark.contract
+
 
 def test_web_search_reports_missing_dependency(monkeypatch):
     import search

@@ -62,12 +62,15 @@ without them remain `not_assessed`.
 ## Automatic scoped rules
 
 Two observations of one canonical fact promote an `observed` or `inferred`
-assessment to `verified` only when at least two distinct keyed execution-
-provenance IDs have latest persisted outcomes of `succeeded`. Failed, partial,
-blocked, unavailable, cancelled, and timed-out outcomes do not corroborate.
-Provider labels alone do not establish independence. A `contradicted` head is
-never automatically promoted by a duplicate observation or idempotent
-provenance attachment. The stable rule is
+assessment to `verified` only when they are tied to distinct keyed executions
+whose latest outcomes are `succeeded` and to different
+`(source_identity, observation_method)` pairs. Replaying one execution or
+renaming a command does not establish independence; a different source or a
+different observation method does. Failed, partial, blocked, unavailable,
+cancelled, and timed-out outcomes do not corroborate. Legacy observation rows
+receive conservative source/method metadata but are never retroactively linked
+to an execution. A `contradicted` head is never automatically promoted by a
+duplicate observation or idempotent provenance attachment. The stable rule is
 `fact.corroborated.independent_execution.v1`.
 
 Automatic contradiction recognizes only explicit opposite assertion markers
@@ -86,6 +89,12 @@ This makes corroboration and contradiction independent of whether fact rows or
 opposing successful outcomes arrived first: readers observe either the old
 state or the committed result plus all rule transitions, never an intermediate
 combination.
+
+Every automatic or manual assessment transition also enqueues the current
+assessment head in `fact_assessment_projection_outbox` inside that transaction.
+Projection is attempted only after commit; failures retain the coalesced work
+for the next runtime ingress or restart. Graph projection is therefore an
+idempotent repairable read model and cannot roll back authoritative evidence.
 
 ## Append-only transitions
 
@@ -108,7 +117,8 @@ assets without crossing scan scope.
 ## Verification behavior
 
 `EvidenceVerifier` now requires an explicit non-empty `required_evidence`
-list. It resolves requirements against non-contradicted facts and returns the
+list. It resolves requirements against one `EvaluatedFactSnapshot` decision
+view, excluding contradicted, stale, and degraded evidence, and returns the
 supporting fact IDs.
 
 - When every requirement maps to persisted facts, it creates a
@@ -131,9 +141,10 @@ The result preserves the compatibility `accepted|rejected` field while adding
 `assessment_id` and `assessment_status` fields. Current readers use them as
 follows:
 
-- evidence verification excludes contradicted facts;
-- state, context, target, surface, and capability inputs exclude contradicted
-  facts;
+- evidence verification, state, context, target, surface, capability, and
+  exploit-applicability decisions consume the same freshness/coverage rule;
+- historical stale/degraded facts remain reportable but cannot close a current
+  access, service, stage, or verification gate;
 - state exposes candidate and verified vulnerability flags separately while
   retaining the legacy `vulnerabilities_found` compatibility flag;
 - context and trace reports expose bounded assessment counts and IDs;
@@ -175,6 +186,13 @@ persistence. If the shared `SecretStore` learns a secret later, a repeated
 idempotent assessment applies one-way display redaction without changing its
 semantic identity. Raw values used for idempotency are never stored as plain
 hash or display fields.
+
+Display-only redaction of a current head is nevertheless projection-visible:
+the same transaction enqueues that unchanged assessment ID in the durable graph
+outbox, and post-commit repair rewrites the per-fact provenance record instead
+of unioning superseded execution identifiers. Startup redaction and legacy
+assessment backfill use the same enqueue/repair path, so a graph cannot retain
+plaintext that the authoritative assessment row has already removed.
 
 This contract does not define canonical graph entity IDs, action success, or
 the final report schema. Those layers consume assessment references; they do

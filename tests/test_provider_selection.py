@@ -12,22 +12,33 @@ import pytest
 from core.actions import (
     ActionAdapter,
     ActionCatalog,
+    ActionCheckResult,
     ActionDescriptor,
     ActionExecutor,
     ActionKind,
     ActionRequest,
     ActionRequirements,
+    ActiveRiskClass,
     IngestionOutcome,
     ProviderCircuitBreaker,
     ProviderFallbackExecutor,
     ProviderSelector,
     ProviderTelemetryEvent,
     ProviderTelemetryStore,
+    RegisteredToolAdapter,
     RetryClassifier,
     target_class,
 )
 from core.ai.runtime import PipelineRuntime
-from core.execution import ExecutionContext, ExecutionPolicy, ExecutionStatus
+from core.execution import (
+    ExecutionContext,
+    ExecutionDecision,
+    ExecutionPolicy,
+    ExecutionStatus,
+)
+from core.tools.registry import ToolDef
+
+pytestmark = [pytest.mark.contract, pytest.mark.security]
 
 
 def automatic(target: str = "example.com") -> ExecutionContext:
@@ -218,6 +229,65 @@ def test_selector_ranks_history_and_explains_every_rejection_without_execution()
     assert "telemetry:timeouts" in serialized
 
 
+def test_registered_manual_tool_uses_policy_owned_active_risk_classification():
+    tool_def = ToolDef(
+        name="msf_run",
+        category="exploit",
+        func=lambda _target: "must-not-run",
+    )
+    adapter = RegisteredToolAdapter(
+        tool_def,
+        lambda _command, _context: "must-not-run",
+    )
+    telemetry, selector, _fallback = provider_stack(adapter)
+
+    selection = selector.select(
+        "verification",
+        ActionRequest(
+            "example.com",
+            automatic(),
+            command="msf_run example.com",
+        ),
+        ["msf_run"],
+    )
+
+    assert selection.ranked == ()
+    rejected = selection.rejected[0]
+    assert rejected.active_risk == 1.0
+    assert rejected.active_risk_class is ActiveRiskClass.ACTIVE
+    assert rejected.policy_denial is not None
+    assert rejected.policy_denial.reason_code == "active_tool_requires_approval"
+    assert telemetry.count() == 0
+
+
+def test_rejected_active_candidate_does_not_block_an_executed_safe_provider():
+    events: list[str] = []
+    safe = SequenceAdapter(
+        "test:safe",
+        [{"status": "succeeded", "stdout": "safe result"}],
+        events,
+    )
+    active = SequenceAdapter(
+        "test:active",
+        [{"status": "succeeded"}],
+        events,
+        policy_name="msf_run",
+        requirements=ActionRequirements(active=True),
+    )
+    _telemetry, _selector, fallback = provider_stack(safe, active)
+
+    run = fallback.run(
+        "verification",
+        ActionRequest("example.com", automatic()),
+        ["test:active", "test:safe"],
+    )
+
+    assert run.status is ExecutionStatus.SUCCEEDED
+    assert run.policy_denial is None
+    assert [attempt.action_id for attempt in run.attempts] == ["test:safe"]
+    assert active.execute_calls == 0
+
+
 def test_scope_rejection_trace_retains_only_the_policy_reason_code():
     events: list[str] = []
     provider = SequenceAdapter("test:a", [{"status": "succeeded"}], events)
@@ -354,6 +424,47 @@ def test_retryable_partial_output_is_ingested_before_fallback():
     assert telemetry.summary("test:a", "service_discovery", "dns").timeout_rate == 1.0
 
 
+def test_dedicated_partial_ingestion_callback_runs_only_before_fallback():
+    events: list[str] = []
+    first = SequenceAdapter(
+        "test:a",
+        [{
+            "status": "timeout",
+            "stdout": "partial discovery",
+            "partial": True,
+        }],
+        events,
+    )
+    second = SequenceAdapter(
+        "test:b",
+        [{"status": "succeeded", "stdout": "complete discovery"}],
+        events,
+    )
+    _telemetry, _selector, fallback = provider_stack(first, second)
+    request = ActionRequest("example.com", automatic())
+
+    def ingest_partial(result, action_id: str, callback_request: ActionRequest):
+        assert callback_request is request
+        assert result.partial is True
+        events.append(f"partial-ingest:{action_id}")
+        return {"parsed_facts": 1, "new_facts": 1}
+
+    run = fallback.run(
+        "service_discovery",
+        request,
+        ["test:a", "test:b"],
+        partial_ingest=ingest_partial,
+    )
+
+    assert events == [
+        "execute:test:a",
+        "partial-ingest:test:a",
+        "execute:test:b",
+    ]
+    assert run.status is ExecutionStatus.SUCCEEDED
+    assert run.attempts[0].fallback_taken is True
+
+
 @pytest.mark.parametrize(
     ("status", "error_class"),
     [
@@ -444,6 +555,101 @@ def test_retry_classifier_accepts_only_explicit_retry_contracts():
     assert RetryClassifier.is_retryable(temporary) is True
     assert RetryClassifier.is_retryable(generic) is False
     assert RetryClassifier.is_retryable(None) is False
+
+
+class DenyOnFinalAuthorization(ExecutionPolicy):
+    def __init__(self, deny_on_call: int = 2) -> None:
+        self.calls = 0
+        self.deny_on_call = deny_on_call
+
+    def authorize_registered(self, invocation, context):
+        self.calls += 1
+        if self.calls < self.deny_on_call:
+            return super().authorize_registered(invocation, context)
+        return ExecutionDecision(
+            allowed=False,
+            reason="active_tool_requires_approval",
+            context=context,
+            invocation=invocation,
+        )
+
+
+def test_final_policy_denial_is_typed_blocked_and_never_falls_back():
+    events: list[str] = []
+    first = SequenceAdapter("test:a", [{"status": "succeeded"}], events)
+    second = SequenceAdapter("test:b", [{"status": "succeeded"}], events)
+    catalog = ActionCatalog()
+    catalog.register(first)
+    catalog.register(second)
+    policy = DenyOnFinalAuthorization()
+    telemetry = ProviderTelemetryStore(":memory:")
+    selector = ProviderSelector(catalog, policy, telemetry)
+    fallback = ProviderFallbackExecutor(
+        selector,
+        ActionExecutor(catalog, policy),
+        telemetry,
+    )
+
+    run = fallback.run(
+        "service_discovery",
+        ActionRequest("example.com", automatic()),
+        ["test:a", "test:b"],
+    )
+
+    assert run.status is ExecutionStatus.BLOCKED
+    assert run.policy_denial is not None
+    assert run.policy_denial.phase == "execute"
+    assert run.policy_denial.reason_code == "active_tool_requires_approval"
+    assert [attempt.action_id for attempt in run.attempts] == ["test:a"]
+    assert first.execute_calls == second.execute_calls == 0
+
+
+class CheckedSequenceAdapter(SequenceAdapter):
+    def __init__(self, action_id: str, results: list[Any], events: list[str]):
+        super().__init__(
+            action_id,
+            results,
+            events,
+            requirements=ActionRequirements(supports_check=True),
+        )
+
+    def check(self, request: ActionRequest):
+        self.events.append(f"check:{self.descriptor.action_id}")
+        return ActionCheckResult(
+            result={"status": "succeeded", "stdout": "positive check"},
+            applicable=True,
+        )
+
+
+def test_execute_policy_denial_wins_over_a_successful_check_result():
+    events: list[str] = []
+    adapter = CheckedSequenceAdapter(
+        "test:checked",
+        [{"status": "succeeded"}],
+        events,
+    )
+    catalog = ActionCatalog()
+    catalog.register(adapter)
+    policy = DenyOnFinalAuthorization(deny_on_call=3)
+    telemetry = ProviderTelemetryStore(":memory:")
+    fallback = ProviderFallbackExecutor(
+        ProviderSelector(catalog, policy, telemetry),
+        ActionExecutor(catalog, policy),
+        telemetry,
+    )
+
+    run = fallback.run(
+        "verification",
+        ActionRequest("example.com", automatic()),
+        ["test:checked"],
+    )
+
+    assert events == ["check:test:checked"]
+    assert run.status is ExecutionStatus.BLOCKED
+    assert run.effective_result is None
+    assert run.policy_denial is not None
+    assert run.policy_denial.phase == "execute"
+    assert adapter.execute_calls == 0
 
 
 def test_pipeline_runtime_exposes_selection_and_fallback_with_separate_db(tmp_path):

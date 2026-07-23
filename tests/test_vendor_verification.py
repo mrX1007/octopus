@@ -11,6 +11,8 @@ import pytest
 
 from scripts.quality import coverage_gate, import_smoke, verify_vendor
 
+pytestmark = pytest.mark.contract
+
 
 def _git(cwd: Path, *args: str) -> str:
     completed = subprocess.run(
@@ -185,7 +187,15 @@ def test_coverage_gate_discovers_every_first_party_python_file(tmp_path: Path):
     (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
     (tmp_path / "core").mkdir()
     (tmp_path / "core" / "worker.py").write_text("value = 2\n", encoding="utf-8")
-    for excluded in ("data", "tests", "vendor", "venv", ".git", "__pycache__"):
+    for excluded in (
+        "build",
+        "data",
+        "tests",
+        "vendor",
+        "venv",
+        ".git",
+        "__pycache__",
+    ):
         directory = tmp_path / excluded
         directory.mkdir()
         (directory / "ignored.py").write_text("raise AssertionError\n", encoding="utf-8")

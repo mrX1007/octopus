@@ -7,8 +7,14 @@ from types import SimpleNamespace
 
 import pytest
 
+from core.ai.command_scheduler import CommandDecision
+from core.ai.evaluated_facts import EvaluatedFactSnapshot
+from core.ai.mission_store import TaskScope
 from core.ai.pipeline import AIPipeline
+from core.ai.planner import PlanCompilation
 from core.ai.task_scoring import TaskScorer, TaskScoringWeights
+from core.execution import ExecutionResult, ExecutionStatus
+from core.knowledge.identity import canonical_asset, canonical_service
 
 pytestmark = pytest.mark.contract
 
@@ -48,6 +54,268 @@ def test_registered_pipeline_task_persists_scope_capability_and_retry_policy(
         "provider_unavailable",
         "tool_unavailable",
     }
+
+
+def test_compiled_plan_carries_evaluated_snapshot_ref_into_registered_task(
+    tmp_path,
+):
+    pipeline = AIPipeline(str(tmp_path / "task-snapshot-ref.db"))
+    pipeline._reset_runtime_state()
+    pipeline._start_mission("scan-task-snapshot-ref", "10.0.0.5")
+    pipeline.plan_compiler = SimpleNamespace(
+        compile=lambda plan, **_kwargs: PlanCompilation(
+            plan=tuple(dict(step) for step in plan),
+            rejected=(),
+        )
+    )
+    snapshot = EvaluatedFactSnapshot.build(
+        "scan-task-snapshot-ref",
+        "10.0.0.5",
+        [],
+        evaluated_at=123.0,
+    )
+
+    compiled = pipeline._compile_plan(
+        [
+            {
+                "agent": "DiscoveryAgent",
+                "task": "service_discovery",
+                "evaluated_snapshot_ref": "evaluated-facts://stale",
+            }
+        ],
+        "scan-task-snapshot-ref",
+        "10.0.0.5",
+        {"evaluated_fact_snapshot_ref": snapshot.snapshot_ref},
+        evaluated_fact_snapshot=snapshot,
+    )
+    pipeline._register_mission_plan(compiled)
+
+    task = pipeline.mission_store.snapshot(pipeline.mission_id).tasks[0]
+    assert compiled[0]["evaluated_snapshot_ref"] == snapshot.snapshot_ref
+    assert task.evaluated_snapshot_ref == snapshot.snapshot_ref
+    restored = pipeline.mission_store.resolve_evaluated_fact_snapshot(
+        pipeline.mission_id,
+        snapshot.snapshot_ref,
+    )
+    assert restored == snapshot
+
+
+def test_restarted_task_execution_uses_accepted_durable_snapshot(tmp_path) -> None:
+    db_path = tmp_path / "task-snapshot-restart.db"
+    scan_id = "scan-task-snapshot-restart"
+    target = "10.0.0.5"
+    first = AIPipeline(str(db_path))
+    first._reset_runtime_state()
+    first._start_mission(scan_id, target)
+    initial_id = first.fact_store.add_fact(
+        scan_id,
+        target,
+        "port_open",
+        "80/tcp (http)",
+        "initial-probe",
+    )
+    snapshot = first.context_builder.build_evaluated_fact_snapshot(scan_id, target)
+    first.plan_compiler = SimpleNamespace(
+        compile=lambda plan, **_kwargs: PlanCompilation(
+            plan=tuple(dict(step) for step in plan),
+            rejected=(),
+        )
+    )
+    compiled = first._compile_plan(
+        [{"agent": "DiscoveryAgent", "task": "service_discovery"}],
+        scan_id,
+        target,
+        {"evaluated_fact_snapshot_ref": snapshot.snapshot_ref},
+        evaluated_fact_snapshot=snapshot,
+    )
+    task = first._register_mission_plan(compiled)[0]
+    late_id = first.fact_store.add_fact(
+        scan_id,
+        target,
+        "potential_vulnerability",
+        "CVE-2099-0001 late observation",
+        "late-probe",
+    )
+    first._interrupt_mission("simulated_restart")
+
+    resumed = AIPipeline(str(db_path))
+    resumed._reset_runtime_state()
+    resumed._start_mission(scan_id, target)
+    resumed_task = resumed._resumable_mission_plan()[0]
+    assert resumed_task["task_id"] == task["task_id"]
+    resumed._register_mission_plan([resumed_task])
+    resumed._begin_task_attempt(
+        resumed_task["agent"],
+        resumed_task["task"],
+        task_id=resumed_task["task_id"],
+    )
+    observed: dict[str, list[dict]] = {}
+
+    def decide(command, facts, *_args, **_kwargs):
+        observed["facts"] = list(facts)
+        return CommandDecision(command, "probe:accepted-snapshot", "execute", "test")
+
+    resumed.runtime.decide = decide
+    resumed.runtime.execute = lambda _decision, _context: ExecutionResult(
+        status=ExecutionStatus.SUCCEEDED,
+        request_id="request-accepted-snapshot",
+        execution_id="exec-accepted-snapshot",
+        tool_name="probe",
+        stdout="",
+        exit_code=0,
+    )
+    resumed.runtime.parse_output = lambda _command, _result: []
+
+    resumed._execute_pipeline_command(
+        scan_id,
+        target,
+        "probe target",
+        "Fact",
+        "[Running]",
+    )
+
+    assert [fact["id"] for fact in observed["facts"]] == [initial_id]
+    assert late_id not in {fact["id"] for fact in observed["facts"]}
+
+
+def test_plan_compiler_uses_captured_snapshot_without_rereading_fact_store(
+    tmp_path,
+):
+    pipeline = AIPipeline(str(tmp_path / "captured-plan-snapshot.db"))
+    captured = {}
+    snapshot = EvaluatedFactSnapshot.build(
+        "scan-captured-plan-snapshot",
+        "10.0.0.5",
+        [
+            {"id": 1, "type": "port_open", "value": "443/tcp"},
+            {
+                "id": 2,
+                "type": "port_open",
+                "value": "80/tcp",
+                "assessment": {"status": "contradicted"},
+            },
+        ],
+        evaluated_at=123.0,
+    )
+
+    def compile_plan(plan, **kwargs):
+        captured["facts"] = kwargs["facts"]
+        return PlanCompilation(
+            plan=tuple(dict(step) for step in plan),
+            rejected=(),
+        )
+
+    pipeline.plan_compiler = SimpleNamespace(compile=compile_plan)
+    pipeline.fact_store.get_facts = lambda *_args: (_ for _ in ()).throw(
+        AssertionError("FactStore was reread after snapshot capture")
+    )
+
+    compiled = pipeline._compile_plan(
+        [{"agent": "DiscoveryAgent", "task": "service_discovery"}],
+        "scan-captured-plan-snapshot",
+        "10.0.0.5",
+        {"evaluated_fact_snapshot_ref": snapshot.snapshot_ref},
+        evaluated_fact_snapshot=snapshot,
+    )
+
+    assert [fact["id"] for fact in captured["facts"]] == [1]
+    assert compiled[0]["evaluated_snapshot_ref"] == snapshot.snapshot_ref
+
+
+def test_plan_compiler_compat_fallback_uses_evaluated_decision_facts(tmp_path):
+    pipeline = AIPipeline(str(tmp_path / "fallback-plan-snapshot.db"))
+    captured = {}
+    pipeline.fact_store.get_facts = lambda *_args: [
+        {"id": 1, "type": "port_open", "value": "443/tcp"},
+        {
+            "id": 2,
+            "type": "port_open",
+            "value": "80/tcp",
+            "freshness_status": "stale",
+        },
+    ]
+
+    def compile_plan(plan, **kwargs):
+        captured["facts"] = kwargs["facts"]
+        return PlanCompilation(
+            plan=tuple(dict(step) for step in plan),
+            rejected=(),
+        )
+
+    pipeline.plan_compiler = SimpleNamespace(compile=compile_plan)
+
+    compiled = pipeline._compile_plan(
+        [{"agent": "DiscoveryAgent", "task": "service_discovery"}],
+        "scan-fallback-plan-snapshot",
+        "10.0.0.5",
+        {},
+    )
+
+    assert [fact["id"] for fact in captured["facts"]] == [1]
+    assert compiled[0]["evaluated_snapshot_ref"].startswith(
+        "evaluated-facts://sha256/"
+    )
+
+
+def test_plan_optimization_keeps_same_task_for_distinct_typed_scopes(tmp_path):
+    target = "10.0.0.5"
+    pipeline = AIPipeline(str(tmp_path / "typed-scope-optimization.db"))
+    pipeline._current_target = target
+    asset_scope = TaskScope(
+        entity_ids=(canonical_asset(target).entity_id,),
+        legacy_scope=f"asset:{target}",
+    )
+    service_scope = TaskScope(
+        entity_ids=(canonical_service(target, 443).entity_id,),
+        legacy_scope=f"service:{target}:443/tcp",
+    )
+
+    optimized = pipeline._optimize_plan(
+        [
+            {
+                "agent": "DiscoveryAgent",
+                "task": "service_discovery",
+                "task_scope": asset_scope,
+            },
+            {
+                "agent": "DiscoveryAgent",
+                "task": "service_discovery",
+                "task_scope": service_scope,
+            },
+            {
+                "agent": "DiscoveryAgent",
+                "task": "service_discovery",
+                "task_scope": TaskScope(
+                    entity_ids=asset_scope.entity_ids,
+                    legacy_scope="display-alias-that-is-not-identity",
+                ),
+            },
+            {
+                "agent": "VerificationAgent",
+                "task": "service_discovery",
+                "task_scope": TaskScope(
+                    entity_ids=asset_scope.entity_ids,
+                    legacy_scope="different-agent-display-alias",
+                ),
+            },
+        ],
+        "service_discovery",
+        {"state": "initial_recon"},
+    )
+
+    assert [step["task_scope"] for step in optimized] == [
+        asset_scope,
+        service_scope,
+        TaskScope(
+            entity_ids=asset_scope.entity_ids,
+            legacy_scope="different-agent-display-alias",
+        ),
+    ]
+    assert [step["agent"] for step in optimized] == [
+        "DiscoveryAgent",
+        "DiscoveryAgent",
+        "VerificationAgent",
+    ]
 
 
 def test_pipeline_schedules_only_typed_transient_failure_for_retry(tmp_path):
@@ -135,6 +403,103 @@ def test_state_change_replan_is_material_deduplicated_and_bounded(tmp_path):
     assert len(
         pipeline.decision_trace.list_events(
             scan_id="scan-state-replan",
+            event_type="state_replan_rejected",
+        )
+    ) == 1
+
+
+def test_state_change_replan_reads_nested_fact_assessment_counts(tmp_path):
+    pipeline = AIPipeline(str(tmp_path / "assessment-replan.db"))
+    pipeline._reset_runtime_state()
+    pipeline._start_mission("scan-assessment-replan", "10.0.0.5")
+    pipeline._max_state_replans = lambda: 1
+    previous = {
+        "state": "recon_completed",
+        "next_required_capability": "verify",
+        "stage_gates": {"recon": True},
+        "fact_assessments": {
+            "counts": {"observed": 1, "verified": 0, "contradicted": 0}
+        },
+    }
+    current = {
+        **previous,
+        "fact_assessments": {
+            "counts": {"observed": 0, "verified": 1, "contradicted": 0}
+        },
+    }
+    pipeline.context_builder = SimpleNamespace(
+        build_context=lambda _scan, _target: current
+    )
+
+    assert pipeline._evaluate_state_change_replan(
+        previous,
+        "scan-assessment-replan",
+        "10.0.0.5",
+    ) is True
+    assert pipeline._state_replan_count == 1
+    assert (
+        pipeline.mission_store.snapshot(pipeline.mission_id).mission.state_replan_count
+        == 1
+    )
+
+
+def test_state_change_replan_budget_and_deduplication_survive_restart(tmp_path):
+    db_path = tmp_path / "restart-replan.db"
+    scan_id = "scan-restart-replan"
+    target = "10.0.0.5"
+    initial = {"state": "initial_recon"}
+    recon = {"state": "recon_completed", "next_required_capability": "verify"}
+
+    first = AIPipeline(str(db_path))
+    first._reset_runtime_state()
+    first._start_mission(scan_id, target)
+    first._max_state_replans = lambda: 1
+    first.context_builder = SimpleNamespace(
+        build_context=lambda _scan, _target: recon
+    )
+    assert first._evaluate_state_change_replan(initial, scan_id, target) is True
+    assert first._state_replan_count == 1
+    first.mission_store.close()
+
+    resumed = AIPipeline(str(db_path))
+    resumed._reset_runtime_state()
+    resumed._start_mission(scan_id, target)
+    resumed._max_state_replans = lambda: 1
+
+    assert resumed._state_replan_count == 1
+    assert len(resumed._state_replan_signatures) == 1
+
+    resumed.context_builder = SimpleNamespace(
+        build_context=lambda _scan, _target: recon
+    )
+    assert resumed._evaluate_state_change_replan(initial, scan_id, target) is False
+    assert len(resumed._state_replan_signatures) == 1
+
+    verified = {
+        "state": "recon_completed",
+        "next_required_capability": "verify",
+        "fact_assessments": {"counts": {"observed": 0, "verified": 1}},
+    }
+    resumed.context_builder = SimpleNamespace(
+        build_context=lambda _scan, _target: verified
+    )
+    assert resumed._evaluate_state_change_replan(recon, scan_id, target) is False
+
+    durable = resumed.mission_store.snapshot(resumed.mission_id).mission
+    assert durable.state_replan_count == 1
+    assert len(durable.state_replan_signatures) == 2
+    assert len(resumed._state_replan_signatures) == 2
+    assert resumed._evaluate_state_change_replan(recon, scan_id, target) is False
+    assert len(resumed._state_replan_signatures) == 2
+    assert len(
+        resumed.decision_trace.list_events(
+            scan_id=scan_id,
+            event_type="state_replan_requested",
+        )
+    ) == 1
+    assert len(
+        resumed.decision_trace.list_events(
+            scan_id=scan_id,
             event_type="state_replan_rejected",
         )
     ) == 1

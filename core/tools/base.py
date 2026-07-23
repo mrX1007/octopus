@@ -14,6 +14,7 @@ import subprocess
 import threading
 import time
 from datetime import datetime, timezone
+from typing import Optional
 
 # ANSI COLORS
 C_GREY    = "\033[90m"
@@ -206,7 +207,7 @@ def run_tool(command: list, timeout: int = 120) -> str:
     cancel_reason = ""
     start_time = time.monotonic()
     last_heartbeat = 0
-    last_hydra_status = [None]
+    last_hydra_status: list[Optional[str]] = [None]
     proc = None
     reader = None
 

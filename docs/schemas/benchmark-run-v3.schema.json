@@ -1,0 +1,206 @@
+{
+  "$id": "https://octopus.local/schemas/benchmark-run-v3.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action_telemetry": {
+      "items": { "$ref": "#/$defs/action" },
+      "type": "array"
+    },
+    "action_telemetry_available": { "type": "boolean" },
+    "action_telemetry_reliability": { "$ref": "#/$defs/reliability" },
+    "applied_model_seed": { "minimum": 0, "type": ["integer", "null"] },
+    "artifact_refs": { "$ref": "#/$defs/stringArray" },
+    "budget_enforcement": {
+      "items": { "$ref": "#/$defs/budget" },
+      "type": "array"
+    },
+    "censor_limit_seconds": { "minimum": 0, "type": ["number", "null"] },
+    "duration_censored": { "type": "boolean" },
+    "duration_seconds": { "minimum": 0, "type": "number" },
+    "environment": { "type": "object" },
+    "error_class": { "type": "string" },
+    "evaluation": { "$ref": "#/$defs/evaluation" },
+    "execution_status": {
+      "enum": ["succeeded", "failed", "timeout", "invalid", "cancelled"]
+    },
+    "finished_at": { "type": "number" },
+    "fixture_variant_digest": {
+      "oneOf": [
+        { "pattern": "^[0-9a-f]{64}$", "type": "string" },
+        { "type": "null" }
+      ]
+    },
+    "matched_fixture_seed": { "minimum": 0, "type": "integer" },
+    "model_seed_evidence": { "$ref": "#/$defs/stringArray" },
+    "model_seed_status": {
+      "enum": ["applied", "rejected", "not_supported", "unknown"]
+    },
+    "policy_violations": { "$ref": "#/$defs/stringArray" },
+    "repetition": { "minimum": 1, "type": "integer" },
+    "run_id": { "$ref": "#/$defs/identifier" },
+    "scenario_id": { "$ref": "#/$defs/identifier" },
+    "schema_version": { "const": "2.0" },
+    "source_schema_version": { "type": "string" },
+    "started_at": { "type": "number" },
+    "system_id": { "$ref": "#/$defs/identifier" },
+    "track_id": { "$ref": "#/$defs/identifier" }
+  },
+  "required": [
+    "action_telemetry",
+    "action_telemetry_available",
+    "action_telemetry_reliability",
+    "applied_model_seed",
+    "artifact_refs",
+    "budget_enforcement",
+    "censor_limit_seconds",
+    "duration_censored",
+    "duration_seconds",
+    "environment",
+    "error_class",
+    "evaluation",
+    "execution_status",
+    "finished_at",
+    "fixture_variant_digest",
+    "matched_fixture_seed",
+    "model_seed_evidence",
+    "model_seed_status",
+    "policy_violations",
+    "repetition",
+    "run_id",
+    "scenario_id",
+    "schema_version",
+    "source_schema_version",
+    "started_at",
+    "system_id",
+    "track_id"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": { "source_schema_version": { "const": "2.0" } },
+        "required": ["source_schema_version"]
+      },
+      "then": {
+        "properties": {
+          "budget_enforcement": { "minItems": 1 },
+          "fixture_variant_digest": { "pattern": "^[0-9a-f]{64}$", "type": "string" }
+        }
+      }
+    }
+  ],
+  "title": "OCTOPUS Benchmark v3 run",
+  "type": "object",
+  "$defs": {
+    "action": {
+      "additionalProperties": false,
+      "properties": {
+        "action_name": { "$ref": "#/$defs/identifier" },
+        "action_type": { "$ref": "#/$defs/identifier" },
+        "duration_seconds": { "minimum": 0, "type": ["number", "null"] },
+        "event_id": { "$ref": "#/$defs/identifier" },
+        "evidence_refs": { "$ref": "#/$defs/stringArray" },
+        "method": { "type": ["string", "null"] },
+        "output_bytes": { "minimum": 0, "type": ["integer", "null"] },
+        "sequence": { "minimum": 0, "type": "integer" },
+        "started_offset_seconds": { "minimum": 0, "type": ["number", "null"] },
+        "status": { "enum": ["succeeded", "failed", "timeout", "blocked", "unknown"] },
+        "target_class": { "type": ["string", "null"] }
+      },
+      "required": [
+        "action_name",
+        "action_type",
+        "duration_seconds",
+        "event_id",
+        "evidence_refs",
+        "method",
+        "output_bytes",
+        "sequence",
+        "started_offset_seconds",
+        "status",
+        "target_class"
+      ],
+      "type": "object"
+    },
+    "budget": {
+      "additionalProperties": false,
+      "properties": {
+        "budget_name": { "$ref": "#/$defs/identifier" },
+        "enforcement_mode": { "enum": ["hard", "advisory", "observed", "none"] },
+        "evidence_refs": { "$ref": "#/$defs/stringArray" },
+        "exceeded": { "type": ["boolean", "null"] },
+        "limit": { "exclusiveMinimum": 0, "type": "number" },
+        "measured": { "minimum": 0, "type": ["number", "null"] },
+        "note": { "type": "string" },
+        "reliable": { "type": "boolean" },
+        "system_id": { "$ref": "#/$defs/identifier" },
+        "unit": { "$ref": "#/$defs/identifier" }
+      },
+      "required": ["budget_name", "enforcement_mode", "evidence_refs", "exceeded", "limit", "measured", "note", "reliable", "system_id", "unit"],
+      "type": "object"
+    },
+    "claim": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_id": { "$ref": "#/$defs/identifier" },
+        "evidence_refs": { "$ref": "#/$defs/stringArray" },
+        "matched_truth_id": { "type": ["string", "null"] },
+        "matcher_kind": { "$ref": "#/$defs/identifier" },
+        "normalized_claim_id": { "$ref": "#/$defs/identifier" },
+        "supported": { "type": "boolean" },
+        "text": { "minLength": 1, "type": "string" },
+        "verified": { "type": "boolean" }
+      },
+      "required": ["claim_id", "evidence_refs", "matched_truth_id", "matcher_kind", "normalized_claim_id", "supported", "text", "verified"],
+      "type": "object"
+    },
+    "evaluation": {
+      "additionalProperties": false,
+      "properties": {
+        "claims": { "items": { "$ref": "#/$defs/claim" }, "type": "array" },
+        "completion_rule_id": { "$ref": "#/$defs/identifier" },
+        "evaluator_id": { "$ref": "#/$defs/identifier" },
+        "populations": {
+          "additionalProperties": false,
+          "properties": {
+            "all_scheduled": { "$ref": "#/$defs/metricMap" },
+            "completion_conditional": { "$ref": "#/$defs/metricMap" }
+          },
+          "required": ["all_scheduled", "completion_conditional"],
+          "type": "object"
+        },
+        "task_status": { "enum": ["completed", "partial", "not_completed", "not_evaluated", "invalid"] }
+      },
+      "required": ["claims", "completion_rule_id", "evaluator_id", "populations", "task_status"],
+      "type": "object"
+    },
+    "identifier": {
+      "pattern": "^[a-z0-9][a-z0-9_.:-]{0,159}$",
+      "type": "string"
+    },
+    "metric": {
+      "additionalProperties": false,
+      "properties": {
+        "available": { "type": "boolean" },
+        "denominator": { "minimum": 0, "type": "integer" },
+        "numerator": { "minimum": 0, "type": "integer" },
+        "reason": { "type": "string" },
+        "reliability": { "$ref": "#/$defs/reliability" },
+        "value": { "type": "number" }
+      },
+      "required": ["available", "reliability"],
+      "type": "object"
+    },
+    "metricMap": {
+      "additionalProperties": { "$ref": "#/$defs/metric" },
+      "type": "object"
+    },
+    "reliability": {
+      "enum": ["verified", "measured", "derived", "self_reported", "legacy_incomplete", "unavailable"]
+    },
+    "stringArray": {
+      "items": { "type": "string" },
+      "type": "array"
+    }
+  }
+}

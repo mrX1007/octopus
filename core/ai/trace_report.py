@@ -4,6 +4,7 @@ import json
 from typing import Any, Optional
 
 from core.ai.decision_trace import build_decision_metrics
+from core.ai.evaluated_facts import EvaluatedFactSnapshot
 from core.ai.fact_store import FactStore
 from core.ai.report_schema import build_evidence_report
 from core.ai.reporting import (
@@ -13,6 +14,7 @@ from core.ai.reporting import (
     build_finding_groups,
     build_remediations,
 )
+from core.knowledge.identity import canonicalize_scope_value
 
 
 class TraceReporter:
@@ -31,11 +33,25 @@ class TraceReporter:
         task_outcomes: Optional[list[dict[str, Any]]] = None,
         context: Optional[dict[str, Any]] = None,
         decision_events: Optional[list[dict[str, Any]]] = None,
+        evaluated_fact_snapshot: Optional[EvaluatedFactSnapshot] = None,
     ) -> dict[str, Any]:
-        facts = self.fact_store.get_facts(scan_id, target)
+        snapshot = evaluated_fact_snapshot or EvaluatedFactSnapshot.build(
+            scan_id,
+            target,
+            self.fact_store.get_facts(scan_id, target),
+        )
+        self._validate_evaluated_fact_snapshot(snapshot, scan_id, target)
+        facts = list(snapshot.historical_facts())
         command_results = self.fact_store.get_command_results(scan_id, target)
         hypotheses = self.fact_store.get_hypotheses(scan_id, target)
         context = context or {}
+        context_snapshot_ref = context.get("evaluated_fact_snapshot_ref") or (
+            (context.get("evaluated_fact_snapshot") or {}).get("snapshot_ref")
+            if isinstance(context.get("evaluated_fact_snapshot"), dict)
+            else ""
+        )
+        if context_snapshot_ref and context_snapshot_ref != snapshot.snapshot_ref:
+            raise ValueError("context and report use different evaluated fact snapshots")
         llm_events = self._llm_events(facts)
         state = {
             "root_access_confirmed": bool((context.get("stage_gates") or {}).get("root")),
@@ -71,6 +87,8 @@ class TraceReporter:
             "schema_version": "1.0",
             "scan_id": scan_id,
             "target": target,
+            "evaluated_fact_snapshot_ref": snapshot.snapshot_ref,
+            "evaluated_fact_snapshot": snapshot.to_context(),
             "summary": self._summary(facts, command_results, goal_trace or [], command_trace or []),
             "surface_states": (context.get("target_model") or {}).get("surface_states")
                 or (context.get("surface_states") or {}),
@@ -93,6 +111,20 @@ class TraceReporter:
             "fact_flow": self._fact_flow(facts),
         }
         return self.redactor.redact_data(report)
+
+    def _validate_evaluated_fact_snapshot(
+        self,
+        snapshot: EvaluatedFactSnapshot,
+        scan_id: str,
+        target: str,
+    ) -> None:
+        expected_target = (
+            canonicalize_scope_value(target) if str(target or "").strip() else ""
+        )
+        if snapshot.scan_id != str(scan_id):
+            raise ValueError("evaluated fact snapshot belongs to a different scan")
+        if expected_target and expected_target not in snapshot.canonical_scope:
+            raise ValueError("evaluated fact snapshot does not cover the report target")
 
     def to_text(self, report: dict[str, Any]) -> str:
         report = self.redactor.redact_data(report)

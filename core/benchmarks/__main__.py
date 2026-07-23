@@ -6,10 +6,6 @@ import argparse
 from collections.abc import Sequence
 from pathlib import Path
 
-from .harness import BenchmarkHarness
-from .schema import load_scenarios
-from .task_efficiency import write_task_efficiency_comparison
-
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -25,17 +21,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--output-directory",
         type=Path,
-        default=_REPOSITORY_ROOT / "benchmarks" / "results" / "builtin-catalog",
+        default=Path.cwd() / "octobench-results" / "builtin-catalog",
     )
     parser.add_argument(
         "--comparison-output",
         type=Path,
-        default=(
-            _REPOSITORY_ROOT
-            / "benchmarks"
-            / "results"
-            / "noop-repeat-comparison-v1.json"
-        ),
+        default=Path.cwd()
+        / "octobench-results"
+        / "noop-repeat-comparison-v1.json",
     )
     parser.add_argument(
         "--comparison-only",
@@ -43,6 +36,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Write only the deterministic task-efficiency comparison.",
     )
     args = parser.parse_args(argv)
+
+    # Keep --help import-pure for an installed wheel; runtime modules may load
+    # optional application profiles only after argument parsing succeeds.
+    from .harness import BenchmarkHarness
+    from .schema import load_scenarios
+    from .task_efficiency import write_task_efficiency_comparison
 
     written: list[Path] = []
     if not args.comparison_only:

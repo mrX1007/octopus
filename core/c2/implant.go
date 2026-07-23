@@ -32,6 +32,8 @@ var (
 	EncBlob = "" // Base64 AES-GCM encrypted JSON
 	KP1     = "" // Key part 1 (hex)
 	KP2     = "" // Key part 2 (hex)
+	// Injected by builder.py from core/c2/protocol.py.
+	SessionKDFContext = ""
 
 	BeaconInt = 60 // seconds
 	Jitter    = 20 // percent
@@ -81,6 +83,9 @@ func generateX25519KeyPair() ([]byte, []byte, error) {
 
 // deriveSharedKey derives a shared secret using X25519 + HKDF-SHA256
 func deriveSharedKey(priv []byte, peerPub []byte) ([]byte, error) {
+	if SessionKDFContext == "" {
+		return nil, fmt.Errorf("missing session KDF context")
+	}
 	var privArr, pubArr [32]byte
 	copy(privArr[:], priv)
 	copy(pubArr[:], peerPub)
@@ -89,7 +94,7 @@ func deriveSharedKey(priv []byte, peerPub []byte) ([]byte, error) {
 	curve25519.ScalarMult(&rawShared, &privArr, &pubArr)
 
 	// HKDF-SHA256 derivation — matches Python daemon's crypto_engine.py
-	hkdfReader := hkdf.New(sha256.New, rawShared[:], nil, []byte("octopus-session-v10"))
+	hkdfReader := hkdf.New(sha256.New, rawShared[:], nil, []byte(SessionKDFContext))
 	sessionKey := make([]byte, 32)
 	if _, err := io.ReadFull(hkdfReader, sessionKey); err != nil {
 		return nil, err

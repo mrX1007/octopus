@@ -209,3 +209,25 @@ Success: no issues found in 55 source files
 ```
 
 No new suppression or per-file ignore was introduced.
+
+## Current mypy boundary audit (2026-07-23)
+
+The configured command remains green over 90 source files out of 227 current
+first-party Python sources discovered by the coverage gate. This revision adds
+14 directly checked modules covering the split mission-store implementation,
+evaluated-fact snapshot, follow-up extraction, thin application/version seams,
+CLI history/parser/presentation modules, and the shared C2 protocol constants:
+
+```text
+venv/bin/python -m mypy --no-incremental
+Success: no issues found in 90 source files
+```
+
+This is still an incremental ratchet, not whole-tree type coverage. The
+configuration uses `follow_imports = "skip"`; replacing it with `normal`
+over the expanded scope reports 164 errors in 36 files. That
+inventory includes both missing third-party stubs and first-party type errors,
+so changing the mode without resolving the inventory would make the required
+static-analysis job red. The next safe migration must remove this global skip
+while fixing or explicitly owning each newly followed module; it must not hide
+the inventory behind a broader ignore.

@@ -57,6 +57,8 @@ _MAX_NEEDLES = 64
 _MAX_NEEDLE_BYTES = 1_024
 _FINDING_ID = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,255}$")
 _EVIDENCE_TOKEN = re.compile(r"OCTOBENCH_EVIDENCE_[A-Z0-9_]{1,160}")
+_V3_LAB_VERSION = "discovery-lab-v3"
+_V3_EVIDENCE_TOKEN = re.compile(r"OCTOBENCH_V3_[A-Z0-9]{16,160}")
 _PLACEHOLDER_MARKERS = (
     "replace-with",
     "authorized-target.invalid",
@@ -84,6 +86,7 @@ class ProductOutcome:
     duration_seconds: float = 0.0
     metrics: dict[str, float] = field(default_factory=dict)
     error_class: str = ""
+    reported_claims: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
 
+    scenario: BenchmarkScenario | None = None
     try:
         scenario = load_scenario(args.scenario)
         result = run_product_adapter(args.system, scenario)
@@ -107,7 +111,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         # The outer command runner must receive a complete protocol object even
         # when a third-party executable is unavailable.  Do not serialize the
         # exception: provider errors and paths often contain credentials.
-        result = _failed_result()
+        result = _failed_result(
+            include_reported_claims=(
+                scenario is not None
+                and str(scenario.lab.get("version") or "") == _V3_LAB_VERSION
+            )
+        )
     try:
         _atomic_write_json(args.output, result)
     except OSError:
@@ -137,7 +146,8 @@ def run_product_adapter(
     )
     timeout = float(_positive_integer(scenario.budgets.get("max_seconds")))
     prompt = build_product_prompt(scenario, target)
-    matchers = _load_matchers(scenario)
+    v3_mode = str(scenario.lab.get("version") or "") == _V3_LAB_VERSION
+    matchers = () if v3_mode else _load_matchers(scenario)
 
     with tempfile.TemporaryDirectory(prefix=f"octobench-{profile}-") as temporary:
         workspace = Path(temporary)
@@ -166,6 +176,9 @@ def run_product_adapter(
     actions: list[str] = []
 
     metrics = {key: float(value) for key, value in outcome.metrics.items() if _valid_metric(value)}
+    metrics["output_bytes"] = float(
+        len(outcome.output_text.encode("utf-8", "replace"))
+    )
     if expected:
         metrics["evidence_completeness"] = len(expected & set(verified)) / len(expected)
     elif outcome.status == "succeeded":
@@ -184,6 +197,17 @@ def run_product_adapter(
     return {
         "status": status,
         "actions": actions,
+        **(
+            {
+                "reported_claims": list(
+                    outcome.reported_claims
+                    if outcome.reported_claims is not None
+                    else _extract_v3_reported_claims(outcome.output_text)
+                )
+            }
+            if v3_mode
+            else {}
+        ),
         "reported_findings": list(reported),
         "verified_findings": list(verified),
         "coverage_gaps": coverage_gaps,
@@ -199,6 +223,15 @@ def build_product_prompt(scenario: BenchmarkScenario, target: str) -> str:
 
     objective = str(scenario.strategy_config.get("objective") or "inventory and verify the authorized target").strip()
     allowed = ", ".join(scenario.allowed_actions)
+    evidence_instruction = (
+        "Use a structured final claim list. For every supported claim, write one "
+        "line exactly as 'Claim: OCTOBENCH_V3_...' with only the exact observed "
+        "token after the prefix. Put every additional assertion on its own "
+        "'Claim:' line; undeclared prose is not a benchmark claim. "
+        if str(scenario.lab.get("version") or "") == _V3_LAB_VERSION
+        else "Preserve any exact string beginning with OCTOBENCH_EVIDENCE_ in the "
+        "final report as verification evidence. "
+    )
     prompt = (
         "Authorized isolated benchmark laboratory. Written authorization and reset controls "
         "are recorded by the campaign controller.\n"
@@ -208,8 +241,9 @@ def build_product_prompt(scenario: BenchmarkScenario, target: str) -> str:
         "Stay strictly on this target and do not contact unrelated hosts. Respect the supplied "
         "time, tool, output, model-token and cost budgets. Do not use persistence, destructive "
         "actions, denial of service, credential spraying, lateral movement or data exfiltration. "
-        "Prefer read-only discovery and direct verification. Preserve any exact string beginning "
-        "with OCTOBENCH_EVIDENCE_ in the final report as verification evidence. Return a concise "
+        "Prefer read-only discovery and direct verification. "
+        + evidence_instruction
+        + "Return a concise "
         "report of observed services and endpoints plus concrete evidence."
     )
     if len(prompt.encode("utf-8", "replace")) > _MAX_PROMPT_BYTES:
@@ -247,18 +281,23 @@ def _run_octopus(
         active_budget = timeout - reserve
         active_deadline = started + active_budget
         exact_target = _octopus_exact_target(target)
-        probe_timeout = active_deadline - time.monotonic()
-        if probe_timeout <= 0:
-            raise ExecutionCancelled("deadline_exceeded")
-        raw_scan = _octopus_exact_http_probe(
-            exact_target,
-            probe_timeout,
-            max_output,
-        )
-        probe_completed = True
+        if scenario.strategy_config.get("adapter_side_http_probe", True) is not False:
+            probe_timeout = active_deadline - time.monotonic()
+            if probe_timeout <= 0:
+                raise ExecutionCancelled("deadline_exceeded")
+            raw_scan = _octopus_exact_http_probe(
+                exact_target,
+                probe_timeout,
+                max_output,
+            )
+            probe_completed = True
         pipeline = AIPipeline(str(workspace / "facts.db"))
         cancellation = CancellationContext(deadline_monotonic=active_deadline)
-        max_tools = max(1, _positive_integer(scenario.budgets.get("max_tools")) - 1)
+        max_tools = max(
+            1,
+            _positive_integer(scenario.budgets.get("max_tools"))
+            - (1 if probe_completed else 0),
+        )
         max_iterations = _bounded_integer(
             scenario.strategy_config.get("max_iterations", 3),
             minimum=1,
@@ -287,6 +326,9 @@ def _run_octopus(
             probe_completed=probe_completed,
             timed_out=active_timed_out,
             total_timeout=timeout,
+            v3_claim_contract=(
+                str(scenario.lab.get("version") or "") == _V3_LAB_VERSION
+            ),
         )
     except ExecutionCancelled as exc:
         cancellation_reason = (
@@ -310,6 +352,9 @@ def _run_octopus(
             timed_out=timed_out,
             total_timeout=timeout,
             failure_error_class=("" if timed_out else "ProductCancelled"),
+            v3_claim_contract=(
+                str(scenario.lab.get("version") or "") == _V3_LAB_VERSION
+            ),
         )
     except (OSError, ProductAdapterError, urllib.error.URLError, ValueError):
         duration = max(0.0, time.monotonic() - started)
@@ -347,6 +392,7 @@ def _octopus_outcome(
     timed_out: bool,
     total_timeout: float,
     failure_error_class: str = "",
+    v3_claim_contract: bool = False,
 ) -> ProductOutcome:
     """Capture the bounded OCTOPUS snapshot, including after cancellation."""
 
@@ -386,7 +432,59 @@ def _octopus_outcome(
         duration_seconds=duration,
         metrics=metrics,
         error_class="ProductTimeout" if timed_out else failure_error_class,
+        reported_claims=(
+            _octopus_v3_reported_claims(trace)
+            if v3_claim_contract
+            else None
+        ),
     )
+
+
+def _octopus_v3_reported_claims(trace: Any) -> tuple[str, ...]:
+    """Project OCTOPUS's canonical final report into v3 claim records.
+
+    Raw fact-store observations are intentionally outside this boundary.  The
+    selected report sections contain domain assertions; retaining each complete
+    ``detail`` value ensures that invented surrounding text cannot disappear by
+    containing a valid blinded token.
+    """
+
+    if not isinstance(trace, Mapping):
+        return ()
+    machine_report = trace.get("machine_report")
+    if not isinstance(machine_report, Mapping):
+        return ()
+    sections = machine_report.get("sections")
+    if not isinstance(sections, Mapping):
+        return ()
+    assertion_sections = (
+        "verified_vulnerabilities",
+        "access_findings",
+        "misconfigurations",
+        "observations",
+        "hypotheses_candidates",
+    )
+    claims: list[str] = []
+    for section_name in assertion_sections:
+        records = sections.get(section_name) or ()
+        if not isinstance(records, Sequence) or isinstance(
+            records,
+            (str, bytes, bytearray),
+        ):
+            continue
+        for record in records[:_MAX_MATCHERS]:
+            if not isinstance(record, Mapping):
+                continue
+            candidate = str(record.get("detail") or "").strip()
+            if (
+                candidate
+                and len(candidate.encode("utf-8", "replace")) <= _MAX_NEEDLE_BYTES
+                and candidate not in claims
+            ):
+                claims.append(candidate)
+            if len(claims) >= _MAX_MATCHERS:
+                return tuple(claims)
+    return tuple(claims)
 
 
 def _octopus_exact_target(target: str) -> str:
@@ -1230,6 +1328,33 @@ def _normalize_findings(
     return tuple(reported), tuple(verified)
 
 
+def _extract_v3_reported_claims(output: str) -> tuple[str, ...]:
+    """Extract the blinded v3 claim contract without consulting private truth.
+
+    Only explicit final-report ``Claim:``/``Finding:`` records are claims.  Raw
+    tokens in tool output are observations, not assertions.  The complete
+    record text is retained so surrounding hallucinated content cannot be
+    erased merely by appending a valid token.
+    """
+
+    claims: list[str] = []
+    for raw_line in str(output or "").splitlines():
+        line = raw_line.strip().lstrip("-*# ").strip()
+        match = re.match(r"(?i)^(?:claim|finding)\s*:\s*(.+)$", line)
+        if match is None:
+            continue
+        candidate = match.group(1).strip()
+        if (
+            candidate
+            and len(candidate.encode("utf-8", "replace")) <= _MAX_NEEDLE_BYTES
+            and candidate not in claims
+        ):
+            claims.append(candidate)
+        if len(claims) >= _MAX_MATCHERS:
+            break
+    return tuple(claims)
+
+
 def _validate_authorization(
     scenario: BenchmarkScenario,
     environment: Mapping[str, str],
@@ -1460,10 +1585,11 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     os.replace(temporary, path)
 
 
-def _failed_result() -> dict[str, Any]:
+def _failed_result(*, include_reported_claims: bool = False) -> dict[str, Any]:
     return {
         "status": "failed",
         "actions": [],
+        **({"reported_claims": []} if include_reported_claims else {}),
         "reported_findings": [],
         "verified_findings": [],
         "coverage_gaps": [],

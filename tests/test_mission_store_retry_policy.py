@@ -70,18 +70,27 @@ def test_task_metadata_and_retry_policy_survive_reopen(tmp_path):
     assert hydrated.retryable_error_classes == policy.retryable_error_classes
     assert hydrated.last_error_class is None
 
-    with pytest.raises(MissionStoreError, match="scope conflicts"):
+    second_scope = store.register_task(
+        mission.mission_id,
+        "DiscoveryAgent",
+        "service_discovery",
+        scope="target:10.0.0.6",
+    )
+    assert second_scope.task_id != registered.task_id
+    with pytest.raises(MissionStoreError, match="capability conflicts"):
         store.register_task(
             mission.mission_id,
             "DiscoveryAgent",
             "service_discovery",
-            scope="target:10.0.0.6",
+            scope="target:10.0.0.5",
+            capability="conflicting.capability",
         )
     with pytest.raises(MissionStoreError, match="retry policy conflicts"):
         store.register_task(
             mission.mission_id,
             "DiscoveryAgent",
             "service_discovery",
+            scope="target:10.0.0.5",
             retry_policy=TaskRetryPolicy(
                 retry_budget=1,
                 retryable_error_classes=(RetryErrorClass.TIMEOUT,),
@@ -278,4 +287,3 @@ def test_v1_schema_is_migrated_additively_before_use(tmp_path):
 )
 def test_retry_policy_is_hashable_and_normalized(policy):
     assert hash(policy)
-

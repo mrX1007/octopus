@@ -29,6 +29,8 @@ import textwrap
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
+from core.c2.protocol import C2_SESSION_KDF_CONTEXT
+
 logger = logging.getLogger("octopus.c2.implants.python")
 
 
@@ -279,7 +281,7 @@ def generate_python_implant(
                 algorithm=hashes.SHA256(),
                 length=32,
                 salt=None,
-                info=b"octopus-session-v10",
+                info={C2_SESSION_KDF_CONTEXT!r},
             ).derive(raw_shared)
             # Wipe raw shared key
             raw_mut = bytearray(raw_shared)

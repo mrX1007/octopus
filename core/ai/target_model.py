@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import urlparse, urlunparse
 
 from core.ai.asset_graph import AssetGraph
+from core.ai.evaluated_facts import fact_is_decision_usable
 from core.ai.risk_analysis import RiskAnalyzer
 from core.ai.surface_state import SurfaceState
 from core.knowledge.identity import (
@@ -46,7 +47,7 @@ class TargetModel:
         self.facts = [
             fact
             for fact in (facts or [])
-            if str(fact.get("assessment_status") or "observed") != "contradicted"
+            if fact_is_decision_usable(fact)
         ]
 
     @classmethod

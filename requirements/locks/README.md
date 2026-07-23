@@ -5,9 +5,10 @@ The checked-in `manifest.json` is resolved: every managed lock has a recorded
 digest and every requirement has exact artifact hashes. No placeholder
 packages or fake hashes are committed.
 
-The matrix contains 24 lock files: the `runtime`, `test`, `mysql`,
-`external-tools`, `platform`, and `full` profiles for CPython 3.9, 3.10, 3.11,
-and 3.12 on `x86_64-manylinux_2_34`.
+The matrix contains 36 lock files: the `runtime`, `c2`, `reporting`,
+`osint-browser`, `test`, `mysql`, `external-tools`, `platform`, and `full`
+profiles for CPython 3.9, 3.10, 3.11, and 3.12 on
+`x86_64-manylinux_2_34`.
 
 ## Commands
 
@@ -26,7 +27,7 @@ python scripts/lock_requirements.py validate
   bytes without modifying the repository. It therefore also needs index
   access.
 - `validate` is offline. It verifies the fixed epoch, current input hashes,
-  exact 24-file matrix, manifest metadata, lock digests, exact pins, and hashes.
+  exact 36-file matrix, manifest metadata, lock digests, exact pins, and hashes.
 
 Resolution uses the fixed cutoff in `EPOCH`, the first-index strategy, the
 credential-free `https://pypi.org/simple` default index, and
@@ -34,7 +35,7 @@ credential-free `https://pypi.org/simple` default index, and
 configuration, accepts no index option from the lock CLI, and does not emit an
 index URL into lock files. `--emit-build-options` persists the binary-default
 policy inside every generated lock. The current `shodan==1.31.0` distribution
-has no usable wheel, so only the `external-tools` and `full` profiles carry the
+has no usable wheel, so only the `osint-browser` and `full` profiles carry the
 explicit `--no-binary shodan` exception. Offline validation requires the exact
 per-profile allowlist and rejects every other `--no-binary`, index, link, or
 installer directive.
@@ -45,8 +46,9 @@ default is `deny` and whose allowlist is explicit for every profile.
 The Shodan exception executes a trusted source build during installation. Run
 that profile only in an isolated builder with pinned build tooling, no package
 credentials in the environment, restricted egress, and no reuse of build
-artifacts until their provenance is recorded. Core `runtime`, `test`, `mysql`,
-and `platform` profiles remain strictly binary-only.
+artifacts until their provenance is recorded. Core `runtime`, `c2`,
+`reporting`, `test`, `mysql`, `external-tools`, and `platform` profiles remain
+strictly binary-only.
 Requirement inputs may not contain installer options, local/VCS paths, or
 direct URL references. Resolver calls use an argv list and never a shell.
 

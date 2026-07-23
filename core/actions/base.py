@@ -24,6 +24,7 @@ from .models import (
     ActionDescriptor,
     ActionRequest,
     ActionVerificationResult,
+    ActiveRiskClass,
     ApplicabilityResult,
 )
 
@@ -35,6 +36,20 @@ class ActionAdapter(ABC):
     """Wrap one provider without changing that provider's public API."""
 
     descriptor: ActionDescriptor
+
+    def active_risk_class(
+        self,
+        request: ActionRequest,
+        phase: str = "execute",
+    ) -> ActiveRiskClass:
+        """Classify risk without granting authority or invoking a provider."""
+
+        del request, phase
+        return (
+            ActiveRiskClass.ACTIVE
+            if self.descriptor.requirements.active
+            else ActiveRiskClass.READ_ONLY
+        )
 
     def applicability(self, request: ActionRequest) -> ApplicabilityResult:
         requirements = self.descriptor.requirements

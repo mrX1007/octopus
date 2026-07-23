@@ -152,7 +152,7 @@ unanswered questions instead of repeating tools blindly.
 
 ### Durable Mission Lifecycle
 
-`core/ai/mission_store.py` owns mission lifecycle schema `1.2` in the same
+`core/ai/mission_store.py` owns mission lifecycle schema `1.4` in the same
 SQLite file as `FactStore`; facts remain the evidence authority. A durable task
 stores its dependencies, task-level scope, capability, status and typed retry
 policy. Attempts retain terminal outcomes plus bounded fact/execution links, so
@@ -210,8 +210,8 @@ from positive verification and final `ExecutionPolicy` authorization.
 
 | Area | Files | Purpose |
 | --- | --- | --- |
-| CLI | `octopus.py`, `core/cli/` | Main console, scan history, Shodan flow, reports, C2 menu |
-| AI pipeline | `core/ai/pipeline.py`, `core/ai/pipeline_*.py`, `core/ai/scan_loop.py`, `core/ai/runtime.py` | Public facade, decomposed mission/planning/replay/observability seams, scan lifecycle and canonical runtime I/O boundary |
+| CLI | `core/application.py`, `core/cli/main.py`, `core/cli/application.py`, `octopus.py` | Installed entry point, explicit parser/lifecycle, console workflows, and the thin legacy import/executable facade |
+| AI pipeline | `core/ai/pipeline.py`, `core/ai/pipeline_*.py`, `core/ai/scan_loop.py`, `core/ai/runtime.py` | Public facade, decomposed mission/planning/replay/observability/follow-up seams, scan lifecycle and canonical runtime I/O boundary |
 | Mission lifecycle | `core/ai/mission_store.py`, `core/ai/pipeline_mission.py`, `core/ai/scan_loop.py` | Durable scope/capability, attempts, typed retries, crash recovery and bounded state-change replans |
 | Director / Planner | `core/ai/director.py`, `core/ai/planner.py` | Local LLM goal and plan generation |
 | Task scoring | `core/ai/task_scoring.py`, `core/ai/pipeline_planning.py` | Configurable eight-signal ranking and trace explanations |
@@ -228,6 +228,16 @@ from positive verification and final `ExecutionPolicy` authorization.
 | Benchmarks | `core/benchmarks/`, `benchmarks/scenarios/`, `benchmarks/results/`, `benchmarks/competitors/` | Built-in hermetic replay plus a separate manifest-driven, authorized competitor matrix and published comparison data |
 | C2 | `core/c2/` | Optional daemon, implants, operators and channels |
 | OSINT/browser | `shodan_module.py`, `core/osint/shardbrowser.py` | Shodan and ShardBrowser integrations |
+
+Current physical line-count snapshot (2026-07-23):
+
+| File | Lines | Status |
+| --- | ---: | --- |
+| `core/ai/pipeline.py` | 2,374 | Below the enforced 2,400-line ceiling |
+| `core/ai/evidence.py` | 2,368 | Includes the 1,308-line `RegexParser` compatibility fallback |
+| `core/tools/post_tools.py` | 2,169 | Further wrapper decomposition remains |
+| `core/cli/application.py` | 2,234 | Workflow implementation behind the thin CLI entry points |
+| `core/benchmarks/competitors/launch.py` | 2,077 | Versioned live-campaign launcher |
 
 ## Tooling Overview
 
@@ -362,7 +372,7 @@ Default configuration expects:
 
 ```sql
 CREATE DATABASE octopus CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER 'octopus'@'localhost' IDENTIFIED BY '123';
+CREATE USER 'octopus'@'localhost' IDENTIFIED BY '<strong-random-password>';
 GRANT ALL PRIVILEGES ON octopus.* TO 'octopus'@'localhost';
 FLUSH PRIVILEGES;
 ```
@@ -372,7 +382,7 @@ Environment overrides:
 ```bash
 export OCTOPUS_DB_HOST=localhost
 export OCTOPUS_DB_USER=octopus
-export OCTOPUS_DB_PASS=123
+export OCTOPUS_DB_PASS='<the-same-strong-random-password>'
 export OCTOPUS_DB_NAME=octopus
 ```
 
@@ -413,8 +423,14 @@ export OCTOPUS_C2_PSK=...
 Start the console:
 
 ```bash
+octopus --help                    # installed console script
+octopus                           # installed console script
 python3 octopus.py
 ```
+
+`octopus.py` is the checkout-compatible executable and legacy import facade;
+the installed `octopus` command dispatches through `core.application` and
+`core.cli.main`.
 
 Supervisor commands:
 
@@ -577,9 +593,16 @@ launcher provide two full-system black-box profiles:
 - `core`: OCTOPUS and Strix 1.1.0;
 - `extended`: `core` plus PentAGI 2.1.0.
 
-The repository now includes a complete, checksum-verified
+The latest checked-in live result is the complete, checksum-verified
+[`linux-blackbox-small-model-v2-20260721t202413z`](benchmarks/competitors/results/linux-blackbox-small-model-v2-20260721t202413z/comparison.md)
+bundle: 48 executions across four read-only surfaces. OCTOPUS recorded 24
+succeeded process outcomes; Strix 1.1.0 recorded 12 succeeded, five failed and
+seven timed out at the 900-second cap. Schema 1.1 records process outcomes, not
+independent v3 task completion, and the bundle declares no winner.
+
+The earlier complete, checksum-verified
 [`linux-blackbox-small-model-v1-20260721t134205z`](benchmarks/competitors/results/linux-blackbox-small-model-v1-20260721t134205z/comparison.md)
-live result. In this single authorized altered-Qwen-9B stress scenario,
+bundle is a single authorized altered-Qwen-9B stress scenario. In that run,
 OCTOPUS completed 6/6 runs; Strix completed 1/6, timed out twice at the
 predeclared 600-second cap and exited with code 1 three times. The bundle is
 published as `completed_with_failures`, not as a statistical or
@@ -589,9 +612,14 @@ vendor-representative ranking; successful-run Strix quality metrics have
 ![Published OCTOPUS and Strix terminal outcomes with successful-run quality ranges](docs/benchmarks/linux-blackbox-small-model-v1-20260721t134205z.svg)
 
 This checked-in SVG is derived from the immutable v1 bundle and is
-non-normative. New benchmark bundles include their own deterministic
-`comparison.svg`, embedded by `comparison.md`, so the graph renders directly
-on GitHub beside the checksummed JSON and full aggregates.
+non-normative. Schema-1.1 bundles include a deterministic `comparison.svg`
+embedded by `comparison.md`. Benchmark v3 instead generates and checksums
+`comparison.svg` directly from its frozen plan and statistics.
+
+The runnable `linux-blackbox-small-model-v3` definition has no checked-in
+result yet. It generates 12 blinded fixture families for the `core` profile
+and schedules 288 product executions (`12 families × 2 systems × 12 paired
+repetitions`). Do not cite the definition as a performance result.
 
 PentestGPT 1.0.0 remains cataloged only as a separate CTF/flag-capture
 candidate. Its upstream non-interactive CLI hardcodes a CTF task and retries a
@@ -641,10 +669,11 @@ missing or differs from `YES`.
 The checked-in `STRIX_IMAGE` value is an immutable Linux amd64 digest; do not
 replace it with a mutable tag or another digest.
 
-For the calibrated `linux-blackbox-small-model-v1` and multi-surface
-`linux-blackbox-small-model-v2` definitions, use this exact
-private env configuration. The two acknowledgement values below are valid only
-after you have personally confirmed authorization and host isolation:
+For the calibrated `linux-blackbox-small-model-v1`, multi-surface
+`linux-blackbox-small-model-v2`, and generated blinded
+`linux-blackbox-small-model-v3` definitions, use this exact private env
+configuration. The two acknowledgement values below are valid only after you
+have personally confirmed authorization and host isolation:
 
 ```dotenv
 OCTOBENCH_ACK_AUTHORIZED=YES
@@ -666,8 +695,8 @@ LLM_API_BASE=http://127.0.0.1:11434
 LLM_API_KEY=
 ```
 
-Both small-model definitions are intentionally separate altered-model stress
-profiles. They require the exact tag
+All three small-model definitions are intentionally separate altered-model
+stress profiles. They require the exact tag
 `huihui_ai/qwen3.5-abliterated:9b`, server version `0.18.3`, context `65536`,
 flash attention `1`, and KV cache type `q8_0`; the live launcher also pins the
 attested model digest and fails closed if any value differs.
@@ -813,6 +842,14 @@ five to six hours; the absolute product-time ceiling is 12 hours. Full
 methodology and log-handling are in
 [`benchmarks/competitors/README.md`](benchmarks/competitors/README.md).
 
+`linux-blackbox-small-model-v3` retains the pinned runtime and 900-second
+per-run cap, but uses the generated 12-family schema-2.0 contract and 12 paired
+repetitions per system/scenario. Its sequential product-time ceiling is 72
+hours before lifecycle/publication overhead. It additionally requires a
+private 32–64-character hexadecimal `OCTOBENCH_V3_BASE_FIXTURE_SEED`; use the
+[v3 campaign runbook](benchmarks/competitors/campaigns/linux-blackbox-small-model-v3/README.md)
+and a fresh campaign ID.
+
 ```bash
 git status --short
 CAMPAIGN_ID="linux-blackbox-small-model-v2-$(date -u +%Y%m%dt%H%M%Sz)"
@@ -850,9 +887,9 @@ During execution, secret-free JSON progress events are written to stderr after
 every run while stdout remains reserved for the final bundle path.
 
 Initial clones, environments and images can consume multiple gigabytes and
-take tens of minutes. The counterbalanced launcher uses six repetitions for
-both profiles per system/scenario pair; a live campaign can take tens
-of minutes to hours and incur model, cloud or tool charges. Wall time and captured output
+take tens of minutes. The v1/v2 definitions use six repetitions per
+system/scenario pair; the full v3 definition uses 12. A live campaign can take
+tens of minutes to days and incur model, cloud or tool charges. Wall time and captured output
 are hard-bounded, but vendor CLIs do not expose one uniform enforceable
 token/tool/cost cutoff. Strix 1.1.0 also receives its native
 `--max-budget-usd` limit; treat the shared declared values as conformance targets,
@@ -895,6 +932,15 @@ Static and dependency checks:
 ./venv/bin/python -m pip check
 ```
 
+CLI and documentation contract checks:
+
+```bash
+./venv/bin/python octopus.py --help
+./venv/bin/python -m core.benchmarks.competitors.launch --help
+./venv/bin/python -m core.benchmarks.competitors --help
+./venv/bin/python scripts/quality/docs_gate.py --root .
+```
+
 Compile check:
 
 ```bash
@@ -918,31 +964,33 @@ print("unknown:", report["unknown"])'
 
 ```text
 .
-├── octopus.py              # main CLI
+├── octopus.py              # thin executable and legacy import facade
 ├── config.yaml             # primary runtime configuration
 ├── config.py               # config loader and environment overrides
 ├── db.py                   # MariaDB schema and history API
 ├── tools.py                # compatibility exports for registered tools
-├── memory.py               # optional ChromaDB semantic memory
+├── search.py               # legacy search compatibility; retirement is audited
+├── memory.py               # legacy optional vector-memory compatibility
 ├── shodan_module.py        # Shodan discovery and persistence
 ├── msf.py                  # Metasploit wrapper
 ├── export.py               # PDF/report export
 ├── core/
+│   ├── application.py      # installed console-script composition entry point
 │   ├── actions/            # unified provider/action lifecycle adapters
 │   ├── ai/                 # pipeline, missions, facts, assessment, LLM, parsers
 │   ├── benchmarks/         # schema, built-in replay runner, CLI and aggregation
 │   ├── c2/                 # optional C2 daemon, implants, operators
-│   ├── cli/                # shared CLI rendering helpers
+│   ├── cli/                # parser, lifecycle, workflows, history and presentation
 │   ├── exploits/           # exploit selector and intelligence mapper
 │   ├── killchain/          # post-access stages and AD modules
 │   ├── knowledge/          # SQLite knowledge graph
-│   ├── observability/      # audit and metrics
-│   ├── opsec/              # artifact and transport helpers
+│   ├── observability/      # legacy compatibility; retirement is audited
+│   ├── opsec/              # artifact helpers; network.py is legacy compatibility
 │   ├── osint/              # ShardBrowser integration
 │   ├── plugins/            # plugin SDK and loader
-│   ├── recon/              # async recon engine
+│   ├── recon/              # legacy recon compatibility; retirement is audited
 │   ├── tools/              # @tool implementations
-│   └── transport/          # transport profiles and policies
+│   └── transport/          # legacy compatibility; retirement is audited
 ├── modules/                # class-based plugins
 ├── benchmarks/scenarios/   # versioned replay benchmark catalog
 ├── benchmarks/results/     # published deterministic replay comparison data
@@ -953,6 +1001,10 @@ print("unknown:", report["unknown"])'
 ├── data/                   # local DBs and runtime state
 └── tests/                  # regression tests and replay fixtures
 ```
+
+Legacy labels above are inventory, not deletion approval. Their external-usage
+preconditions and remaining callers are tracked in
+[`docs/deprecations.yaml`](docs/deprecations.yaml).
 
 ## Extending OCTOPUS
 

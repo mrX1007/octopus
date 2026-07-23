@@ -37,6 +37,8 @@ import time
 from datetime import datetime, timedelta
 from typing import Callable, Optional
 
+from core.version import APPLICATION_VERSION
+
 logger = logging.getLogger("octopus.supervisor")
 
 # ─── Configuration ───────────────────────────────────────
@@ -252,7 +254,7 @@ class Supervisor:
         pid_data = {
             "pid": self._pid,
             "started_at": datetime.now().isoformat(),
-            "version": "11.0",
+            "version": APPLICATION_VERSION,
             "hostname": os.uname().nodename,
         }
         _atomic_write_json(PID_FILE, pid_data)

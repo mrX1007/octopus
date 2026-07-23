@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Regression tests for legacy UI result adaptation."""
 
+import pytest
+
+pytestmark = pytest.mark.contract
+
 
 def _adapt_state_to_result():
     """Import octopus adapter without optional CLI/database dependencies."""

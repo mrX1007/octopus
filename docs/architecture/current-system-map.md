@@ -22,33 +22,34 @@ actually run in production.
 
 ## Top-level lifecycle
 
-The interactive application enters through `octopus.py:2444-2527`. Startup
-configures logging/readline, constructs and starts the supervisor, registers a
-shutdown hook, runs preflight, starts C2 automatically, discovers isolated
-plugins, and then enters the menu (`octopus.py:2470-2527`). C2 auto-start is
-therefore current intended behavior, not an inferred future feature
-(`octopus.py:2508-2509`).
+`octopus.py` is now a thin executable and compatibility import facade. Argument
+dispatch is owned by `core.cli.main.main()`; `create_parser()` is pure and
+`create_app()` is composition-only. `OctopusCLIApplication.run()` explicitly
+owns logging/readline, supervisor and signal lifecycle, preflight, automatic C2
+startup, plugin discovery, the interactive menu, and shutdown. Importing the
+CLI modules performs none of those actions. See
+`docs/architecture/cli-lifecycle.md`.
 
 There are three principal scan paths:
 
 1. A direct scan creates a MariaDB session, runs reconnaissance, constructs
    `AIPipeline`, calls `run_scan()`, and adapts/saves the result
-   (`octopus.py:573-621`). This path marks the session complete before all
-   result rows are saved (`octopus.py:618-621`).
+   (`core.cli.application._new_scan_direct`). This path marks the session
+   complete before all result rows are saved.
 2. Shodan parallel mode confines worker threads to reconnaissance, then creates
    sessions and runs each `AIPipeline` on the main thread
-   (`octopus.py:769-890`). This path saves results before marking the session
-   complete (`octopus.py:876-879`).
+   (`core.cli.application._run_shodan_parallel_scans`). This path saves results
+   before marking the session complete.
 3. Resume reads a JSON checkpoint, optionally refreshes reconnaissance or
    rebuilds input from MariaDB, constructs a new `AIPipeline`, and removes the
-   checkpoint after success (`octopus.py:1242-1351`). It also marks the session
-   complete before `_save_and_show_results()` finishes
-   (`octopus.py:1341-1343`).
+   checkpoint after success (`core.cli.application.resume_scan`). It also marks
+   the session complete before `_save_and_show_results()` finishes.
 
 The central runtime flow currently looks like this:
 
 ```text
-octopus.py
+octopus.py -> core.cli.main
+  -> core.cli.application workflows
   -> AIPipeline.run_scan()
      -> ScanLifecycle
      -> deterministic raw-output parsing -> FactStore
@@ -58,21 +59,25 @@ octopus.py
      -> task agents
      -> PipelineRuntime.decide()
      -> PipelineRuntime.execute()
-     -> shared OutputParser -> FactStore + FactAssessmentStore
+     -> PipelineRuntime.complete_execution()
+        -> shared OutputParser -> FactStore + FactAssessmentStore
      -> PipelineObservabilityMixin -> outcomes/trace/retry
      -> StateResolver + report/result adaptation
   -> MariaDB row-by-row persistence -> export/trace files
 ```
 
 `PipelineRuntime` is instantiated exactly once per `AIPipeline` in production.
-Its declared I/O ownership is real for decision
-and execution, but the main pipeline currently bypasses its parsing/ingestion
-methods after execution. That distinction is detailed next.
+Production and replay completion both cross `complete_execution()`; the main
+pipeline no longer parses or persists a completed execution independently.
+Initial reconnaissance, the visible pre-run state, and explicit manual seed
+compatibility remain separate ingestion paths, as detailed next.
 
-The 2,956-line baseline facade has been decomposed below a 2,400-line
-acceptance ceiling. `run_scan()` remains public; `ScanLifecycle` owns the loop,
-and mission, planning, replay, and observability behavior is composed from the
-four `Pipeline*Mixin` modules. See
+The 2,956-line baseline facade has been decomposed to 2,369 physical lines in
+the 2026-07-23 working tree, 31 lines below the 2,400-line acceptance ceiling
+enforced by `tests/test_pipeline_remaining_acceptance.py`. `run_scan()` remains
+public; `ScanLifecycle` owns the loop, and mission, planning, replay,
+observability, and follow-up behavior is composed from the bounded pipeline
+modules. See
 `docs/architecture/pipeline-decomposition.md` for the ownership and
 characterization contract.
 
@@ -90,20 +95,33 @@ single stateful I/O boundary (`core/ai/runtime.py:38-59`). Its constructor owns:
 - the injected command runner.
 
 Its methods cover scheduling, context binding, execution, parsing, redaction,
-and fact persistence (`core/ai/runtime.py:61-128`). `dispatch()` composes only
-decision and execution (`core/ai/runtime.py:86-94`); callers must invoke
-`ingest_output()` separately to parse and persist output
-(`core/ai/runtime.py:96-128`).
+and fact persistence. `dispatch()` remains a decide/execute convenience API.
+`complete_execution()` is the production completion ingress. It first reserves
+a durable, payload-bound completion claim, then parses output, persists base
+and derived facts, records the command result (which applies assessment
+transitions), refreshes the graph, and finally records attempt provenance.
+Conflicting reuse is rejected before parser/callback side effects. Exact replay
+loads the committed result and fact IDs, drains projection repair, and repairs
+only the attempt tail. Fact writes renew and validate claim ownership inside
+their own write transaction. The pipeline captures a keyed scan-generation
+fence before its running fact and provider dispatch; scan clearing rejects a
+live owner, advances that generation, and therefore rejects results from both
+expired claims and pre-claim dispatches. `ingest_output()` remains a smaller
+public compatibility facade. The canonical `complete_execution()` ingress
+fails closed when that bound fence is omitted. Completion callbacks are
+idempotent, at-least-once projection hooks rather than an exactly-once external
+transaction.
 
 ### Actual production ownership
 
 `AIPipeline.__init__()` constructs one `PipelineRuntime` and exposes aliases to
 its facts, missions, scheduler, parser, and reporter. No
 second `PipelineRuntime` is constructed in production. The actual task command
-path calls `runtime.decide()` and `runtime.execute()`, then invokes the shared
-parser and writes through runtime-owned FactStore/assessment components. The
-facade's `_store_fact()` helper retains orchestration-specific normalization;
-it does not create a second repository.
+path calls `runtime.decide()` and `runtime.execute()`, then hands completion to
+`runtime.complete_execution()`. The facade supplies pure normalization,
+derived-fact, check-result, and credential-sync adapters; it no longer writes
+parsed execution facts or command results itself. `_store_fact()` remains for
+the visible pre-run state and explicit manual seed compatibility paths.
 
 Consequently:
 
@@ -111,8 +129,9 @@ Consequently:
 |---|---|---|---|
 | Command authorization and scheduling | `PipelineRuntime` -> `CommandScheduler` | `AIPipeline._run_task_commands()` | decision trace/result later |
 | Context-bound command execution | `PipelineRuntime.execute()` | `AIPipeline._run_task_commands()` | no direct durable write |
-| Output parsing | `PipelineRuntime.parse_output()` | `AIPipeline` calls the shared `OutputParser` alias directly | no |
-| Fact ingestion | `PipelineRuntime.ingest_output()` | `AIPipeline._store_fact()` and explicit command-result writes | `FactStore` SQLite |
+| Output parsing | `PipelineRuntime.complete_execution()` / `parse_output()` | runtime completion ingress | no separate write |
+| Execution completion | `PipelineRuntime.complete_execution()` | production command path and replay | facts, command results, assessment outbox, graph projection, and attempt provenance |
+| Compatibility/manual fact ingestion | `PipelineRuntime.ingest_output()` / `AIPipeline._store_fact()` | public compatibility, pre-run state, and manual seed | `FactStore` SQLite |
 | Mission/task lifecycle | `MissionStore` owned by `PipelineRuntime` | `ScanLifecycle` and `AIPipeline` compatibility facades | mission/task/attempt tables plus incremental provenance in FactStore SQLite |
 | Decide/execute facade | `PipelineRuntime.dispatch()` | tests/contracts; not the production scan loop | none directly |
 
@@ -131,11 +150,11 @@ verification, and analysis, and finally resolves state.
 | Context construction | facts, resolved state, target, tool availability | in-memory `TargetModel`, `AssetGraph`, surface/risk context | none |
 | Mission decision | durable resume queue or bounded facts/context and LLM response | topologically ordered plan and decision trace; registered durable tasks | mission tables; trace/report writes later |
 | Task execution | plan, dependencies, tool availability, scheduler decision, `ExecutionContext` | subprocess/tool result, command-result record, facts, incremental attempt provenance, terminal attempt | fact and mission tables plus tool-owned stores/files |
-| Final adaptation | facts, hypotheses, resolved state | legacy result dict and evidence-backed reporting fields | MariaDB/files in `octopus.py` |
+| Final adaptation | facts, hypotheses, resolved state | legacy result dict and evidence-backed reporting fields | MariaDB/files via `core.cli.application` |
 
 The pipeline’s result adapter reads facts/hypotheses and builds legacy
 vulnerability/exploit structures before applying the reporting enricher and
-recursive redaction (`octopus.py:1354-1498`).
+recursive redaction (`core.cli.application._adapt_state_to_result`).
 
 ## Facts, parsing, state, and context
 
@@ -147,8 +166,9 @@ uses the default secret path, while a custom fact database gets a sibling
 `.secrets` database (`core/ai/fact_store.py:14-28`). Connections commit or roll
 back and always close through `_get_conn()` (`core/ai/fact_store.py:30-40`).
 
-Its schema contains canonical facts, hypotheses, fact observations, and command
-results (`core/ai/fact_store.py:42-115`). At initialization it also redacts
+Its schema contains canonical facts, hypotheses, fact observations, command
+results, completion claims, and an assessment-projection outbox. At
+initialization it also redacts
 legacy rows (`core/ai/fact_store.py:122-161`). `add_fact_with_status()` redacts
 input, finds a matching canonical fact, updates or inserts it, and records a
 separate observation (`core/ai/fact_store.py:197-256`). Reads return facts in a
@@ -164,9 +184,10 @@ evidence. See `docs/architecture/fact-assessment.md`.
 
 Current production fact writers are bounded to these paths:
 
-- `PipelineRuntime.ingest_output()` (`core/ai/runtime.py:96-116`);
-- `AIPipeline._store_fact()` and explicit pipeline-derived facts
-  (`core/ai/pipeline.py:1256-1292`, `core/ai/pipeline.py:2289-2305`);
+- `PipelineRuntime.complete_execution()` for production and replay output;
+- `PipelineRuntime.ingest_output()` for its public compatibility contract;
+- `AIPipeline._store_fact()` only for pre-run state and explicit manual seed
+  compatibility;
 - `EvidenceVerifier`, which uses `add_fact_with_status()` with a compatibility
   fallback (`core/ai/evidence.py:187-204`).
 
@@ -197,14 +218,17 @@ registry currently runs thirteen parser families sequentially
 
 ### State and read models
 
-`StateResolver` reads `FactStore`, excludes currently contradicted facts, and
-derives an in-memory state snapshot; it
-does not persist state (`core/ai/state_resolver.py:8-17`,
-`core/ai/state_resolver.py:21-147`). `ContextBuilder` reads that state and the
-effective facts, then constructs `TargetModel`, `AssetGraph`, `SurfaceState`, a
-fact-assessment summary, and the LLM
-context (`core/ai/context_builder.py:46-67`,
-`core/ai/context_builder.py:117-133`).
+`ContextBuilder` captures one immutable `EvaluatedFactSnapshot` and gives the
+same object to `StateResolver` and all context projections. Contradicted,
+stale, and degraded facts remain in snapshot history and assessment counts but
+are excluded from decision facts, so they cannot close current service/access
+stage gates. `TargetModel`, `AssetGraph`, `SurfaceState`, capability assessment,
+and the LLM context are constructed from that one decision view; the snapshot
+reference and bounded assessment-head metadata are included in context.
+FactStore constructs each batch from facts, observations, assessment
+heads/provenance, and execution outcomes in one SQLite read transaction and
+uses one captured freshness-evaluation time, preventing a concurrent writer
+from producing a mixed decision view.
 
 `TargetModel` is explicitly a normalized read model
 (`core/ai/target_model.py:13-19`). It derives services, endpoints, access,
@@ -360,7 +384,7 @@ Current callers are the registered plugin gateway
 (`core/tools/post_tools.py:1856-1879`), other explicit post-tool plugin
 integrations (`core/tools/post_tools.py:588-608`,
 `core/tools/post_tools.py:1309-1314`), startup discovery
-(`octopus.py:2511-2521`), and strategic availability summaries
+(`core.cli.main.OctopusCLIApplication._discover_extensions`), and strategic availability summaries
 (`core/ai/tool_registry.py:725-735`).
 
 The isolation boundary is process, environment, path validation, JSON, timeout,
@@ -426,7 +450,7 @@ retaining legacy fields and recursively redacts the result.
 events. It emits the machine report, decision metrics schema `1.0`, and
 human/JSON trace representations. `DecisionTraceStore` persists idempotent,
 retention-bounded schema `1.0` decision events in a separate SQLite store.
-`octopus.py` writes trace JSON and text below the configured log path.
+`core.cli.application` writes trace JSON and text below the configured log path.
 
 MariaDB exposes a typed `SessionReport` contract (`db.py:35-42`). Export first
 normalizes that contract, including the `vulns` field and compatibility alias
@@ -439,16 +463,21 @@ neutralization helpers are at `export.py:96-113`; the format writers are PDF
 Application persistence is not a single report transaction. The adapter loops
 over vulnerabilities, fixes, exploits, and summary rows through separate DB
 calls, then reads the session back and offers export
-(`octopus.py:1851-1920`).
+(`core.cli.application._save_and_show_results`).
 
 ## Replay
 
 Replay is a deterministic decision snapshot, not a live execution replay.
-`AIPipeline.replay_outputs()` parses supplied outputs into its `FactStore`,
-rebuilds context, and snapshots proposed actions without executing them
-(`core/ai/pipeline.py:394-434`). The fixture runner constructs a real
-`AIPipeline`, invokes that method, then compares facts, actions, and context to
-the expected fixture (`core/ai/replay_snapshot.py:9-63`).
+`AIPipeline.replay_outputs()` normalizes supplied output and routes completion
+through the same `PipelineRuntime.complete_execution()` ingress as production:
+facts and derived facts, command result, assessment transitions, graph
+projection/outbox repair, and attempt provenance retain the same ordering and
+idempotency rules. One bound generation fence is captured before preprocessing
+and covers the entire replay batch, so reset during preparation or between
+entries cancels the remaining batch. It then rebuilds context and snapshots proposed actions
+without executing a provider. The fixture runner constructs a real pipeline,
+invokes that method, then compares facts, actions, and context to the expected
+fixture.
 
 Because the replay pipeline uses a real `FactStore`, replay writes to the
 configured SQLite fact database. Isolation therefore depends on the caller
@@ -459,17 +488,27 @@ read-only.
 
 ### Startup and boundaries
 
-The main application automatically starts the daemon
-(`octopus.py:2508-2509`). `_start_c2_daemon()` launches it as a detached
-subprocess and sends output to `data/c2_daemon.log`
-(`octopus.py:2244-2290`). The interactive thin client communicates over a
-Unix-domain socket (`octopus.py:2218-2242`).
+The interactive application automatically starts the daemon only from
+`OctopusCLIApplication.run()`. `core.cli.application._start_c2_daemon()`
+launches it as a detached subprocess and sends output to
+`data/c2_daemon.log`. The interactive thin client communicates over a
+Unix-domain socket through `core.cli.application._send_to_daemon()`.
 
 Daemon configuration owns its data directory, keys directory, SQLite database,
 operator socket, and request/task/result limits (`core/c2/daemon.py:29-48`).
 Importing the daemon module constructs `KeyStore`, crypto, `C2Database`,
 `EventStore`, `OperatorManager`, and `EnrollmentAuthority`
 (`core/c2/daemon.py:77-94`), so imports have schema/key filesystem side effects.
+
+`KeyStore` persists the Ed25519 identity in a strictly bounded, versioned
+AES-GCM envelope whose authenticated header records the mandatory Scrypt KDF
+and fixed parameters. Historical environment-selected Argon2id, Scrypt, and
+PBKDF2 blobs are read only for one-way atomic migration. Static X25519 private
+material is sealed by the unlocked store; loading repairs an interrupted public
+key projection and removes a legacy plaintext PEM only after its public key is
+confirmed to match. Atomic replacements and plaintext removal fsync the parent
+directory where the platform supports it. `C2CryptoEngine` may read an existing
+legacy PEM for compatibility but never creates one implicitly.
 
 ### Agent protocol
 
@@ -556,14 +595,15 @@ important coupling is not always visible as a static import cycle:
   (`core/secrets.py:466-502`);
 - C2 daemon imports construct database/key-owning components
   (`core/c2/daemon.py:77-94`);
-- MariaDB migration runs at `db` import (`db.py:388-406`).
+- MariaDB migration still runs at direct `db` import (`db.py:388-406`), but
+  importing the CLI no longer imports `db`; workflow calls resolve it lazily.
 
 Other mutable globals include the executable tool registry, tool-availability
 cache, legacy credential cache, credential-store singleton, secret-store
-singletons, C2 daemon components, and top-level application supervisor/session
-state (`core/credentials.py:32-59`, `core/secrets.py:466-502`,
-`octopus.py:127-128`, `octopus.py:2216-2242`). Tests and decomposition work must
-account for those process-wide lifetimes.
+singletons, C2 daemon components, and compatibility application
+supervisor/session state in `core.cli.application`. The lifecycle owner is now
+explicit, although the legacy workflow globals remain process-wide. Tests and
+later decomposition work must account for those lifetimes.
 
 ## Broad exception boundaries in critical paths
 
@@ -579,7 +619,7 @@ treated as one category:
 | C2 HTTP register/beacon | preserves `HTTPException`; maps other failures to generic client errors | `core/c2/daemon.py:184-239`, `core/c2/daemon.py:242-333` |
 | C2 event projection | logs handler failure and continues after the event has been committed | `core/c2/event_store.py:213-221` |
 | MariaDB import migration | logs and suppresses initialization failure | `db.py:388-406` |
-| Application startup plugin discovery | logs discovery failure and continues into the menu | `octopus.py:2511-2521` |
+| Application startup plugin discovery | logs discovery failure and continues into the menu | `core/cli/main.py:OctopusCLIApplication._discover_extensions` |
 
 The transaction handlers preserve failure, while fallback/containment handlers
 change the error contract. Later typed-result work must characterize those

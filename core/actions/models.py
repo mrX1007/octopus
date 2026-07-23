@@ -21,6 +21,17 @@ class ActionKind(str, Enum):
     KILLCHAIN = "killchain"
 
 
+class ActiveRiskClass(str, Enum):
+    """Coarse action risk used for ranking and safe fallback boundaries."""
+
+    READ_ONLY = "read_only"
+    ACTIVE = "active"
+
+    @property
+    def score(self) -> float:
+        return 1.0 if self is ActiveRiskClass.ACTIVE else 0.0
+
+
 class ApplicabilityStatus(str, Enum):
     UNKNOWN = "unknown"
     APPLICABLE = "applicable"
@@ -129,6 +140,24 @@ class ActionRequest:
     evidence_fact_ids: tuple[int, ...] = ()
     assessment_refs: tuple[str, ...] = ()
     source_execution_ids: tuple[str, ...] = ()
+    provider_commands: dict[str, str] = field(default_factory=dict, repr=False)
+
+    def provider_command_for(self, action_name: str) -> str:
+        """Look up one in-memory provider command without an audit fallback."""
+
+        requested = str(action_name or "").strip().casefold()
+        for name, command in self.provider_commands.items():
+            if str(name).strip().casefold() == requested:
+                return str(command)
+        return ""
+
+    def command_for(self, action_name: str) -> str:
+        """Return an in-memory provider command without exposing it to audit."""
+
+        provider_command = self.provider_command_for(action_name)
+        if provider_command:
+            return provider_command
+        return self.command
 
     def audit_dict(self) -> dict[str, Any]:
         return {
@@ -136,6 +165,7 @@ class ActionRequest:
             "request_id": self.execution_context.request_id,
             "argument_count": len(self.arguments),
             "parameter_names": sorted(str(key) for key in self.parameters),
+            "provider_command_count": len(self.provider_commands),
             "fact_count": len(self.facts),
             "evidence_fact_ids": list(self.evidence_fact_ids),
             "assessment_refs": list(self.assessment_refs),
@@ -193,6 +223,40 @@ class ActionCleanupResult:
         return {"succeeded": self.succeeded, "reason": self.reason}
 
 
+@dataclass(frozen=True)
+class PolicyDenial:
+    """Secret-safe typed policy denial retained separately from availability."""
+
+    phase: str
+    reason_code: str
+    decision_ref: str = ""
+
+    @classmethod
+    def create(
+        cls,
+        phase: str,
+        reason: str,
+        decision_ref: str = "",
+    ) -> PolicyDenial:
+        raw = str(reason or "unknown").split(":", 1)[0].strip().casefold()
+        reason_code = "".join(
+            character if character.isalnum() or character in "_.-" else "_"
+            for character in raw
+        )[:128]
+        return cls(
+            phase=str(phase or "unknown")[:64],
+            reason_code=reason_code or "unknown",
+            decision_ref=str(decision_ref or "")[:256],
+        )
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "phase": self.phase,
+            "reason_code": self.reason_code,
+            "decision_ref": self.decision_ref,
+        }
+
+
 @dataclass
 class ActionLifecycle:
     candidate: bool = True
@@ -244,6 +308,7 @@ class ActionExecutionReport:
     verification_result: ActionVerificationResult | None = None
     cleanup_result: ActionCleanupResult | None = None
     policy_decision_refs: list[str] = field(default_factory=list)
+    policy_denials: list[PolicyDenial] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -258,6 +323,7 @@ class ActionExecutionReport:
             ),
             "cleanup_result": self.cleanup_result.to_dict() if self.cleanup_result else None,
             "policy_decision_refs": list(self.policy_decision_refs),
+            "policy_denials": [item.to_dict() for item in self.policy_denials],
         }
 
     def to_audit_dict(self) -> dict[str, Any]:
@@ -286,11 +352,13 @@ __all__ = [
     "ActionRequest",
     "ActionRequirements",
     "ActionVerificationResult",
+    "ActiveRiskClass",
     "ApplicabilityResult",
     "ApplicabilityStatus",
     "AttemptStatus",
     "CheckStatus",
     "CleanupStatus",
     "OutcomeStatus",
+    "PolicyDenial",
     "VerificationStatus",
 ]
