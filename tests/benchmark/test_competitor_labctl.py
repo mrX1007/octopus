@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import ssl
+import stat
 import subprocess
 import urllib.error
 import urllib.request
@@ -144,6 +146,140 @@ def test_cleanup_uses_bounded_compose_down_without_raw_output(
         "project": "octobench",
         "status": "clean",
     }
+
+
+def test_compose_failure_writes_only_bounded_private_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    compose = tmp_path / "compose.yaml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+    diagnostics = tmp_path / "journal" / "diagnostics"
+    diagnostics.mkdir(parents=True, mode=0o700)
+    os.chmod(diagnostics, 0o700)
+    destination = diagnostics / "lab-reset.log"
+    monkeypatch.setenv(
+        labctl._PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT,
+        str(destination),
+    )
+    monkeypatch.setattr(labctl, "_COMPOSE_PATH", compose)
+
+    class FailedProcess:
+        pid = 12345
+
+        def wait(self, *, timeout: float) -> int:
+            assert timeout == labctl.COMPOSE_TIMEOUT_SECONDS
+            return 17
+
+    def failing_process(_argv: list[str], **options: Any) -> FailedProcess:
+        assert options["stderr"] is subprocess.STDOUT
+        options["stdout"].write(
+            b"x" * (labctl.MAX_COMPOSE_DIAGNOSTIC_BYTES + 1024)
+            + b"docker compose root cause\n"
+        )
+        return FailedProcess()
+
+    monkeypatch.setattr(labctl.subprocess, "Popen", failing_process)
+
+    assert labctl.main(["reset", "--target", "http://127.0.0.1:8080"]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {"error": "reset_failed"}
+    content = destination.read_bytes()
+    header, output = content.split(b"\n", 1)
+    assert json.loads(header) == {
+        "command": "reset",
+        "error": "reset_failed",
+        "operation": "docker_compose",
+        "return_code": 17,
+        "schema_version": "1.0",
+    }
+    assert output.endswith(b"docker compose root cause\n")
+    assert len(content) <= labctl.MAX_PRIVATE_DIAGNOSTIC_BYTES
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o600
+    assert list(diagnostics.glob(".*.tmp-*")) == []
+
+
+def test_private_diagnostic_rejects_symlinked_directory(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir(mode=0o700)
+    linked = tmp_path / "linked"
+    linked.symlink_to(target, target_is_directory=True)
+
+    labctl._write_private_diagnostic(
+        str(linked / "diagnostic.log"),
+        command="reset",
+        error=labctl.LabControlError("reset_failed"),
+    )
+
+    assert not (target / "diagnostic.log").exists()
+
+
+def test_health_failure_captures_compose_ps_and_logs_privately(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    compose = tmp_path / "compose.yaml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+    diagnostics = tmp_path / "journal" / "diagnostics"
+    diagnostics.mkdir(parents=True, mode=0o700)
+    os.chmod(diagnostics, 0o700)
+    destination = diagnostics / "lab-reset.log"
+    monkeypatch.setenv(
+        labctl._PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT,
+        str(destination),
+    )
+    monkeypatch.setattr(labctl, "_COMPOSE_PATH", compose)
+
+    class Process:
+        pid = 12345
+
+        def __init__(self, command: str) -> None:
+            self.command = command
+
+        def wait(self, *, timeout: float) -> int:
+            expected = (
+                labctl.COMPOSE_TIMEOUT_SECONDS
+                if self.command == "up"
+                else labctl.COMPOSE_DIAGNOSTIC_TIMEOUT_SECONDS
+            )
+            assert timeout == expected
+            return 0
+
+    def process_factory(argv: list[str], **options: Any) -> Process:
+        if "ps" in argv:
+            command = "ps"
+            options["stdout"].write(b"lab exited (1)\n")
+        elif "logs" in argv:
+            command = "logs"
+            options["stdout"].write(b"Traceback: fixture startup failed\n")
+        else:
+            command = "up"
+            options["stdout"].write(b"compose startup completed\n")
+        return Process(command)
+
+    def fail_health(*_args: Any, **_kwargs: Any) -> Any:
+        raise labctl.LabControlError("health_timeout")
+
+    monkeypatch.setattr(labctl.subprocess, "Popen", process_factory)
+    monkeypatch.setattr(labctl, "_wait_for_health", fail_health)
+
+    assert labctl.main(["reset", "--target", "http://127.0.0.1:8080"]) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert json.loads(captured.err) == {"error": "health_timeout"}
+    content = destination.read_bytes()
+    header, output = content.split(b"\n", 1)
+    assert json.loads(header)["operation"] == "docker_compose_post_health_failure"
+    assert b"docker compose ps -a" in output
+    assert b"lab exited (1)" in output
+    assert b"docker compose logs" in output
+    assert b"Traceback: fixture startup failed" in output
+    assert len(content) <= labctl.MAX_PRIVATE_DIAGNOSTIC_BYTES
 
 
 def test_v2_reset_uses_allowlisted_compose_and_attests_exact_scenario(
@@ -482,6 +618,40 @@ def test_address_uses_validated_environment_or_detected_private_ip(
     )
     assert labctl.main(["address", "--port", "8081"]) == 0
     assert capsys.readouterr().out == "http://10.20.30.40:8081\n"
+
+
+def test_detected_address_prefers_udp_default_route_over_docker_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Probe:
+        @staticmethod
+        def connect(target: tuple[str, int]) -> None:
+            assert target == ("192.0.2.1", 9)
+
+        @staticmethod
+        def getsockname() -> tuple[str, int]:
+            return ("192.168.1.29", 43210)
+
+        @staticmethod
+        def close() -> None:
+            return None
+
+    monkeypatch.setattr(labctl.socket, "socket", lambda *_args: Probe())
+    monkeypatch.setattr(
+        labctl.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (
+                labctl.socket.AF_INET,
+                labctl.socket.SOCK_STREAM,
+                6,
+                "",
+                ("172.17.0.1", 0),
+            )
+        ],
+    )
+
+    assert labctl._detect_private_host_ip() == ipaddress.ip_address("192.168.1.29")
 
 
 def test_address_rejects_public_override_with_stable_error(

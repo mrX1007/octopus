@@ -40,9 +40,3 @@ services:
       timeout: 15s
       retries: 8
       start_period: 5s
-    networks:
-      - fixture
-
-networks:
-  fixture:
-    internal: true

@@ -10,8 +10,10 @@ import os
 import signal
 import socket
 import ssl
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -39,7 +41,11 @@ DEFAULT_HEALTH_TIMEOUT_SECONDS = 30.0
 MAX_HEALTH_TIMEOUT_SECONDS = 120.0
 HEALTH_REQUEST_TIMEOUT_SECONDS = 3.0
 COMPOSE_TIMEOUT_SECONDS = 600.0
+COMPOSE_DIAGNOSTIC_TIMEOUT_SECONDS = 10.0
 MAX_HEALTH_BYTES = 65_536
+MAX_PRIVATE_DIAGNOSTIC_BYTES = 65_536
+MAX_COMPOSE_DIAGNOSTIC_BYTES = 60_000
+_PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT = "OCTOPUS_BENCHMARK_LAB_DIAGNOSTIC_PATH"
 
 _COMPOSE_PATH = (
     Path(__file__).resolve().parents[3]
@@ -124,9 +130,21 @@ class LabControlError(RuntimeError):
         }
     )
 
-    def __init__(self, code: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        diagnostic_output: bytes = b"",
+        diagnostic_metadata: Mapping[str, Any] | None = None,
+    ) -> None:
         stable_code = code if code in self._ALLOWED_CODES else "health_invalid"
         self.code = stable_code
+        self.diagnostic_output = bytes(diagnostic_output)[
+            -MAX_COMPOSE_DIAGNOSTIC_BYTES:
+        ]
+        self.diagnostic_metadata = {
+            str(key): value for key, value in (diagnostic_metadata or {}).items()
+        }
         super().__init__(stable_code)
 
 
@@ -156,10 +174,15 @@ class _LabDefinition:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _argument_parser().parse_args(argv)
     environment = os.environ
+    diagnostic_definition: _LabDefinition | None = None
+    diagnostic_scenario_id: str | None = None
+    diagnostic_v3_run_directory: Path | None = None
     try:
         if args.command == "reset":
             definition = _lab_definition(args.lab_definition)
             scenario_id = _selected_scenario(definition, args.scenario_id)
+            diagnostic_definition = definition
+            diagnostic_scenario_id = scenario_id
             target = _target_url(args.target, environment)
             timeout = _health_timeout(args.timeout)
             v3_run_directory: Path | None = None
@@ -178,6 +201,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 except (BenchmarkV3SchemaError, OSError, TypeError, ValueError):
                     raise LabControlError("v3_fixture_prepare_failed") from None
                 v3_run_directory = artifacts.run_directory
+                diagnostic_v3_run_directory = v3_run_directory
                 fixture_digest = variant.variant_digest
             _run_compose(
                 ("up", "-d", "--build", "--force-recreate"),
@@ -245,6 +269,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:  # pragma: no cover - argparse prevents this branch
             raise LabControlError("health_invalid")
     except LabControlError as exc:
+        diagnostic_error = exc
+        if (
+            args.command == "reset"
+            and exc.code in {"health_invalid", "health_timeout", "health_unreachable"}
+            and diagnostic_definition is not None
+            and environment.get(_PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT)
+        ):
+            diagnostic_error = LabControlError(
+                exc.code,
+                diagnostic_output=_collect_compose_state(
+                    environment=environment,
+                    lab_definition=diagnostic_definition,
+                    scenario_id=diagnostic_scenario_id,
+                    v3_run_directory=diagnostic_v3_run_directory,
+                ),
+                diagnostic_metadata={
+                    "operation": "docker_compose_post_health_failure"
+                },
+            )
+        _write_private_diagnostic(
+            environment.get(_PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT),
+            command=str(args.command),
+            error=diagnostic_error,
+        )
         print(
             json.dumps(
                 {"error": exc.code},
@@ -345,6 +393,100 @@ def _run_compose(
         str(compose_path),
         *arguments,
     ]
+    if (
+        definition.definition_id == V3_LAB_VERSION
+        and tuple(arguments[:1]) == ("up",)
+        and v3_run_directory is None
+    ):
+        raise LabControlError("invalid_v3_context")
+    child_environment = _compose_child_environment(
+        environment,
+        definition=definition,
+        selected_scenario=selected_scenario,
+        v3_run_directory=v3_run_directory,
+    )
+    capture = _compose_output_capture(environment)
+    try:
+        process = subprocess.Popen(
+            argv,
+            cwd=str(compose_path.parent),
+            env=child_environment,
+            stdin=subprocess.DEVNULL,
+            stdout=capture if capture is not None else subprocess.DEVNULL,
+            stderr=subprocess.STDOUT if capture is not None else subprocess.DEVNULL,
+            shell=False,
+            start_new_session=True,
+        )
+    except (OSError, ValueError):
+        if capture is not None:
+            capture.close()
+        raise LabControlError(
+            "compose_unavailable",
+            diagnostic_metadata={"operation": "docker_compose"},
+        ) from None
+    try:
+        try:
+            return_code = process.wait(timeout=COMPOSE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            _terminate_process_group(process)
+            raise LabControlError(
+                "compose_timeout",
+                diagnostic_output=_read_compose_output(capture),
+                diagnostic_metadata={"operation": "docker_compose"},
+            ) from None
+        except OSError:
+            _terminate_process_group(process)
+            raise LabControlError(
+                failure_code,
+                diagnostic_output=_read_compose_output(capture),
+                diagnostic_metadata={"operation": "docker_compose"},
+            ) from None
+        if return_code != 0:
+            raise LabControlError(
+                failure_code,
+                diagnostic_output=_read_compose_output(capture),
+                diagnostic_metadata={
+                    "operation": "docker_compose",
+                    "return_code": return_code,
+                },
+            )
+    finally:
+        if capture is not None:
+            capture.close()
+
+
+def _compose_output_capture(environment: Mapping[str, str]) -> Any | None:
+    directory = _private_diagnostic_directory(
+        environment.get(_PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT)
+    )
+    if directory is None:
+        return None
+    try:
+        return tempfile.TemporaryFile(mode="w+b", dir=directory)
+    except OSError:
+        return None
+
+
+def _read_compose_output(capture: Any | None) -> bytes:
+    if capture is None:
+        return b""
+    try:
+        capture.flush()
+        capture.seek(0, os.SEEK_END)
+        size = capture.tell()
+        capture.seek(max(0, size - MAX_COMPOSE_DIAGNOSTIC_BYTES))
+        return bytes(capture.read(MAX_COMPOSE_DIAGNOSTIC_BYTES))
+    except (OSError, ValueError):
+        return b""
+
+
+def _compose_child_environment(
+    environment: Mapping[str, str],
+    *,
+    definition: _LabDefinition,
+    selected_scenario: str | None,
+    v3_run_directory: Path | None,
+) -> dict[str, str]:
     child_environment = {
         name: environment[name]
         for name in _PASSTHROUGH_ENVIRONMENT
@@ -352,38 +494,165 @@ def _run_compose(
     }
     if selected_scenario is not None:
         child_environment["OCTOBENCH_LAB_SCENARIO_ID"] = selected_scenario
-    if definition.definition_id == V3_LAB_VERSION:
-        if tuple(arguments[:1]) == ("up",) and v3_run_directory is None:
-            raise LabControlError("invalid_v3_context")
-        if v3_run_directory is not None:
-            child_environment["OCTOBENCH_V3_RUN_DIRECTORY"] = str(
-                v3_run_directory.resolve()
-            )
-            child_environment["OCTOBENCH_V3_UID"] = str(os.getuid())
-            child_environment["OCTOBENCH_V3_GID"] = str(os.getgid())
-    try:
-        process = subprocess.Popen(
-            argv,
-            cwd=str(compose_path.parent),
-            env=child_environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            shell=False,
-            start_new_session=True,
+    if definition.definition_id == V3_LAB_VERSION and v3_run_directory is not None:
+        child_environment["OCTOBENCH_V3_RUN_DIRECTORY"] = str(
+            v3_run_directory.resolve()
         )
-    except (OSError, ValueError):
-        raise LabControlError("compose_unavailable") from None
+        child_environment["OCTOBENCH_V3_UID"] = str(os.getuid())
+        child_environment["OCTOBENCH_V3_GID"] = str(os.getgid())
+    return child_environment
+
+
+def _collect_compose_state(
+    *,
+    environment: Mapping[str, str],
+    lab_definition: _LabDefinition,
+    scenario_id: str | None,
+    v3_run_directory: Path | None,
+) -> bytes:
+    child_environment = _compose_child_environment(
+        environment,
+        definition=lab_definition,
+        selected_scenario=scenario_id,
+        v3_run_directory=v3_run_directory,
+    )
+    commands = (
+        ("ps -a", ("ps", "-a")),
+        ("logs", ("logs", "--no-color", "--tail", "200")),
+    )
+    chunks: list[bytes] = []
+    per_command_limit = MAX_COMPOSE_DIAGNOSTIC_BYTES // len(commands)
+    for label, arguments in commands:
+        capture = _compose_output_capture(environment)
+        if capture is None:
+            chunks.append(f"=== docker compose {label} ===\nunavailable\n".encode())
+            continue
+        try:
+            argv = [
+                "docker",
+                "compose",
+                "--project-name",
+                lab_definition.project_name,
+                "--file",
+                str(lab_definition.compose_path),
+                *arguments,
+            ]
+            try:
+                process = subprocess.Popen(
+                    argv,
+                    cwd=str(lab_definition.compose_path.parent),
+                    env=child_environment,
+                    stdin=subprocess.DEVNULL,
+                    stdout=capture,
+                    stderr=subprocess.STDOUT,
+                    shell=False,
+                    start_new_session=True,
+                )
+                try:
+                    return_code = process.wait(
+                        timeout=COMPOSE_DIAGNOSTIC_TIMEOUT_SECONDS
+                    )
+                except subprocess.TimeoutExpired:
+                    _terminate_process_group(process)
+                    return_code = -1
+            except (OSError, ValueError):
+                chunks.append(
+                    f"=== docker compose {label} ===\nunavailable\n".encode()
+                )
+                continue
+            output = _read_compose_output(capture)[-per_command_limit:]
+            chunks.append(
+                f"=== docker compose {label} (exit {return_code}) ===\n".encode()
+                + output
+                + (b"\n" if output and not output.endswith(b"\n") else b"")
+            )
+        finally:
+            capture.close()
+    return b"".join(chunks)[-MAX_COMPOSE_DIAGNOSTIC_BYTES:]
+
+
+def _write_private_diagnostic(
+    raw_path: str | None,
+    *,
+    command: str,
+    error: LabControlError,
+) -> None:
+    directory = _private_diagnostic_directory(raw_path)
+    if directory is None:
+        return
+    assert raw_path is not None
+    destination = Path(raw_path)
     try:
-        return_code = process.wait(timeout=COMPOSE_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired:
-        _terminate_process_group(process)
-        raise LabControlError("compose_timeout") from None
+        metadata = {
+            "command": command[:32],
+            "error": error.code,
+            "schema_version": LAB_PROTOCOL_VERSION,
+            **error.diagnostic_metadata,
+        }
+        header = (
+            json.dumps(metadata, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        if len(header) > MAX_PRIVATE_DIAGNOSTIC_BYTES // 4:
+            header = (
+                json.dumps(
+                    {
+                        "command": command[:32],
+                        "error": error.code,
+                        "schema_version": LAB_PROTOCOL_VERSION,
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n"
+            ).encode("utf-8")
+        separator = b"--- subprocess output (tail) ---\n"
+        available = max(
+            0,
+            MAX_PRIVATE_DIAGNOSTIC_BYTES - len(header) - len(separator),
+        )
+        payload = header
+        if error.diagnostic_output:
+            payload += separator + error.diagnostic_output[-available:]
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.tmp-",
+            dir=str(directory),
+        )
+        temporary = Path(temporary_name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+            os.chmod(destination, 0o600)
+        except Exception:
+            with suppress(FileNotFoundError):
+                temporary.unlink()
+            raise
+    except (OSError, TypeError, ValueError):
+        # Diagnostics must never replace the stable operational error.
+        return
+
+
+def _private_diagnostic_directory(raw_path: str | None) -> Path | None:
+    if not raw_path:
+        return None
+    destination = Path(raw_path)
+    if not destination.is_absolute():
+        return None
+    directory = destination.parent
+    try:
+        directory_stat = os.lstat(directory)
     except OSError:
-        _terminate_process_group(process)
-        raise LabControlError(failure_code) from None
-    if return_code != 0:
-        raise LabControlError(failure_code)
+        return None
+    if (
+        not stat.S_ISDIR(directory_stat.st_mode)
+        or stat.S_ISLNK(directory_stat.st_mode)
+        or stat.S_IMODE(directory_stat.st_mode) != 0o700
+    ):
+        return None
+    return directory
 
 
 def _terminate_process_group(process: subprocess.Popen[Any]) -> None:
@@ -679,8 +948,14 @@ def _detect_private_host_ip() -> ipaddress.IPv4Address | ipaddress.IPv6Address:
     if probe is not None:
         try:
             probe.connect(("192.0.2.1", 9))
-            candidates.append(str(probe.getsockname()[0]))
-        except OSError:
+            preferred = ipaddress.ip_address(str(probe.getsockname()[0]))
+            if (
+                not preferred.is_loopback
+                and any(preferred in network for network in _PRIVATE_NETWORKS)
+            ):
+                return preferred
+            candidates.append(preferred.compressed)
+        except (OSError, ValueError):
             pass
         finally:
             probe.close()

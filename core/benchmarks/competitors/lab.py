@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import time
 from collections.abc import Mapping, Sequence
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 LAB_CONTROL_SCHEMA_VERSION = "1.0"
+_PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT = "OCTOPUS_BENCHMARK_LAB_DIAGNOSTIC_PATH"
 _ALLOWED_PLACEHOLDERS = frozenset(
     {
         "campaign_id",
@@ -35,6 +37,17 @@ class LabControlError(RuntimeError):
 
 class LabResetError(LabControlError):
     """A reset or health-check failed; the campaign must stop."""
+
+    def __init__(
+        self,
+        code: str,
+        *,
+        diagnostic_path: str | Path | None = None,
+    ) -> None:
+        self.diagnostic_path = (
+            Path(diagnostic_path) if diagnostic_path is not None else None
+        )
+        super().__init__(code)
 
 
 @dataclass(frozen=True)
@@ -164,6 +177,7 @@ class CommandLabController:
         *,
         cleanup: LabCommand | None = None,
         environment: Mapping[str, str] | None = None,
+        diagnostics_directory: str | Path | None = None,
         clock: Any = time.time,
         monotonic: Any = time.monotonic,
     ) -> None:
@@ -171,6 +185,9 @@ class CommandLabController:
         self.health_command = health
         self.cleanup_command = cleanup
         self.environment = {str(key): str(value) for key, value in (environment or {}).items()}
+        self.diagnostics_directory = (
+            Path(diagnostics_directory) if diagnostics_directory is not None else None
+        )
         self.clock = clock
         self.monotonic = monotonic
 
@@ -210,6 +227,9 @@ class CommandLabController:
             "OCTOPUS_BENCHMARK_SNAPSHOT_REF": context.snapshot_ref,
             }
         )
+        diagnostic_path = self._diagnostic_path(context, phase=phase)
+        if diagnostic_path is not None:
+            environment[_PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT] = str(diagnostic_path)
         started = self.monotonic()
         try:
             process = subprocess.Popen(
@@ -223,12 +243,18 @@ class CommandLabController:
                 start_new_session=os.name == "posix",
             )
         except (OSError, ValueError):
-            raise LabResetError(f"lab_{phase}_unavailable") from None
+            raise _lab_reset_error(
+                f"lab_{phase}_unavailable",
+                diagnostic_path,
+            ) from None
         try:
             return_code = process.wait(timeout=command.timeout_seconds)
         except subprocess.TimeoutExpired:
             _terminate_process(process)
-            raise LabResetError(f"lab_{phase}_timeout") from None
+            raise _lab_reset_error(
+                f"lab_{phase}_timeout",
+                diagnostic_path,
+            ) from None
         except BaseException:
             # Reset/health/cleanup commands own a separate process group. An
             # operator interrupt must tear it down before the caller attempts
@@ -236,8 +262,47 @@ class CommandLabController:
             _terminate_process(process)
             raise
         if return_code != 0:
-            raise LabResetError(f"lab_{phase}_failed")
+            raise _lab_reset_error(f"lab_{phase}_failed", diagnostic_path)
         return max(0.0, float(self.monotonic() - started))
+
+    def _diagnostic_path(
+        self,
+        context: LabRunContext,
+        *,
+        phase: str,
+    ) -> Path | None:
+        if self.diagnostics_directory is None:
+            return None
+        directory = Path(os.path.abspath(self.diagnostics_directory))
+        try:
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            directory_stat = os.lstat(directory)
+            if not stat.S_ISDIR(directory_stat.st_mode) or stat.S_ISLNK(
+                directory_stat.st_mode
+            ):
+                return None
+            os.chmod(directory, 0o700)
+        except OSError:
+            return None
+        identity = json.dumps(
+            {**context.substitutions(), "phase": phase},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        digest = hashlib.sha256(identity).hexdigest()
+        return directory / f"lab-{phase}-{digest}.log"
+
+
+def _lab_reset_error(code: str, diagnostic_path: Path | None) -> LabResetError:
+    available_path: Path | None = None
+    if diagnostic_path is not None:
+        try:
+            path_stat = os.lstat(diagnostic_path)
+            if stat.S_ISREG(path_stat.st_mode) and not stat.S_ISLNK(path_stat.st_mode):
+                available_path = diagnostic_path
+        except OSError:
+            pass
+    return LabResetError(code, diagnostic_path=available_path)
 
 
 def command_executable_available(command: LabCommand, environment: Mapping[str, str]) -> bool:

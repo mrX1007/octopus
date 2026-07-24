@@ -9,6 +9,7 @@ import math
 import os
 import platform
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -411,6 +412,7 @@ def run_campaign(
         resolved.health_command,
         cleanup=resolved.cleanup_command,
         environment=effective_environment,
+        diagnostics_directory=journal.diagnostics_directory,
         clock=clock,
         monotonic=monotonic,
     )
@@ -547,10 +549,16 @@ def run_campaign(
                         ),
                     )
             except LabResetError as exc:
+                status_metadata: dict[str, Any] = {
+                    "reason": str(exc),
+                    "completed_runs": journal.completed_run_count(),
+                }
+                diagnostic_reference = _diagnostic_reference(journal, exc)
+                if diagnostic_reference is not None:
+                    status_metadata["diagnostic_path"] = diagnostic_reference
                 journal.set_status(
                     "aborted",
-                    reason=str(exc),
-                    completed_runs=journal.completed_run_count(),
+                    **status_metadata,
                 )
                 raise CampaignAbortedError(str(exc)) from None
             except KeyboardInterrupt:
@@ -1101,6 +1109,45 @@ def _canonical_digest(value: Any) -> str:
         default=str,
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _diagnostic_reference(
+    journal: CampaignJournal,
+    error: LabResetError,
+) -> str | None:
+    raw_path = error.diagnostic_path
+    if raw_path is None:
+        return None
+    directory = Path(os.path.abspath(journal.diagnostics_directory))
+    candidate = Path(os.path.abspath(raw_path))
+    if candidate.parent != directory:
+        return None
+    if (
+        not candidate.name.startswith("lab-")
+        or not candidate.name.endswith(".log")
+        or len(candidate.name) > 128
+        or any(
+            character
+            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
+            for character in candidate.name
+        )
+    ):
+        return None
+    try:
+        directory_stat = os.lstat(directory)
+        candidate_stat = os.lstat(candidate)
+    except OSError:
+        return None
+    if (
+        not stat.S_ISDIR(directory_stat.st_mode)
+        or stat.S_ISLNK(directory_stat.st_mode)
+        or stat.S_IMODE(directory_stat.st_mode) != 0o700
+        or not stat.S_ISREG(candidate_stat.st_mode)
+        or stat.S_ISLNK(candidate_stat.st_mode)
+        or stat.S_IMODE(candidate_stat.st_mode) != 0o600
+    ):
+        return None
+    return f"diagnostics/{candidate.name}"
 
 
 def _resolved_path(value: Any, *, base: Path, name: str) -> Path:

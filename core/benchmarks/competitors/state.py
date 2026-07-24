@@ -77,6 +77,12 @@ class CampaignJournal:
         self.campaign_root = self.root / self.campaign_id
         self._schedule_keys: frozenset[str] = frozenset()
 
+    @property
+    def diagnostics_directory(self) -> Path:
+        """Return the private, unpublished diagnostics location for this campaign."""
+
+        return self.campaign_root / "diagnostics"
+
     @contextmanager
     def lock(self) -> Iterator[None]:
         """Acquire a non-blocking process lock for the whole campaign lifecycle."""

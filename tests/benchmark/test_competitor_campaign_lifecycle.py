@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import stat
 import sys
 from collections import Counter
 from dataclasses import replace
@@ -615,6 +616,41 @@ def test_reset_failure_aborts_before_adapter_and_leaves_resumable_state(tmp_path
     assert status["status"] == "aborted"
 
 
+def test_reset_failure_status_references_existing_private_diagnostic(tmp_path):
+    config, _manifest_paths = _campaign_fixture(tmp_path)
+
+    class DiagnosticFailure(RecordingLab):
+        def reset_and_health(self, context):
+            diagnostics = (
+                config.state_directory / config.campaign_id / "diagnostics"
+            )
+            diagnostics.mkdir(mode=0o700)
+            diagnostics.chmod(0o700)
+            destination = diagnostics / "lab-reset-test.log"
+            destination.write_text("private root cause\n", encoding="utf-8")
+            destination.chmod(0o600)
+            raise LabResetError(
+                "lab_reset_failed",
+                diagnostic_path=destination,
+            )
+
+    with pytest.raises(CampaignAbortedError, match="lab_reset_failed"):
+        run_campaign(
+            config,
+            environment={"CAMPAIGN_TEST_TOKEN": SECRET_VALUE},
+            runner_factory=_successful_runner_factory([]),
+            lab_controller=DiagnosticFailure(),
+        )
+
+    status = json.loads(
+        (config.state_directory / config.campaign_id / "status.json").read_text()
+    )
+    assert status["metadata"]["reason"] == "lab_reset_failed"
+    assert status["metadata"]["diagnostic_path"] == (
+        "diagnostics/lab-reset-test.log"
+    )
+
+
 @pytest.mark.parametrize("failure", ["existing_output", "missing_environment"])
 def test_preflight_is_fail_closed_and_never_invokes_adapter_or_reset(tmp_path, failure):
     config, _manifest_paths = _campaign_fixture(tmp_path)
@@ -713,6 +749,107 @@ with open(sys.argv[1], "a", encoding="utf-8") as stream:
         "health:available",
     ]
     assert attestation.to_dict()["status"] == "healthy"
+
+
+def test_command_lab_controller_scopes_diagnostics_to_private_directory(
+    tmp_path,
+    monkeypatch,
+):
+    command = LabCommand.from_dict(
+        {
+            "argv": [sys.executable, "-c", "pass"],
+            "working_directory": ".",
+        },
+        base_directory=tmp_path,
+    )
+    diagnostics = tmp_path / "journal" / "campaign" / "diagnostics"
+    observed_environments = []
+
+    class SuccessfulProcess:
+        def wait(self, *, timeout):
+            assert timeout == 300.0
+            return 0
+
+    def process_factory(*_args, **options):
+        observed_environments.append(options["env"])
+        return SuccessfulProcess()
+
+    monkeypatch.setattr(lab_module.subprocess, "Popen", process_factory)
+    controller = CommandLabController(
+        command,
+        command,
+        diagnostics_directory=diagnostics,
+    )
+    context = LabRunContext(
+        campaign_id="campaign",
+        system_id="alpha",
+        scenario_id="scenario",
+        repetition=1,
+        seed=10,
+        lab_version="lab-v1",
+        snapshot_ref="snapshot-v1",
+    )
+
+    controller.reset_and_health(context)
+
+    diagnostic_paths = [
+        Path(environment[lab_module._PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT])
+        for environment in observed_environments
+    ]
+    assert len(diagnostic_paths) == 2
+    assert diagnostic_paths[0].name.startswith("lab-reset-")
+    assert diagnostic_paths[1].name.startswith("lab-health-")
+    assert {path.parent for path in diagnostic_paths} == {diagnostics}
+    assert stat.S_IMODE(diagnostics.stat().st_mode) == 0o700
+
+
+def test_command_lab_controller_ignores_symlinked_diagnostics_directory(
+    tmp_path,
+    monkeypatch,
+):
+    command = LabCommand.from_dict(
+        {
+            "argv": [sys.executable, "-c", "pass"],
+            "working_directory": ".",
+        },
+        base_directory=tmp_path,
+    )
+    target = tmp_path / "target"
+    target.mkdir()
+    diagnostics = tmp_path / "diagnostics"
+    diagnostics.symlink_to(target, target_is_directory=True)
+    observed_environments = []
+
+    class SuccessfulProcess:
+        def wait(self, *, timeout):
+            return 0
+
+    def process_factory(*_args, **options):
+        observed_environments.append(options["env"])
+        return SuccessfulProcess()
+
+    monkeypatch.setattr(lab_module.subprocess, "Popen", process_factory)
+    controller = CommandLabController(
+        command,
+        command,
+        diagnostics_directory=diagnostics,
+    )
+    context = LabRunContext(
+        campaign_id="campaign",
+        system_id="alpha",
+        scenario_id="scenario",
+        repetition=1,
+        seed=10,
+        lab_version="lab-v1",
+        snapshot_ref="snapshot-v1",
+    )
+
+    controller.reset_and_health(context)
+
+    assert all(
+        lab_module._PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT not in environment
+        for environment in observed_environments
+    )
 
 
 def test_command_lab_controller_terminates_child_on_operator_interrupt(

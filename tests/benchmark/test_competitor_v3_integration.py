@@ -648,3 +648,22 @@ def test_v3_docker_context_is_whitelisted() -> None:
         sensitive in ignore
         for sensitive in ("!.git", "!.benchmark-state", "!venv", "!secrets.env")
     )
+
+
+def test_v3_compose_publishes_host_port_on_default_project_network() -> None:
+    root = Path(__file__).resolve().parents[2]
+    compose = (
+        root
+        / "benchmarks"
+        / "competitors"
+        / "labs"
+        / "discovery-lab-v3"
+        / "compose.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        '"${OCTOBENCH_LAB_BIND:-127.0.0.1}:'
+        '${OCTOBENCH_LAB_PORT:-8080}:8080"'
+    ) in compose
+    assert "internal: true" not in compose
+    assert "\nnetworks:" not in compose

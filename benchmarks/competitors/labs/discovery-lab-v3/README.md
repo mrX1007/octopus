@@ -32,8 +32,8 @@ the configured batch and host IDs.
 Products receive the target base URL and start at `/`. That stable root returns
 an in-band handoff to the generated entry route. Do not pass the product-view
 file, private manifest, ledger, generated seed, or controller state path to a
-product process. The container is read-only, capability-free, attached to an
-internal Docker network, and receives only its per-run controller bind.
+product process. The container is read-only, capability-free, launched in its
+dedicated Compose project, and receives only its per-run controller bind.
 
 The `clean_negative` family still requires a fixture observation: its response
 contains a blinded negative-evidence nonce that the controller can verify from
