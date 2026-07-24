@@ -5,9 +5,9 @@ The checked-in `manifest.json` is resolved: every managed lock has a recorded
 digest and every requirement has exact artifact hashes. No placeholder
 packages or fake hashes are committed.
 
-The matrix contains 36 lock files: the `runtime`, `c2`, `reporting`,
+The matrix contains 27 lock files: the `runtime`, `c2`, `reporting`,
 `osint-browser`, `test`, `mysql`, `external-tools`, `platform`, and `full`
-profiles for CPython 3.9, 3.10, 3.11, and 3.12 on
+profiles for CPython 3.10, 3.11, and 3.12 on
 `x86_64-manylinux_2_34`.
 
 ## Commands
@@ -27,7 +27,7 @@ python scripts/lock_requirements.py validate
   bytes without modifying the repository. It therefore also needs index
   access.
 - `validate` is offline. It verifies the fixed epoch, current input hashes,
-  exact 36-file matrix, manifest metadata, lock digests, exact pins, and hashes.
+  exact 27-file matrix, manifest metadata, lock digests, exact pins, and hashes.
 
 Resolution uses the fixed cutoff in `EPOCH`, the first-index strategy, the
 credential-free `https://pypi.org/simple` default index, and

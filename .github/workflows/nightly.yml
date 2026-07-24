@@ -29,10 +29,10 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Set up Python 3.9
+      - name: Set up Python 3.10
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.9"
+          python-version: "3.10"
 
       - name: Install native smoke dependencies
         run: |
@@ -42,7 +42,7 @@ jobs:
       - name: Install locked full Python profile
         run: |
           python scripts/lock_requirements.py validate
-          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp39/full.txt
+          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp310/full.txt
           python -m pip check
 
       - name: Import OSINT and browser boundaries
@@ -50,7 +50,7 @@ jobs:
 
       - name: Run strict native tool smoke
         env:
-          OCTOPUS_STRICT_EXTERNAL_TOOLS: "1"
+          OCTOPUS_REQUIRE_EXTERNAL_TOOLS: "1"
         run: python -m pytest -q -m external_tools tests/test_external_tools_smoke.py
 
       - name: Run deterministic benchmark contracts

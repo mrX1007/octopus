@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import hashlib
 import inspect
 import json
 import logging
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, Optional
-from urllib.parse import urljoin, urlparse, urlunparse
+from typing import Any
 
 from core.ai.capability_assessment import CapabilityResolver
 from core.ai.context_builder import ContextBuilder
@@ -22,6 +23,7 @@ from core.ai.pipeline_mission import PipelineMissionMixin
 from core.ai.pipeline_observability import PipelineObservabilityMixin
 from core.ai.pipeline_planning import PipelinePlanningMixin
 from core.ai.pipeline_replay import PipelineReplayMixin
+from core.ai.pipeline_web_links import PipelineWebLinksMixin
 from core.ai.planner import MissionPlanCompiler, MissionPlanner
 from core.ai.policy import DeterministicPolicy
 from core.ai.runtime import PipelineRuntime
@@ -45,11 +47,13 @@ logger = logging.getLogger("octopus.pipeline")
 try:
     from tools import run_arbitrary_cmd
 except ImportError:
+
     def run_arbitrary_cmd(
         cmd_str: str,
-        execution_context: Optional[ExecutionContext] = None,
+        execution_context: ExecutionContext | None = None,
     ) -> str:
         raise FileNotFoundError("OCTOPUS tool runtime is unavailable")
+
 
 class AIPipeline(
     PipelineMissionMixin,
@@ -57,6 +61,7 @@ class AIPipeline(
     PipelineReplayMixin,
     PipelineObservabilityMixin,
     PipelineFollowupsMixin,
+    PipelineWebLinksMixin,
 ):
     def __init__(self, db_path: str = "data/facts.db"):
         self.runtime = PipelineRuntime(db_path, runner=lambda command: run_arbitrary_cmd(command))
@@ -190,7 +195,7 @@ class AIPipeline(
         max_time_minutes: int = 0,
         raw_scan: str = "",
         *,
-        cancellation: Optional[CancellationContext] = None,
+        cancellation: CancellationContext | None = None,
     ):
         from core.ai.scan_loop import ScanLifecycle
 
@@ -221,7 +226,9 @@ class AIPipeline(
             raw_scan,
         )
 
-    def _run_task_commands(self, scan_id: str, target: str, cmds: list[str], fact_label: str, verification: bool = False) -> dict[str, Any]:
+    def _run_task_commands(
+        self, scan_id: str, target: str, cmds: list[str], fact_label: str, verification: bool = False
+    ) -> dict[str, Any]:
         new_facts = 0
         parsed_facts = 0
         command_results = []
@@ -233,15 +240,10 @@ class AIPipeline(
                 cmd = self._augment_command_with_context(cmd, scan_id, target)
                 if fallback_attempted_actions:
                     try:
-                        resolved = self.runtime.action_catalog.resolve(
-                            self._command_tool_name(cmd)
-                        )
+                        resolved = self.runtime.action_catalog.resolve(self._command_tool_name(cmd))
                     except Exception:
                         resolved = None
-                    if (
-                        resolved is not None
-                        and resolved.canonical_id in fallback_attempted_actions
-                    ):
+                    if resolved is not None and resolved.canonical_id in fallback_attempted_actions:
                         continue
                 provider_commands = self._task_provider_commands(
                     cmd,
@@ -309,7 +311,9 @@ class AIPipeline(
                         new_facts += active_result["new_facts"]
                         command_results.append(active_result["command_result"])
 
-                        post_result = self._run_controlled_post_access_followups(scan_id, target, active_result["facts"])
+                        post_result = self._run_controlled_post_access_followups(
+                            scan_id, target, active_result["facts"]
+                        )
                         parsed_facts += post_result["parsed_facts"]
                         new_facts += post_result["new_facts"]
                         command_results.extend(post_result["commands"])
@@ -334,7 +338,7 @@ class AIPipeline(
         scan_id: str,
         target: str,
         *,
-        excluded_action_ids: Optional[set[str]] = None,
+        excluded_action_ids: set[str] | None = None,
     ) -> tuple[str, ...]:
         """Build bounded in-memory alternatives for production fallback.
 
@@ -378,9 +382,7 @@ class AIPipeline(
                 )
                 if excluded:
                     try:
-                        resolved = self.runtime.action_catalog.resolve(
-                            self._command_tool_name(candidate)
-                        )
+                        resolved = self.runtime.action_catalog.resolve(self._command_tool_name(candidate))
                     except Exception:
                         resolved = None
                     if resolved is not None and resolved.canonical_id in excluded:
@@ -392,15 +394,19 @@ class AIPipeline(
             bounded = bounded[:remaining]
         return tuple(bounded)
 
-    def _execute_pipeline_command(self, scan_id: str, target: str, cmd: str,
-                                  fact_label: str, prefix: str, *,
-                                  provider_commands: Sequence[str] = ()) -> dict[str, Any]:
+    def _execute_pipeline_command(
+        self,
+        scan_id: str,
+        target: str,
+        cmd: str,
+        fact_label: str,
+        prefix: str,
+        *,
+        provider_commands: Sequence[str] = (),
+    ) -> dict[str, Any]:
         self._current_scan_id = str(scan_id)
         self._current_target = str(target)
-        if (
-            self._max_tools_budget is not None
-            and self.tools_run_count >= self._max_tools_budget
-        ):
+        if self._max_tools_budget is not None and self.tools_run_count >= self._max_tools_budget:
             self._mission_stop_reason = "max_tools_reached"
             raise ToolBudgetReached("max_tools_reached")
         execution_context = self._execution_context(scan_id, target)
@@ -416,9 +422,7 @@ class AIPipeline(
             assessment = assess_exploit_command(cmd, current_facts)
             if not assessment.applicable:
                 decision.action = "skip"
-                decision.reason = "assessment_blocked:" + ",".join(
-                    assessment.missing_requirements
-                )
+                decision.reason = "assessment_blocked:" + ",".join(assessment.missing_requirements)
                 decision.prerequisite = "canonical_fact_assessment"
                 decision.retry = False
         if decision.action == "execute" and decision.retry:
@@ -519,38 +523,24 @@ class AIPipeline(
                     "provider_partial_ingestion": True,
                 },
                 attempt_id=self._active_task_attempt_id,
-                idempotency_key=(
-                    f"execution:{partial_result.execution_id}"
-                    if partial_result.execution_id
-                    else ""
-                ),
+                idempotency_key=(f"execution:{partial_result.execution_id}" if partial_result.execution_id else ""),
                 completion_fence=completion_fence,
                 after_facts=lambda facts: self._sync_runtime_credentials_from_facts(
                     target,
                     list(facts),
                 ),
             )
-            partial_ingestion["parsed_facts"] += int(
-                completion.get("parsed_facts", 0) or 0
-            )
-            partial_ingestion["new_facts"] += int(
-                completion.get("new_facts", 0) or 0
-            )
-            partial_ingested_facts.extend(
-                dict(item) for item in completion.get("facts", ())
-            )
-            partial_fact_ids.extend(
-                int(item)
-                for item in completion.get("command_result", {}).get("fact_ids", ())
-            )
+            partial_ingestion["parsed_facts"] += int(completion.get("parsed_facts", 0) or 0)
+            partial_ingestion["new_facts"] += int(completion.get("new_facts", 0) or 0)
+            partial_ingested_facts.extend(dict(item) for item in completion.get("facts", ()))
+            partial_fact_ids.extend(int(item) for item in completion.get("command_result", {}).get("fact_ids", ()))
             self.executed_command_keys.add(provider_key)
             return {
                 "parsed_facts": int(completion.get("parsed_facts", 0) or 0),
                 "useful_facts": int(completion.get("new_facts", 0) or 0),
                 "duplicate_facts": max(
                     0,
-                    int(completion.get("parsed_facts", 0) or 0)
-                    - int(completion.get("new_facts", 0) or 0),
+                    int(completion.get("parsed_facts", 0) or 0) - int(completion.get("new_facts", 0) or 0),
                 ),
                 "parser_items": int(completion.get("parsed_facts", 0) or 0),
             }
@@ -570,9 +560,7 @@ class AIPipeline(
             # mission dispatch carries the typed action context above.
             decision.invocation = None
             dispatch_result = self.runtime.execute(decision, execution_context)
-        provider_attempts = int(
-            dispatch_result.metadata.get("provider_attempts", 1) or 1
-        )
+        provider_attempts = int(dispatch_result.metadata.get("provider_attempts", 1) or 1)
         self.tools_run_count += max(1, provider_attempts)
         self.executed_command_keys.update(
             str(item)
@@ -641,17 +629,11 @@ class AIPipeline(
             initial_facts=(running_fact,),
             failed=failed,
             attempt_id=self._active_task_attempt_id,
-            idempotency_key=(
-                f"execution:{dispatch_result.execution_id}"
-                if dispatch_result.execution_id
-                else ""
-            ),
+            idempotency_key=(f"execution:{dispatch_result.execution_id}" if dispatch_result.execution_id else ""),
             completion_fence=completion_fence,
             after_facts=sync_completion_side_effects,
         )
-        result["command_result"]["check_status"] = completion_state.get(
-            "check_status"
-        ) or self._command_check_status(
+        result["command_result"]["check_status"] = completion_state.get("check_status") or self._command_check_status(
             cmd,
             output_str,
             failed,
@@ -660,29 +642,22 @@ class AIPipeline(
         )
         if partial_ingestion["parsed_facts"] or partial_ingestion["new_facts"]:
             result["facts"] = [*partial_ingested_facts, *result.get("facts", ())]
-            result["parsed_facts"] = int(result.get("parsed_facts", 0) or 0) + int(
-                partial_ingestion["parsed_facts"]
+            result["parsed_facts"] = int(result.get("parsed_facts", 0) or 0) + int(partial_ingestion["parsed_facts"])
+            result["new_facts"] = int(result.get("new_facts", 0) or 0) + int(partial_ingestion["new_facts"])
+            result["command_result"]["provider_partial_parsed_facts"] = int(partial_ingestion["parsed_facts"])
+            result["command_result"]["provider_partial_new_facts"] = int(partial_ingestion["new_facts"])
+            result["command_result"]["fact_ids"] = list(
+                dict.fromkeys(
+                    [
+                        *partial_fact_ids,
+                        *result["command_result"].get("fact_ids", ()),
+                    ]
+                )
             )
-            result["new_facts"] = int(result.get("new_facts", 0) or 0) + int(
-                partial_ingestion["new_facts"]
-            )
-            result["command_result"]["provider_partial_parsed_facts"] = int(
-                partial_ingestion["parsed_facts"]
-            )
-            result["command_result"]["provider_partial_new_facts"] = int(
-                partial_ingestion["new_facts"]
-            )
-            result["command_result"]["fact_ids"] = list(dict.fromkeys([
-                *partial_fact_ids,
-                *result["command_result"].get("fact_ids", ()),
-            ]))
         for stored in result.pop("stored_base_facts", []):
             safe_fact = stored["fact"]
             if stored["created"] and safe_fact.get("type") != "check_result":
-                print(
-                    f"     [+] {fact_label}: "
-                    f"{safe_fact['type']} -> {safe_fact['value']}"
-                )
+                print(f"     [+] {fact_label}: {safe_fact['type']} -> {safe_fact['value']}")
         result.pop("graph_projection", None)
         result["_provider_fallback_attempt_action_ids"] = list(
             dispatch_result.metadata.get(
@@ -718,9 +693,7 @@ class AIPipeline(
                 )
                 if snapshot is not None:
                     if snapshot.scan_id != str(scan_id):
-                        raise RuntimeError(
-                            "active task snapshot belongs to a different scan"
-                        )
+                        raise RuntimeError("active task snapshot belongs to a different scan")
                     return list(snapshot.decision_facts())
         return self.fact_store.get_facts(scan_id, target)
 
@@ -742,8 +715,7 @@ class AIPipeline(
         except (TypeError, ValueError):
             parameters = {}
         supports_arbitrary_keywords = any(
-            parameter.kind is inspect.Parameter.VAR_KEYWORD
-            for parameter in parameters.values()
+            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
         )
         keyword_arguments: dict[str, Any] = {}
         if supports_arbitrary_keywords or "facts" in parameters:
@@ -801,26 +773,30 @@ class AIPipeline(
                 scope_value = self._internal_service_scope_value(str(fact.get("value", "")))
                 if not scope_value:
                     continue
-                results.append(self._command_check_result_fact(
-                    cmd=cmd,
-                    target=target,
-                    command_key=f"{command_key}:{scope_value}",
-                    status="completed",
-                    kind="internal_service_discovery",
-                    scope={"type": "internal_service", "value": scope_value},
-                    mode="check_only",
-                ))
+                results.append(
+                    self._command_check_result_fact(
+                        cmd=cmd,
+                        target=target,
+                        command_key=f"{command_key}:{scope_value}",
+                        status="completed",
+                        kind="internal_service_discovery",
+                        scope={"type": "internal_service", "value": scope_value},
+                        mode="check_only",
+                    )
+                )
         if self._command_tool_name(cmd) == "exploit_select":
             for scope_value in self._internal_service_scopes_from_compact_state(cmd):
-                results.append(self._command_check_result_fact(
-                    cmd=cmd,
-                    target=target,
-                    command_key=f"{command_key}:{scope_value}",
-                    status=status,
-                    kind="internal_vulnerability_assessment",
-                    scope={"type": "internal_service", "value": scope_value},
-                    mode="check_only",
-                ))
+                results.append(
+                    self._command_check_result_fact(
+                        cmd=cmd,
+                        target=target,
+                        command_key=f"{command_key}:{scope_value}",
+                        status=status,
+                        kind="internal_vulnerability_assessment",
+                        scope={"type": "internal_service", "value": scope_value},
+                        mode="check_only",
+                    )
+                )
         return results
 
     def _command_check_result_fact(
@@ -831,7 +807,7 @@ class AIPipeline(
         status: str,
         output_str: str = "",
         kind: str = "",
-        scope: Optional[dict[str, str]] = None,
+        scope: dict[str, str] | None = None,
         mode: str = "",
     ) -> dict[str, Any]:
         tool = self._command_tool_name(cmd)
@@ -859,7 +835,7 @@ class AIPipeline(
         output_str: str,
         failed: bool,
         parsed_output_facts: int,
-        execution_result: Optional[ExecutionResult] = None,
+        execution_result: ExecutionResult | None = None,
     ) -> str:
         from core.execution.normalization import command_check_status
 
@@ -892,7 +868,14 @@ class AIPipeline(
             return "web_headers"
         if tool == "cors_check":
             return "cors"
-        if tool in {"jwt_analyze", "js_route_extract", "session_profile_import", "authenticated_crawl", "burp_import", "zap_import"}:
+        if tool in {
+            "jwt_analyze",
+            "js_route_extract",
+            "session_profile_import",
+            "authenticated_crawl",
+            "burp_import",
+            "zap_import",
+        }:
             return "web_app_deep_testing"
         if tool in {"ffuf", "scrapling_crawl", "katana_crawl"}:
             return "web_content_discovery"
@@ -967,7 +950,7 @@ class AIPipeline(
         source: str,
         *,
         source_execution_ids: tuple[str, ...] = (),
-        completion_claim: Optional[CommandCompletionClaim] = None,
+        completion_claim: CommandCompletionClaim | None = None,
     ) -> dict[str, Any]:
         """Store a parsed fact plus normalized derived facts.
 
@@ -984,7 +967,11 @@ class AIPipeline(
         if secret_refs:
             safe_fact["secret_refs"] = list(secret_refs)
         fact_id, created = self.fact_store.add_fact_with_status(
-            scan_id, target, safe_fact["type"], safe_fact["value"], source,
+            scan_id,
+            target,
+            safe_fact["type"],
+            safe_fact["value"],
+            source,
             confidence=safe_fact.get("confidence", 100),
             session_id=safe_fact.get("session_id", "none"),
             source_execution_ids=source_execution_ids,
@@ -995,7 +982,11 @@ class AIPipeline(
         derived_facts = self._derived_facts_from_fact(target, fact, source)
         for derived in derived_facts:
             derived_id, derived_created = self.fact_store.add_fact_with_status(
-                scan_id, target, derived["type"], derived["value"], f"derived:{source}",
+                scan_id,
+                target,
+                derived["type"],
+                derived["value"],
+                f"derived:{source}",
                 confidence=derived.get("confidence", fact.get("confidence", 80)),
                 session_id=fact.get("session_id", "none"),
                 derived_from=[fact_id],
@@ -1045,8 +1036,13 @@ class AIPipeline(
         elif ftype == "browser_rendered":
             endpoint = self._canonical_endpoint_value(value)
         elif ftype in {
-            "web_title", "web_server", "web_surface", "web_link",
-            "web_redirect", "web_powered_by", "web_input",
+            "web_title",
+            "web_server",
+            "web_surface",
+            "web_link",
+            "web_redirect",
+            "web_powered_by",
+            "web_input",
         }:
             endpoint = self._endpoint_from_command_source(source)
         if endpoint:
@@ -1075,7 +1071,7 @@ class AIPipeline(
         return self._canonical_endpoint_value(url, service=service, port=port)
 
     def _endpoint_from_command_source(self, source: str) -> str:
-        match = re.search(r'\bhttps?://[^\s]+', source or "", re.IGNORECASE)
+        match = re.search(r"\bhttps?://[^\s]+", source or "", re.IGNORECASE)
         if not match:
             return ""
         return self._canonical_endpoint_value(match.group(0))
@@ -1091,66 +1087,112 @@ class AIPipeline(
             return []
         facts = []
         if ftype == "internal_host":
-            facts.append({
-                "type": "network_node",
-                "value": json.dumps({"kind": "host", "id": value}, sort_keys=True),
-                "confidence": 85,
-            })
-            facts.append({
-                "type": "network_edge",
-                "value": json.dumps({
-                    "from": host, "to": value, "type": "observed_internal_host",
-                }, sort_keys=True),
-                "confidence": 85,
-            })
+            facts.append(
+                {
+                    "type": "network_node",
+                    "value": json.dumps({"kind": "host", "id": value}, sort_keys=True),
+                    "confidence": 85,
+                }
+            )
+            facts.append(
+                {
+                    "type": "network_edge",
+                    "value": json.dumps(
+                        {
+                            "from": host,
+                            "to": value,
+                            "type": "observed_internal_host",
+                        },
+                        sort_keys=True,
+                    ),
+                    "confidence": 85,
+                }
+            )
         elif ftype == "internal_subnet":
             subnet_ip = value.split("/", 1)[0]
             interface_id = f"{host}:iface:{subnet_ip}"
-            facts.append({
-                "type": "network_node",
-                "value": json.dumps({"kind": "interface", "id": interface_id, "host": host, "address": subnet_ip, "subnet": value}, sort_keys=True),
-                "confidence": 85,
-            })
-            facts.append({
-                "type": "network_node",
-                "value": json.dumps({"kind": "subnet", "id": value}, sort_keys=True),
-                "confidence": 85,
-            })
-            facts.append({
-                "type": "network_edge",
-                "value": json.dumps({
-                    "from": host, "to": interface_id, "type": "has_interface",
-                }, sort_keys=True),
-                "confidence": 85,
-            })
-            facts.append({
-                "type": "network_edge",
-                "value": json.dumps({
-                    "from": interface_id, "to": value, "type": "attached_to_subnet",
-                }, sort_keys=True),
-                "confidence": 85,
-            })
-            facts.append({
-                "type": "network_edge",
-                "value": json.dumps({
-                    "from": host, "to": value, "type": "attached_subnet",
-                }, sort_keys=True),
-                "confidence": 85,
-            })
+            facts.append(
+                {
+                    "type": "network_node",
+                    "value": json.dumps(
+                        {"kind": "interface", "id": interface_id, "host": host, "address": subnet_ip, "subnet": value},
+                        sort_keys=True,
+                    ),
+                    "confidence": 85,
+                }
+            )
+            facts.append(
+                {
+                    "type": "network_node",
+                    "value": json.dumps({"kind": "subnet", "id": value}, sort_keys=True),
+                    "confidence": 85,
+                }
+            )
+            facts.append(
+                {
+                    "type": "network_edge",
+                    "value": json.dumps(
+                        {
+                            "from": host,
+                            "to": interface_id,
+                            "type": "has_interface",
+                        },
+                        sort_keys=True,
+                    ),
+                    "confidence": 85,
+                }
+            )
+            facts.append(
+                {
+                    "type": "network_edge",
+                    "value": json.dumps(
+                        {
+                            "from": interface_id,
+                            "to": value,
+                            "type": "attached_to_subnet",
+                        },
+                        sort_keys=True,
+                    ),
+                    "confidence": 85,
+                }
+            )
+            facts.append(
+                {
+                    "type": "network_edge",
+                    "value": json.dumps(
+                        {
+                            "from": host,
+                            "to": value,
+                            "type": "attached_subnet",
+                        },
+                        sort_keys=True,
+                    ),
+                    "confidence": 85,
+                }
+            )
         elif ftype == "port_open":
             match = re.match(r"(\d+)/(tcp|udp)\s+\(([^)]*)\)", value.lower())
             if match:
                 port, proto, service = match.groups()
-                facts.append({
-                    "type": "network_node",
-                    "value": json.dumps({"kind": "service", "host": host, "port": port, "proto": proto, "service": service}, sort_keys=True),
-                    "confidence": 85,
-                })
-                facts.append({
-                    "type": "network_edge",
-                    "value": json.dumps({"from": host, "to": f"{host}:{port}/{proto}", "type": "listens_on"}, sort_keys=True),
-                    "confidence": 85,
-                })
+                facts.append(
+                    {
+                        "type": "network_node",
+                        "value": json.dumps(
+                            {"kind": "service", "host": host, "port": port, "proto": proto, "service": service},
+                            sort_keys=True,
+                        ),
+                        "confidence": 85,
+                    }
+                )
+                facts.append(
+                    {
+                        "type": "network_edge",
+                        "value": json.dumps(
+                            {"from": host, "to": f"{host}:{port}/{proto}", "type": "listens_on"}, sort_keys=True
+                        ),
+                        "confidence": 85,
+                    }
+                )
         return facts
 
     def _followup_commands_from_facts(self, facts: list[dict[str, Any]]) -> list[str]:
@@ -1186,9 +1228,7 @@ class AIPipeline(
         self.executed_followup_commands.update(commands)
         return commands
 
-    def _run_fact_driven_actions(
-        self, scan_id: str, target: str, facts: list[dict[str, Any]]
-    ) -> dict[str, Any]:
+    def _run_fact_driven_actions(self, scan_id: str, target: str, facts: list[dict[str, Any]]) -> dict[str, Any]:
         """Run deterministic next actions implied by concrete facts.
 
         New facts are fed back into the selector for a bounded number of layers
@@ -1221,9 +1261,7 @@ class AIPipeline(
             for cmd in self._fact_driven_action_commands(scan_id, target, batch_facts):
                 if max_commands is not None and commands_started >= max_commands:
                     break
-                result = self._execute_pipeline_command(
-                    scan_id, target, cmd, "Action Fact", "[Running Action]"
-                )
+                result = self._execute_pipeline_command(scan_id, target, cmd, "Action Fact", "[Running Action]")
                 commands_started += 1
                 parsed_facts += result["parsed_facts"]
                 new_facts += result["new_facts"]
@@ -1273,7 +1311,9 @@ class AIPipeline(
                         command_results.append(active_result["command_result"])
                         enqueue_result(active_result, depth)
 
-                        post_result = self._run_controlled_post_access_followups(scan_id, target, active_result["facts"])
+                        post_result = self._run_controlled_post_access_followups(
+                            scan_id, target, active_result["facts"]
+                        )
                         parsed_facts += post_result["parsed_facts"]
                         new_facts += post_result["new_facts"]
                         command_results.extend(post_result["commands"])
@@ -1314,24 +1354,16 @@ class AIPipeline(
             return None
         return None if value <= 0 else max(1, value)
 
-    def _fact_driven_action_commands(
-        self, scan_id: str, target: str, facts: list[dict[str, Any]]
-    ) -> list[str]:
+    def _fact_driven_action_commands(self, scan_id: str, target: str, facts: list[dict[str, Any]]) -> list[str]:
         """Map facts to safe deterministic follow-up actions."""
         from core.ai.followups import FollowupRuleFamilies
 
         all_facts = self.fact_store.get_facts(scan_id, target)
-        all_pairs = {
-            (str(fact.get("type", "")).lower(), str(fact.get("value", "")).lower())
-            for fact in all_facts
-        }
+        all_pairs = {(str(fact.get("type", "")).lower(), str(fact.get("value", "")).lower()) for fact in all_facts}
 
         inventory_seen = self._post_access_inventory_seen(all_pairs)
         ssh_creds_available = self._facts_include_cached_ssh_credential(facts)
-        ssh_access_confirmed = (
-            self._facts_confirm_ssh_access(facts)
-            or self._facts_confirm_ssh_access(all_facts)
-        )
+        ssh_access_confirmed = self._facts_confirm_ssh_access(facts) or self._facts_confirm_ssh_access(all_facts)
         ssh_inventory_commands = []
         if self._auto_ssh_inventory_enabled() and not inventory_seen and (ssh_creds_available or ssh_access_confirmed):
             ssh_inventory_commands.append(f"ssh_inventory {target}")
@@ -1343,9 +1375,7 @@ class AIPipeline(
         proposals = FollowupRuleFamilies().from_legacy_groups(
             ssh_inventory_commands=ssh_inventory_commands,
             cpanel_commands=cpanel_commands,
-            service_intelligence_commands=self._service_intelligence_commands(
-                scan_id, target, facts, all_pairs
-            ),
+            service_intelligence_commands=self._service_intelligence_commands(scan_id, target, facts, all_pairs),
             protocol_service_commands=self._service_action_commands(target, facts, all_pairs),
             web_path_commands=self._web_path_action_commands(scan_id, target, facts),
             web_link_api_commands=self._web_link_action_commands(scan_id, target, facts),
@@ -1381,17 +1411,8 @@ class AIPipeline(
         self, scan_id: str, target: str, facts: list[dict[str, Any]], all_pairs: set
     ) -> list[str]:
         """Run version-to-exploit intelligence for newly observed services."""
-        evidence_keys = [
-            key for key in (
-                self._service_intelligence_evidence_key(fact)
-                for fact in facts
-            )
-            if key
-        ]
-        new_evidence = [
-            key for key in evidence_keys
-            if key not in self.service_intelligence_evidence_seen
-        ]
+        evidence_keys = [key for key in (self._service_intelligence_evidence_key(fact) for fact in facts) if key]
+        new_evidence = [key for key in evidence_keys if key not in self.service_intelligence_evidence_seen]
         if not new_evidence:
             return []
         self.service_intelligence_evidence_seen.update(new_evidence)
@@ -1417,9 +1438,19 @@ class AIPipeline(
         ftype = str(fact.get("type", "")).lower()
         value = str(fact.get("value", "")).strip().lower()
         service_types = {
-            "port_open", "service_version", "web_server", "web_powered_by",
-            "browser_rendered", "web_title", "web_surface", "web_input", "web_link",
-            "web_endpoint", "web_root", "potential_vulnerability", "vulnerability",
+            "port_open",
+            "service_version",
+            "web_server",
+            "web_powered_by",
+            "browser_rendered",
+            "web_title",
+            "web_surface",
+            "web_input",
+            "web_link",
+            "web_endpoint",
+            "web_root",
+            "potential_vulnerability",
+            "vulnerability",
         }
         if ftype not in service_types or not value:
             return ""
@@ -1445,17 +1476,25 @@ class AIPipeline(
         if ftype == "service_version" and ":local:" in value:
             return False
         return ftype in {
-            "port_open", "service_version", "web_server", "web_powered_by",
-            "browser_rendered", "web_title", "web_surface", "web_input",
-            "web_link", "web_endpoint", "web_root", "potential_vulnerability",
+            "port_open",
+            "service_version",
+            "web_server",
+            "web_powered_by",
+            "browser_rendered",
+            "web_title",
+            "web_surface",
+            "web_input",
+            "web_link",
+            "web_endpoint",
+            "web_root",
+            "potential_vulnerability",
             "vulnerability",
         }
 
     def _searchsploit_query_seen(self, fact_pairs: set, query: str) -> bool:
         normalized = self._normalize_query_token(query)
         return any(
-            ftype == "service_status" and value == f"searchsploit_queried:{normalized}"
-            for ftype, value in fact_pairs
+            ftype == "service_status" and value == f"searchsploit_queried:{normalized}" for ftype, value in fact_pairs
         )
 
     def _searchsploit_queries_from_facts(self, facts: list[dict[str, Any]]) -> list[str]:
@@ -1466,10 +1505,21 @@ class AIPipeline(
             ftype = str(fact.get("type", "")).lower()
             value = str(fact.get("value", "")).strip()
             query = ""
-            if ftype in {
-                "web_server", "web_powered_by", "browser_rendered", "web_title",
-                "web_surface", "web_input", "web_link", "web_endpoint", "web_root",
-            } and "http" not in queries:
+            if (
+                ftype
+                in {
+                    "web_server",
+                    "web_powered_by",
+                    "browser_rendered",
+                    "web_title",
+                    "web_surface",
+                    "web_input",
+                    "web_link",
+                    "web_endpoint",
+                    "web_root",
+                }
+                and "http" not in queries
+            ):
                 queries.append("http")
             if ftype in {"potential_vulnerability", "vulnerability"}:
                 cves = re.findall(r"\bCVE-\d{4}-\d{4,7}\b", value, re.IGNORECASE)
@@ -1507,12 +1557,27 @@ class AIPipeline(
 
     def _service_name_for_common_port(self, port: str) -> str:
         mapping = {
-            "21": "ftp", "22": "openssh", "25": "smtp", "53": "dns",
-            "80": "http", "110": "pop3", "143": "imap", "443": "https",
-            "445": "smb", "587": "smtp", "993": "imap", "995": "pop3",
-            "3000": "node express", "3306": "mysql", "5432": "postgresql",
-            "6379": "redis", "8000": "http", "8080": "http",
-            "8443": "https", "9000": "http", "9200": "elasticsearch",
+            "21": "ftp",
+            "22": "openssh",
+            "25": "smtp",
+            "53": "dns",
+            "80": "http",
+            "110": "pop3",
+            "143": "imap",
+            "443": "https",
+            "445": "smb",
+            "587": "smtp",
+            "993": "imap",
+            "995": "pop3",
+            "3000": "node express",
+            "3306": "mysql",
+            "5432": "postgresql",
+            "6379": "redis",
+            "8000": "http",
+            "8080": "http",
+            "8443": "https",
+            "9000": "http",
+            "9200": "elasticsearch",
             "27017": "mongodb",
         }
         return mapping.get(str(port).strip(), "")
@@ -1582,9 +1647,7 @@ class AIPipeline(
                 return True
         return False
 
-    def _service_action_commands(
-        self, target: str, facts: list[dict[str, Any]], all_pairs: set
-    ) -> list[str]:
+    def _service_action_commands(self, target: str, facts: list[dict[str, Any]], all_pairs: set) -> list[str]:
         """Add deterministic protocol-specific probes for newly observed services."""
         commands = []
         for port, service, value in self._open_service_ports(facts):
@@ -1633,7 +1696,9 @@ class AIPipeline(
         for ftype, value in fact_pairs:
             if ftype != "service_status":
                 continue
-            if any(value.startswith(prefix) and (value.endswith(f":{port}") or f":{port}:" in value) for prefix in prefixes):
+            if any(
+                value.startswith(prefix) and (value.endswith(f":{port}") or f":{port}:" in value) for prefix in prefixes
+            ):
                 return True
         return False
 
@@ -1650,7 +1715,13 @@ class AIPipeline(
     def _database_service_for_port(self, port: str, service: str, value: str) -> str:
         if port == "5432" or "postgres" in service or "postgres" in value:
             return "postgresql"
-        if port in {"3306", "33060"} or "mysql" in service or "mariadb" in service or "mysql" in value or "mariadb" in value:
+        if (
+            port in {"3306", "33060"}
+            or "mysql" in service
+            or "mariadb" in service
+            or "mysql" in value
+            or "mariadb" in value
+        ):
             return "mysql"
         return ""
 
@@ -1673,190 +1744,6 @@ class AIPipeline(
         if service == "mysql":
             candidate_keys.add("mariadb")
         return any(creds.get(key) for key in candidate_keys)
-
-    def _web_path_action_commands(self, scan_id: str, target: str, facts: list[dict[str, Any]]) -> list[str]:
-        endpoints = self._web_endpoints_from_facts(scan_id, target)
-        if not endpoints:
-            host = (target or "").strip().split("://")[-1].split("/")[0].split(":")[0]
-            endpoints = [f"http://{host}"]
-        base = endpoints[0].rstrip("/")
-        commands = []
-        for fact in facts:
-            if fact.get("type") != "web_path":
-                continue
-            value = str(fact.get("value", ""))
-            path, _, status = value.partition(":")
-            path = "/" + path.strip().lstrip("/")
-            if path in {"/", ""}:
-                continue
-            is_interesting = (
-                status in {"200", "301", "302", "401", "403"}
-                or any(word in path.lower() for word in self._interesting_web_words())
-            )
-            if not is_interesting:
-                continue
-            url = f"{base}{path}"
-            commands.append(f"curl_headers {url}")
-            commands.append(f"scrapling {url}")
-            path_limit = self._strategy_limit("web_path_followup_commands", None)
-            if path_limit is not None and len(commands) >= path_limit:
-                break
-        return commands
-
-    def _web_link_action_commands(self, scan_id: str, target: str, facts: list[dict[str, Any]]) -> list[str]:
-        urls = self._normalized_web_link_urls(scan_id, target, facts)
-        commands = []
-        limit = self._web_link_followup_command_limit()
-        for url in urls:
-            if self._url_looks_javascript_asset(url):
-                commands.append(f"js_route_extract {url}")
-                if limit is not None and len(commands) >= limit:
-                    break
-                continue
-            commands.append(f"curl_headers {url}")
-            if limit is not None and len(commands) >= limit:
-                break
-            commands.append(f"scrapling {url}")
-            if limit is not None and len(commands) >= limit:
-                break
-            if self._url_looks_openapi_spec(url):
-                commands.append(f"openapi_import {url}")
-                if limit is not None and len(commands) >= limit:
-                    break
-            if self._url_looks_graphql_endpoint(url):
-                commands.append(f"graphql_check {url}")
-                if limit is not None and len(commands) >= limit:
-                    break
-        return commands
-
-    def _normalized_web_link_urls(self, scan_id: str, target: str, facts: list[dict[str, Any]]) -> list[str]:
-        endpoints = self._web_endpoints_from_facts(scan_id, target)
-        if not endpoints:
-            host = self._target_host(target)
-            endpoints = [f"http://{host}"] if host else []
-        if not endpoints:
-            return []
-
-        allowed_hosts = {
-            parsed.hostname.lower()
-            for parsed in (urlparse(endpoint) for endpoint in endpoints)
-            if parsed.hostname
-        }
-        target_host = self._target_host(target)
-        if target_host:
-            allowed_hosts.add(target_host.lower())
-
-        urls = []
-        seen = set()
-        for fact in facts:
-            if str(fact.get("type", "")).lower() != "web_link":
-                continue
-            raw_link = str(fact.get("value", "")).strip()
-            if not self._web_link_looks_interesting(raw_link):
-                continue
-            candidate_urls = []
-            if re.match(r"^https?://", raw_link, re.IGNORECASE) or raw_link.startswith("//"):
-                candidate_urls.append(self._normalize_web_link_url(raw_link, endpoints[0], allowed_hosts))
-            else:
-                for endpoint in endpoints:
-                    candidate_urls.append(self._normalize_web_link_url(raw_link, endpoint, allowed_hosts))
-
-            for url in candidate_urls:
-                if not url or url in seen:
-                    continue
-                seen.add(url)
-                urls.append(url)
-                url_limit = self._strategy_limit("web_link_url_limit", None)
-                if url_limit is not None and len(urls) >= url_limit:
-                    return urls
-        return urls
-
-    def _normalize_web_link_url(self, raw_link: str, base: str, allowed_hosts: set) -> str:
-        link = (raw_link or "").strip().strip("\"'<>")
-        link = re.sub(r"[\s)\],;]+$", "", link)
-        if not link:
-            return ""
-        if link.startswith("#"):
-            return ""
-        if re.match(r"^(?:javascript|mailto|tel|data):", link, re.IGNORECASE):
-            return ""
-
-        base_url = base.rstrip("/") + "/"
-        if link.startswith("//"):
-            base_scheme = urlparse(base_url).scheme or "http"
-            url = f"{base_scheme}:{link}"
-        elif re.match(r"^https?://", link, re.IGNORECASE):
-            url = link
-        else:
-            url = urljoin(base_url, link)
-
-        parsed = urlparse(url)
-        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
-            return ""
-        if parsed.hostname.lower() not in allowed_hosts:
-            return ""
-
-        path = parsed.path or "/"
-        if path == "/" and not parsed.query:
-            return ""
-        if self._web_path_is_static(path) and not path.lower().endswith((".js", ".mjs")):
-            return ""
-
-        return urlunparse((
-            parsed.scheme.lower(),
-            parsed.netloc.lower(),
-            path,
-            "",
-            parsed.query,
-            "",
-        ))
-
-    def _web_link_looks_interesting(self, raw_link: str) -> bool:
-        link = (raw_link or "").strip().strip("\"'<>").lower()
-        if not link or link.startswith("#"):
-            return False
-        if re.match(r"^(?:javascript|mailto|tel|data):", link):
-            return False
-        path = urlparse(link).path if re.match(r"^https?://", link) else link.split("?", 1)[0].split("#", 1)[0]
-        if path.lower().endswith((".js", ".mjs")):
-            return True
-        if self._web_path_is_static(path):
-            return False
-        if any(word in link for word in self._interesting_web_words()):
-            return True
-        return path not in {"", "/", "./", "../"}
-
-    def _web_path_is_static(self, path: str) -> bool:
-        return (path or "").lower().endswith((
-            ".css", ".js", ".mjs", ".map", ".png", ".jpg", ".jpeg",
-            ".gif", ".svg", ".ico", ".webp", ".woff", ".woff2",
-            ".ttf", ".eot", ".mp4", ".mp3", ".avi", ".mov",
-        ))
-
-    def _interesting_web_words(self) -> tuple:
-        return (
-            "admin", "login", "signin", "auth", "account", "report",
-            "_reports", "api", "dashboard", "cpanel", "whm", "wp-admin",
-            "phpmyadmin", "grafana", "metrics", "health", "status",
-            "config", "setup", "install",
-            "swagger", "openapi", "api-docs", "graphql",
-        )
-
-    def _url_looks_openapi_spec(self, url: str) -> bool:
-        path = (urlparse(url or "").path or "").lower()
-        return any(marker in path for marker in (
-            "swagger.json", "openapi.json", "openapi.yaml", "openapi.yml",
-            "api-docs", "swagger/v1", "swagger/v2", "swagger/v3",
-        ))
-
-    def _url_looks_graphql_endpoint(self, url: str) -> bool:
-        return (urlparse(url or "").path or "").lower().rstrip("/") == "/graphql"
-
-    def _url_looks_javascript_asset(self, url: str) -> bool:
-        return (urlparse(url or "").path or "").lower().endswith((".js", ".mjs"))
-
-    def _web_link_followup_command_limit(self):
-        return self._strategy_limit("web_link_followup_commands", None)
 
     def _target_host(self, target: str) -> str:
         from core.tools.targeting import target_host
@@ -1896,7 +1783,9 @@ class AIPipeline(
                 commands.append(f"scrapling_crawl {endpoint}")
                 if command_limit is not None and len(commands) >= command_limit:
                     break
-            if self.tool_registry._is_tool_available("nuclei_safe") and not self._nuclei_seen(facts, all_pairs, endpoint):
+            if self.tool_registry._is_tool_available("nuclei_safe") and not self._nuclei_seen(
+                facts, all_pairs, endpoint
+            ):
                 commands.append(f"nuclei_safe {endpoint}")
                 if command_limit is not None and len(commands) >= command_limit:
                     break
@@ -1908,30 +1797,49 @@ class AIPipeline(
 
     def _facts_include_web_surface(self, facts: list[dict[str, Any]]) -> bool:
         return any(
-            str(fact.get("type", "")).lower() in {
-                "port_open", "web_server", "web_title", "web_surface",
-                "web_endpoint", "web_link", "web_input", "web_redirect", "browser_rendered",
-                "asset_url", "technology", "nuclei_finding",
+            str(fact.get("type", "")).lower()
+            in {
+                "port_open",
+                "web_server",
+                "web_title",
+                "web_surface",
+                "web_endpoint",
+                "web_link",
+                "web_input",
+                "web_redirect",
+                "browser_rendered",
+                "asset_url",
+                "technology",
+                "nuclei_finding",
             }
-            and any(marker in str(fact.get("value", "")).lower() for marker in (
-                "http", "nginx", "apache", "wordpress", "login", "form", "80", "443",
-                "8080", "8443", "3000", "9000",
-            ))
+            and any(
+                marker in str(fact.get("value", "")).lower()
+                for marker in (
+                    "http",
+                    "nginx",
+                    "apache",
+                    "wordpress",
+                    "login",
+                    "form",
+                    "80",
+                    "443",
+                    "8080",
+                    "8443",
+                    "3000",
+                    "9000",
+                )
+            )
             for fact in facts
         )
 
     def _browser_render_seen(self, fact_pairs: set, endpoint: str) -> bool:
         endpoint_l = endpoint.lower().rstrip("/")
-        return any(
-            ftype == "browser_rendered" and value.rstrip("/") == endpoint_l
-            for ftype, value in fact_pairs
-        )
+        return any(ftype == "browser_rendered" and value.rstrip("/") == endpoint_l for ftype, value in fact_pairs)
 
     def _crawl_seen(self, fact_pairs: set, endpoint: str) -> bool:
         endpoint_l = endpoint.lower().rstrip("/")
         return any(
-            ftype == "service_status" and value == f"web_crawl_completed:{endpoint_l}"
-            for ftype, value in fact_pairs
+            ftype == "service_status" and value == f"web_crawl_completed:{endpoint_l}" for ftype, value in fact_pairs
         )
 
     def _web_endpoint_absent_seen(self, fact_pairs: set, endpoint: str) -> bool:
@@ -1946,8 +1854,7 @@ class AIPipeline(
     def _nuclei_seen(self, facts: list[dict[str, Any]], fact_pairs: set, endpoint: str) -> bool:
         endpoint_l = endpoint.lower().rstrip("/")
         if any(
-            ftype == "service_status" and value == f"nuclei_scan_completed:{endpoint_l}"
-            for ftype, value in fact_pairs
+            ftype == "service_status" and value == f"nuclei_scan_completed:{endpoint_l}" for ftype, value in fact_pairs
         ):
             return True
         for fact in facts or []:
@@ -1959,7 +1866,9 @@ class AIPipeline(
             if value != "tool_timeout:nuclei_safe" and value != "tool_timeout:nuclei":
                 continue
             sources = [str(fact.get("source", ""))]
-            sources.extend(str(item.get("source", "")) for item in fact.get("observations", []) if isinstance(item, dict))
+            sources.extend(
+                str(item.get("source", "")) for item in fact.get("observations", []) if isinstance(item, dict)
+            )
             if any(endpoint_l in source.lower().rstrip("/") for source in sources):
                 return True
         return False
@@ -2053,18 +1962,22 @@ class AIPipeline(
         if len(parts) != 2:
             return [cmd]
         tool, arg = parts[0], parts[1].strip()
-        if (
-            tool == "bruteforce"
-            and arg == f"ssh {target}"
-            and self._known_credentials_for_target(target).get("ssh")
-        ):
+        if tool == "bruteforce" and arg == f"ssh {target}" and self._known_credentials_for_target(target).get("ssh"):
             return [f"ssh_session {target}"]
         if arg != target:
             return [cmd]
 
         web_mapping_tools = {
-            "whatweb", "curl_headers", "scrapling", "browser_surface_analysis",
-            "scrapling_crawl", "ffuf", "nikto", "jmx2rce_scan", "wpscan", "sqlmap",
+            "whatweb",
+            "curl_headers",
+            "scrapling",
+            "browser_surface_analysis",
+            "scrapling_crawl",
+            "ffuf",
+            "nikto",
+            "jmx2rce_scan",
+            "wpscan",
+            "sqlmap",
         }
         if tool not in web_mapping_tools:
             return [cmd]
@@ -2142,6 +2055,7 @@ class AIPipeline(
         endpoints = []
         endpoint_keys = set()
         default_ports = {"80", "443"}  # URL formatting only, not discovery logic.
+
         def add_endpoint(endpoint: str) -> None:
             endpoint = self._display_endpoint_url(endpoint)
             if not endpoint:
@@ -2225,10 +2139,11 @@ class AIPipeline(
             if not self._fact_is_external_service_evidence(fact):
                 continue
             value = str(fact.get("value", "")).replace("\n", " ").replace("\r", " ").strip()
-            if (
-                fact.get("type") in {"web_endpoint", "web_link", "browser_rendered"}
-                and not self._web_fact_in_target_scope(value, target)
-            ):
+            if fact.get("type") in {
+                "web_endpoint",
+                "web_link",
+                "browser_rendered",
+            } and not self._web_fact_in_target_scope(value, target):
                 continue
             if value:
                 recon_bits.append(f"{fact['type']} -> {value}")
@@ -2290,7 +2205,10 @@ class AIPipeline(
         return {key: value for key, value in context.items() if value}
 
     def _parse_port_fact_for_context(self, value: str) -> dict[str, Any]:
-        match = re.match(r"(?:(?P<host>[^:\s]+):)?(?P<port>\d+)/(?:tcp|udp)\s+\((?P<service>[^)]*)\)(?:\s+\[(?P<banner>.*?)\])?", value)
+        match = re.match(
+            r"(?:(?P<host>[^:\s]+):)?(?P<port>\d+)/(?:tcp|udp)\s+\((?P<service>[^)]*)\)(?:\s+\[(?P<banner>.*?)\])?",
+            value,
+        )
         if not match:
             return {}
         item = {
@@ -2367,6 +2285,7 @@ class AIPipeline(
         from core.execution.normalization import command_failed
 
         return command_failed(output, output_str)
+
 
 # For testing
 if __name__ == "__main__":

@@ -22,9 +22,8 @@ class TestGetConnection:
         project_root = Path(__file__).resolve().parents[1]
         script = textwrap.dedent(
             f"""
-            import mysql.connector
-            import mysql.connector.pooling
             import sys
+            import types
 
             calls = []
 
@@ -34,8 +33,20 @@ class TestGetConnection:
                     raise AssertionError(f"import attempted {{kind}}")
                 return call
 
-            mysql.connector.connect = forbidden("direct MySQL connection")
-            mysql.connector.pooling.MySQLConnectionPool = forbidden("MySQL pool")
+            mysql = types.ModuleType("mysql")
+            mysql.__path__ = []
+            connector = types.ModuleType("mysql.connector")
+            connector.__path__ = []
+            pooling = types.ModuleType("mysql.connector.pooling")
+            connector.connect = forbidden("direct MySQL connection")
+            pooling.MySQLConnectionPool = forbidden("MySQL pool")
+            connector.pooling = pooling
+            mysql.connector = connector
+            sys.modules.update({{
+                "mysql": mysql,
+                "mysql.connector": connector,
+                "mysql.connector.pooling": pooling,
+            }})
             sys.path.insert(0, {str(project_root)!r})
 
             import db
@@ -63,11 +74,9 @@ class TestGetConnection:
         _mock_mysql,
     ):
         import db
+
         db._pool = None  # Reset pool state
-        mock_config.return_value = {
-            "host": "localhost", "user": "test",
-            "password": "test", "database": "test_db"
-        }
+        mock_config.return_value = {"host": "localhost", "user": "test", "password": "test", "database": "test_db"}
         mock_pool = MagicMock()
         mock_pool_class.return_value = mock_pool
         mock_pool.get_connection.return_value = MagicMock()
@@ -81,6 +90,7 @@ class TestGetConnection:
     @patch("db._get_db_config")
     def test_raises_on_missing_config(self, mock_config):
         import db
+
         db._pool = None
         mock_config.side_effect = RuntimeError("No config")
 
@@ -142,6 +152,7 @@ class TestTransaction:
     @patch("db.get_connection")
     def test_commits_on_success(self, mock_get_conn):
         import db
+
         mock_conn = MagicMock()
         mock_get_conn.return_value = mock_conn
 
@@ -154,6 +165,7 @@ class TestTransaction:
     @patch("db.get_connection")
     def test_rollback_on_exception(self, mock_get_conn):
         import db
+
         mock_conn = MagicMock()
         mock_get_conn.return_value = mock_conn
 
@@ -170,6 +182,7 @@ class TestCreateSession:
     @patch("db.get_connection")
     def test_create_session_returns_sl_no(self, mock_get_conn):
         import db
+
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_cursor.lastrowid = 42
@@ -185,6 +198,7 @@ class TestCreateSession:
     @patch("db.get_connection")
     def test_create_session_stores_target(self, mock_get_conn):
         import db
+
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_cursor.lastrowid = 1
@@ -220,6 +234,7 @@ class TestSaveVulnerability:
     @patch("db.get_connection")
     def test_save_vulnerability_truncates_long_names(self, mock_get_conn):
         import db
+
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_conn.cursor.return_value = mock_cursor
@@ -243,9 +258,16 @@ class TestSaveVulnerability:
         mock_get_conn.return_value = mock_conn
 
         db.save_vulnerability(
-            1, "finding", "HIGH", "80", "http", "desc",
-            evidence_source="nmap", raw_evidence="evidence",
-            repro_cmd="curl target", cvss_score=8.4,
+            1,
+            "finding",
+            "HIGH",
+            "80",
+            "http",
+            "desc",
+            evidence_source="nmap",
+            raw_evidence="evidence",
+            repro_cmd="curl target",
+            cvss_score=8.4,
         )
 
         sql, params = mock_cursor.execute.call_args[0]
@@ -314,6 +336,7 @@ class TestGetAllHistory:
     @patch("db.get_connection")
     def test_returns_list(self, mock_get_conn):
         import db
+
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_cursor.fetchall.return_value = [
@@ -335,6 +358,7 @@ class TestUpdateSessionStatus:
     @patch("db.get_connection")
     def test_updates_status(self, mock_get_conn):
         import db
+
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_conn.cursor.return_value = mock_cursor

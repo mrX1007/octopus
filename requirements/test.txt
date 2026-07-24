@@ -1,3 +1,5 @@
-# One-file installer for the hermetic collection/unit/contract environment.
+# One-file installer matching the locked hermetic test profile.
 -r runtime.txt
+-r c2.txt
+-r reporting.txt
 -r dev.txt

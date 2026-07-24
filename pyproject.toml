@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77", "wheel"]
+requires = ["setuptools>=83.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,18 +7,18 @@ name = "octopus-security"
 version = "1.1.0"
 description = "Evidence-driven, policy-gated security assessment orchestration"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{name = "OCTOPUS contributors"}]
 dependencies = [
-    "cryptography>=44.0.0",
+    "cryptography>=48.0.1",
     "paramiko>=3.0",
-    "python-dotenv>=1.0.0",
+    "python-dotenv>=1.2.2",
     "PyYAML>=6.0",
-    "requests>=2.31.0",
+    "requests>=2.33.0",
     "rich>=13.7.0",
-    "urllib3>=2.2.0",
+    "urllib3>=2.7.0",
 ]
 
 [project.optional-dependencies]
@@ -31,8 +31,7 @@ reporting = [
 ]
 osint-browser = [
     "beautifulsoup4>=4.12.0",
-    "ddgs>=9.0.1,<9.8.0; python_version < '3.10'",
-    "ddgs>=9.14.4; python_version >= '3.10'",
+    "ddgs>=9.14.4",
     "httpx[socks]>=0.27.0",
     "lxml>=5.1.0",
     "patchright>=1.49.0",
@@ -113,6 +112,8 @@ filterwarnings = [
 
 [tool.ruff]
 line-length = 120
+# Keep the established syntax-modernization ratchet independent from the
+# supported runtime floor; raising this enables hundreds of unrelated UP/B fixes.
 target-version = "py39"
 extend-exclude = [
     "venv",
@@ -144,7 +145,7 @@ ignore = [
 "core/killchain/exploits/__init__.py" = ["F401"]
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 ignore_missing_imports = true
 warn_unused_ignores = true
 warn_redundant_casts = true

@@ -1,16 +1,16 @@
-# OCTOPUS mandatory Python runtime (CPython 3.9 baseline)
+# OCTOPUS mandatory Python runtime (CPython 3.10 baseline)
 
 # Configuration and CLI
 PyYAML>=6.0
-python-dotenv>=1.0.0
+python-dotenv>=1.2.2
 rich>=13.7.0
 
 # Cryptography
-cryptography>=44.0.0
+cryptography>=48.0.1
 
 # Networking and HTTP
-requests>=2.31.0
-urllib3>=2.2.0
+requests>=2.33.0
+urllib3>=2.7.0
 
 # Remote access used by the supported SSH providers
 paramiko>=3.0

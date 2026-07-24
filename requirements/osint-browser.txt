@@ -1,7 +1,6 @@
 # Optional OSINT/search/browser profile.
 beautifulsoup4>=4.12.0
-ddgs>=9.0.1,<9.8.0; python_version < "3.10"
-ddgs>=9.14.4; python_version >= "3.10"
+ddgs>=9.14.4
 httpx[socks]>=0.27.0
 lxml>=5.1.0
 patchright>=1.49.0

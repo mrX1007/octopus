@@ -57,12 +57,7 @@ def _fake_uv(calls: list[dict[str, Any]]):
         no_binary = ""
         if "--no-binary" in argv:
             no_binary = f"--no-binary {argv[argv.index('--no-binary') + 1]}\n"
-        output_text = (
-            no_binary
-            + "--only-binary :all:\n"
-            + "demo-runtime==1.0.0 \\\n"
-            + f"    --hash=sha256:{_HASH}\n"
-        )
+        output_text = no_binary + "--only-binary :all:\n" + "demo-runtime==1.0.0 \\\n" + f"    --hash=sha256:{_HASH}\n"
         output.write_text(
             output_text,
             encoding="utf-8",
@@ -84,7 +79,7 @@ def test_update_builds_complete_matrix_with_safe_uv_argv(
 
     manifest_path = tmp_path / "requirements" / "locks" / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["epoch"] == "2026-07-14T00:00:00Z"
+    assert manifest["epoch"] == "2026-07-24T00:00:00Z"
     assert manifest["resolver"] == {
         "index": "https://pypi.org/simple",
         "name": "uv",
@@ -108,11 +103,11 @@ def test_update_builds_complete_matrix_with_safe_uv_argv(
             },
         },
     }
-    assert len(manifest["locks"]) == 36
+    assert len(manifest["locks"]) == 27
 
     expected_paths = {
         f"requirements/locks/linux-x86_64/{python}/{profile}.txt"
-        for python in ("cp39", "cp310", "cp311", "cp312")
+        for python in ("cp310", "cp311", "cp312")
         for profile in (
             "runtime",
             "c2",
@@ -132,8 +127,11 @@ def test_update_builds_complete_matrix_with_safe_uv_argv(
         assert item["sha256"] == hashlib.sha256(lock_bytes).hexdigest()
         assert item["input_sha256"]
         assert b"--hash=sha256:" in lock_bytes
+        lock_text = lock_bytes.decode("utf-8")
+        if item["profile"] in {"osint-browser", "full"}:
+            assert lock_text.index("--only-binary :all:") < lock_text.index("--no-binary shodan")
 
-    assert len(calls) == 37
+    assert len(calls) == 28
     compile_calls = calls[1:]
     for call in compile_calls:
         argv = call["argv"]
@@ -169,14 +167,7 @@ def test_check_resolves_in_temporary_tree_without_mutating_locks(
     lock_requirements.update_locks(tmp_path)
 
     lock_requirements.check_locks(tmp_path)
-    lock_path = (
-        tmp_path
-        / "requirements"
-        / "locks"
-        / "linux-x86_64"
-        / "cp39"
-        / "runtime.txt"
-    )
+    lock_path = tmp_path / "requirements" / "locks" / "linux-x86_64" / "cp310" / "runtime.txt"
     tampered = lock_path.read_text(encoding="utf-8") + "# local edit\n"
     lock_path.write_text(tampered, encoding="utf-8")
 
@@ -221,17 +212,19 @@ def test_update_rejects_direct_urls_options_and_shell_payloads_before_resolver(
         "demo==1.0.0\n",
         "demo>=1.0.0 \\\n    --hash=sha256:" + _HASH + "\n",
         "demo @ https://example.invalid/demo.whl \\\n    --hash=sha256:" + _HASH + "\n",
-        "--index-url https://example.invalid/simple\n"
-        "demo==1.0.0 \\\n    --hash=sha256:" + _HASH + "\n",
+        "--index-url https://example.invalid/simple\ndemo==1.0.0 \\\n    --hash=sha256:" + _HASH + "\n",
         "demo==1.0.0 \\\n    --hash=sha256:not-a-digest\n",
     ],
 )
 def test_validate_rejects_unhashed_unpinned_direct_or_directive_locks(body: str) -> None:
-    text = lock_requirements.render_lock_header(
-        target=lock_requirements.TARGETS[0],
-        profile="runtime",
-        inputs=lock_requirements.PROFILE_INPUTS["runtime"],
-    ) + body
+    text = (
+        lock_requirements.render_lock_header(
+            target=lock_requirements.TARGETS[0],
+            profile="runtime",
+            inputs=lock_requirements.PROFILE_INPUTS["runtime"],
+        )
+        + body
+    )
 
     with pytest.raises(lock_requirements.LockError):
         lock_requirements.validate_lock_text(text, source="test lock")
@@ -249,7 +242,7 @@ def test_validate_requires_self_contained_binary_only_policy() -> None:
         lock_requirements.validate_lock_text(header + pinned, source="missing policy")
     with pytest.raises(lock_requirements.LockError, match="sdist allowlist mismatch"):
         lock_requirements.validate_lock_text(
-            header + "--no-binary demo\n--only-binary :all:\n" + pinned,
+            header + "--only-binary :all:\n--no-binary demo\n" + pinned,
             source="unsafe policy",
         )
 
@@ -273,6 +266,12 @@ def test_validate_allows_only_the_declared_profile_sdist_exception() -> None:
         source="external lock",
         sdist_allowlist=("shodan",),
     )
+    with pytest.raises(lock_requirements.LockError, match="must precede"):
+        lock_requirements.validate_lock_text(
+            header + "--no-binary shodan\n--only-binary :all:\n" + pinned,
+            source="wrong-order lock",
+            sdist_allowlist=("shodan",),
+        )
     with pytest.raises(lock_requirements.LockError, match="sdist allowlist mismatch"):
         lock_requirements.validate_lock_text(valid, source="runtime lock")
     with pytest.raises(lock_requirements.LockError, match="sdist allowlist mismatch"):
@@ -293,14 +292,14 @@ def test_validate_detects_manifest_and_lock_tampering(
     lock_requirements.update_locks(tmp_path)
     lock_requirements.validate_locks(tmp_path)
 
-    lock_path = (
-        tmp_path
-        / "requirements"
-        / "locks"
-        / "linux-x86_64"
-        / "cp312"
-        / "full.txt"
-    )
+    retired_lock = tmp_path / "requirements" / "locks" / "linux-x86_64" / "cp39" / "runtime.txt"
+    retired_lock.parent.mkdir(parents=True)
+    retired_lock.write_text("retired target\n", encoding="utf-8")
+    with pytest.raises(lock_requirements.LockError, match="unexpected lock artifacts"):
+        lock_requirements.validate_locks(tmp_path)
+    retired_lock.unlink()
+
+    lock_path = tmp_path / "requirements" / "locks" / "linux-x86_64" / "cp312" / "full.txt"
     lock_path.write_text(
         lock_path.read_text(encoding="utf-8").replace(_HASH, "b" * 64),
         encoding="utf-8",

@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-EPOCH = "2026-07-14T00:00:00Z"
-SOURCE_DATE_EPOCH = "1783987200"
+EPOCH = "2026-07-24T00:00:00Z"
+SOURCE_DATE_EPOCH = "1784851200"
 UV_VERSION = "0.11.28"
 INDEX_URL = "https://pypi.org/simple"
 SCHEMA_VERSION = 1
@@ -52,7 +52,6 @@ class Target:
 
 
 TARGETS = (
-    Target("cp39", "3.9"),
     Target("cp310", "3.10"),
     Target("cp311", "3.11"),
     Target("cp312", "3.12"),
@@ -105,9 +104,7 @@ PROFILE_SDIST_ALLOWLIST: dict[str, tuple[str, ...]] = {
 }
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-_HASH_OPTION_RE = re.compile(
-    r"(?:^|\s)--hash=sha256:([0-9a-fA-F]{64})(?=\s|$)"
-)
+_HASH_OPTION_RE = re.compile(r"(?:^|\s)--hash=sha256:([0-9a-fA-F]{64})(?=\s|$)")
 _PIN_RE = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._-]*"
     r"(?:\[[A-Za-z0-9._,-]+\])?"
@@ -162,9 +159,7 @@ def validate_requirement_input_text(text: str, *, source: str) -> None:
         line = re.split(r"\s+#", line, maxsplit=1)[0].rstrip()
         reason = _unsafe_requirement_reason(line)
         if reason:
-            raise LockError(
-                f"unsafe requirement in {source}:{line_number}: {reason}"
-            )
+            raise LockError(f"unsafe requirement in {source}:{line_number}: {reason}")
 
 
 def _read_and_validate_inputs(root: Path) -> tuple[dict[str, str], dict[str, str]]:
@@ -208,6 +203,49 @@ def render_lock_header(
     )
 
 
+def _canonicalize_build_options(
+    text: str,
+    *,
+    sdist_allowlist: Sequence[str],
+    source: str,
+) -> str:
+    """Put pip format-control options in their effective, deterministic order."""
+
+    retained: list[str] = []
+    binary_policy_count = 0
+    observed_sdist: list[str] = []
+    for raw_line in text.splitlines():
+        record = raw_line.strip()
+        if record in {"--only-binary :all:", "--only-binary=:all:"}:
+            binary_policy_count += 1
+            continue
+        match = re.fullmatch(
+            r"--no-binary(?:=|\s+)([A-Za-z0-9._-]+)",
+            record,
+        )
+        if match:
+            observed_sdist.append(re.sub(r"[-_.]+", "-", match.group(1)).lower())
+            continue
+        retained.append(raw_line)
+
+    expected_sdist = [re.sub(r"[-_.]+", "-", package).lower() for package in sdist_allowlist]
+    if (
+        binary_policy_count != 1
+        or len(observed_sdist) != len(set(observed_sdist))
+        or set(observed_sdist) != set(expected_sdist)
+    ):
+        raise LockError(f"resolver emitted an invalid binary policy for {source}")
+
+    body = "\n".join(retained).lstrip("\n")
+    if not body:
+        raise LockError(f"resolver emitted no packages for {source}")
+    if not body.endswith("\n"):
+        body += "\n"
+    directives = ["--only-binary :all:"]
+    directives.extend(f"--no-binary {package}" for package in expected_sdist)
+    return "\n".join(directives) + "\n\n" + body
+
+
 def _logical_lock_records(text: str, *, source: str) -> list[str]:
     records: list[str] = []
     pending = ""
@@ -244,15 +282,23 @@ def validate_lock_text(
     expected_sdist = {name.lower() for name in sdist_allowlist}
     observed_sdist: list[str] = []
     binary_policy_count = 0
+    binary_policy_seen = False
+    package_seen = False
     for record in records:
         if record in {"--only-binary :all:", "--only-binary=:all:"}:
+            if package_seen:
+                raise LockError(f"binary policy directives must precede packages in {source}")
             binary_policy_count += 1
+            binary_policy_seen = True
             continue
         no_binary_match = re.fullmatch(r"--no-binary(?:=|\s+)([A-Za-z0-9._-]+)", record)
         if no_binary_match:
+            if not binary_policy_seen or package_seen:
+                raise LockError(f"'--only-binary :all:' must precede sdist exceptions in {source}")
             package = re.sub(r"[-_.]+", "-", no_binary_match.group(1)).lower()
             observed_sdist.append(package)
             continue
+        package_seen = True
         if record.startswith("-"):
             raise LockError(f"unsupported installer directive in {source}: {record}")
         hashes = _HASH_OPTION_RE.findall(record)
@@ -268,9 +314,7 @@ def validate_lock_text(
         if not _PIN_RE.fullmatch(requirement):
             raise LockError(f"locked requirement is not exactly pinned in {source}: {record}")
     if binary_policy_count != 1:
-        raise LockError(
-            f"lock must contain exactly one '--only-binary :all:' policy in {source}"
-        )
+        raise LockError(f"lock must contain exactly one '--only-binary :all:' policy in {source}")
     if len(observed_sdist) != len(set(observed_sdist)) or set(observed_sdist) != expected_sdist:
         raise LockError(
             f"lock sdist allowlist mismatch in {source}: "
@@ -355,11 +399,11 @@ def _compile_argv(
             "--emit-build-options",
             "--no-header",
             "--no-annotate",
-        "--index-strategy",
-        "first-index",
-        "--default-index",
-        INDEX_URL,
-        "--exclude-newer",
+            "--index-strategy",
+            "first-index",
+            "--default-index",
+            INDEX_URL,
+            "--exclude-newer",
             EPOCH,
         ]
     )
@@ -395,8 +439,7 @@ def _manifest_document(
             "sdist_policy": {
                 "default": "deny",
                 "allowlist_by_profile": {
-                    profile: list(packages)
-                    for profile, packages in PROFILE_SDIST_ALLOWLIST.items()
+                    profile: list(packages) for profile, packages in PROFILE_SDIST_ALLOWLIST.items()
                 },
             },
         },
@@ -446,9 +489,11 @@ def _build_candidate(
                 resolved = output.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError) as exc:
                 raise LockError(f"uv did not produce a UTF-8 lock for {relative}") from exc
-            resolved = resolved.lstrip("\n")
-            if not resolved.endswith("\n"):
-                resolved += "\n"
+            resolved = _canonicalize_build_options(
+                resolved,
+                sdist_allowlist=PROFILE_SDIST_ALLOWLIST[profile],
+                source=relative,
+            )
             final = render_lock_header(target=target, profile=profile, inputs=inputs) + resolved
             validate_lock_text(
                 final,
@@ -501,7 +546,7 @@ def _copy_candidate(root: Path, candidate: Path) -> None:
 
 
 def update_locks(root: Path, *, uv_executable: str = "uv") -> None:
-    """Resolve all 24 artifacts, validate them, then replace managed outputs."""
+    """Resolve every matrix artifact, validate it, then replace managed outputs."""
 
     root = root.resolve()
     with tempfile.TemporaryDirectory(prefix="octopus-lock-update-") as temporary:
@@ -514,9 +559,7 @@ def update_locks(root: Path, *, uv_executable: str = "uv") -> None:
 def _candidate_files() -> tuple[Path, ...]:
     files = [Path("manifest.json")]
     files.extend(
-        Path(target.platform_id) / target.tag / f"{profile}.txt"
-        for target in TARGETS
-        for profile in PROFILE_INPUTS
+        Path(target.platform_id) / target.tag / f"{profile}.txt" for target in TARGETS for profile in PROFILE_INPUTS
     )
     return tuple(files)
 
@@ -587,15 +630,17 @@ def validate_locks(root: Path) -> None:
             raise LockError(f"manifest contains a duplicate lock entry: {path}")
         by_path[path] = entry
 
-    expected_paths = {
-        _lock_relative_path(target, profile)
-        for target in TARGETS
-        for profile in PROFILE_INPUTS
-    }
+    expected_paths = {_lock_relative_path(target, profile) for target in TARGETS for profile in PROFILE_INPUTS}
     if set(by_path) != expected_paths:
         missing = sorted(expected_paths - set(by_path))
         unexpected = sorted(set(by_path) - expected_paths)
         raise LockError(f"manifest matrix is incomplete; missing={missing}, unexpected={unexpected}")
+
+    locks_root = root / "requirements" / "locks"
+    observed_lock_paths = {path.relative_to(root).as_posix() for path in (locks_root / PLATFORM_ID).glob("cp*/*.txt")}
+    if observed_lock_paths != expected_paths:
+        unexpected = sorted(observed_lock_paths - expected_paths)
+        raise LockError(f"unexpected lock artifacts are present: {unexpected}")
 
     for target in TARGETS:
         for profile, inputs in PROFILE_INPUTS.items():

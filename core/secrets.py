@@ -135,10 +135,23 @@ class SecretStore:
     def _connect(self) -> sqlite3.Connection:
         if self._memory_conn is not None:
             return self._memory_conn
-        conn = sqlite3.connect(self.db_path, timeout=30)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=FULL")
-        return conn
+        last_error: sqlite3.OperationalError | None = None
+        for attempt in range(12):
+            conn = sqlite3.connect(self.db_path, timeout=30)
+            try:
+                conn.execute("PRAGMA busy_timeout=30000")
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=FULL")
+                return conn
+            except sqlite3.OperationalError as exc:
+                conn.close()
+                if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                    raise
+                last_error = exc
+                time.sleep(min(0.01 * (2**attempt), 0.25))
+        if last_error is not None:
+            raise last_error
+        raise SecretStoreError("secret-store connection failed without an SQLite error")
 
     def _close(self, conn: sqlite3.Connection) -> None:
         if conn is not self._memory_conn:
@@ -221,9 +234,7 @@ class SecretStore:
         with self._lock:
             conn = self._connect()
             try:
-                row = conn.execute(
-                    "SELECT kind, nonce, ciphertext FROM secrets WHERE id = ?", (identifier,)
-                ).fetchone()
+                row = conn.execute("SELECT kind, nonce, ciphertext FROM secrets WHERE id = ?", (identifier,)).fetchone()
                 if not row:
                     raise KeyError(ref)
                 kind, nonce, ciphertext = row
@@ -465,7 +476,7 @@ def is_secret_ref(value: Any) -> bool:
 def _reference_identifier(reference: str) -> str:
     if not is_secret_ref(reference):
         raise ValueError("invalid secret reference")
-    return reference[len(SECRET_REF_PREFIX):]
+    return reference[len(SECRET_REF_PREFIX) :]
 
 
 def _is_sensitive_field(field: str) -> bool:

@@ -30,9 +30,15 @@ def test_importing_legacy_entrypoint_has_no_runtime_side_effects(tmp_path: Path)
         import sys
         import threading
 
-        import mysql.connector
-        import mysql.connector.pooling
         import requests.sessions
+
+        try:
+            import mysql.connector
+            import mysql.connector.pooling
+        except ModuleNotFoundError as exc:
+            if exc.name != "mysql":
+                raise
+            mysql = None
 
         def forbidden(kind):
             def call(*_args, **_kwargs):
@@ -46,8 +52,9 @@ def test_importing_legacy_entrypoint_has_no_runtime_side_effects(tmp_path: Path)
         subprocess.Popen = forbidden("process start")
         socket.create_connection = forbidden("network connection")
         sqlite3.connect = forbidden("SQLite connection")
-        mysql.connector.connect = forbidden("MySQL connection")
-        mysql.connector.pooling.MySQLConnectionPool = forbidden("MySQL pool")
+        if mysql is not None:
+            mysql.connector.connect = forbidden("MySQL connection")
+            mysql.connector.pooling.MySQLConnectionPool = forbidden("MySQL pool")
         requests.sessions.Session.request = forbidden("HTTP request")
 
         import octopus
@@ -93,9 +100,7 @@ def test_create_parser_preserves_trace_and_supervisor_commands() -> None:
 def test_main_routes_trace_without_starting_interactive_lifecycle() -> None:
     calls: list[tuple[str, str, str]] = []
     workflows = SimpleNamespace(
-        _print_trace_report_cli=lambda scan_id, target, fmt: calls.append(
-            (scan_id, target, fmt)
-        )
+        _print_trace_report_cli=lambda scan_id, target, fmt: calls.append((scan_id, target, fmt))
     )
     app = SimpleNamespace(
         workflows=workflows,

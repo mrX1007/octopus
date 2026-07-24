@@ -23,15 +23,33 @@ def test_global_coverage_floor_is_raised_and_synchronized() -> None:
 
     assert floor >= 58.0
     assert coverage_gate._argument_parser().parse_args([]).fail_under == floor
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert f"--fail-under {floor:.2f}" in workflow
 
-    isolated = coverage_gate._argument_parser().parse_args(
-        ["--data-file", "isolated.coverage"]
-    )
+    isolated = coverage_gate._argument_parser().parse_args(["--data-file", "isolated.coverage"])
     assert isolated.data_file == Path("isolated.coverage")
+
+
+def test_mysql_ci_uses_application_environment_contract() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    for name in (
+        "OCTOPUS_DB_HOST",
+        "OCTOPUS_DB_NAME",
+        "OCTOPUS_DB_USER",
+        "OCTOPUS_DB_PASS",
+    ):
+        assert f"          {name}:" in workflow
+    assert "          DB_PASSWORD:" not in workflow
+    assert "requirements/locks/linux-x86_64/cp310/test.txt \\" in workflow
+    assert "requirements/locks/linux-x86_64/cp310/mysql.txt" in workflow
+
+
+def test_nightly_external_tool_smoke_is_fail_closed() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
+
+    assert 'OCTOPUS_REQUIRE_EXTERNAL_TOOLS: "1"' in workflow
+    assert "OCTOPUS_STRICT_EXTERNAL_TOOLS" not in workflow
 
 
 def test_package_threshold_parser_is_bounded() -> None:
@@ -64,10 +82,7 @@ def test_format_gate_uses_argv_and_contains_changed_paths(tmp_path, monkeypatch)
 def test_sbom_is_deterministic_and_contains_every_hash(tmp_path: Path) -> None:
     lock = tmp_path / "runtime.txt"
     lock.write_text(
-        "--only-binary :all:\n"
-        "Example_Pkg==1.2.3 \\\n"
-        f"  --hash=sha256:{'a' * 64} \\\n"
-        f"  --hash=sha256:{'b' * 64}\n",
+        f"--only-binary :all:\nExample_Pkg==1.2.3 \\\n  --hash=sha256:{'a' * 64} \\\n  --hash=sha256:{'b' * 64}\n",
         encoding="utf-8",
     )
 
@@ -90,8 +105,7 @@ def test_sbom_cli_writes_canonical_json(tmp_path: Path) -> None:
     lock = tmp_path / "runtime.txt"
     output = tmp_path / "sbom.json"
     lock.write_text(
-        "--only-binary :all:\n"
-        f"demo==1.0.0 --hash=sha256:{'c' * 64}\n",
+        f"--only-binary :all:\ndemo==1.0.0 --hash=sha256:{'c' * 64}\n",
         encoding="utf-8",
     )
 

@@ -17,7 +17,7 @@ env:
 
 jobs:
   import-smoke:
-    name: Minimal runtime import smoke (Python 3.9)
+    name: Minimal runtime import smoke (Python 3.10)
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
@@ -28,17 +28,17 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Set up Python 3.9
+      - name: Set up Python 3.10
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.9"
+          python-version: "3.10"
 
       - name: Validate dependency locks offline
         run: python scripts/lock_requirements.py validate
 
       - name: Install locked runtime profile only
         run: |
-          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp39/runtime.txt
+          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp310/runtime.txt
           python -m pip check
 
       - name: Import public runtime boundaries
@@ -60,17 +60,17 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Set up Python 3.9
+      - name: Set up Python 3.10
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.9"
+          python-version: "3.10"
 
       - name: Validate dependency locks offline
         run: python scripts/lock_requirements.py validate
 
       - name: Install locked optional profile
         run: |
-          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp39/${{ matrix.profile }}.txt
+          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp310/${{ matrix.profile }}.txt
           python -m pip check
 
       - name: Import optional profile boundaries
@@ -88,17 +88,17 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Set up Python 3.9
+      - name: Set up Python 3.10
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.9"
+          python-version: "3.10"
 
       - name: Validate dependency locks offline
         run: python scripts/lock_requirements.py validate
 
       - name: Install locked test profile
         run: |
-          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp39/test.txt
+          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp310/test.txt
           python -m pip check
 
       - name: Ruff (repository configuration)
@@ -133,8 +133,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - python-version: "3.9"
-            lock-tag: cp39
           - python-version: "3.10"
             lock-tag: cp310
           - python-version: "3.11"
@@ -168,7 +166,7 @@ jobs:
           -m '(unit or contract) and not slow and not integration and not external_tools and not mysql and not platform'
 
   full-suite:
-    name: Full suite and coverage ratchets (Python 3.9)
+    name: Full suite and coverage ratchets (Python 3.10)
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
@@ -179,17 +177,17 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Set up Python 3.9
+      - name: Set up Python 3.10
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.9"
+          python-version: "3.10"
 
       - name: Validate dependency locks offline
         run: python scripts/lock_requirements.py validate
 
       - name: Install locked hermetic test profile
         run: |
-          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp39/test.txt
+          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp310/test.txt
           python -m pip check
 
       - name: Measure the complete suite with branch coverage
@@ -221,7 +219,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: coverage-python39
+          name: coverage-python310
           path: coverage.xml
           if-no-files-found: warn
           retention-days: 14
@@ -251,25 +249,26 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Set up Python 3.9
+      - name: Set up Python 3.10
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.9"
+          python-version: "3.10"
 
-      - name: Install locked MySQL profile
+      - name: Install locked test and MySQL profiles
         run: |
           python scripts/lock_requirements.py validate
-          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp39/mysql.txt
+          python -m pip install --require-hashes \
+            -r requirements/locks/linux-x86_64/cp310/test.txt \
+            -r requirements/locks/linux-x86_64/cp310/mysql.txt
           python -m pip check
 
       - name: Run live MySQL tests
         env:
           OCTOPUS_TEST_MYSQL: "1"
-          DB_HOST: 127.0.0.1
-          DB_PORT: "3306"
-          DB_NAME: octopus_test
-          DB_USER: root
-          DB_PASSWORD: octopus-ci-root
+          OCTOPUS_DB_HOST: 127.0.0.1
+          OCTOPUS_DB_NAME: octopus_test
+          OCTOPUS_DB_USER: root
+          OCTOPUS_DB_PASS: octopus-ci-root
         run: python -m pytest -q -m mysql
 
   packaging-docs:
@@ -284,15 +283,15 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Set up Python 3.9
+      - name: Set up Python 3.10
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.9"
+          python-version: "3.10"
 
       - name: Install locked quality toolchain
         run: |
           python scripts/lock_requirements.py validate
-          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp39/test.txt
+          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp310/test.txt
           python -m pip check
 
       - name: Validate docs, schemas, and shipped examples
@@ -316,35 +315,35 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Set up Python 3.9
+      - name: Set up Python 3.10
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.9"
+          python-version: "3.10"
 
       - name: Install locked audit toolchain
         run: |
           python scripts/lock_requirements.py validate
-          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp39/test.txt
+          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp310/test.txt
           python -m pip check
 
       - name: Audit exact full dependency graph
         run: >-
           python -m pip_audit
           --require-hashes --no-deps --disable-pip --strict
-          -r requirements/locks/linux-x86_64/cp39/full.txt
+          -r requirements/locks/linux-x86_64/cp310/full.txt
           --format json --output dependency-audit.json
 
       - name: Generate deterministic CycloneDX SBOM
         run: >-
           python scripts/quality/sbom.py
-          requirements/locks/linux-x86_64/cp39/full.txt
+          requirements/locks/linux-x86_64/cp310/full.txt
           --output octopus-sbom.cdx.json
 
       - name: Upload dependency evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: dependency-evidence-python39
+          name: dependency-evidence-python310
           path: |
             dependency-audit.json
             octopus-sbom.cdx.json
@@ -408,10 +407,10 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      - name: Set up Python 3.9
+      - name: Set up Python 3.10
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.9"
+          python-version: "3.10"
 
       - name: Verify every approved vendor artifact
         run: python -I scripts/quality/verify_vendor.py --platform all
