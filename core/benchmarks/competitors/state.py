@@ -124,9 +124,7 @@ class CampaignJournal:
             existing = _read_mapping(path)
             if existing.get("fingerprint") != self.fingerprint:
                 raise CampaignFingerprintMismatch("campaign_fingerprint_mismatch")
-            if _canonical_json(existing.get("schedule")) != _canonical_json(
-                normalized_schedule
-            ):
+            if _canonical_json(existing.get("schedule")) != _canonical_json(normalized_schedule):
                 raise CampaignFingerprintMismatch("campaign_schedule_mismatch")
         else:
             _atomic_json(path, metadata)
@@ -343,10 +341,7 @@ def _json_safe(value: Any, *, depth: int = 0) -> Any:
             raise CampaignStateError("campaign_state_nonfinite_number")
         return value
     if isinstance(value, Mapping):
-        return {
-            str(key): _json_safe(item, depth=depth + 1)
-            for key, item in value.items()
-        }
+        return {str(key): _json_safe(item, depth=depth + 1) for key, item in value.items()}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return [_json_safe(item, depth=depth + 1) for item in value]
     raise CampaignStateError("campaign_state_non_json_value")

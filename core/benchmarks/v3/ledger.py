@@ -6,7 +6,7 @@ import json
 import os
 import threading
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -239,10 +239,24 @@ def verify_ledger_entries(
 ) -> tuple[LedgerEntry, ...]:
     """Validate an in-memory public ledger payload and its complete hash chain."""
 
+    return tuple(
+        iter_verified_ledger_entries(
+            payloads,
+            variant_digest=variant_digest,
+        )
+    )
+
+
+def iter_verified_ledger_entries(
+    payloads: Sequence[Mapping[str, Any]],
+    *,
+    variant_digest: str,
+) -> Iterator[LedgerEntry]:
+    """Yield a verified ledger chain without retaining typed entry copies."""
+
     if not _is_digest(variant_digest):
         raise BenchmarkV3SchemaError("invalid:variant_digest")
     previous = _GENESIS_DIGEST
-    entries: list[LedgerEntry] = []
     for expected_sequence, payload in enumerate(payloads, start=1):
         if not isinstance(payload, Mapping):
             raise BenchmarkV3SchemaError("invalid_ledger_entry")
@@ -257,9 +271,8 @@ def verify_ledger_entries(
         )
         if entry.entry_digest != expected_digest:
             raise BenchmarkV3SchemaError("ledger_digest_mismatch")
-        entries.append(entry)
         previous = entry.entry_digest
-    return tuple(entries)
+        yield entry
 
 
 def _is_digest(value: str) -> bool:

@@ -89,9 +89,7 @@ def test_reset_uses_fixed_shell_free_compose_project_then_bounded_health(
 
     monkeypatch.setattr(labctl, "_wait_for_health", healthy)
 
-    exit_code = labctl.main(
-        ["reset", "--target", "http://127.0.0.1:8080", "--timeout", "7"]
-    )
+    exit_code = labctl.main(["reset", "--target", "http://127.0.0.1:8080", "--timeout", "7"])
 
     output = json.loads(capsys.readouterr().out)
     argv, options = calls[0]
@@ -174,10 +172,7 @@ def test_compose_failure_writes_only_bounded_private_diagnostic(
 
     def failing_process(_argv: list[str], **options: Any) -> FailedProcess:
         assert options["stderr"] is subprocess.STDOUT
-        options["stdout"].write(
-            b"x" * (labctl.MAX_COMPOSE_DIAGNOSTIC_BYTES + 1024)
-            + b"docker compose root cause\n"
-        )
+        options["stdout"].write(b"x" * (labctl.MAX_COMPOSE_DIAGNOSTIC_BYTES + 1024) + b"docker compose root cause\n")
         return FailedProcess()
 
     monkeypatch.setattr(labctl.subprocess, "Popen", failing_process)
@@ -242,9 +237,7 @@ def test_health_failure_captures_compose_ps_and_logs_privately(
 
         def wait(self, *, timeout: float) -> int:
             expected = (
-                labctl.COMPOSE_TIMEOUT_SECONDS
-                if self.command == "up"
-                else labctl.COMPOSE_DIAGNOSTIC_TIMEOUT_SECONDS
+                labctl.COMPOSE_TIMEOUT_SECONDS if self.command == "up" else labctl.COMPOSE_DIAGNOSTIC_TIMEOUT_SECONDS
             )
             assert timeout == expected
             return 0
@@ -317,19 +310,22 @@ def test_v2_reset_uses_allowlisted_compose_and_attests_exact_scenario(
 
     monkeypatch.setattr(labctl, "_wait_for_health", healthy)
 
-    assert labctl.main(
-        [
-            "reset",
-            "--lab-definition",
-            "discovery-lab-v2",
-            "--scenario-id",
-            scenario_id,
-            "--target",
-            "http://127.0.0.1:8080",
-            "--timeout",
-            "8",
-        ]
-    ) == 0
+    assert (
+        labctl.main(
+            [
+                "reset",
+                "--lab-definition",
+                "discovery-lab-v2",
+                "--scenario-id",
+                scenario_id,
+                "--target",
+                "http://127.0.0.1:8080",
+                "--timeout",
+                "8",
+            ]
+        )
+        == 0
+    )
 
     argv, options = calls[0]
     assert argv == [
@@ -497,23 +493,13 @@ def test_health_disables_proxies_redirects_and_verifies_tls(
 
     result = labctl._health("https://lab.internal:8443", timeout_seconds=9)
 
-    proxy_handler = next(
-        item
-        for item in captured_handlers
-        if isinstance(item, urllib.request.ProxyHandler)
-    )
-    tls_handler = next(
-        item
-        for item in captured_handlers
-        if isinstance(item, urllib.request.HTTPSHandler)
-    )
+    proxy_handler = next(item for item in captured_handlers if isinstance(item, urllib.request.ProxyHandler))
+    tls_handler = next(item for item in captured_handlers if isinstance(item, urllib.request.HTTPSHandler))
     assert proxy_handler.proxies == {}
     assert any(isinstance(item, labctl._NoRedirectHandler) for item in captured_handlers)
     assert tls_handler._context.verify_mode == ssl.CERT_REQUIRED
     assert tls_handler._context.check_hostname is True
-    assert captured_request[0][0].full_url == (
-        "https://lab.internal:8443/__octobench_health"
-    )
+    assert captured_request[0][0].full_url == ("https://lab.internal:8443/__octobench_health")
     assert captured_request[0][0].get_method() == "GET"
     assert captured_request[0][1] == labctl.HEALTH_REQUEST_TIMEOUT_SECONDS
     assert result == {"healthy": True, "lab_version": "discovery-lab-v1"}
@@ -567,9 +553,7 @@ def test_network_and_protocol_failures_emit_only_stable_error_json(
         lambda *_handlers: Opener(),
     )
 
-    exit_code = labctl.main(
-        ["health", "--target", "http://127.0.0.1:8080"]
-    )
+    exit_code = labctl.main(["health", "--target", "http://127.0.0.1:8080"])
 
     captured = capsys.readouterr()
     assert exit_code == 2

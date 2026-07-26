@@ -44,9 +44,7 @@ class LabResetError(LabControlError):
         *,
         diagnostic_path: str | Path | None = None,
     ) -> None:
-        self.diagnostic_path = (
-            Path(diagnostic_path) if diagnostic_path is not None else None
-        )
+        self.diagnostic_path = Path(diagnostic_path) if diagnostic_path is not None else None
         super().__init__(code)
 
 
@@ -87,9 +85,7 @@ class LabCommand:
         if timeout <= 0 or timeout > 3600:
             raise LabControlError("invalid_lab_command_timeout")
         raw_environment = payload.get("environment_passthrough") or []
-        if not isinstance(raw_environment, Sequence) or isinstance(
-            raw_environment, (str, bytes)
-        ):
+        if not isinstance(raw_environment, Sequence) or isinstance(raw_environment, (str, bytes)):
             raise LabControlError("invalid_lab_environment_passthrough")
         environment: list[str] = []
         for item in raw_environment:
@@ -185,9 +181,7 @@ class CommandLabController:
         self.health_command = health
         self.cleanup_command = cleanup
         self.environment = {str(key): str(value) for key, value in (environment or {}).items()}
-        self.diagnostics_directory = (
-            Path(diagnostics_directory) if diagnostics_directory is not None else None
-        )
+        self.diagnostics_directory = Path(diagnostics_directory) if diagnostics_directory is not None else None
         self.clock = clock
         self.monotonic = monotonic
 
@@ -210,21 +204,19 @@ class CommandLabController:
     def _run(self, command: LabCommand, context: LabRunContext, *, phase: str) -> float:
         argv = _format_argv(command.argv, context.substitutions())
         environment = {
-            name: self.environment[name]
-            for name in command.environment_passthrough
-            if name in self.environment
+            name: self.environment[name] for name in command.environment_passthrough if name in self.environment
         }
         environment.setdefault("PATH", self.environment.get("PATH", os.defpath))
         environment.update(
             {
-            "OCTOPUS_BENCHMARK_CAMPAIGN_ID": context.campaign_id,
-            "OCTOPUS_BENCHMARK_SYSTEM_ID": context.system_id,
-            "OCTOPUS_BENCHMARK_SCENARIO_ID": context.scenario_id,
-            "OCTOPUS_BENCHMARK_REPETITION": str(context.repetition),
-            "OCTOPUS_BENCHMARK_SEED": str(context.seed),
-            "OCTOPUS_BENCHMARK_LAB_PHASE": phase,
-            "OCTOPUS_BENCHMARK_LAB_VERSION": context.lab_version,
-            "OCTOPUS_BENCHMARK_SNAPSHOT_REF": context.snapshot_ref,
+                "OCTOPUS_BENCHMARK_CAMPAIGN_ID": context.campaign_id,
+                "OCTOPUS_BENCHMARK_SYSTEM_ID": context.system_id,
+                "OCTOPUS_BENCHMARK_SCENARIO_ID": context.scenario_id,
+                "OCTOPUS_BENCHMARK_REPETITION": str(context.repetition),
+                "OCTOPUS_BENCHMARK_SEED": str(context.seed),
+                "OCTOPUS_BENCHMARK_LAB_PHASE": phase,
+                "OCTOPUS_BENCHMARK_LAB_VERSION": context.lab_version,
+                "OCTOPUS_BENCHMARK_SNAPSHOT_REF": context.snapshot_ref,
             }
         )
         diagnostic_path = self._diagnostic_path(context, phase=phase)
@@ -277,9 +269,7 @@ class CommandLabController:
         try:
             directory.mkdir(mode=0o700, parents=True, exist_ok=True)
             directory_stat = os.lstat(directory)
-            if not stat.S_ISDIR(directory_stat.st_mode) or stat.S_ISLNK(
-                directory_stat.st_mode
-            ):
+            if not stat.S_ISDIR(directory_stat.st_mode) or stat.S_ISLNK(directory_stat.st_mode):
                 return None
             os.chmod(directory, 0o700)
         except OSError:
@@ -370,8 +360,11 @@ def _terminate_process(process: subprocess.Popen[Any]) -> None:
 
 
 def _valid_environment_name(value: str) -> bool:
-    return bool(value) and value.isascii() and (value[0].isalpha() or value[0] == "_") and all(
-        character.isalnum() or character == "_" for character in value
+    return (
+        bool(value)
+        and value.isascii()
+        and (value[0].isalpha() or value[0] == "_")
+        and all(character.isalnum() or character == "_" for character in value)
     )
 
 

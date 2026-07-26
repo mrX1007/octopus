@@ -806,17 +806,22 @@ benchmarks/competitors/results/<campaign-id>/
 ├── analysis-plan.json
 ├── campaign-context.json
 ├── comparison.svg
-├── ledgers.jsonl
+├── ledgers-NNNN.jsonl    # one or more deterministic shards, at most 48 MB each
 ├── publication.json
 ├── runs.csv
-├── runs.jsonl
+├── runs-NNNN.jsonl       # one or more deterministic shards, at most 48 MB each
 ├── statistics.json
 └── SHA256SUMS
 ```
 
 The v3 verifier checksum-validates the exact file set, rebuilds statistics and
 `comparison.svg`, and validates every controller ledger against the run
-records. It does not expect `comparison.md` or schema-1.1 aggregate folders.
+records. Publication schema 1.1 shards JSONL only at run boundaries so every
+file remains safe for ordinary GitHub pushes without truncating evidence; the
+verifier remains backward-compatible with schema-1.0 `runs.jsonl` and
+`ledgers.jsonl` bundles. It does not expect `comparison.md` or schema-1.1
+aggregate folders. Verification and legacy repacking process one JSONL record
+at a time, avoiding bundle-sized telemetry expansion in memory.
 
 `comparison.json` is the machine-readable matrix and embeds public system,
 scenario, execution-mode, fairness and completeness metadata. It excludes

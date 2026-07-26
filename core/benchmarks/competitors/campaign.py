@@ -131,11 +131,7 @@ class CampaignConfig:
         if set(payload) - _CAMPAIGN_CONFIG_KEYS:
             raise CampaignConfigError("unknown_campaign_config_key")
         campaign_id = _identifier(payload.get("campaign_id"), "campaign_id")
-        base = (
-            Path(source_path).resolve().parent
-            if source_path is not None
-            else Path.cwd().resolve()
-        )
+        base = Path(source_path).resolve().parent if source_path is not None else Path.cwd().resolve()
         manifests = _path_sequence(
             payload.get("system_manifests"),
             base=base,
@@ -143,20 +139,12 @@ class CampaignConfig:
         )
         if len(manifests) < 2:
             raise CampaignConfigError("campaign_requires_two_system_manifests")
-        scenario_directory = _resolved_path(
-            payload.get("scenario_directory"), base=base, name="scenario_directory"
-        )
-        output_directory = _resolved_path(
-            payload.get("output_directory"), base=base, name="output_directory"
-        )
-        state_directory = _resolved_path(
-            payload.get("state_directory"), base=base, name="state_directory"
-        )
+        scenario_directory = _resolved_path(payload.get("scenario_directory"), base=base, name="scenario_directory")
+        output_directory = _resolved_path(payload.get("output_directory"), base=base, name="output_directory")
+        state_directory = _resolved_path(payload.get("state_directory"), base=base, name="state_directory")
         repetitions = _positive_integer(payload.get("repetitions", MIN_BENCHMARK_REPETITIONS))
         if repetitions < MIN_BENCHMARK_REPETITIONS:
-            raise CampaignConfigError(
-                f"repetitions_below_minimum:{MIN_BENCHMARK_REPETITIONS}"
-            )
+            raise CampaignConfigError(f"repetitions_below_minimum:{MIN_BENCHMARK_REPETITIONS}")
         lab = payload.get("lab")
         if not isinstance(lab, Mapping):
             raise CampaignConfigError("invalid:lab")
@@ -189,15 +177,11 @@ class CampaignConfig:
             raise CampaignConfigError("secret_environment_must_be_required")
         raw_environment_file = payload.get("environment_file")
         environment_file = (
-            _resolved_path(raw_environment_file, base=base, name="environment_file")
-            if raw_environment_file
-            else None
+            _resolved_path(raw_environment_file, base=base, name="environment_file") if raw_environment_file else None
         )
         raw_campaign_definition = payload.get("campaign_definition")
         campaign_definition = (
-            _identifier(raw_campaign_definition, "campaign_definition")
-            if raw_campaign_definition
-            else None
+            _identifier(raw_campaign_definition, "campaign_definition") if raw_campaign_definition else None
         )
         raw_benchmark_v3 = payload.get("benchmark_v3")
         if raw_benchmark_v3 is not None and not isinstance(raw_benchmark_v3, Mapping):
@@ -255,11 +239,7 @@ class CampaignConfig:
             "lab": {
                 "reset": self.reset_command.to_dict(),
                 "health": self.health_command.to_dict(),
-                "cleanup": (
-                    self.cleanup_command.to_dict()
-                    if self.cleanup_command is not None
-                    else None
-                ),
+                "cleanup": (self.cleanup_command.to_dict() if self.cleanup_command is not None else None),
             },
         }
         if self.campaign_definition is not None:
@@ -282,9 +262,7 @@ class CampaignConfig:
                 "reset_sha256": _canonical_digest(self.reset_command.to_dict()),
                 "health_sha256": _canonical_digest(self.health_command.to_dict()),
                 "cleanup_sha256": (
-                    _canonical_digest(self.cleanup_command.to_dict())
-                    if self.cleanup_command is not None
-                    else None
+                    _canonical_digest(self.cleanup_command.to_dict()) if self.cleanup_command is not None else None
                 ),
             },
         }
@@ -345,26 +323,18 @@ def run_campaign(
     effective_environment = _effective_environment(resolved, environment)
     required_environment = tuple(
         sorted(
-            set(resolved.required_environment).union(
-                name
-                for manifest in manifests
-                for name in manifest.adapter.env_passthrough
-            ).union(resolved.reset_command.environment_passthrough)
+            set(resolved.required_environment)
+            .union(name for manifest in manifests for name in manifest.adapter.env_passthrough)
+            .union(resolved.reset_command.environment_passthrough)
             .union(resolved.health_command.environment_passthrough)
-            .union(
-                resolved.cleanup_command.environment_passthrough
-                if resolved.cleanup_command is not None
-                else ()
-            )
+            .union(resolved.cleanup_command.environment_passthrough if resolved.cleanup_command is not None else ())
         )
     )
     secret_names = set(resolved.secret_environment).union(
         name for name in required_environment if _looks_secret_name(name)
     )
     secret_canaries = tuple(
-        effective_environment[name]
-        for name in sorted(secret_names)
-        if effective_environment.get(name)
+        effective_environment[name] for name in sorted(secret_names) if effective_environment.get(name)
     )
     environment_identity = {
         name: hashlib.sha256(effective_environment.get(name, "").encode("utf-8")).hexdigest()
@@ -526,11 +496,7 @@ def run_campaign(
                             "seed": context.seed,
                             "error_class": error_class,
                             "result": result,
-                            **(
-                                {"benchmark_v3": v3_run.to_dict()}
-                                if v3_run is not None
-                                else {}
-                            ),
+                            **({"benchmark_v3": v3_run.to_dict()} if v3_run is not None else {}),
                         },
                     )
                     executed_runs += 1
@@ -601,17 +567,11 @@ def run_campaign(
             for aggregate in aggregates.values()
             for run in aggregate.runs
         )
-        v3_runs = (
-            _journal_v3_runs(journal, schedule)
-            if v3_plan is not None
-            else ()
-        )
+        v3_runs = _journal_v3_runs(journal, schedule) if v3_plan is not None else ()
         if v3_runs:
             status_counts = Counter(run.execution_status for run in v3_runs)
             task_status_counts = Counter(run.task_status for run in v3_runs)
-            policy_violations = sum(
-                len(run.policy_violations) for run in v3_runs
-            )
+            policy_violations = sum(len(run.policy_violations) for run in v3_runs)
         else:
             task_status_counts = Counter()
             policy_violations = sum(
@@ -627,20 +587,12 @@ def run_campaign(
             run_failure = True
         strict_failure = run_failure or cleanup_failed
         campaign_outcome_status = (
-            "partial"
-            if cleanup_failed
-            else "completed_with_failures"
-            if run_failure
-            else "succeeded"
+            "partial" if cleanup_failed else "completed_with_failures" if run_failure else "succeeded"
         )
         campaign_status = {
             "status": campaign_outcome_status,
             "status_counts": dict(sorted(status_counts.items())),
-            **(
-                {"task_status_counts": dict(sorted(task_status_counts.items()))}
-                if v3_runs
-                else {}
-            ),
+            **({"task_status_counts": dict(sorted(task_status_counts.items()))} if v3_runs else {}),
             "policy_violations": policy_violations,
             "executed_runs": executed_runs,
             "resumed_runs": resumed_runs,
@@ -883,9 +835,7 @@ def _journal_runner_factory(
             if not isinstance(result, Mapping):
                 raise RuntimeError("campaign_journal_result_invalid")
             replayed = dict(result)
-            replayed["error_class"] = _safe_error_class(
-                record.get("error_class") or ""
-            )
+            replayed["error_class"] = _safe_error_class(record.get("error_class") or "")
             return replayed
 
         return replay
@@ -914,12 +864,7 @@ def _effective_environment(
     environment: dict[str, str] = {}
     if config.environment_file is not None:
         environment.update(_load_environment_file(config.environment_file))
-    environment.update(
-        {
-            str(key): str(value)
-            for key, value in (os.environ if supplied is None else supplied).items()
-        }
-    )
+    environment.update({str(key): str(value) for key, value in (os.environ if supplied is None else supplied).items()})
     return environment
 
 
@@ -982,12 +927,8 @@ def _provenance(
         "controller_source_sha256": dict(sorted(controller_source_identity.items())),
         "input_sha256": {
             "campaign": _canonical_digest(config.fingerprint_payload()),
-            "systems": {
-                item.system_id: _canonical_digest(item.to_dict()) for item in manifests
-            },
-            "scenarios": {
-                item.scenario_id: _canonical_digest(item.to_dict()) for item in scenarios
-            },
+            "systems": {item.system_id: _canonical_digest(item.to_dict()) for item in manifests},
+            "scenarios": {item.scenario_id: _canonical_digest(item.to_dict()) for item in scenarios},
         },
     }
 
@@ -1032,9 +973,7 @@ def _controller_source_identity() -> dict[str, str]:
         benchmark_root / "schema.py",
     ]
     return {
-        path.relative_to(benchmark_root.parent.parent).as_posix(): hashlib.sha256(
-            path.read_bytes()
-        ).hexdigest()
+        path.relative_to(benchmark_root.parent.parent).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in sources
     }
 
@@ -1127,8 +1066,7 @@ def _diagnostic_reference(
         or not candidate.name.endswith(".log")
         or len(candidate.name) > 128
         or any(
-            character
-            not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
+            character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-"
             for character in candidate.name
         )
     ):
@@ -1210,17 +1148,17 @@ def _environment_names(value: Any, name: str) -> tuple[str, ...]:
 
 
 def _valid_environment_name(value: str) -> bool:
-    return bool(value) and value.isascii() and (value[0].isalpha() or value[0] == "_") and all(
-        character.isalnum() or character == "_" for character in value
+    return (
+        bool(value)
+        and value.isascii()
+        and (value[0].isalpha() or value[0] == "_")
+        and all(character.isalnum() or character == "_" for character in value)
     )
 
 
 def _looks_secret_name(value: str) -> bool:
     upper = value.upper()
-    return any(
-        marker in upper
-        for marker in ("API_KEY", "CREDENTIAL", "PASSWORD", "SECRET", "TOKEN")
-    )
+    return any(marker in upper for marker in ("API_KEY", "CREDENTIAL", "PASSWORD", "SECRET", "TOKEN"))
 
 
 def _contains_secret_canary(value: Any, canaries: Sequence[str]) -> bool:

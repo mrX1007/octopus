@@ -142,15 +142,22 @@ paired block received the same fixture digest. It publishes:
 - completion-by-deadline over all scheduled runs;
 - Kaplan–Meier completion survival, censor-aware median when reached, and
   restricted mean completion time;
-- deterministic `runs.csv`, full schema-2.0 `runs.jsonl`, `statistics.json`,
-  `analysis-plan.json`, a script-free `comparison.svg`, `publication.json`,
-  and `SHA256SUMS`;
-- required `ledgers.jsonl` audit evidence with the controller request-ledger
-  chain for every run, tied to its run ID, fixture digest, paired seed, and
-  ledger root digest;
+- deterministic `runs.csv`, full schema-2.0 `runs-NNNN.jsonl` shards,
+  `statistics.json`, `analysis-plan.json`, a script-free `comparison.svg`,
+  `publication.json`, and `SHA256SUMS`;
+- required `ledgers-NNNN.jsonl` audit-evidence shards with the complete
+  controller request-ledger chain for every run, tied to its run ID, fixture
+  digest, paired seed, and ledger root digest;
 - a checksum-covered `campaign-context.json` containing sanitized campaign,
   system, scenario, preflight, reset/health, cleanup, status, and provenance
   records plus post-closure fixture reveal manifests.
+
+Publication schema 1.1 splits run records and controller ledgers at canonical
+JSONL record boundaries into deterministically numbered, root-level shards of
+at most 48,000,000 bytes each. Each artifact family is limited to 512,000,000
+bytes in aggregate. Sharding is lossless: it neither drops ledger entries nor
+removes the action-telemetry projection from a run. The manifest lists every
+shard in byte-stable order and `SHA256SUMS` covers each one independently.
 
 The SVG has separate panels for execution outcomes, task outcomes, verified
 recall with confidence intervals, and censored completion time. It declares no
@@ -163,6 +170,23 @@ re-evaluates every reported claim and task outcome from the revealed truth,
 completion rule, policy status, and ledger-observed evidence. It regenerates
 `runs.csv`, statistics, and the SVG from the full run records before accepting
 a bundle, so re-checksummed aggregate or evaluation tampering is rejected.
+
+`verify_v3_results` remains backward-compatible with publication schema 1.0
+bundles that use single `runs.jsonl` and `ledgers.jsonl` files. To convert a
+verified legacy bundle into the current sharded layout, write to a new,
+nonexistent destination:
+
+```bash
+./venv/bin/python -c \
+  'import sys; from core.benchmarks.v3 import repack_v3_results; print(repack_v3_results(sys.argv[1], sys.argv[2]))' \
+  <verified-v1.0-source> <new-v1.1-destination>
+```
+
+The repacker verifies the source before reading its audit material, publishes
+atomically, and verifies the destination before returning. Verification and
+repacking stream one JSONL record at a time and retain only compact per-run
+metadata, so peak memory is bounded by the largest run/ledger record instead of
+the full evidence bundle.
 
 ## Isolated tracks
 

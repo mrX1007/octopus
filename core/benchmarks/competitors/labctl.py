@@ -47,28 +47,12 @@ MAX_PRIVATE_DIAGNOSTIC_BYTES = 65_536
 MAX_COMPOSE_DIAGNOSTIC_BYTES = 60_000
 _PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT = "OCTOPUS_BENCHMARK_LAB_DIAGNOSTIC_PATH"
 
-_COMPOSE_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "benchmarks"
-    / "competitors"
-    / "lab"
-    / "compose.yaml"
-)
+_COMPOSE_PATH = Path(__file__).resolve().parents[3] / "benchmarks" / "competitors" / "lab" / "compose.yaml"
 _V2_COMPOSE_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "benchmarks"
-    / "competitors"
-    / "labs"
-    / V2_LAB_VERSION
-    / "compose.yaml"
+    Path(__file__).resolve().parents[3] / "benchmarks" / "competitors" / "labs" / V2_LAB_VERSION / "compose.yaml"
 )
 _V3_COMPOSE_PATH = (
-    Path(__file__).resolve().parents[3]
-    / "benchmarks"
-    / "competitors"
-    / "labs"
-    / V3_LAB_VERSION
-    / "compose.yaml"
+    Path(__file__).resolve().parents[3] / "benchmarks" / "competitors" / "labs" / V3_LAB_VERSION / "compose.yaml"
 )
 _V2_SCENARIO_IDS = frozenset(
     {
@@ -78,9 +62,7 @@ _V2_SCENARIO_IDS = frozenset(
         "authorized-relative-redirect-small-model-v2",
     }
 )
-_V3_SCENARIO_IDS = frozenset(
-    f"{family.replace('_', '-')}-v3" for family in SCENARIO_FAMILIES
-)
+_V3_SCENARIO_IDS = frozenset(f"{family.replace('_', '-')}-v3" for family in SCENARIO_FAMILIES)
 _PASSTHROUGH_ENVIRONMENT = (
     "DOCKER_CONFIG",
     "DOCKER_CONTEXT",
@@ -139,12 +121,8 @@ class LabControlError(RuntimeError):
     ) -> None:
         stable_code = code if code in self._ALLOWED_CODES else "health_invalid"
         self.code = stable_code
-        self.diagnostic_output = bytes(diagnostic_output)[
-            -MAX_COMPOSE_DIAGNOSTIC_BYTES:
-        ]
-        self.diagnostic_metadata = {
-            str(key): value for key, value in (diagnostic_metadata or {}).items()
-        }
+        self.diagnostic_output = bytes(diagnostic_output)[-MAX_COMPOSE_DIAGNOSTIC_BYTES:]
+        self.diagnostic_metadata = {str(key): value for key, value in (diagnostic_metadata or {}).items()}
         super().__init__(stable_code)
 
 
@@ -284,9 +262,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     scenario_id=diagnostic_scenario_id,
                     v3_run_directory=diagnostic_v3_run_directory,
                 ),
-                diagnostic_metadata={
-                    "operation": "docker_compose_post_health_failure"
-                },
+                diagnostic_metadata={"operation": "docker_compose_post_health_failure"},
             )
         _write_private_diagnostic(
             environment.get(_PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT),
@@ -393,11 +369,7 @@ def _run_compose(
         str(compose_path),
         *arguments,
     ]
-    if (
-        definition.definition_id == V3_LAB_VERSION
-        and tuple(arguments[:1]) == ("up",)
-        and v3_run_directory is None
-    ):
+    if definition.definition_id == V3_LAB_VERSION and tuple(arguments[:1]) == ("up",) and v3_run_directory is None:
         raise LabControlError("invalid_v3_context")
     child_environment = _compose_child_environment(
         environment,
@@ -456,9 +428,7 @@ def _run_compose(
 
 
 def _compose_output_capture(environment: Mapping[str, str]) -> Any | None:
-    directory = _private_diagnostic_directory(
-        environment.get(_PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT)
-    )
+    directory = _private_diagnostic_directory(environment.get(_PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT))
     if directory is None:
         return None
     try:
@@ -487,17 +457,11 @@ def _compose_child_environment(
     selected_scenario: str | None,
     v3_run_directory: Path | None,
 ) -> dict[str, str]:
-    child_environment = {
-        name: environment[name]
-        for name in _PASSTHROUGH_ENVIRONMENT
-        if name in environment
-    }
+    child_environment = {name: environment[name] for name in _PASSTHROUGH_ENVIRONMENT if name in environment}
     if selected_scenario is not None:
         child_environment["OCTOBENCH_LAB_SCENARIO_ID"] = selected_scenario
     if definition.definition_id == V3_LAB_VERSION and v3_run_directory is not None:
-        child_environment["OCTOBENCH_V3_RUN_DIRECTORY"] = str(
-            v3_run_directory.resolve()
-        )
+        child_environment["OCTOBENCH_V3_RUN_DIRECTORY"] = str(v3_run_directory.resolve())
         child_environment["OCTOBENCH_V3_UID"] = str(os.getuid())
         child_environment["OCTOBENCH_V3_GID"] = str(os.getgid())
     return child_environment
@@ -549,16 +513,12 @@ def _collect_compose_state(
                     start_new_session=True,
                 )
                 try:
-                    return_code = process.wait(
-                        timeout=COMPOSE_DIAGNOSTIC_TIMEOUT_SECONDS
-                    )
+                    return_code = process.wait(timeout=COMPOSE_DIAGNOSTIC_TIMEOUT_SECONDS)
                 except subprocess.TimeoutExpired:
                     _terminate_process_group(process)
                     return_code = -1
             except (OSError, ValueError):
-                chunks.append(
-                    f"=== docker compose {label} ===\nunavailable\n".encode()
-                )
+                chunks.append(f"=== docker compose {label} ===\nunavailable\n".encode())
                 continue
             output = _read_compose_output(capture)[-per_command_limit:]
             chunks.append(
@@ -589,9 +549,7 @@ def _write_private_diagnostic(
             "schema_version": LAB_PROTOCOL_VERSION,
             **error.diagnostic_metadata,
         }
-        header = (
-            json.dumps(metadata, sort_keys=True, separators=(",", ":")) + "\n"
-        ).encode("utf-8")
+        header = (json.dumps(metadata, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
         if len(header) > MAX_PRIVATE_DIAGNOSTIC_BYTES // 4:
             header = (
                 json.dumps(
@@ -763,20 +721,13 @@ def _health(
         or decoded.get("status") != "healthy"
         or decoded.get("lab_version") != definition.lab_version
         or decoded.get("evidence") != definition.health_evidence
-        or (
-            selected_scenario is not None
-            and decoded.get("scenario_id") != selected_scenario
-        )
+        or (selected_scenario is not None and decoded.get("scenario_id") != selected_scenario)
     ):
         raise LabControlError("health_invalid")
     return {
         "healthy": True,
         "lab_version": definition.lab_version,
-        **(
-            {"scenario_id": selected_scenario}
-            if selected_scenario is not None
-            else {}
-        ),
+        **({"scenario_id": selected_scenario} if selected_scenario is not None else {}),
     }
 
 
@@ -899,10 +850,7 @@ def _host_is_allowed(host: str) -> bool:
     try:
         address = ipaddress.ip_address(candidate)
     except ValueError:
-        return (
-            candidate == "localhost"
-            or candidate.endswith((".localhost", ".internal", ".test"))
-        )
+        return candidate == "localhost" or candidate.endswith((".localhost", ".internal", ".test"))
     return any(address in network for network in _PRIVATE_NETWORKS)
 
 
@@ -930,11 +878,7 @@ def _lab_address(
             raise LabControlError("invalid_host_ip")
     else:
         address = _detect_private_host_ip()
-    selected_port = _port(
-        port
-        if port is not None
-        else environment.get("OCTOBENCH_LAB_PORT", str(DEFAULT_PORT))
-    )
+    selected_port = _port(port if port is not None else environment.get("OCTOBENCH_LAB_PORT", str(DEFAULT_PORT)))
     host = f"[{address.compressed}]" if address.version == 6 else address.compressed
     return f"http://{host}:{selected_port}"
 
@@ -949,10 +893,7 @@ def _detect_private_host_ip() -> ipaddress.IPv4Address | ipaddress.IPv6Address:
         try:
             probe.connect(("192.0.2.1", 9))
             preferred = ipaddress.ip_address(str(probe.getsockname()[0]))
-            if (
-                not preferred.is_loopback
-                and any(preferred in network for network in _PRIVATE_NETWORKS)
-            ):
+            if not preferred.is_loopback and any(preferred in network for network in _PRIVATE_NETWORKS):
                 return preferred
             candidates.append(preferred.compressed)
         except (OSError, ValueError):

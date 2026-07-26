@@ -475,7 +475,7 @@ def analyze_runs(
 
     items = tuple(runs)
     _validate_schedule(plan, items)
-    track = validate_single_track(items)
+    track = validate_single_track([run.track_id for run in items])
     grouped: dict[tuple[str, str], list[BenchmarkRunV3]] = defaultdict(list)
     by_system: dict[str, list[BenchmarkRunV3]] = defaultdict(list)
     for run in items:
@@ -601,7 +601,7 @@ def _group_statistics(
     return {
         "action_telemetry": {
             "available_runs": sum(run.action_telemetry_available for run in runs),
-            "events": sum(len(run.action_telemetry) for run in runs),
+            "events": sum(run.action_event_count for run in runs),
             "scheduled_runs": len(runs),
         },
         "budget_enforcement": {

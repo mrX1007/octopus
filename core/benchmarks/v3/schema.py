@@ -595,6 +595,12 @@ class BenchmarkRunV3:
     def completion_rule_id(self) -> str:
         return self.evaluation.completion_rule_id
 
+    @property
+    def action_event_count(self) -> int:
+        """Return the measured action count without exposing representation details."""
+
+        return len(self.action_telemetry)
+
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> BenchmarkRunV3:
         schema_version = str(payload.get("schema_version") or "")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import stat
+import subprocess
 import sys
 from collections import Counter
 from dataclasses import replace
@@ -45,18 +46,12 @@ from core.benchmarks.competitors.state import (
     schedule_run_key,
 )
 from core.benchmarks.schema import load_scenarios
+from core.benchmarks.v3 import verify_v3_results
 
 pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 
-SCENARIO_SOURCE = (
-    Path(__file__).parents[2]
-    / "benchmarks"
-    / "scenarios"
-    / "01-service-discovery-verification.json"
-)
-PUBLISHED_COMPETITOR_RESULTS = (
-    Path(__file__).parents[2] / "benchmarks" / "competitors" / "results"
-)
+SCENARIO_SOURCE = Path(__file__).parents[2] / "benchmarks" / "scenarios" / "01-service-discovery-verification.json"
+PUBLISHED_COMPETITOR_RESULTS = Path(__file__).parents[2] / "benchmarks" / "competitors" / "results"
 SECRET_VALUE = "campaign-secret-canary-9d831c"
 
 
@@ -72,24 +67,12 @@ def test_schedule_rotation_balances_every_position_and_reverses_carryover() -> N
         ("alpha", "gamma", "beta"),
         ("beta", "alpha", "gamma"),
     ]
-    assert all(
-        [order[position] for order in orders].count(system) == 2
-        for position in range(3)
-        for system in systems
-    )
+    assert all([order[position] for order in orders].count(system) == 2 for position in range(3) for system in systems)
 
     extended = ("alpha", "beta", "gamma", "delta")
-    extended_orders = [
-        _counterbalanced_order(extended, repetition) for repetition in range(1, 9)
-    ]
-    directed_pairs = Counter(
-        pair
-        for order in extended_orders
-        for pair in zip(order, order[1:])
-    )
-    assert set(directed_pairs) == {
-        (left, right) for left in extended for right in extended if left != right
-    }
+    extended_orders = [_counterbalanced_order(extended, repetition) for repetition in range(1, 9)]
+    directed_pairs = Counter(pair for order in extended_orders for pair in zip(order, order[1:]))
+    assert set(directed_pairs) == {(left, right) for left in extended for right in extended if left != right}
     assert set(directed_pairs.values()) == {2}
     assert all(
         [order[position] for order in extended_orders].count(system) == 2
@@ -121,17 +104,14 @@ def test_small_model_v2_schedule_has_48_counterbalanced_runs() -> None:
 
     assert len(scenarios) == 4
     assert len(schedule) == 48
-    counts = Counter(
-        (item["scenario_id"], item["system_id"]) for item in schedule
-    )
+    counts = Counter((item["scenario_id"], item["system_id"]) for item in schedule)
     assert set(counts.values()) == {6}
     for scenario in scenarios:
         first_systems = [
             next(
                 item["system_id"]
                 for item in schedule
-                if item["scenario_id"] == scenario.scenario_id
-                and item["repetition"] == repetition
+                if item["scenario_id"] == scenario.scenario_id and item["repetition"] == repetition
             )
             for repetition in range(1, 7)
         ]
@@ -141,14 +121,30 @@ def test_small_model_v2_schedule_has_48_counterbalanced_runs() -> None:
 
 def test_checked_in_competitor_publication_bundles_verify() -> None:
     bundles = tuple(
-        sorted(path for path in PUBLISHED_COMPETITOR_RESULTS.iterdir() if path.is_dir())
+        sorted(
+            path
+            for path in PUBLISHED_COMPETITOR_RESULTS.iterdir()
+            if path.is_dir() and not (path / "publication.json").is_file()
+        )
     )
 
     assert bundles
-    assert all(
-        verify_campaign_bundle(bundle)["status"] == "verified"
-        for bundle in bundles
+    assert all(verify_campaign_bundle(bundle)["status"] == "verified" for bundle in bundles)
+
+
+@pytest.mark.slow
+def test_checked_in_v3_publication_bundles_verify() -> None:
+    bundles = tuple(
+        sorted(
+            path
+            for path in PUBLISHED_COMPETITOR_RESULTS.iterdir()
+            if path.is_dir() and (path / "publication.json").is_file()
+        )
     )
+
+    if not bundles:
+        pytest.skip("no checked-in v3 publications")
+    assert all(verify_v3_results(bundle)["runs"] > 0 for bundle in bundles)
 
 
 def test_supplied_runtime_environment_overrides_relative_values_from_env_file(
@@ -366,9 +362,7 @@ def test_campaign_resets_each_run_outside_duration_and_publishes_complete_bundle
         "SHA256SUMS",
     }
     observed = {
-        path.relative_to(outcome.bundle_path).as_posix()
-        for path in outcome.bundle_path.rglob("*")
-        if path.is_file()
+        path.relative_to(outcome.bundle_path).as_posix() for path in outcome.bundle_path.rglob("*") if path.is_file()
     }
     assert expected.issubset(observed)
     assert len([item for item in observed if item.startswith("attestations/")]) == 10
@@ -376,9 +370,7 @@ def test_campaign_resets_each_run_outside_duration_and_publishes_complete_bundle
     assert cleanup["status"] == "succeeded"
     assert cleanup["fingerprint"] == outcome.fingerprint
     assert SECRET_VALUE not in "".join(
-        path.read_text(encoding="utf-8")
-        for path in outcome.bundle_path.rglob("*")
-        if path.is_file()
+        path.read_text(encoding="utf-8") for path in outcome.bundle_path.rglob("*") if path.is_file()
     )
     progress_text = capsys.readouterr().err
     progress = [json.loads(line) for line in progress_text.splitlines()]
@@ -476,11 +468,7 @@ def test_public_provenance_omits_environment_hash_oracle_while_resume_detects_dr
         )
 
     journal_campaign = json.loads(
-        (
-            config.state_directory
-            / config.campaign_id
-            / "campaign.json"
-        ).read_text(encoding="utf-8")
+        (config.state_directory / config.campaign_id / "campaign.json").read_text(encoding="utf-8")
     )
     original_fingerprint = journal_campaign["fingerprint"]
     changed_environment = {**environment, "HOME": "/home/other-user"}
@@ -586,9 +574,7 @@ def test_cleanup_failure_precedes_publication_and_marks_campaign_partial(
     cleanup = json.loads((outcome.bundle_path / "cleanup.json").read_text())
     assert cleanup["status"] == "failed"
     assert cleanup["error_class"] == "LabResetError"
-    campaign_status = json.loads(
-        (outcome.bundle_path / "campaign-status.json").read_text()
-    )
+    campaign_status = json.loads((outcome.bundle_path / "campaign-status.json").read_text())
     assert campaign_status["status"] == "partial"
     assert campaign_status["cleanup_status"] == "failed"
 
@@ -610,9 +596,7 @@ def test_reset_failure_aborts_before_adapter_and_leaves_resumable_state(tmp_path
     assert len(lab.resets) == 1
     assert len(lab.cleanups) == 1
     assert not config.output_directory.exists()
-    status = json.loads(
-        (config.state_directory / config.campaign_id / "status.json").read_text()
-    )
+    status = json.loads((config.state_directory / config.campaign_id / "status.json").read_text())
     assert status["status"] == "aborted"
 
 
@@ -621,9 +605,7 @@ def test_reset_failure_status_references_existing_private_diagnostic(tmp_path):
 
     class DiagnosticFailure(RecordingLab):
         def reset_and_health(self, context):
-            diagnostics = (
-                config.state_directory / config.campaign_id / "diagnostics"
-            )
+            diagnostics = config.state_directory / config.campaign_id / "diagnostics"
             diagnostics.mkdir(mode=0o700)
             diagnostics.chmod(0o700)
             destination = diagnostics / "lab-reset-test.log"
@@ -642,13 +624,9 @@ def test_reset_failure_status_references_existing_private_diagnostic(tmp_path):
             lab_controller=DiagnosticFailure(),
         )
 
-    status = json.loads(
-        (config.state_directory / config.campaign_id / "status.json").read_text()
-    )
+    status = json.loads((config.state_directory / config.campaign_id / "status.json").read_text())
     assert status["metadata"]["reason"] == "lab_reset_failed"
-    assert status["metadata"]["diagnostic_path"] == (
-        "diagnostics/lab-reset-test.log"
-    )
+    assert status["metadata"]["diagnostic_path"] == ("diagnostics/lab-reset-test.log")
 
 
 @pytest.mark.parametrize("failure", ["existing_output", "missing_environment"])
@@ -694,9 +672,7 @@ def test_preflight_rejects_placeholders_and_unavailable_adapter(tmp_path):
             lab_controller=RecordingLab(),
         )
 
-    failed = {
-        item.check_id for item in exc.value.report.checks if not item.passed
-    }
+    failed = {item.check_id for item in exc.value.report.checks if not item.passed}
     assert "adapter_executable:alpha" in failed
     assert "adapter_cwd:beta" in failed
     assert "completed_placeholders" in failed
@@ -793,14 +769,91 @@ def test_command_lab_controller_scopes_diagnostics_to_private_directory(
     controller.reset_and_health(context)
 
     diagnostic_paths = [
-        Path(environment[lab_module._PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT])
-        for environment in observed_environments
+        Path(environment[lab_module._PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT]) for environment in observed_environments
     ]
     assert len(diagnostic_paths) == 2
     assert diagnostic_paths[0].name.startswith("lab-reset-")
     assert diagnostic_paths[1].name.startswith("lab-health-")
     assert {path.parent for path in diagnostic_paths} == {diagnostics}
     assert stat.S_IMODE(diagnostics.stat().st_mode) == 0o700
+
+
+@pytest.mark.parametrize(
+    ("failure_mode", "expected_code", "expects_termination"),
+    (
+        ("unavailable", "lab_reset_unavailable", False),
+        ("timeout", "lab_reset_timeout", True),
+        ("failed", "lab_reset_failed", False),
+    ),
+)
+def test_command_lab_controller_preserves_private_diagnostic_on_failure(
+    tmp_path,
+    monkeypatch,
+    failure_mode,
+    expected_code,
+    expects_termination,
+):
+    command = LabCommand.from_dict(
+        {
+            "argv": [sys.executable, "-c", "pass"],
+            "working_directory": ".",
+        },
+        base_directory=tmp_path,
+    )
+    diagnostics = tmp_path / "diagnostics"
+    diagnostics.mkdir(mode=0o700)
+    destination = diagnostics / "lab-reset-fixed.log"
+    destination.write_text("private root cause\n", encoding="utf-8")
+    destination.chmod(0o600)
+    controller = CommandLabController(
+        command,
+        command,
+        diagnostics_directory=diagnostics,
+    )
+    context = LabRunContext(
+        campaign_id="campaign",
+        system_id="alpha",
+        scenario_id="scenario",
+        repetition=1,
+        seed=10,
+        lab_version="lab-v1",
+        snapshot_ref="snapshot-v1",
+    )
+    monkeypatch.setattr(
+        CommandLabController,
+        "_diagnostic_path",
+        lambda *_args, **_kwargs: destination,
+    )
+
+    class FailedProcess:
+        pid = 12345
+
+        def wait(self, *, timeout):
+            assert timeout == 300.0
+            if failure_mode == "timeout":
+                raise subprocess.TimeoutExpired("lab", timeout)
+            return 17
+
+    process = FailedProcess()
+
+    def process_factory(*_args, **_kwargs):
+        if failure_mode == "unavailable":
+            raise OSError("lab executable unavailable")
+        return process
+
+    terminated = []
+    monkeypatch.setattr(lab_module.subprocess, "Popen", process_factory)
+    monkeypatch.setattr(
+        lab_module,
+        "_terminate_process",
+        lambda observed: terminated.append(observed),
+    )
+
+    with pytest.raises(LabResetError, match=expected_code) as exc:
+        controller.reset_and_health(context)
+
+    assert exc.value.diagnostic_path == destination
+    assert terminated == ([process] if expects_termination else [])
 
 
 def test_command_lab_controller_ignores_symlinked_diagnostics_directory(
@@ -847,8 +900,7 @@ def test_command_lab_controller_ignores_symlinked_diagnostics_directory(
     controller.reset_and_health(context)
 
     assert all(
-        lab_module._PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT not in environment
-        for environment in observed_environments
+        lab_module._PRIVATE_DIAGNOSTIC_PATH_ENVIRONMENT not in environment for environment in observed_environments
     )
 
 
@@ -922,9 +974,7 @@ def test_timeout_status_is_published_but_returns_strict_failure(tmp_path):
 
     assert outcome.status == "completed_with_failures"
     assert outcome.exit_code == 1
-    status = json.loads(
-        (outcome.bundle_path / "campaign-status.json").read_text(encoding="utf-8")
-    )
+    status = json.loads((outcome.bundle_path / "campaign-status.json").read_text(encoding="utf-8"))
     assert status["status_counts"] == {"timeout": 10}
     assert {
         run.error_class
@@ -959,11 +1009,14 @@ def test_journal_lock_fingerprint_and_immutable_run_contract(tmp_path):
     )
     with first.lock():
         first.initialize(schedule)
-        with pytest.raises(CampaignLockedError), CampaignJournal(
+        with (
+            pytest.raises(CampaignLockedError),
+            CampaignJournal(
                 tmp_path / "state",
                 campaign_id="campaign",
                 fingerprint=fingerprint,
-            ).lock():
+            ).lock(),
+        ):
             pass
         record = {"result": {"status": "succeeded"}}
         first.write_run(run_key, record)
@@ -1192,12 +1245,7 @@ def test_verifier_rejects_self_checksummed_incomplete_evidence(
     if missing_evidence == "attestation":
         path = next((outcome.bundle_path / "attestations").glob("*.json"))
     elif missing_evidence == "aggregate":
-        path = (
-            outcome.bundle_path
-            / "aggregates"
-            / "alpha"
-            / "service-discovery-verification.json"
-        )
+        path = outcome.bundle_path / "aggregates" / "alpha" / "service-discovery-verification.json"
     else:
         path = outcome.bundle_path / "inputs" / "systems" / "alpha.json"
     path.unlink()
@@ -1240,12 +1288,7 @@ def test_verifier_rejects_rechecksummed_semantic_tampering(tmp_path, tamper):
         lab_controller=RecordingLab(),
         clock=lambda: 100.0,
     )
-    aggregate_path = (
-        outcome.bundle_path
-        / "aggregates"
-        / "alpha"
-        / "service-discovery-verification.json"
-    )
+    aggregate_path = outcome.bundle_path / "aggregates" / "alpha" / "service-discovery-verification.json"
     if tamper in {
         "system_metadata",
         "scenario_metadata",
@@ -1334,12 +1377,7 @@ def test_verifier_rejects_unreported_expected_finding_without_coverage_gap(
         lab_controller=RecordingLab(),
         clock=lambda: 100.0,
     )
-    aggregate_path = (
-        outcome.bundle_path
-        / "aggregates"
-        / "alpha"
-        / "service-discovery-verification.json"
-    )
+    aggregate_path = outcome.bundle_path / "aggregates" / "alpha" / "service-discovery-verification.json"
     payload = json.loads(aggregate_path.read_text(encoding="utf-8"))
     payload["runs"][0]["result_summary"]["reported_findings"] = ["ssh_service"]
     assert payload["runs"][0]["result_summary"]["coverage_gaps"] == []
@@ -1358,14 +1396,10 @@ def test_verifier_rejects_unreported_expected_finding_without_coverage_gap(
 
 def _rewrite_checksums(root: Path) -> None:
     checksum_file = root / "SHA256SUMS"
-    paths = sorted(
-        path for path in root.rglob("*") if path.is_file() and path != checksum_file
-    )
+    paths = sorted(path for path in root.rglob("*") if path.is_file() and path != checksum_file)
     checksum_file.write_text(
         "".join(
-            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  "
-            f"{path.relative_to(root).as_posix()}\n"
-            for path in paths
+            f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root).as_posix()}\n" for path in paths
         ),
         encoding="utf-8",
     )

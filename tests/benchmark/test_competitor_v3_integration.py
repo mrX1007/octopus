@@ -34,9 +34,7 @@ from core.benchmarks.v3 import (
 pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 
 _TOKEN = re.compile(r"OCTOBENCH_V3_[A-Z0-9]{16,160}")
-_V3_DEFINITION = launch._CAMPAIGN_DEFINITIONS[
-    launch._SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID
-]
+_V3_DEFINITION = launch._CAMPAIGN_DEFINITIONS[launch._SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID]
 
 
 def _scenario_payload(repetitions: int = 5) -> dict:
@@ -133,24 +131,17 @@ def test_v3_launcher_generates_plan_and_twelve_blinded_scenarios(
     assert len(scenarios) == 12
     assert plan.repetitions == 12
     assert plan.track_id == "small-model-stress-v3"
-    assert config["benchmark_v3"]["analysis_plan"] == str(
-        config_path.parent / "analysis-plan.json"
-    )
+    assert config["benchmark_v3"]["analysis_plan"] == str(config_path.parent / "analysis-plan.json")
     assert config["benchmark_v3"]["batch_id"] == "batch-1"
     assert config["benchmark_v3"]["host_id"].startswith("host-")
-    assert {
-        item["tool_versions"]["command-adapter-protocol"] for item in manifests
-    } == {"1.1-v3-claims"}
+    assert {item["tool_versions"]["command-adapter-protocol"] for item in manifests} == {"1.1-v3-claims"}
     assert all(
         json.loads(path.read_text(encoding="utf-8"))["ground_truth"]
         == {"expected_findings": [], "forbidden_findings": []}
         for path in scenarios
     )
     assert "8f" * 32 not in json.dumps(
-        {
-            path.name: json.loads(path.read_text(encoding="utf-8"))
-            for path in config_path.parent.rglob("*.json")
-        },
+        {path.name: json.loads(path.read_text(encoding="utf-8")) for path in config_path.parent.rglob("*.json")},
         sort_keys=True,
     )
 
@@ -196,9 +187,7 @@ def test_octopus_v3_claim_projection_uses_only_canonical_final_report() -> None:
     )
 
     assert claims == (token, f"invented admin {token}", "invented endpoint")
-    assert adapter_module._octopus_v3_reported_claims(
-        {"machine_report": {"sections": {"observations": []}}}
-    ) == ()
+    assert adapter_module._octopus_v3_reported_claims({"machine_report": {"sections": {"observations": []}}}) == ()
 
 
 def test_octopus_parser_records_exact_v3_nonce_as_an_observation() -> None:
@@ -210,11 +199,9 @@ def test_octopus_parser_records_exact_v3_nonce_as_an_observation() -> None:
         "scan-test",
     )
 
-    assert {
-        (fact["type"], fact["value"])
-        for fact in facts
-        if fact["type"] == "benchmark_observation"
-    } == {("benchmark_observation", token)}
+    assert {(fact["type"], fact["value"]) for fact in facts if fact["type"] == "benchmark_observation"} == {
+        ("benchmark_observation", token)
+    }
 
 
 def test_octopus_v3_uses_full_tool_budget_without_adapter_probe(
@@ -242,13 +229,7 @@ def test_octopus_v3_uses_full_tool_budget_without_adapter_probe(
         @staticmethod
         def trace_report(_scan_id, _target):
             return {
-                "machine_report": {
-                    "sections": {
-                        "observations": [
-                            {"kind": "benchmark_observation", "detail": token}
-                        ]
-                    }
-                }
+                "machine_report": {"sections": {"observations": [{"kind": "benchmark_observation", "detail": token}]}}
             }
 
     monkeypatch.setattr("core.ai.pipeline.AIPipeline", Pipeline)
@@ -522,9 +503,7 @@ def test_v3_campaign_uses_paired_fixtures_and_publishes_task_failures(
 
     def runner_factory(manifest):
         def runner(scenario, repetition, seed):
-            runtime = lab.runtimes[
-                (manifest.system_id, scenario.scenario_id, repetition, seed)
-            ]
+            runtime = lab.runtimes[(manifest.system_id, scenario.scenario_id, repetition, seed)]
             observed_tokens: list[str] = []
             runtime.handle("GET", "/")
             for route in runtime.variant.routes:
@@ -543,11 +522,7 @@ def test_v3_campaign_uses_paired_fixtures_and_publishes_task_failures(
                 claims = [runtime.variant.truth_claims[0].canonical_text]
             if manifest.system_id == "beta" and repetition == 1:
                 claims = []
-            status = (
-                "partial"
-                if manifest.system_id == "beta" and repetition == 2
-                else "succeeded"
-            )
+            status = "partial" if manifest.system_id == "beta" and repetition == 2 else "succeeded"
             return {
                 "status": status,
                 "actions": [],
@@ -579,30 +554,25 @@ def test_v3_campaign_uses_paired_fixtures_and_publishes_task_failures(
         newline="",
     ) as handle:
         rows = tuple(csv.DictReader(handle))
-    context = json.loads(
-        (outcome.bundle_path / "campaign-context.json").read_text(encoding="utf-8")
-    )
-    run_records = tuple(
-        json.loads(line)
-        for line in (outcome.bundle_path / "runs.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    )
-    ledger_records = tuple(
-        json.loads(line)
-        for line in (outcome.bundle_path / "ledgers.jsonl")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    )
+    context = json.loads((outcome.bundle_path / "campaign-context.json").read_text(encoding="utf-8"))
+    publication = json.loads((outcome.bundle_path / "publication.json").read_text(encoding="utf-8"))
+
+    def published_jsonl_records(artifact: str):
+        return tuple(
+            json.loads(line)
+            for name in publication["artifacts"][artifact]
+            for line in (outcome.bundle_path / name).read_text(encoding="utf-8").splitlines()
+        )
+
+    run_records = published_jsonl_records("run_records")
+    ledger_records = published_jsonl_records("controller_ledgers")
 
     assert outcome.exit_code == 1
     assert outcome.status == "completed_with_failures"
     assert verification["runs"] == repetitions * 2
     assert len(run_records) == repetitions * 2
     assert len(ledger_records) == repetitions * 2
-    assert {item["run_id"] for item in run_records} == {
-        item["run_id"] for item in ledger_records
-    }
+    assert {item["run_id"] for item in run_records} == {item["run_id"] for item in ledger_records}
     assert all(item["entries"] for item in ledger_records)
     assert sum(row["task_status"] == "completed" for row in rows) == 22
     assert sum(row["task_status"] == "partial" for row in rows) == 1
@@ -613,10 +583,7 @@ def test_v3_campaign_uses_paired_fixtures_and_publishes_task_failures(
         "partial": 1,
     }
     assert len(context["fixture_reveals"]) == repetitions
-    assert all(
-        reveal["reveal"]["campaign_closed"] is True
-        for reveal in context["fixture_reveals"]
-    )
+    assert all(reveal["reveal"]["campaign_closed"] is True for reveal in context["fixture_reveals"])
     for repetition, seed in enumerate(
         plan.fixture_seeds["deep-navigation-v3"],
         start=1,
@@ -624,8 +591,7 @@ def test_v3_campaign_uses_paired_fixtures_and_publishes_task_failures(
         paired = [
             row["fixture_variant_digest"]
             for row in rows
-            if int(row["repetition"]) == repetition
-            and int(row["matched_fixture_seed"]) == seed
+            if int(row["repetition"]) == repetition and int(row["matched_fixture_seed"]) == seed
         ]
         assert len(paired) == 2
         assert len(set(paired)) == 1
@@ -633,37 +599,21 @@ def test_v3_campaign_uses_paired_fixtures_and_publishes_task_failures(
 
 def test_v3_docker_context_is_whitelisted() -> None:
     root = Path(__file__).resolve().parents[2]
-    ignore = (
-        root
-        / "benchmarks"
-        / "competitors"
-        / "labs"
-        / "discovery-lab-v3"
-        / "Dockerfile.dockerignore"
-    ).read_text(encoding="utf-8")
+    ignore = (root / "benchmarks" / "competitors" / "labs" / "discovery-lab-v3" / "Dockerfile.dockerignore").read_text(
+        encoding="utf-8"
+    )
 
     assert ignore.splitlines()[0] == "**"
     assert "!core/benchmarks/v3/**" in ignore
-    assert not any(
-        sensitive in ignore
-        for sensitive in ("!.git", "!.benchmark-state", "!venv", "!secrets.env")
-    )
+    assert not any(sensitive in ignore for sensitive in ("!.git", "!.benchmark-state", "!venv", "!secrets.env"))
 
 
 def test_v3_compose_publishes_host_port_on_default_project_network() -> None:
     root = Path(__file__).resolve().parents[2]
-    compose = (
-        root
-        / "benchmarks"
-        / "competitors"
-        / "labs"
-        / "discovery-lab-v3"
-        / "compose.yaml"
-    ).read_text(encoding="utf-8")
+    compose = (root / "benchmarks" / "competitors" / "labs" / "discovery-lab-v3" / "compose.yaml").read_text(
+        encoding="utf-8"
+    )
 
-    assert (
-        '"${OCTOBENCH_LAB_BIND:-127.0.0.1}:'
-        '${OCTOBENCH_LAB_PORT:-8080}:8080"'
-    ) in compose
+    assert ('"${OCTOBENCH_LAB_BIND:-127.0.0.1}:${OCTOBENCH_LAB_PORT:-8080}:8080"') in compose
     assert "internal: true" not in compose
     assert "\nnetworks:" not in compose

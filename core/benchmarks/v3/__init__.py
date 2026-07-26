@@ -35,6 +35,7 @@ from .publication import (
     render_run_records,
     render_runs_csv,
     render_statistics_svg,
+    repack_v3_results,
     svg_contract,
     verify_v3_results,
 )
@@ -104,6 +105,7 @@ __all__ = [
     "render_run_records",
     "render_runs_csv",
     "render_statistics_svg",
+    "repack_v3_results",
     "svg_contract",
     "validate_budget_enforcement",
     "validate_single_track",
