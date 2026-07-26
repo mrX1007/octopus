@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1000" viewBox="0 0 1200 1000" role="img" aria-labelledby="chart-title chart-desc">
+<title id="chart-title">Benchmark v3 outcome and evidence statistics</title>
+<desc id="chart-desc">Separate panels for execution outcomes, task outcomes, verified recall with Wilson confidence intervals, and censor-aware completion time.</desc>
+<style>text{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;fill:#172033}.panel{fill:#fff;stroke:#cbd5e1}.grid{stroke:#e2e8f0}.label{font-size:13px}.small{font-size:11px;fill:#475569}.title{font-size:18px;font-weight:700}.heading{font-size:24px;font-weight:700}</style>
+<rect width="100%" height="100%" fill="#f8fafc"/>
+<text class="heading" x="38" y="38">Benchmark v3 — separated outcomes</text>
+<text class="small" x="38" y="59">Track: small-model-stress-v3 · Plan: 732b6fee232090b1 · No cross-track ranking</text>
+<g id="execution-outcomes" data-panel="execution-outcomes">
+<rect class="panel" x="28" y="78" width="1144" height="205" rx="8"/>
+<text class="title" x="48" y="106">Execution outcomes</text>
+<text class="label" x="48" y="160">octopus</text>
+<rect x="260.00" y="147" width="769.17" height="20" fill="#2563eb"><title>succeeded: 142/144</title></rect>
+<rect x="1029.17" y="147" width="10.83" height="20" fill="#059669"><title>timeout: 2/144</title></rect>
+<text class="small" x="1055" y="161">n=144</text>
+<text class="label" x="48" y="200">strix</text>
+<rect x="260.00" y="187" width="205.83" height="20" fill="#2563eb"><title>failed: 38/144</title></rect>
+<rect x="465.83" y="187" width="319.58" height="20" fill="#059669"><title>succeeded: 59/144</title></rect>
+<rect x="785.42" y="187" width="254.58" height="20" fill="#d97706"><title>timeout: 47/144</title></rect>
+<text class="small" x="1055" y="201">n=144</text>
+</g>
+<g id="task-outcomes" data-panel="task-outcomes">
+<rect class="panel" x="28" y="301" width="1144" height="205" rx="8"/>
+<text class="title" x="48" y="329">Task outcomes</text>
+<text class="label" x="48" y="383">octopus</text>
+<rect x="260.00" y="370" width="43.33" height="20" fill="#2563eb"><title>invalid: 8/144</title></rect>
+<rect x="303.33" y="370" width="736.67" height="20" fill="#059669"><title>not_completed: 136/144</title></rect>
+<text class="small" x="1055" y="384">n=144</text>
+<text class="label" x="48" y="423">strix</text>
+<rect x="260.00" y="410" width="10.83" height="20" fill="#2563eb"><title>invalid: 2/144</title></rect>
+<rect x="270.83" y="410" width="769.17" height="20" fill="#059669"><title>not_completed: 142/144</title></rect>
+<text class="small" x="1055" y="424">n=144</text>
+</g>
+<g id="verified-recall" data-panel="verified-recall">
+<rect class="panel" x="28" y="524" width="1144" height="205" rx="8"/>
+<text class="title" x="48" y="552">Verified recall (all scheduled, Wilson 95% CI)</text>
+<line class="grid" x1="260" y1="586" x2="260" y2="721"/>
+<text class="small" x="260" y="738">0.00</text>
+<line class="grid" x1="455" y1="586" x2="455" y2="721"/>
+<text class="small" x="455" y="738">0.25</text>
+<line class="grid" x1="650" y1="586" x2="650" y2="721"/>
+<text class="small" x="650" y="738">0.50</text>
+<line class="grid" x1="845" y1="586" x2="845" y2="721"/>
+<text class="small" x="845" y="738">0.75</text>
+<line class="grid" x1="1040" y1="586" x2="1040" y2="721"/>
+<text class="small" x="1040" y="738">1.00 x 1.0</text>
+<text class="label" x="48" y="606">octopus</text>
+<rect x="260" y="593" width="0.00" height="20" fill="#2563eb" opacity="0.8"/>
+<line x1="260.00" y1="603" x2="278.75" y2="603" stroke="#111827" stroke-width="2"/>
+<line x1="260.00" y1="598" x2="260.00" y2="608" stroke="#111827"/>
+<line x1="278.75" y1="598" x2="278.75" y2="608" stroke="#111827"/>
+<text class="small" x="1055" y="607">0.000</text>
+<text class="label" x="48" y="646">strix</text>
+<rect x="260" y="633" width="0.00" height="20" fill="#059669" opacity="0.8"/>
+<line x1="260.00" y1="643" x2="278.75" y2="643" stroke="#111827" stroke-width="2"/>
+<line x1="260.00" y1="638" x2="260.00" y2="648" stroke="#111827"/>
+<line x1="278.75" y1="638" x2="278.75" y2="648" stroke="#111827"/>
+<text class="small" x="1055" y="647">0.000</text>
+</g>
+<g id="censored-completion-time" data-panel="censored-completion-time">
+<rect class="panel" x="28" y="747" width="1144" height="205" rx="8"/>
+<text class="title" x="48" y="775">Censor-aware completion time</text>
+<line class="grid" x1="260" y1="809" x2="260" y2="944"/>
+<text class="small" x="260" y="961">0.00</text>
+<line class="grid" x1="455" y1="809" x2="455" y2="944"/>
+<text class="small" x="455" y="961">0.25</text>
+<line class="grid" x1="650" y1="809" x2="650" y2="944"/>
+<text class="small" x="650" y="961">0.50</text>
+<line class="grid" x1="845" y1="809" x2="845" y2="944"/>
+<text class="small" x="845" y="961">0.75</text>
+<line class="grid" x1="1040" y1="809" x2="1040" y2="944"/>
+<text class="small" x="1040" y="961">1.00 x 120s</text>
+<text class="label" x="48" y="829">octopus</text>
+<rect x="260" y="816" width="780.00" height="20" fill="#2563eb" opacity="0.8"><title>Restricted mean completion time: 120.000s</title></rect>
+<text class="small" x="1055" y="830">median=not reached; events=0/144</text>
+<text class="label" x="48" y="869">strix</text>
+<rect x="260" y="856" width="780.00" height="20" fill="#059669" opacity="0.8"><title>Restricted mean completion time: 120.000s</title></rect>
+<text class="small" x="1055" y="870">median=not reached; events=0/144</text>
+</g>
+</svg>

@@ -1,0 +1,38 @@
+{
+  "analysis_plan_digest": "732b6fee232090b10247c995b1a5ceb16c9b3202ca70a83a8fa5a5ab05d730c0",
+  "artifacts": {
+    "analysis_plan": "analysis-plan.json",
+    "campaign_context": "campaign-context.json",
+    "controller_ledgers": [
+      "ledgers-0000.jsonl",
+      "ledgers-0001.jsonl",
+      "ledgers-0002.jsonl",
+      "ledgers-0003.jsonl"
+    ],
+    "run_records": [
+      "runs-0000.jsonl",
+      "runs-0001.jsonl",
+      "runs-0002.jsonl"
+    ],
+    "runs": "runs.csv",
+    "statistics": "statistics.json",
+    "visualization": "comparison.svg"
+  },
+  "leaderboard_merge_group": "small-model-stress-v3-only",
+  "publication_tier": "full",
+  "schema_version": "1.1",
+  "svg_contract": {
+    "censor_aware_completion_time": true,
+    "external_resources": false,
+    "panels": [
+      "execution-outcomes",
+      "task-outcomes",
+      "verified-recall",
+      "censored-completion-time"
+    ],
+    "scripts": false,
+    "separate_execution_and_task_outcomes": true,
+    "verified_recall_confidence_intervals": true
+  },
+  "track_id": "small-model-stress-v3"
+}
