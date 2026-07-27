@@ -36,9 +36,24 @@ out of normal JSON scenario/manifest discovery.
 
 ## Published live campaigns
 
-The latest checked-in live result is the complete, checksum-verified
+The latest checked-in live result is the complete, checksum-verified Benchmark
+v3 [`linux-blackbox-small-model-v3-20260724t092256z`](results/linux-blackbox-small-model-v3-20260724t092256z/comparison.svg)
+bundle. It contains 288 executions across 12 blinded fixture families and 12
+paired repetitions per system.
+
+| System | Execution outcomes | Independent task outcomes |
+| --- | --- | --- |
+| OCTOPUS | 142 succeeded, 2 timed out | 136 not completed, 8 invalid |
+| Strix 1.1.0 | 59 succeeded, 38 failed, 47 timed out | 142 not completed, 2 invalid |
+
+Neither system completed a sealed task, and
+[`statistics.json`](results/linux-blackbox-small-model-v3-20260724t092256z/statistics.json)
+declares no automatic winner. This is a constrained-small-model stress result,
+not a general product ranking or superiority claim.
+
+The previous complete, checksum-verified
 [`linux-blackbox-small-model-v2-20260721t202413z`](results/linux-blackbox-small-model-v2-20260721t202413z/comparison.md)
-bundle. It contains 48 executions across four isolated read-only surfaces, six
+bundle contains 48 executions across four isolated read-only surfaces, six
 repetitions per system/scenario, and the same pinned altered Qwen 9B/Ollama
 profile used by v1.
 
@@ -393,9 +408,11 @@ table, full schema-2.0 run records, controller request-ledger chains,
 statistics, deterministic `comparison.svg`, publication manifest, and sanitized campaign
 context with reset/health/cleanup evidence, provenance, and post-closure
 fixture reveals. Verification regenerates the summaries from those raw records
-and validates each ledger chain. There is no published v3 bundle in this
-repository today; do not cite the runnable definition as a result or
-superiority claim.
+and validates each ledger chain. The checksum-verified
+[`linux-blackbox-small-model-v3-20260724t092256z`](results/linux-blackbox-small-model-v3-20260724t092256z/comparison.svg)
+bundle is the published v3 result. Cite that immutable bundle and its frozen
+analysis plan rather than the runnable definition alone; it declares no
+automatic winner or superiority claim.
 
 `--campaign-definition` selects the checked-in contract;
 `--campaign-id` identifies one execution and all of its generated, journal and

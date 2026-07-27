@@ -593,9 +593,24 @@ launcher provide two full-system black-box profiles:
 - `core`: OCTOPUS and Strix 1.1.0;
 - `extended`: `core` plus PentAGI 2.1.0.
 
-The latest checked-in live result is the complete, checksum-verified
+The latest checked-in live result is the complete, checksum-verified Benchmark
+v3 [`linux-blackbox-small-model-v3-20260724t092256z`](benchmarks/competitors/results/linux-blackbox-small-model-v3-20260724t092256z/comparison.svg)
+bundle: 288 executions across 12 blinded fixture families with 12 paired
+repetitions per system. OCTOPUS recorded 142 succeeded executions and two
+timeouts; Strix 1.1.0 recorded 59 succeeded, 38 failed and 47 timed out. The
+independent task evaluation recorded zero completed tasks for both systems
+(OCTOPUS: 136 not completed and eight invalid; Strix: 142 not completed and
+two invalid), so the frozen statistics declare no automatic winner. This is a
+constrained-small-model stress result, not a general product ranking or a
+superiority claim. The checked-in
+[`statistics.json`](benchmarks/competitors/results/linux-blackbox-small-model-v3-20260724t092256z/statistics.json)
+contains the complete outcome and uncertainty tables.
+
+![Benchmark v3 execution outcomes, task outcomes, verified recall, and censored completion time](benchmarks/competitors/results/linux-blackbox-small-model-v3-20260724t092256z/comparison.svg)
+
+The previous complete, checksum-verified
 [`linux-blackbox-small-model-v2-20260721t202413z`](benchmarks/competitors/results/linux-blackbox-small-model-v2-20260721t202413z/comparison.md)
-bundle: 48 executions across four read-only surfaces. OCTOPUS recorded 24
+bundle contains 48 executions across four read-only surfaces. OCTOPUS recorded 24
 succeeded process outcomes; Strix 1.1.0 recorded 12 succeeded, five failed and
 seven timed out at the 900-second cap. Schema 1.1 records process outcomes, not
 independent v3 task completion, and the bundle declares no winner.
@@ -616,10 +631,11 @@ non-normative. Schema-1.1 bundles include a deterministic `comparison.svg`
 embedded by `comparison.md`. Benchmark v3 instead generates and checksums
 `comparison.svg` directly from its frozen plan and statistics.
 
-The runnable `linux-blackbox-small-model-v3` definition has no checked-in
-result yet. It generates 12 blinded fixture families for the `core` profile
-and schedules 288 product executions (`12 families × 2 systems × 12 paired
-repetitions`). Do not cite the definition as a performance result.
+The runnable `linux-blackbox-small-model-v3` definition generated the published
+bundle above. It uses 12 blinded fixture families for the `core` profile and
+schedules 288 product executions (`12 families × 2 systems × 12 paired
+repetitions`). Cite the immutable bundle and its frozen analysis plan, never
+the runnable definition alone, when discussing the result.
 
 PentestGPT 1.0.0 remains cataloged only as a separate CTF/flag-capture
 candidate. Its upstream non-interactive CLI hardcodes a CTF task and retries a

@@ -63,5 +63,9 @@ Successful output contains `track_id: small-model-stress-v3`, `runs: 288`,
 the analysis-plan digest, and the verified file count. Verification also
 rebuilds the statistics and SVG and validates every ledger chain.
 
-There is no checked-in v3 result bundle yet. The definition and methodology do
-not establish a performance result, ranking, or superiority claim.
+The checksum-verified
+[`linux-blackbox-small-model-v3-20260724t092256z`](../../results/linux-blackbox-small-model-v3-20260724t092256z/comparison.svg)
+bundle is the checked-in result from this definition. It contains all 288
+scheduled runs; its frozen statistics record zero completed tasks for both
+systems and no automatic winner. The result is constrained-small-model stress
+evidence, not a general performance ranking or superiority claim.

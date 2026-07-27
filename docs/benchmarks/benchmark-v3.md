@@ -6,9 +6,12 @@ can read schema-1.0 run objects for diagnostics, but labels their task outcome
 `not_evaluated`, verified recall unavailable, and legacy precision
 `legacy_incomplete` because the old adapter could discard unmatched claims.
 
-The implementation and full launcher definition are checked in, but there is
-no published v3 campaign bundle yet. The existing published evidence is v1/v2
-only; this document makes no v3 performance or superiority claim.
+The implementation, full launcher definition, and checksum-verified
+[`linux-blackbox-small-model-v3-20260724t092256z`](../../benchmarks/competitors/results/linux-blackbox-small-model-v3-20260724t092256z/comparison.svg)
+campaign bundle are checked in. The bundle contains all 288 scheduled runs and
+its frozen statistics record zero completed tasks for both systems and no
+automatic winner. It is constrained-small-model stress evidence, not a general
+performance ranking or superiority claim.
 
 ## Outcome and metric semantics
 
