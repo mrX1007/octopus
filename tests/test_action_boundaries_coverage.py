@@ -337,12 +337,10 @@ def test_registered_tool_boundaries_and_killchain_contract():
         tool_fixture(is_available=lambda: False),
         lambda *_args: None,
     )
-    assert generic_unavailable.applicability(
-        ActionRequest("example.com", automatic())
-    ).missing_requirements == ("provider_unavailable",)
-    assert adapter.applicability(ActionRequest("example.com", automatic())).reasons == (
-        "registered_tool_available",
+    assert generic_unavailable.applicability(ActionRequest("example.com", automatic())).missing_requirements == (
+        "provider_unavailable",
     )
+    assert adapter.applicability(ActionRequest("example.com", automatic())).reasons == ("registered_tool_available",)
 
     by_id = ActionRequest(
         "example.com",
@@ -366,16 +364,17 @@ def test_registered_tool_boundaries_and_killchain_contract():
         tool_fixture(name="targetless", aliases=(), needs_target=False),
         lambda *_args: None,
     )
-    assert targetless._command(ActionRequest("ignored", automatic(), arguments=("--flag",))) == (
-        "targetless --flag"
-    )
+    assert targetless._command(ActionRequest("ignored", automatic(), arguments=("--flag",))) == ("targetless --flag")
     with pytest.raises(ValueError, match="invalid_action_command_quoting"):
         adapter._command(ActionRequest("example.com", automatic(), command="fixture '"))
     with pytest.raises(ValueError, match="action_command_does_not_match_descriptor"):
         adapter._command(ActionRequest("example.com", automatic(), command="other command"))
-    assert adapter.active_risk_class(
-        ActionRequest("example.com", automatic(), command="fixture '"),
-    ) is ActiveRiskClass.READ_ONLY
+    assert (
+        adapter.active_risk_class(
+            ActionRequest("example.com", automatic(), command="fixture '"),
+        )
+        is ActiveRiskClass.READ_ONLY
+    )
 
     killchain = KillchainActionAdapter(
         tool_fixture(name="killchain_fixture", aliases=()),
@@ -434,16 +433,17 @@ def test_exploit_and_metasploit_adapter_boundaries(monkeypatch):
         parameters={"options": {"B": 2, "A": 1}},
     )
     assert adapter._options(mapping_options) == "RHOSTS=example.com A=1 B=2"
-    assert adapter._options(
-        ActionRequest(
-            "example.com",
-            automatic(),
-            parameters={"options": "RHOST=other.example"},
+    assert (
+        adapter._options(
+            ActionRequest(
+                "example.com",
+                automatic(),
+                parameters={"options": "RHOST=other.example"},
+            )
         )
-    ) == "RHOST=other.example"
-    assert adapter._options(
-        ActionRequest("", automatic(""), parameters={"options": "THREADS=2"})
-    ) == "THREADS=2"
+        == "RHOST=other.example"
+    )
+    assert adapter._options(ActionRequest("", automatic(""), parameters={"options": "THREADS=2"})) == "THREADS=2"
 
     unavailable = adapter.check(mapping_options)
     assert unavailable.result["status"] == "unavailable"
@@ -457,9 +457,7 @@ def test_exploit_and_metasploit_adapter_boundaries(monkeypatch):
         runner=lambda *_args, **_kwargs: "ok",
         dependency_check=lambda _name: False,
     )
-    assert missing_dependency.applicability(mapping_options).missing_requirements == (
-        "binary:msfconsole",
-    )
+    assert missing_dependency.applicability(mapping_options).missing_requirements == ("binary:msfconsole",)
 
 
 class PluginManagerFixture:
@@ -524,9 +522,7 @@ def test_plugin_adapter_actions_execution_and_cleanup():
         ExecutionResult(stderr="provider cleanup failed: fixture"),
     )
     assert failed == ActionCleanupResult(False, "plugin_worker_cleanup_failed")
-    assert adapter.cleanup(request, ExecutionResult(stdout="complete")).reason == (
-        "plugin_worker_cleanup_succeeded"
-    )
+    assert adapter.cleanup(request, ExecutionResult(stdout="complete")).reason == ("plugin_worker_cleanup_succeeded")
 
 
 class BoundaryAdapter(ActionAdapter):
@@ -603,9 +599,11 @@ def test_selector_exception_denial_duplicate_and_half_open_paths():
         catalog,
         object(),
         telemetry,
-        CircuitFixture({
-            "test:active": ProviderCircuitState("half_open", True, "probe"),
-        }),
+        CircuitFixture(
+            {
+                "test:active": ProviderCircuitState("half_open", True, "probe"),
+            }
+        ),
     )
     selection = selector.select(
         "service discovery!",
@@ -704,15 +702,17 @@ def test_ingestion_retry_and_run_result_projection():
     outcome = IngestionOutcome(parsed_facts=1)
     assert IngestionOutcome.from_value(outcome) is outcome
     assert IngestionOutcome.from_value("not a mapping") == IngestionOutcome()
-    converted = IngestionOutcome.from_value({
-        "parsed_facts": "5",
-        "useful_facts": 0,
-        "new_facts": 2,
-        "duplicate_facts": -1,
-        "parser_items": 0,
-        "parser_errors": object(),
-        "error": "fixture",
-    })
+    converted = IngestionOutcome.from_value(
+        {
+            "parsed_facts": "5",
+            "useful_facts": 0,
+            "new_facts": 2,
+            "duplicate_facts": -1,
+            "parser_items": 0,
+            "parser_errors": object(),
+            "error": "fixture",
+        }
+    )
     assert converted == IngestionOutcome(
         parsed_facts=5,
         useful_facts=2,
@@ -721,18 +721,21 @@ def test_ingestion_retry_and_run_result_projection():
         parser_errors=0,
         error="fixture",
     )
-    direct = IngestionOutcome.from_value({
-        "parsed_facts": 2_000_000,
-        "useful_facts": 3,
-        "parser_items": 4,
-    })
+    direct = IngestionOutcome.from_value(
+        {
+            "parsed_facts": 2_000_000,
+            "useful_facts": 3,
+            "parser_items": 4,
+        }
+    )
     assert direct.parsed_facts == 1_000_000
     assert direct.to_dict()["parser_items"] == 4
 
     assert RetryClassifier.is_retryable(ExecutionResult(status=ExecutionStatus.SUCCEEDED)) is False
-    assert RetryClassifier.is_retryable(
-        ExecutionResult(status=ExecutionStatus.FAILED, metadata={"retryable": True})
-    ) is True
+    assert (
+        RetryClassifier.is_retryable(ExecutionResult(status=ExecutionStatus.FAILED, metadata={"retryable": True}))
+        is True
+    )
 
     denial = PolicyDenial.create("selection", "denied")
     rejected_selection = provider_selection(
@@ -847,29 +850,36 @@ def test_fallback_empty_last_retry_and_ingestion_error_boundaries():
     output = ExecutionResult(status=ExecutionStatus.TIMEOUT, stdout="partial", partial=True)
     assert ProviderFallbackExecutor._ingest(None, "provider", lambda *_args: {}) == IngestionOutcome()
     assert ProviderFallbackExecutor._ingest(output, "provider", None) == IngestionOutcome()
-    assert ProviderFallbackExecutor._ingest(
-        ExecutionResult(status=ExecutionStatus.TIMEOUT),
-        "provider",
-        lambda *_args: {},
-    ) == IngestionOutcome()
-    assert ProviderFallbackExecutor._ingest(
-        output,
-        "provider",
-        lambda *_args: (_ for _ in ()).throw(RuntimeError("fixture")),
-    ).error == "ingest_error:RuntimeError"
+    assert (
+        ProviderFallbackExecutor._ingest(
+            ExecutionResult(status=ExecutionStatus.TIMEOUT),
+            "provider",
+            lambda *_args: {},
+        )
+        == IngestionOutcome()
+    )
+    assert (
+        ProviderFallbackExecutor._ingest(
+            output,
+            "provider",
+            lambda *_args: (_ for _ in ()).throw(RuntimeError("fixture")),
+        ).error
+        == "ingest_error:RuntimeError"
+    )
     request = ActionRequest("example.com", automatic())
     assert ProviderFallbackExecutor._ingest_partial(None, "provider", request, lambda *_args: {}) == (
         IngestionOutcome()
     )
-    assert ProviderFallbackExecutor._ingest_partial(output, "provider", request, None) == (
-        IngestionOutcome()
+    assert ProviderFallbackExecutor._ingest_partial(output, "provider", request, None) == (IngestionOutcome())
+    assert (
+        ProviderFallbackExecutor._ingest_partial(
+            output,
+            "provider",
+            request,
+            lambda *_args: (_ for _ in ()).throw(ValueError("fixture")),
+        ).error
+        == "ingest_error:ValueError"
     )
-    assert ProviderFallbackExecutor._ingest_partial(
-        output,
-        "provider",
-        request,
-        lambda *_args: (_ for _ in ()).throw(ValueError("fixture")),
-    ).error == "ingest_error:ValueError"
 
     broken = ProviderFallbackExecutor(
         StaticSelector(provider_selection()),
@@ -985,9 +995,7 @@ def test_telemetry_validation_transactions_summary_and_bounds(tmp_path):
 
     unsupported_path = tmp_path / "unsupported.sqlite"
     conn = sqlite3.connect(unsupported_path)
-    conn.execute(
-        "CREATE TABLE provider_telemetry_schema(schema_version TEXT PRIMARY KEY, applied_at REAL NOT NULL)"
-    )
+    conn.execute("CREATE TABLE provider_telemetry_schema(schema_version TEXT PRIMARY KEY, applied_at REAL NOT NULL)")
     conn.execute(
         "INSERT INTO provider_telemetry_schema(schema_version, applied_at) VALUES (?, ?)",
         ("9.9", 0.0),

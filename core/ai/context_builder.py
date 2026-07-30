@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-"""
+""" """
 
 import json
 import re
@@ -24,28 +23,40 @@ except ImportError:
 # Map service names/banners to canonical service labels. Do not infer services
 # from port numbers: custom deployments move protocols to arbitrary ports.
 SERVICE_PATTERNS = {
-    "ssh":       ["ssh", "openssh"],
-    "http":      ["http", "httpd", "web server", "nginx", "apache", "cowboy", "golang net/http", "node.js", "express", "php"],
-    "https":     ["ssl/http", "https"],
-    "cpanel":    ["cpanel", "whm"],
-    "tomcat":    ["tomcat", "ajp13"],
-    "jmx":       ["jmx"],
-    "ftp":       ["ftp"],
-    "smtp":      ["smtp", "submission", "smtps"],
-    "pop3":      ["pop3"],
-    "imap":      ["imap"],
-    "mysql":     ["mysql", "mariadb"],
-    "postgres":  ["postgres", "postgresql"],
-    "rdp":       ["rdp", "ms-wbt-server"],
-    "smb":       ["smb", "microsoft-ds", "netbios-ssn", "samba"],
-    "ldap":      ["ldap"],
-    "kerberos":  ["kerberos", "kerberos-sec"],
-    "winrm":     ["winrm"],
-    "dns":       ["dns", "domain"],
-    "redis":     ["redis"],
-    "mongodb":   ["mongo", "mongodb"],
-    "rtsp":      ["rtsp"],
+    "ssh": ["ssh", "openssh"],
+    "http": [
+        "http",
+        "httpd",
+        "web server",
+        "nginx",
+        "apache",
+        "cowboy",
+        "golang net/http",
+        "node.js",
+        "express",
+        "php",
+    ],
+    "https": ["ssl/http", "https"],
+    "cpanel": ["cpanel", "whm"],
+    "tomcat": ["tomcat", "ajp13"],
+    "jmx": ["jmx"],
+    "ftp": ["ftp"],
+    "smtp": ["smtp", "submission", "smtps"],
+    "pop3": ["pop3"],
+    "imap": ["imap"],
+    "mysql": ["mysql", "mariadb"],
+    "postgres": ["postgres", "postgresql"],
+    "rdp": ["rdp", "ms-wbt-server"],
+    "smb": ["smb", "microsoft-ds", "netbios-ssn", "samba"],
+    "ldap": ["ldap"],
+    "kerberos": ["kerberos", "kerberos-sec"],
+    "winrm": ["winrm"],
+    "dns": ["dns", "domain"],
+    "redis": ["redis"],
+    "mongodb": ["mongo", "mongodb"],
+    "rtsp": ["rtsp"],
 }
+
 
 class ContextBuilder:
     def __init__(
@@ -57,11 +68,7 @@ class ContextBuilder:
     ):
         self.fact_store = fact_store
         self.state_resolver = state_resolver
-        self.capability_resolver = (
-            capability_resolver
-            if capability_resolver is not None
-            else CapabilityResolver()
-        )
+        self.capability_resolver = capability_resolver if capability_resolver is not None else CapabilityResolver()
         self.execution_context_factory = execution_context_factory
 
     def build_context(
@@ -99,7 +106,7 @@ class ContextBuilder:
         target_model = TargetModel.from_facts(scan_id, host, facts).to_dict()
         asset_graph = AssetGraph.from_facts(host, facts).to_dict()
         surface_states = SurfaceState(facts).to_dict()
-        
+
         # Determine highest level conceptual state
         primary_state = "initial_recon"
         if state.get("cleanup_completed"):
@@ -107,7 +114,9 @@ class ContextBuilder:
         elif state.get("exfiltration_completed"):
             primary_state = "exfiltration_completed"
         elif state.get("persistence_established"):
-            primary_state = "internal_recon_completed" if state.get("internal_recon_completed") else "persistence_established"
+            primary_state = (
+                "internal_recon_completed" if state.get("internal_recon_completed") else "persistence_established"
+            )
         elif state.get("root_access_confirmed"):
             primary_state = "root_access_confirmed"
         elif state.get("credentials_found"):
@@ -132,7 +141,7 @@ class ContextBuilder:
             service_names.add("http")
             if '"scheme": "https"' in endpoint_text or endpoint_text.startswith("https://"):
                 service_names.add("https")
-        
+
         services = sorted(service_names)
 
         coverage_gaps = self._coverage_gaps(state, services, primary_state, facts, target_model, surface_states)
@@ -142,10 +151,9 @@ class ContextBuilder:
         # Infer open questions based on current state, services and facts.
         # Coverage gaps are fact-derived unknowns, not a scripted path; they
         # keep the planner focused on surfaces that have evidence but no check.
-        open_questions = list(dict.fromkeys(
-            self._infer_open_questions(state, services, primary_state, facts)
-            + coverage_gaps
-        ))
+        open_questions = list(
+            dict.fromkeys(self._infer_open_questions(state, services, primary_state, facts) + coverage_gaps)
+        )
         stage_gates = self._stage_gates(state)
 
         next_required_capability = self._next_required_capability(primary_state, open_questions)
@@ -209,11 +217,7 @@ class ContextBuilder:
 
     def _fact_assessment_summary(self, facts: list[dict[str, Any]]) -> dict[str, Any]:
         counts = {
-            status: sum(
-                1
-                for fact in facts
-                if str(fact.get("assessment_status") or "observed") == status
-            )
+            status: sum(1 for fact in facts if str(fact.get("assessment_status") or "observed") == status)
             for status in ("observed", "inferred", "verified", "contradicted")
         }
         return {
@@ -222,14 +226,12 @@ class ContextBuilder:
             "verified_fact_ids": [
                 int(fact["id"])
                 for fact in facts
-                if fact.get("id") is not None
-                and str(fact.get("assessment_status") or "observed") == "verified"
+                if fact.get("id") is not None and str(fact.get("assessment_status") or "observed") == "verified"
             ],
             "contradicted_fact_ids": [
                 int(fact["id"])
                 for fact in facts
-                if fact.get("id") is not None
-                and str(fact.get("assessment_status") or "observed") == "contradicted"
+                if fact.get("id") is not None and str(fact.get("assessment_status") or "observed") == "contradicted"
             ],
         }
 
@@ -263,25 +265,23 @@ class ContextBuilder:
                 seen_edges.add(key)
                 edges.append(parsed)
         return {"nodes": nodes, "edges": edges}
-    
-    def _infer_open_questions(self, state: dict, services: list[str], primary_state: str,
-                              facts: Optional[list[dict[str, Any]]] = None) -> list[str]:
+
+    def _infer_open_questions(
+        self, state: dict, services: list[str], primary_state: str, facts: Optional[list[dict[str, Any]]] = None
+    ) -> list[str]:
         """Infer what we still don't know based on services and state."""
         questions = []
         facts = facts or []
         fact_text = " ".join(str(f.get("value", "")).lower() for f in facts)
-        has_login_form = (
-            "login_form_detected" in fact_text
-            or any(f.get("type") == "web_input" and "password:" in str(f.get("value", "")).lower() for f in facts)
+        has_login_form = "login_form_detected" in fact_text or any(
+            f.get("type") == "web_input" and "password:" in str(f.get("value", "")).lower() for f in facts
         )
         has_cpanel_surface = "cpanel" in services or "whm" in fact_text or "cpanel" in fact_text
         has_jmx_surface = "jmx" in services or "tomcat" in services or "jmx" in fact_text
         has_ssh_access = (
-            "ssh_login_success:" in fact_text
-            or "ssh_authenticated" in fact_text
-            or "ssh_key_available:" in fact_text
+            "ssh_login_success:" in fact_text or "ssh_authenticated" in fact_text or "ssh_key_available:" in fact_text
         )
-        
+
         if primary_state in ("initial_recon",):
             return ["service_discovery_needed"]
 
@@ -358,7 +358,7 @@ class ContextBuilder:
                 questions.append("active_directory_exposure_unknown")
             if not questions:
                 questions.append("general_vulnerability_scan_needed")
-                
+
         if not state.get("credentials_found"):
             if "ssh" in services:
                 questions.append("ssh_credentials_unknown")
@@ -366,15 +366,21 @@ class ContextBuilder:
                 questions.append("ftp_credentials_unknown")
             if has_login_form:
                 questions.append("web_credentials_unknown")
-                
+
         if state.get("credentials_found") and has_ssh_access and not state.get("root_access_confirmed"):
             questions.append("privilege_escalation_path_unknown")
-            
+
         return questions
 
-    def _coverage_gaps(self, state: dict, services: list[str], primary_state: str,
-                       facts: list[dict[str, Any]], target_model: dict[str, Any],
-                       surface_states: dict[str, str]) -> list[str]:
+    def _coverage_gaps(
+        self,
+        state: dict,
+        services: list[str],
+        primary_state: str,
+        facts: list[dict[str, Any]],
+        target_model: dict[str, Any],
+        surface_states: dict[str, str],
+    ) -> list[str]:
         gaps = []
         service_set = set(services or [])
         web_present = (
@@ -384,8 +390,7 @@ class ContextBuilder:
         )
         api_present_or_unknown = surface_states.get("api") != "confirmed_absent"
         root_or_access = bool(
-            state.get("root_access_confirmed")
-            or (target_model.get("access") or {}).get("ssh_authenticated")
+            state.get("root_access_confirmed") or (target_model.get("access") or {}).get("ssh_authenticated")
         )
 
         if not state.get("recon_completed"):
@@ -401,7 +406,9 @@ class ContextBuilder:
         if web_present:
             if not self._source_seen(facts, ("whatweb", "curl_headers", "scrapling", "browser_surface_analysis")):
                 gaps.append("web_mapping_pending")
-            if not self._source_seen(facts, ("security_headers_check", "cors_check", "jwt_analyze", "js_route_extract")):
+            if not self._source_seen(
+                facts, ("security_headers_check", "cors_check", "jwt_analyze", "js_route_extract")
+            ):
                 gaps.append("web_app_deep_testing_pending")
             if not self._source_seen(facts, ("ffuf", "scrapling_crawl", "katana_crawl")):
                 gaps.append("web_content_discovery_pending")
@@ -413,7 +420,9 @@ class ContextBuilder:
             )
             if not nuclei_done:
                 gaps.append("template_verification_pending")
-            if api_present_or_unknown and not self._source_seen(facts, ("openapi_import", "graphql_check", "api_auth_check")):
+            if api_present_or_unknown and not self._source_seen(
+                facts, ("openapi_import", "graphql_check", "api_auth_check")
+            ):
                 gaps.append("api_security_testing_pending")
 
         if root_or_access:
@@ -431,9 +440,17 @@ class ContextBuilder:
                 elif self._internal_vulnerability_gaps_seen(target_model):
                     gaps.append("internal_vulnerability_assessment_pending")
 
-        if state.get("internal_recon_completed") and self._strategy_enabled("auto_data_exfil", False) and not state.get("exfiltration_completed"):
+        if (
+            state.get("internal_recon_completed")
+            and self._strategy_enabled("auto_data_exfil", False)
+            and not state.get("exfiltration_completed")
+        ):
             gaps.append("data_exfiltration_pending")
-        if state.get("exfiltration_completed") and self._strategy_enabled("auto_cleanup", False) and not state.get("cleanup_completed"):
+        if (
+            state.get("exfiltration_completed")
+            and self._strategy_enabled("auto_cleanup", False)
+            and not state.get("cleanup_completed")
+        ):
             gaps.append("cleanup_needed")
 
         return list(dict.fromkeys(gaps))
@@ -444,8 +461,7 @@ class ContextBuilder:
     def _status_prefix_seen(self, facts: list[dict[str, Any]], prefix: str) -> bool:
         prefix = prefix.lower()
         return any(
-            str(f.get("type", "")).lower() == "service_status"
-            and str(f.get("value", "")).lower().startswith(prefix)
+            str(f.get("type", "")).lower() == "service_status" and str(f.get("value", "")).lower().startswith(prefix)
             for f in facts or []
         )
 
@@ -482,10 +498,12 @@ class ContextBuilder:
         strategy = CFG.get("strategy") or {}
         return {
             "auto_killchain": bool(strategy.get("auto_killchain", True)),
-            "auto_post_access_inventory": bool(strategy.get(
-                "auto_post_access_inventory",
-                strategy.get("auto_ssh_inventory", True),
-            )),
+            "auto_post_access_inventory": bool(
+                strategy.get(
+                    "auto_post_access_inventory",
+                    strategy.get("auto_ssh_inventory", True),
+                )
+            ),
             "auto_ssh_inventory": bool(strategy.get("auto_ssh_inventory", True)),
             "auto_internal_recon": bool(strategy.get("auto_internal_recon", True)),
             "auto_payload_generation": bool(strategy.get("auto_payload_generation", False)),
@@ -553,9 +571,6 @@ class ContextBuilder:
         for gap in coverage.get("gaps") or []:
             if not isinstance(gap, dict):
                 continue
-            if (
-                gap.get("surface") == "internal_service"
-                and gap.get("check") == "internal_vulnerability_assessment"
-            ):
+            if gap.get("surface") == "internal_service" and gap.get("check") == "internal_vulnerability_assessment":
                 return True
         return False

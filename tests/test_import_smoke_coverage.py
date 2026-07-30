@@ -77,16 +77,19 @@ def test_main_uses_profile_or_explicit_modules_and_reports_results(
     assert calls[-1] == smoke.PROFILE_MODULES["c2"]
     assert "import smoke passed: 3 modules" in capsys.readouterr().out
 
-    assert smoke.main(
-        (
-            "--module",
-            "broken-one",
-            "--module",
-            "broken-two",
-            "--profile",
-            "runtime",
+    assert (
+        smoke.main(
+            (
+                "--module",
+                "broken-one",
+                "--module",
+                "broken-two",
+                "--profile",
+                "runtime",
+            )
         )
-    ) == 1
+        == 1
+    )
     assert calls[-1] == ("broken-one", "broken-two")
     errors = capsys.readouterr().err
     assert "broken-one: ImportError: first failure" in errors

@@ -137,9 +137,7 @@ def test_private_manifest_validates_envelope_and_filters_nonobjects():
 
 def test_reveal_writer_and_product_base_url(tmp_path):
     variant = generate_fixture_variant("clean_negative", matched_fixture_seed=3)
-    path = variant.write_reveal_manifest(
-        tmp_path / "reveal.json", campaign_closed=True
-    )
+    path = variant.write_reveal_manifest(tmp_path / "reveal.json", campaign_closed=True)
     assert path.stat().st_mode & 0o777 == 0o600
     assert variant.product_view(base_url="http://example.test/")["base_url"] == "http://example.test"
 
@@ -160,14 +158,10 @@ def test_runtime_rejects_wrong_ledger_and_covers_all_method_and_route_paths():
     assert runtime.handle("GET", "/missing").status == 404
 
     evidence_header_route = next(
-        route
-        for route in variant.routes
-        if any(name.lower() == "x-octobench-evidence" for name in route.headers)
+        route for route in variant.routes if any(name.lower() == "x-octobench-evidence" for name in route.headers)
     )
     assert runtime.handle("HEAD", evidence_header_route.target).status in {302, 307}
-    assert set(evidence_header_route.evidence_ids).issubset(
-        ledger.snapshot().observed_evidence_ids
-    )
+    assert set(evidence_header_route.evidence_ids).issubset(ledger.snapshot().observed_evidence_ids)
 
 
 @pytest.mark.parametrize("seed", [True, -1, 2**63])

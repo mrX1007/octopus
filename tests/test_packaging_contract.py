@@ -44,9 +44,7 @@ def test_shipped_config_is_declared_for_sdist_and_installed_beside_module() -> N
 
     assert "config" in payload["tool"]["setuptools"]["py-modules"]
     assert "octopus_c2" in payload["tool"]["setuptools"]["py-modules"]
-    assert (ROOT / "MANIFEST.in").read_text(encoding="utf-8").splitlines() == [
-        "include config.yaml"
-    ]
+    assert (ROOT / "MANIFEST.in").read_text(encoding="utf-8").splitlines() == ["include config.yaml"]
     setup_source = (ROOT / "setup.py").read_text(encoding="utf-8")
     assert 'os.path.join(self.build_lib, "config.yaml")' in setup_source
 
@@ -63,11 +61,7 @@ def test_c2_console_entrypoint_reports_missing_extra_without_traceback() -> None
         stdin=subprocess.DEVNULL,
         capture_output=True,
         check=False,
-        env={
-            key: value
-            for key, value in os.environ.items()
-            if key not in {"PYTHONHOME", "PYTHONPATH"}
-        },
+        env={key: value for key, value in os.environ.items() if key not in {"PYTHONHOME", "PYTHONPATH"}},
         text=True,
         timeout=30,
     )

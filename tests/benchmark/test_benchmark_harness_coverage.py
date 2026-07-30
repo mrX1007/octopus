@@ -15,10 +15,7 @@ pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 
 def _scenario():
     return load_scenario(
-        Path(__file__).resolve().parents[2]
-        / "benchmarks"
-        / "scenarios"
-        / "01-service-discovery-verification.json"
+        Path(__file__).resolve().parents[2] / "benchmarks" / "scenarios" / "01-service-discovery-verification.json"
     )
 
 

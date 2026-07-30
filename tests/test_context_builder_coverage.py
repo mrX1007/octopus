@@ -116,27 +116,31 @@ def test_post_access_state_questions_cover_all_terminal_transitions():
         [],
         "persistence_established",
     ) == ["data_exfiltration_pending"]
-    assert builder._infer_open_questions(
-        {"post_access_inventory_completed": True, "exfiltration_completed": True},
-        [],
-        "persistence_established",
-    ) == []
-    assert builder._infer_open_questions({}, [], "internal_recon_completed") == [
-        "post_access_inventory_needed"
-    ]
+    assert (
+        builder._infer_open_questions(
+            {"post_access_inventory_completed": True, "exfiltration_completed": True},
+            [],
+            "persistence_established",
+        )
+        == []
+    )
+    assert builder._infer_open_questions({}, [], "internal_recon_completed") == ["post_access_inventory_needed"]
     assert builder._infer_open_questions(
         {"post_access_inventory_completed": True},
         [],
         "internal_recon_completed",
     ) == ["data_exfiltration_pending"]
-    assert builder._infer_open_questions(
-        {"post_access_inventory_completed": True, "exfiltration_completed": True},
-        [],
-        "internal_recon_completed",
-    ) == []
-    assert builder._infer_open_questions(
-        {"cleanup_completed": False}, [], "exfiltration_completed"
-    ) == ["cleanup_needed"]
+    assert (
+        builder._infer_open_questions(
+            {"post_access_inventory_completed": True, "exfiltration_completed": True},
+            [],
+            "internal_recon_completed",
+        )
+        == []
+    )
+    assert builder._infer_open_questions({"cleanup_completed": False}, [], "exfiltration_completed") == [
+        "cleanup_needed"
+    ]
     builder._strategy_enabled = lambda *_args, **_kwargs: False
     assert builder._infer_open_questions({}, [], "exfiltration_completed") == []
     assert builder._infer_open_questions({}, [], "cleanup_completed") == []
@@ -197,12 +201,8 @@ def test_generic_open_questions_cover_every_service_and_state_branch():
         "web_credentials_unknown",
     } <= set(questions)
 
-    assert builder._infer_open_questions({}, [], "recon_completed") == [
-        "general_vulnerability_scan_needed"
-    ]
-    assert builder._infer_open_questions(
-        {"vulnerabilities_found": True}, [], "recon_completed"
-    ) == []
+    assert builder._infer_open_questions({}, [], "recon_completed") == ["general_vulnerability_scan_needed"]
+    assert builder._infer_open_questions({"vulnerabilities_found": True}, [], "recon_completed") == []
     assert "privilege_escalation_path_unknown" in builder._infer_open_questions(
         {"credentials_found": True},
         [],
@@ -234,10 +234,13 @@ def test_coverage_gaps_skip_completed_web_checks_and_enable_late_stages():
     assert "template_verification_pending" not in gaps
     assert "api_security_testing_pending" not in gaps
 
-    builder._strategy_enabled = lambda key, default=False: key in {
-        "auto_data_exfil",
-        "auto_cleanup",
-    }
+    builder._strategy_enabled = lambda key, default=False: (
+        key
+        in {
+            "auto_data_exfil",
+            "auto_cleanup",
+        }
+    )
     assert "data_exfiltration_pending" in builder._coverage_gaps(
         {"recon_completed": True, "internal_recon_completed": True},
         [],
@@ -260,15 +263,18 @@ def test_source_detection_reads_direct_aggregate_and_observation_sources():
     builder = _builder()
 
     assert builder._source_seen([{"source": "WhatWeb:run"}], ("whatweb",)) is True
-    assert builder._source_seen(
-        [
-            {
-                "sources": ["other"],
-                "observations": [None, {"source": "ffuf:run"}],
-            }
-        ],
-        ("ffuf",),
-    ) is True
+    assert (
+        builder._source_seen(
+            [
+                {
+                    "sources": ["other"],
+                    "observations": [None, {"source": "ffuf:run"}],
+                }
+            ],
+            ("ffuf",),
+        )
+        is True
+    )
     assert builder._source_seen([{"observations": [None]}], ("missing",)) is False
 
 

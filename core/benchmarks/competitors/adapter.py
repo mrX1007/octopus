@@ -66,9 +66,7 @@ _PLACEHOLDER_MARKERS = (
     "your-target",
 )
 _TEXT_SUFFIXES = frozenset({".json", ".jsonl", ".log", ".md", ".sarif", ".txt"})
-_SENSITIVE_FILENAMES = frozenset(
-    {".env", "config.toml", "credentials", "rules-of-engagement.txt", "secrets"}
-)
+_SENSITIVE_FILENAMES = frozenset({".env", "config.toml", "credentials", "rules-of-engagement.txt", "secrets"})
 
 
 class ProductAdapterError(RuntimeError):
@@ -112,10 +110,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         # when a third-party executable is unavailable.  Do not serialize the
         # exception: provider errors and paths often contain credentials.
         result = _failed_result(
-            include_reported_claims=(
-                scenario is not None
-                and str(scenario.lab.get("version") or "") == _V3_LAB_VERSION
-            )
+            include_reported_claims=(scenario is not None and str(scenario.lab.get("version") or "") == _V3_LAB_VERSION)
         )
     try:
         _atomic_write_json(args.output, result)
@@ -176,9 +171,7 @@ def run_product_adapter(
     actions: list[str] = []
 
     metrics = {key: float(value) for key, value in outcome.metrics.items() if _valid_metric(value)}
-    metrics["output_bytes"] = float(
-        len(outcome.output_text.encode("utf-8", "replace"))
-    )
+    metrics["output_bytes"] = float(len(outcome.output_text.encode("utf-8", "replace")))
     if expected:
         metrics["evidence_completeness"] = len(expected & set(verified)) / len(expected)
     elif outcome.status == "succeeded":
@@ -241,9 +234,7 @@ def build_product_prompt(scenario: BenchmarkScenario, target: str) -> str:
         "Stay strictly on this target and do not contact unrelated hosts. Respect the supplied "
         "time, tool, output, model-token and cost budgets. Do not use persistence, destructive "
         "actions, denial of service, credential spraying, lateral movement or data exfiltration. "
-        "Prefer read-only discovery and direct verification. "
-        + evidence_instruction
-        + "Return a concise "
+        "Prefer read-only discovery and direct verification. " + evidence_instruction + "Return a concise "
         "report of observed services and endpoints plus concrete evidence."
     )
     if len(prompt.encode("utf-8", "replace")) > _MAX_PROMPT_BYTES:
@@ -295,8 +286,7 @@ def _run_octopus(
         cancellation = CancellationContext(deadline_monotonic=active_deadline)
         max_tools = max(
             1,
-            _positive_integer(scenario.budgets.get("max_tools"))
-            - (1 if probe_completed else 0),
+            _positive_integer(scenario.budgets.get("max_tools")) - (1 if probe_completed else 0),
         )
         max_iterations = _bounded_integer(
             scenario.strategy_config.get("max_iterations", 3),
@@ -326,15 +316,11 @@ def _run_octopus(
             probe_completed=probe_completed,
             timed_out=active_timed_out,
             total_timeout=timeout,
-            v3_claim_contract=(
-                str(scenario.lab.get("version") or "") == _V3_LAB_VERSION
-            ),
+            v3_claim_contract=(str(scenario.lab.get("version") or "") == _V3_LAB_VERSION),
         )
     except ExecutionCancelled as exc:
         cancellation_reason = (
-            cancellation.reason_code
-            if cancellation is not None and cancellation.cancelled
-            else exc.reason_code
+            cancellation.reason_code if cancellation is not None and cancellation.cancelled else exc.reason_code
         )
         if cancellation_reason == "keyboard_interrupt":
             raise KeyboardInterrupt from None
@@ -352,9 +338,7 @@ def _run_octopus(
             timed_out=timed_out,
             total_timeout=timeout,
             failure_error_class=("" if timed_out else "ProductCancelled"),
-            v3_claim_contract=(
-                str(scenario.lab.get("version") or "") == _V3_LAB_VERSION
-            ),
+            v3_claim_contract=(str(scenario.lab.get("version") or "") == _V3_LAB_VERSION),
         )
     except (OSError, ProductAdapterError, urllib.error.URLError, ValueError):
         duration = max(0.0, time.monotonic() - started)
@@ -362,11 +346,7 @@ def _run_octopus(
             status="timeout" if duration >= timeout else "failed",
             output_text="",
             duration_seconds=duration,
-            error_class=(
-                "ProductTimeout"
-                if duration >= timeout
-                else "OctopusAdapterFailure"
-            ),
+            error_class=("ProductTimeout" if duration >= timeout else "OctopusAdapterFailure"),
         )
 
 
@@ -421,22 +401,12 @@ def _octopus_outcome(
         "tool_calls": float(tools_run + (1 if probe_completed else 0)),
     }
     return ProductOutcome(
-        status=(
-            "timeout"
-            if timed_out
-            else "failed"
-            if failure_error_class
-            else "succeeded"
-        ),
+        status=("timeout" if timed_out else "failed" if failure_error_class else "succeeded"),
         output_text=output,
         duration_seconds=duration,
         metrics=metrics,
         error_class="ProductTimeout" if timed_out else failure_error_class,
-        reported_claims=(
-            _octopus_v3_reported_claims(trace)
-            if v3_claim_contract
-            else None
-        ),
+        reported_claims=(_octopus_v3_reported_claims(trace) if v3_claim_contract else None),
     )
 
 
@@ -476,11 +446,7 @@ def _octopus_v3_reported_claims(trace: Any) -> tuple[str, ...]:
             if not isinstance(record, Mapping):
                 continue
             candidate = str(record.get("detail") or "").strip()
-            if (
-                candidate
-                and len(candidate.encode("utf-8", "replace")) <= _MAX_NEEDLE_BYTES
-                and candidate not in claims
-            ):
+            if candidate and len(candidate.encode("utf-8", "replace")) <= _MAX_NEEDLE_BYTES and candidate not in claims:
                 claims.append(candidate)
             if len(claims) >= _MAX_MATCHERS:
                 return tuple(claims)
@@ -800,11 +766,7 @@ def _run_pentagi(
             output_text="",
             duration_seconds=max(0.0, time.monotonic() - started),
             metrics=(
-                {
-                    "cleanup_succeeded": (
-                        1.0 if deadline_cleanup_succeeded else 0.0
-                    )
-                }
+                {"cleanup_succeeded": (1.0 if deadline_cleanup_succeeded else 0.0)}
                 if deadline_cleanup_succeeded is not None
                 else {}
             ),
@@ -1002,11 +964,7 @@ def _validate_pentagi_execution(
     usage = payload.get("usageStatsByModelAgentsForFlow")
     if not isinstance(usage, Sequence) or isinstance(usage, (str, bytes)) or not usage:
         raise ProductAdapterError("pentagi_model_attestation_missing")
-    actual_models = {
-        str(item.get("model") or "")
-        for item in usage
-        if isinstance(item, Mapping)
-    }
+    actual_models = {str(item.get("model") or "") for item in usage if isinstance(item, Mapping)}
     if not actual_models or actual_models != {expected_model}:
         raise ProductAdapterError("pentagi_model_mismatch")
 
@@ -1344,11 +1302,7 @@ def _extract_v3_reported_claims(output: str) -> tuple[str, ...]:
         if match is None:
             continue
         candidate = match.group(1).strip()
-        if (
-            candidate
-            and len(candidate.encode("utf-8", "replace")) <= _MAX_NEEDLE_BYTES
-            and candidate not in claims
-        ):
+        if candidate and len(candidate.encode("utf-8", "replace")) <= _MAX_NEEDLE_BYTES and candidate not in claims:
             claims.append(candidate)
         if len(claims) >= _MAX_MATCHERS:
             break

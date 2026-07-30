@@ -387,11 +387,10 @@ def test_cpanel_browser_verification_paths(monkeypatch):
     monkeypatch.setattr(time, "time", lambda: 1)
     rich_html = (
         '<td class="cell">admin@example.test</td>'
-        ' hostname: panel.example.test '
+        " hostname: panel.example.test "
         '<a href="/cpsess1/scripts/list"> Accounts </a>'
         '<a href="/cpsess1/scripts/other"> Accounts </a>'
-        '<script>hidden</script><style>css</style>'
-        + "visible " * 50
+        "<script>hidden</script><style>css</style>" + "visible " * 50
     )
     Browser.responses = [
         {"installed": True},
@@ -621,7 +620,7 @@ def test_direct_browser_and_summary_helpers(monkeypatch):
         '<title> A  Title </title><meta name="description" content=" desc ">'
         '<a href="/a">A</a><a href="/a">A2</a>'
         '<form action=""></form><input type="email" name="mail">'
-        '<script>hidden</script><style>css</style> visible text'
+        "<script>hidden</script><style>css</style> visible text"
     )
     summary = post_tools._summarize_browser_content("https://host", html)
     for marker in ("Page title", "Meta tags", "Links", "Forms", "Input fields", "Visible text"):
@@ -672,12 +671,11 @@ def test_credential_reference_resolution_and_ad_shapes(monkeypatch):
     other_service = _ref(service="ldap", suffix="service")
     other_user = _ref(user="bob", suffix="user")
     other_port = _ref(port=2222, suffix="port")
-    resolved = {
-        ref.handle: ref
-        for ref in (valid, other_target, other_service, other_user, other_port)
-    }
+    resolved = {ref.handle: ref for ref in (valid, other_target, other_service, other_user, other_port)}
     monkeypatch.setattr(post_tools, "is_credential_handle", lambda value: str(value).startswith("credential://"))
-    monkeypatch.setattr(post_tools, "resolve_credential_handle", lambda value: resolved.get(getattr(value, "handle", value)))
+    monkeypatch.setattr(
+        post_tools, "resolve_credential_handle", lambda value: resolved.get(getattr(value, "handle", value))
+    )
 
     assert "Plaintext" in post_tools._resolve_credential_ref("host", credential_handle="secret")[1]
     assert "Unknown" in post_tools._resolve_credential_ref("host", credential_handle="credential://missing")[1]
@@ -733,7 +731,9 @@ def test_ad_execution_context_and_provider_sanitization(monkeypatch):
         assert not error
     assert captured["password"] == ""
 
-    monkeypatch.setattr(post_tools, "sanitize_credential_text", lambda value, plaintext: str(value).replace(plaintext, "X"))
+    monkeypatch.setattr(
+        post_tools, "sanitize_credential_text", lambda value, plaintext: str(value).replace(plaintext, "X")
+    )
     assert post_tools._call_ad_provider({"password": "secret"}, lambda: "ok secret") == "ok X"
     failure = post_tools._call_ad_provider(
         {"password": "secret"},
@@ -747,7 +747,9 @@ def test_connect_ssh_for_tool_all_resolution_and_transport_paths(monkeypatch):
     user = _ref("alice", suffix="user")
     wrong_port = _ref("skip", port=2200, suffix="skip")
     monkeypatch.setattr(post_tools, "credential_material_for_execution", _material_context("secret"))
-    monkeypatch.setattr(post_tools, "sanitize_credential_text", lambda value, plaintext: str(value).replace(plaintext, "X"))
+    monkeypatch.setattr(
+        post_tools, "sanitize_credential_text", lambda value, plaintext: str(value).replace(plaintext, "X")
+    )
 
     monkeypatch.setattr(post_tools, "_resolve_ai_creds", lambda *args, **kwargs: (None, "bad handle"))
     assert post_tools._connect_ssh_for_tool("host", "alice", "credential://bad")[3] == "bad handle"
@@ -800,7 +802,9 @@ def test_connect_ssh_for_tool_all_resolution_and_transport_paths(monkeypatch):
 
 
 def test_controlled_inventory_and_generated_artifact(monkeypatch, tmp_path):
-    monkeypatch.setattr(post_tools, "_connect_ssh_for_tool", lambda *args, **kwargs: (None, None, None, "connect failed"))
+    monkeypatch.setattr(
+        post_tools, "_connect_ssh_for_tool", lambda *args, **kwargs: (None, None, None, "connect failed")
+    )
     assert post_tools._run_controlled_ssh_inventory("host") == "connect failed"
 
     client = _Client(close_error=True)
@@ -828,7 +832,7 @@ def test_hash_candidate_discovery_and_registration(monkeypatch):
     monkeypatch.setattr(post_tools.os.path, "expanduser", lambda path: "/loot")
     monkeypatch.setattr(post_tools.os.path, "isdir", lambda path: path in {"/loot", "/tmp"})
     monkeypatch.setattr(post_tools.os, "listdir", lambda path: ["tmp.hash", "ignore.txt"])
-    monkeypatch.setattr(post_tools.os, "walk", lambda path: [(path, [], ["shadow", "zero.hash", "bad.hash", "ignore"])] )
+    monkeypatch.setattr(post_tools.os, "walk", lambda path: [(path, [], ["shadow", "zero.hash", "bad.hash", "ignore"])])
 
     def size(path):
         if path.endswith("bad.hash"):
@@ -945,42 +949,68 @@ def test_msf_login_preparation_and_provider_gates(monkeypatch):
     import core.killchain.policy as policy
 
     monkeypatch.setattr(policy, "stage_gate_message", lambda stage: "denied")
-    assert post_tools._run_ssh_credential_provider(
-        "host", None, None, lambda *args: "ok", missing_message="missing", killchain_stage="stage"
-    ) == "denied"
+    assert (
+        post_tools._run_ssh_credential_provider(
+            "host", None, None, lambda *args: "ok", missing_message="missing", killchain_stage="stage"
+        )
+        == "denied"
+    )
     monkeypatch.setattr(policy, "stage_gate_message", lambda stage: "")
     monkeypatch.setattr(post_tools, "_resolve_ai_creds", lambda *args, **kwargs: (None, "bad handle"))
-    assert post_tools._run_ssh_credential_provider(
-        "host", None, "credential://bad", lambda *args: "ok", missing_message="missing", killchain_stage="stage"
-    ) == "bad handle"
-    assert post_tools._run_ssh_credential_provider(
-        "host", None, None, lambda *args: "ok", missing_message="missing"
-    ) == "missing"
+    assert (
+        post_tools._run_ssh_credential_provider(
+            "host", None, "credential://bad", lambda *args: "ok", missing_message="missing", killchain_stage="stage"
+        )
+        == "bad handle"
+    )
+    assert (
+        post_tools._run_ssh_credential_provider("host", None, None, lambda *args: "ok", missing_message="missing")
+        == "missing"
+    )
     monkeypatch.setattr(post_tools, "_resolve_ai_creds", lambda *args, **kwargs: (credential, ""))
     monkeypatch.setattr(post_tools, "call_credential_provider", _call_provider)
-    assert post_tools._run_ssh_credential_provider(
-        "host", None, credential.handle, lambda target, user, pwd: f"{user}:{pwd}", missing_message="missing"
-    ) == "alice:secret"
+    assert (
+        post_tools._run_ssh_credential_provider(
+            "host", None, credential.handle, lambda target, user, pwd: f"{user}:{pwd}", missing_message="missing"
+        )
+        == "alice:secret"
+    )
 
     monkeypatch.setattr(policy, "master_gate_message", lambda: "master denied")
-    assert post_tools._run_full_killchain_credential_provider(
-        "host", None, None, lambda *args, **kwargs: "ok", missing_message="missing"
-    ) == "master denied"
+    assert (
+        post_tools._run_full_killchain_credential_provider(
+            "host", None, None, lambda *args, **kwargs: "ok", missing_message="missing"
+        )
+        == "master denied"
+    )
     monkeypatch.setattr(policy, "master_gate_message", lambda: "")
     monkeypatch.setattr(post_tools, "_resolve_ai_creds", lambda *args, **kwargs: (None, "bad"))
-    assert post_tools._run_full_killchain_credential_provider(
-        "host", None, "credential://bad", lambda *args, **kwargs: "ok", missing_message="missing"
-    ) == "bad"
-    assert post_tools._run_full_killchain_credential_provider(
-        "host", None, None, lambda *args, **kwargs: "ok", missing_message="missing"
-    ) == "missing"
+    assert (
+        post_tools._run_full_killchain_credential_provider(
+            "host", None, "credential://bad", lambda *args, **kwargs: "ok", missing_message="missing"
+        )
+        == "bad"
+    )
+    assert (
+        post_tools._run_full_killchain_credential_provider(
+            "host", None, None, lambda *args, **kwargs: "ok", missing_message="missing"
+        )
+        == "missing"
+    )
     monkeypatch.setattr(post_tools, "_resolve_ai_creds", lambda *args, **kwargs: (credential, ""))
     monkeypatch.setattr(post_tools, "sanitize_credential_result", lambda cred, value: str(value).replace("secret", "X"))
-    assert post_tools._run_full_killchain_credential_provider(
-        "host", None, None, lambda *args, **kwargs: "ok secret", missing_message="missing"
-    ) == "ok X"
+    assert (
+        post_tools._run_full_killchain_credential_provider(
+            "host", None, None, lambda *args, **kwargs: "ok secret", missing_message="missing"
+        )
+        == "ok X"
+    )
     failure = post_tools._run_full_killchain_credential_provider(
-        "host", None, None, lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("secret")), missing_message="missing"
+        "host",
+        None,
+        None,
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("secret")),
+        missing_message="missing",
     )
     assert "RuntimeError" in failure and "secret" not in failure
 
@@ -998,8 +1028,14 @@ def test_active_msf_and_killchain_ai_wrappers(monkeypatch):
     assert calls[-1][0][1] == "RHOSTS=other"
 
     captured = []
-    monkeypatch.setattr(post_tools, "_run_ssh_credential_provider", lambda *args, **kwargs: captured.append((args, kwargs)) or "wrapped")
-    monkeypatch.setattr(post_tools, "_run_full_killchain_credential_provider", lambda *args, **kwargs: captured.append((args, kwargs)) or "full")
+    monkeypatch.setattr(
+        post_tools, "_run_ssh_credential_provider", lambda *args, **kwargs: captured.append((args, kwargs)) or "wrapped"
+    )
+    monkeypatch.setattr(
+        post_tools,
+        "_run_full_killchain_credential_provider",
+        lambda *args, **kwargs: captured.append((args, kwargs)) or "full",
+    )
     for wrapper in (
         post_tools.ai_privesc,
         post_tools.ai_persist,
@@ -1205,7 +1241,9 @@ def test_ai_database_inventory_all_outcomes(monkeypatch):
         ]
     )
     monkeypatch.setattr(post_tools, "_postgres_inventory", lambda *args: next(results))
-    monkeypatch.setattr(post_tools, "sanitize_credential_text", lambda value, plaintext: str(value).replace(plaintext, "X"))
+    monkeypatch.setattr(
+        post_tools, "sanitize_credential_text", lambda value, plaintext: str(value).replace(plaintext, "X")
+    )
     output = post_tools.ai_db_inventory("https://host/path", 0, "postgres")
     assert "Attempt failed: failed [REDACTED]" in output
     assert "version X" in output and "one X" in output
@@ -1249,7 +1287,9 @@ def test_ssh_ai_wrappers_and_exec_cleanup(monkeypatch):
     monkeypatch.setattr(post_tools, "_ssh_exec_block_reason", lambda command: "blocked")
     assert "ssh_exec blocked" in post_tools.ai_ssh_exec("host", command='"id"')
     monkeypatch.setattr(post_tools, "_ssh_exec_block_reason", lambda command: "")
-    monkeypatch.setattr(post_tools, "_connect_ssh_for_tool", lambda *args, **kwargs: (None, None, None, "connect error"))
+    monkeypatch.setattr(
+        post_tools, "_connect_ssh_for_tool", lambda *args, **kwargs: (None, None, None, "connect error")
+    )
     assert post_tools.ai_ssh_exec("host", command="id") == "connect error"
 
     helpers = _module(monkeypatch, "core.killchain.ssh_helpers", _ssh_exec=lambda client, command, timeout: "uid=0")
@@ -1343,7 +1383,9 @@ def test_adcs_review_binary_credentials_and_provider(monkeypatch):
 
 def test_pivot_and_internal_network_wrappers(monkeypatch):
     client = _Client()
-    monkeypatch.setattr(post_tools, "_connect_ssh_for_tool", lambda *args, **kwargs: (None, None, None, "connect error"))
+    monkeypatch.setattr(
+        post_tools, "_connect_ssh_for_tool", lambda *args, **kwargs: (None, None, None, "connect error")
+    )
     for call in (
         lambda: post_tools.ai_socks_proxy("host"),
         lambda: post_tools.ai_port_forward("host"),
@@ -1418,7 +1460,9 @@ def test_builders_waf_search_and_plugin_wrappers(monkeypatch, tmp_path):
     assert "build aborted" in post_tools.ai_build_go_implant()
 
     written = []
-    monkeypatch.setattr(post_tools, "_write_generated_artifact", lambda name, code: written.append((name, code)) or str(tmp_path / name))
+    monkeypatch.setattr(
+        post_tools, "_write_generated_artifact", lambda name, code: written.append((name, code)) or str(tmp_path / name)
+    )
     monkeypatch.setattr(python_implant, "generate_python_implant", lambda **kwargs: "python code")
     assert "Python implant generated" in post_tools.ai_build_python_implant(beacon_interval=5)
     monkeypatch.setattr(powershell, "generate_ps_encoded", lambda url: "encoded")

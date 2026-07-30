@@ -95,13 +95,9 @@ class PipelineRuntime:
         self.scheduler = scheduler or CommandScheduler()
         self.parser = parser or OutputParser()
         self.reporter = TraceReporter(self.facts)
-        self.knowledge_graph = knowledge_graph or KnowledgeGraph(
-            self._knowledge_graph_path(self.facts.db_path)
-        )
+        self.knowledge_graph = knowledge_graph or KnowledgeGraph(self._knowledge_graph_path(self.facts.db_path))
         self.graph_projector = GraphProjectionService(self.facts, self.knowledge_graph)
-        self.facts.register_assessment_projection_handler(
-            self.graph_projector.project_fact_ids
-        )
+        self.facts.register_assessment_projection_handler(self.graph_projector.project_fact_ids)
         self.facts.drain_assessment_projection_outbox()
         self._runner = runner
         self._action_catalog: ActionCatalog | None = None
@@ -163,9 +159,7 @@ class PipelineRuntime:
     @property
     def provider_telemetry(self) -> ProviderTelemetryStore:
         if self._provider_telemetry is None:
-            self._provider_telemetry = ProviderTelemetryStore(
-                self._provider_telemetry_path(self.facts.db_path)
-            )
+            self._provider_telemetry = ProviderTelemetryStore(self._provider_telemetry_path(self.facts.db_path))
         return self._provider_telemetry
 
     @property
@@ -287,62 +281,48 @@ class PipelineRuntime:
             source_execution_ids.append(final_execution.execution_id)
         attempt_duration = 0.0
         for attempt in result.attempts:
-            attempt_execution = (
-                attempt.report.execution_result or attempt.report.check_result
-            )
+            attempt_execution = attempt.report.execution_result or attempt.report.check_result
             if attempt_execution is not None:
                 attempt_duration += attempt_execution.duration
-        store.record({
-            "event_id": (
-                f"provider:{result.selection.selection_id}:"
-                f"{request.execution_context.request_id}"
-            ),
-            "event_type": "provider_selection",
-            "scan_id": scan_id,
-            "candidates": [
-                item.action_id
-                for item in (*result.selection.ranked, *result.selection.rejected)
-            ],
-            "rejected": [
-                {"candidate": item.action_id, "reason": list(item.reasons)}
-                for item in result.selection.rejected
-            ],
-            "chosen_action": result.selection.chosen_action_id or "",
-            "capability_ref": capability,
-            "policy_refs": (
-                list(final_report.policy_decision_refs) if final_report is not None else []
-            ),
-            "supporting_fact_ids": supporting_fact_ids,
-            "expected_outcome": {
-                "status": "succeeded",
-                "useful_evidence": True,
-                "assessment_refs": assessment_refs,
-            },
-            "actual_outcome": {
-                "status": final_execution.status.value if final_execution else "not_attempted",
-                "attempts": len(result.attempts),
-                "useful_facts": sum(item.ingestion.useful_facts for item in result.attempts),
-                "duplicate_facts": sum(
-                    item.ingestion.duplicate_facts for item in result.attempts
-                ),
-                "source_execution_ids": source_execution_ids,
-            },
-            "duration": attempt_duration,
-            "cost": {
-                "tool_calls": len(result.attempts),
-                "estimated_units": float(len(result.attempts)),
-            },
-            "retry_count": sum(1 for item in result.attempts if item.retryable),
-            "fallback_count": sum(1 for item in result.attempts if item.fallback_taken),
-        })
+        store.record(
+            {
+                "event_id": (f"provider:{result.selection.selection_id}:{request.execution_context.request_id}"),
+                "event_type": "provider_selection",
+                "scan_id": scan_id,
+                "candidates": [item.action_id for item in (*result.selection.ranked, *result.selection.rejected)],
+                "rejected": [
+                    {"candidate": item.action_id, "reason": list(item.reasons)} for item in result.selection.rejected
+                ],
+                "chosen_action": result.selection.chosen_action_id or "",
+                "capability_ref": capability,
+                "policy_refs": (list(final_report.policy_decision_refs) if final_report is not None else []),
+                "supporting_fact_ids": supporting_fact_ids,
+                "expected_outcome": {
+                    "status": "succeeded",
+                    "useful_evidence": True,
+                    "assessment_refs": assessment_refs,
+                },
+                "actual_outcome": {
+                    "status": final_execution.status.value if final_execution else "not_attempted",
+                    "attempts": len(result.attempts),
+                    "useful_facts": sum(item.ingestion.useful_facts for item in result.attempts),
+                    "duplicate_facts": sum(item.ingestion.duplicate_facts for item in result.attempts),
+                    "source_execution_ids": source_execution_ids,
+                },
+                "duration": attempt_duration,
+                "cost": {
+                    "tool_calls": len(result.attempts),
+                    "estimated_units": float(len(result.attempts)),
+                },
+                "retry_count": sum(1 for item in result.attempts if item.retryable),
+                "fallback_count": sum(1 for item in result.attempts if item.fallback_taken),
+            }
+        )
 
     def project_fact_ids(self, fact_ids: Iterable[int]) -> list[dict[str, Any]]:
         """Refresh graph projections for facts whose current heads changed."""
 
-        return [
-            item.to_dict()
-            for item in self.graph_projector.project_fact_ids(list(fact_ids))
-        ]
+        return [item.to_dict() for item in self.graph_projector.project_fact_ids(list(fact_ids))]
 
     def decide(
         self,
@@ -413,18 +393,10 @@ class PipelineRuntime:
                 {
                     "status": ExecutionStatus.BLOCKED,
                     "error_class": "ExecutionBlocked",
-                    "error_message": (
-                        denial.reason_code if denial is not None else decision.reason
-                    ),
+                    "error_message": (denial.reason_code if denial is not None else decision.reason),
                     "metadata": {
-                        "decision_reason": (
-                            denial.reason_code
-                            if denial is not None
-                            else decision.reason
-                        ),
-                        "policy_denial": (
-                            denial.to_dict() if denial is not None else None
-                        ),
+                        "decision_reason": (denial.reason_code if denial is not None else decision.reason),
+                        "policy_denial": (denial.to_dict() if denial is not None else None),
                     },
                 },
                 decision=decision,
@@ -584,9 +556,7 @@ class PipelineRuntime:
         """
 
         target = (
-            invocation.targets[0]
-            if invocation.targets
-            else (context.target_scope[0] if context.target_scope else "")
+            invocation.targets[0] if invocation.targets else (context.target_scope[0] if context.target_scope else "")
         )
         fact_items = tuple(dict(item) for item in facts)
         candidate_names, command_by_action = self._registered_provider_candidates(
@@ -621,49 +591,36 @@ class PipelineRuntime:
         lifecycle_metadata = {
             "action_catalog": True,
             "action_id": (
-                report.descriptor.action_id
-                if report is not None
-                else run.selection.chosen_action_id or action_id
+                report.descriptor.action_id if report is not None else run.selection.chosen_action_id or action_id
             ),
             "capability": run.selection.capability,
             "provider_selection_id": run.selection.selection_id,
             "provider_attempts": len(run.attempts),
-            "provider_attempt_action_ids": [
-                attempt.action_id for attempt in run.attempts
-            ],
+            "provider_attempt_action_ids": [attempt.action_id for attempt in run.attempts],
             "provider_attempt_command_keys": [
-                self.scheduler.command_key(request.command_for(attempt.action_id))
-                for attempt in run.attempts
+                self.scheduler.command_key(request.command_for(attempt.action_id)) for attempt in run.attempts
             ],
             "provider_fallback_attempt_action_ids": [
-                attempt.action_id
-                for attempt in run.attempts
-                if attempt.action_id != candidate_names[0]
+                attempt.action_id for attempt in run.attempts if attempt.action_id != candidate_names[0]
             ],
             "provider_status": run.status.value,
             "policy_denial": denial.to_dict() if denial is not None else None,
-            "action_lifecycle": (
-                report.lifecycle.to_dict() if report is not None else None
-            ),
+            "action_lifecycle": (report.lifecycle.to_dict() if report is not None else None),
         }
         if effective is None:
-            rejected_reasons = tuple(
-                reason for item in run.selection.rejected for reason in item.reasons
-            )
+            rejected_reasons = tuple(reason for item in run.selection.rejected for reason in item.reasons)
             status = run.status
             reason = (
                 denial.reason_code
                 if denial is not None
-                else rejected_reasons[0] if rejected_reasons else "provider_unavailable"
+                else rejected_reasons[0]
+                if rejected_reasons
+                else "provider_unavailable"
             )
             return self._normalize_result(
                 {
                     "status": status,
-                    "error_class": (
-                        "ExecutionBlocked"
-                        if status is ExecutionStatus.BLOCKED
-                        else "ProviderUnavailable"
-                    ),
+                    "error_class": ("ExecutionBlocked" if status is ExecutionStatus.BLOCKED else "ProviderUnavailable"),
                     "error_message": reason,
                     "metadata": lifecycle_metadata,
                 },
@@ -688,11 +645,7 @@ class PipelineRuntime:
             context=context,
             execution_id=execution_id,
             policy_ref=policy_ref,
-            duration=(
-                effective.duration
-                if effective.duration > 0
-                else time.monotonic() - started
-            ),
+            duration=(effective.duration if effective.duration > 0 else time.monotonic() - started),
             executed=effective.executed,
         )
 
@@ -732,9 +685,7 @@ class PipelineRuntime:
             )
         except Exception:
             primary_risk = (
-                ActiveRiskClass.ACTIVE
-                if primary.adapter.descriptor.requirements.active
-                else ActiveRiskClass.READ_ONLY
+                ActiveRiskClass.ACTIVE if primary.adapter.descriptor.requirements.active else ActiveRiskClass.READ_ONLY
             )
         if primary_risk is not ActiveRiskClass.READ_ONLY:
             return tuple(candidate_names), command_by_action
@@ -748,14 +699,9 @@ class PipelineRuntime:
                 context,
             )
             alternative_invocation = preliminary.invocation
-            if (
-                alternative_invocation is None
-                or not alternative_invocation.registered_name
-            ):
+            if alternative_invocation is None or not alternative_invocation.registered_name:
                 continue
-            resolved = self.action_catalog.resolve(
-                alternative_invocation.registered_name
-            )
+            resolved = self.action_catalog.resolve(alternative_invocation.registered_name)
             if resolved is None or resolved.canonical_id in command_by_action:
                 continue
             candidate_request = ActionRequest(
@@ -847,9 +793,7 @@ class PipelineRuntime:
             execution_id=safe_identifier(raw_execution_id, "execution_id") if raw_execution_id else "",
             tool_name=safe_identifier(tool_name, "execution_tool"),
             max_output_bytes=max_output_bytes,
-            policy_decision_ref=(
-                safe_identifier(raw_policy_ref, "policy_decision_ref") if raw_policy_ref else ""
-            ),
+            policy_decision_ref=(safe_identifier(raw_policy_ref, "policy_decision_ref") if raw_policy_ref else ""),
             redact_text=self.facts.redactor.redact_text,
             redact_data=self.facts.redactor.redact_data,
         )
@@ -969,16 +913,8 @@ class PipelineRuntime:
             confidence=int(safe_fact.get("confidence", 100) or 100),
             session_id=str(safe_fact.get("session_id", "none")),
             source_execution_ids=tuple(source_execution_ids),
-            source_identity=(
-                str(safe_fact["source_identity"])
-                if safe_fact.get("source_identity")
-                else None
-            ),
-            observation_method=(
-                str(safe_fact["observation_method"])
-                if safe_fact.get("observation_method")
-                else None
-            ),
+            source_identity=(str(safe_fact["source_identity"]) if safe_fact.get("source_identity") else None),
+            observation_method=(str(safe_fact["observation_method"]) if safe_fact.get("observation_method") else None),
             completion_claim=completion_claim,
         )
         fact_ids = [fact_id]
@@ -999,33 +935,18 @@ class PipelineRuntime:
                 str(safe_derived.get("type", "observation")),
                 str(safe_derived.get("value", "")),
                 f"derived:{source}",
-                confidence=int(
-                    safe_derived.get("confidence", prepared.get("confidence", 80))
-                    or 80
-                ),
+                confidence=int(safe_derived.get("confidence", prepared.get("confidence", 80)) or 80),
                 session_id=str(prepared.get("session_id", "none")),
                 derived_from=[fact_id],
                 source_execution_ids=tuple(source_execution_ids),
                 source_identity=(
-                    str(
-                        safe_derived.get("source_identity")
-                        or safe_fact.get("source_identity")
-                    )
-                    if (
-                        safe_derived.get("source_identity")
-                        or safe_fact.get("source_identity")
-                    )
+                    str(safe_derived.get("source_identity") or safe_fact.get("source_identity"))
+                    if (safe_derived.get("source_identity") or safe_fact.get("source_identity"))
                     else None
                 ),
                 observation_method=(
-                    str(
-                        safe_derived.get("observation_method")
-                        or safe_fact.get("observation_method")
-                    )
-                    if (
-                        safe_derived.get("observation_method")
-                        or safe_fact.get("observation_method")
-                    )
+                    str(safe_derived.get("observation_method") or safe_fact.get("observation_method"))
+                    if (safe_derived.get("observation_method") or safe_fact.get("observation_method"))
                     else None
                 ),
                 completion_claim=completion_claim,
@@ -1096,15 +1017,9 @@ class PipelineRuntime:
         result: ExecutionResult,
         *,
         source: str | None = None,
-        prepare_facts: Callable[
-            [list[dict[str, Any]]], Sequence[dict[str, Any]]
-        ]
-        | None = None,
+        prepare_facts: Callable[[list[dict[str, Any]]], Sequence[dict[str, Any]]] | None = None,
         normalize_fact: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
-        derive_facts: Callable[
-            [str, dict[str, Any], str], Sequence[dict[str, Any]]
-        ]
-        | None = None,
+        derive_facts: Callable[[str, dict[str, Any], str], Sequence[dict[str, Any]]] | None = None,
         initial_fact_ids: Iterable[int] = (),
         initial_new_facts: int = 0,
         initial_facts: Iterable[dict[str, Any]] = (),
@@ -1140,9 +1055,7 @@ class PipelineRuntime:
             raise TypeError("complete_execution requires a bound completion_fence")
         combined_output = output_text(result)
         output_hash = self.output_fingerprint(combined_output)
-        failed_value = (
-            command_failed(result, combined_output) if failed is None else bool(failed)
-        )
+        failed_value = command_failed(result, combined_output) if failed is None else bool(failed)
         completion_claim = self.facts.claim_command_completion(
             scan_id=scan_id,
             host=host,
@@ -1174,9 +1087,7 @@ class PipelineRuntime:
                 command_result_fields=command_result_fields,
             )
             if attempt_id:
-                replay_execution_ids = (
-                    (result.execution_id,) if result.execution_id else ()
-                )
+                replay_execution_ids = (result.execution_id,) if result.execution_id else ()
                 self.missions.record_attempt_progress(
                     attempt_id,
                     fact_ids=completion_claim.fact_ids,
@@ -1187,26 +1098,13 @@ class PipelineRuntime:
         try:
             parsed = [dict(item) for item in self.parse_output(command, result)]
             parsed_fact_count = len(parsed)
-            prepared = (
-                [dict(item) for item in prepare_facts(parsed)]
-                if prepare_facts is not None
-                else parsed
-            )
-            prepared_trees: list[
-                tuple[dict[str, Any], tuple[dict[str, Any], ...]]
-            ] = []
+            prepared = [dict(item) for item in prepare_facts(parsed)] if prepare_facts is not None else parsed
+            prepared_trees: list[tuple[dict[str, Any], tuple[dict[str, Any], ...]]] = []
             for fact in prepared:
                 fact.setdefault("source", source or command)
-                normalized = (
-                    dict(normalize_fact(host, dict(fact)))
-                    if normalize_fact is not None
-                    else dict(fact)
-                )
+                normalized = dict(normalize_fact(host, dict(fact))) if normalize_fact is not None else dict(fact)
                 derived = (
-                    tuple(
-                        dict(item)
-                        for item in derive_facts(host, normalized, source or command)
-                    )
+                    tuple(dict(item) for item in derive_facts(host, normalized, source or command))
                     if derive_facts is not None
                     else ()
                 )
@@ -1296,9 +1194,7 @@ class PipelineRuntime:
             "parsed_facts": parsed_fact_count,
             "new_facts": new_fact_count,
             "fact_ids": list(unique_fact_ids),
-            "fact_pairs": [
-                (fact.get("type"), fact.get("value")) for fact in prepared
-            ],
+            "fact_pairs": [(fact.get("type"), fact.get("value")) for fact in prepared],
         }
         if command_result_fields:
             command_result.update(dict(command_result_fields))
@@ -1335,11 +1231,7 @@ class PipelineRuntime:
             else self.normalize_result(output, tool_name=_tool_name(command))
         )
         key_builder = getattr(self.scheduler, "command_key", None)
-        command_key = (
-            str(key_builder(command))
-            if callable(key_builder)
-            else CommandScheduler().command_key(command)
-        )
+        command_key = str(key_builder(command)) if callable(key_builder) else CommandScheduler().command_key(command)
         completion = self.complete_execution(
             scan_id,
             host,
@@ -1347,11 +1239,7 @@ class PipelineRuntime:
             command,
             execution,
             source=source or command,
-            idempotency_key=(
-                f"execution:{execution.execution_id}"
-                if execution.execution_id
-                else ""
-            ),
+            idempotency_key=(f"execution:{execution.execution_id}" if execution.execution_id else ""),
             completion_fence=self.facts.capture_scan_completion_fence(scan_id),
         )
         projected = {
@@ -1377,7 +1265,4 @@ class PipelineRuntime:
 
         # An idempotent replay has no newly persisted base rows. Preserve the
         # historical list facade while making the replay state explicit.
-        return [
-            {**dict(fact), "created": False}
-            for fact in completion.get("facts") or ()
-        ]
+        return [{**dict(fact), "created": False} for fact in completion.get("facts") or ()]

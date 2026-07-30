@@ -40,11 +40,7 @@ class FactStoreFixture:
     def __init__(self, facts, *, command_reader=True, redactor=True):
         self.facts = facts
         self.redactor = Redactor() if redactor else None
-        self.get_command_results = (
-            (lambda _scan_id, _target: [{"status": "succeeded"}])
-            if command_reader
-            else None
-        )
+        self.get_command_results = (lambda _scan_id, _target: [{"status": "succeeded"}]) if command_reader else None
 
     def get_facts(self, _scan_id, _target):
         return self.facts
@@ -99,9 +95,7 @@ def test_adapt_state_projects_every_fact_class_and_risk_level(monkeypatch):
     assert enrich.call_args.kwargs["command_results"] == [{"status": "succeeded"}]
 
     high_store = FactStoreFixture([fact("vulnerability", "generic confirmed")])
-    assert app._adapt_state_to_result({}, high_store, "scan", "host", "raw")["risk_level"] == (
-        "HIGH"
-    )
+    assert app._adapt_state_to_result({}, high_store, "scan", "host", "raw")["risk_level"] == ("HIGH")
 
     medium_store = FactStoreFixture(
         [fact("potential_vulnerability", "candidate")],
@@ -146,26 +140,16 @@ def test_adapt_state_bounds_confirmed_facts_and_potential_examples(monkeypatch):
 
 
 def test_secret_fact_state_and_unique_value_helpers():
-    masked = app._mask_secret_value(
-        "whm_session:abcdefgh user:supersecret (cached) ssh_credential:bob@example"
-    )
+    masked = app._mask_secret_value("whm_session:abcdefgh user:supersecret (cached) ssh_credential:bob@example")
     assert "abcd***" in masked
     assert "user:su*** (cached)" in masked
     assert app._mask_secret_value(None) == ""
 
     assert app._should_display_confirmed_fact({"type": "check_result", "value": "x"}) is False
-    assert app._should_display_confirmed_fact(
-        {"type": "service_status", "value": "ssh_authenticated:user"}
-    ) is True
-    assert app._should_display_confirmed_fact(
-        {"type": "service_status", "value": "routine"}
-    ) is False
-    assert app._should_display_confirmed_fact(
-        {"type": "nuclei_finding", "value": "INFO: banner"}
-    ) is False
-    assert app._should_display_confirmed_fact(
-        {"type": "nuclei_finding", "value": "HIGH: issue"}
-    ) is True
+    assert app._should_display_confirmed_fact({"type": "service_status", "value": "ssh_authenticated:user"}) is True
+    assert app._should_display_confirmed_fact({"type": "service_status", "value": "routine"}) is False
+    assert app._should_display_confirmed_fact({"type": "nuclei_finding", "value": "INFO: banner"}) is False
+    assert app._should_display_confirmed_fact({"type": "nuclei_finding", "value": "HIGH: issue"}) is True
     assert app._should_display_confirmed_fact({"type": "unknown", "value": "x"}) is False
     assert app._format_confirmed_fact({"type": "credential", "value": "user:secret (cached)"})
 
@@ -354,11 +338,14 @@ def test_exploit_success_metadata_provider_and_fallback_variants():
     )
     assert pwnkit_high["severity"] == "HIGH"
     assert pwnkit_high["evidence_tool"] == "killchain_privesc"
-    assert app._exploit_success_metadata(
-        fact("exploit_success", "PwnKit", source="tool"),
-        [],
-        {"root_access_confirmed": True},
-    )["severity"] == "CRITICAL"
+    assert (
+        app._exploit_success_metadata(
+            fact("exploit_success", "PwnKit", source="tool"),
+            [],
+            {"root_access_confirmed": True},
+        )["severity"]
+        == "CRITICAL"
+    )
 
     default_high = app._exploit_success_metadata(
         fact("exploit_success", "generic", source=""),
@@ -466,26 +453,38 @@ def test_save_and_show_results_persists_fixes_exploits_and_optional_actions(monk
 
 def test_remediation_matching_and_fallback_paths():
     vulnerability = {"vuln_name": "redis issue", "service": "redis"}
-    assert app._remediation_for_vulnerability(
-        vulnerability,
-        [
-            {"finding": "ignored", "recommendation": ""},
-            {"finding": "redis", "recommendation": "by finding"},
-        ],
-    ) == "by finding"
-    assert app._remediation_for_vulnerability(
-        vulnerability,
-        [{"finding": "prefix redis issue suffix", "recommendation": "reverse finding"}],
-    ) == "reverse finding"
-    for service in ("redis", "redis service", "red"):
-        assert app._remediation_for_vulnerability(
+    assert (
+        app._remediation_for_vulnerability(
             vulnerability,
-            [{"service": service, "recommendation": "by service"}],
-        ) == "by service"
-    assert app._remediation_for_vulnerability(
-        vulnerability,
-        [{"finding": "other", "service": "http", "recommendation": "no"}],
-    ) == ""
+            [
+                {"finding": "ignored", "recommendation": ""},
+                {"finding": "redis", "recommendation": "by finding"},
+            ],
+        )
+        == "by finding"
+    )
+    assert (
+        app._remediation_for_vulnerability(
+            vulnerability,
+            [{"finding": "prefix redis issue suffix", "recommendation": "reverse finding"}],
+        )
+        == "reverse finding"
+    )
+    for service in ("redis", "redis service", "red"):
+        assert (
+            app._remediation_for_vulnerability(
+                vulnerability,
+                [{"service": service, "recommendation": "by service"}],
+            )
+            == "by service"
+        )
+    assert (
+        app._remediation_for_vulnerability(
+            vulnerability,
+            [{"finding": "other", "service": "http", "recommendation": "no"}],
+        )
+        == ""
+    )
 
 
 def test_view_history_empty_invalid_missing_and_optional_actions(monkeypatch):
@@ -524,7 +523,9 @@ def test_edit_delete_menu_exercises_every_validation_and_operation(monkeypatch):
     monkeypatch.setattr(
         app,
         "get_vulnerabilities",
-        MagicMock(side_effect=([], [vulnerability], [vulnerability], [], [vulnerability], [vulnerability], [vulnerability])),
+        MagicMock(
+            side_effect=([], [vulnerability], [vulnerability], [], [vulnerability], [vulnerability], [vulnerability])
+        ),
     )
     monkeypatch.setattr(
         app,
@@ -539,28 +540,50 @@ def test_edit_delete_menu_exercises_every_validation_and_operation(monkeypatch):
     prompts = iter(
         (
             "1",
-            "1", "bad",
-            "1", "7", "severity", "HIGH",
-            "2",
-            "2", "bad",
-            "2", "8", "new fix",
-            "3",
-            "3", "bad",
-            "3", "9", "result", "Success",
-            "4", "invalid",
-            "4", "high",
-            "5",
-            "5", "bad",
-            "5", "7",
-            "5", "7",
-            "6",
-            "6", "bad",
-            "6", "8",
-            "6", "8",
+            "1",
+            "bad",
+            "1",
             "7",
-            "7", "bad",
-            "7", "9",
-            "7", "9",
+            "severity",
+            "HIGH",
+            "2",
+            "2",
+            "bad",
+            "2",
+            "8",
+            "new fix",
+            "3",
+            "3",
+            "bad",
+            "3",
+            "9",
+            "result",
+            "Success",
+            "4",
+            "invalid",
+            "4",
+            "high",
+            "5",
+            "5",
+            "bad",
+            "5",
+            "7",
+            "5",
+            "7",
+            "6",
+            "6",
+            "bad",
+            "6",
+            "8",
+            "6",
+            "8",
+            "7",
+            "7",
+            "bad",
+            "7",
+            "9",
+            "7",
+            "9",
             "8",
             "invalid",
             "9",

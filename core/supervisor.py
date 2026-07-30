@@ -58,7 +58,9 @@ def _atomic_write_json(path: str, payload: dict) -> None:
     directory = os.path.dirname(os.path.abspath(path)) or "."
     os.makedirs(directory, exist_ok=True)
     fd, temp_path = tempfile.mkstemp(
-        prefix=f".{os.path.basename(path)}.", suffix=".tmp", dir=directory,
+        prefix=f".{os.path.basename(path)}.",
+        suffix=".tmp",
+        dir=directory,
     )
     try:
         os.fchmod(fd, 0o600)
@@ -77,6 +79,7 @@ def _atomic_write_json(path: str, payload: dict) -> None:
 
 # ─── Exceptions ──────────────────────────────────────────
 
+
 class AlreadyRunningError(Exception):
     """Raised when another OCTOPUS instance is already running."""
 
@@ -86,6 +89,7 @@ class SubsystemCrashError(Exception):
 
 
 # ─── Subsystem Registry ─────────────────────────────────
+
 
 class Subsystem:
     """Tracked subsystem with health check and restart capability."""
@@ -115,7 +119,7 @@ class Subsystem:
         self.health_fn = health_fn
         self.start_fn = start_fn
         self.stop_fn = stop_fn
-        self.status = "unknown"     # unknown | stopped | running | crashed | restarting
+        self.status = "unknown"  # unknown | stopped | running | crashed | restarting
         self.last_check = 0.0
         self.last_healthy = 0.0
         self.crash_count = 0
@@ -183,6 +187,7 @@ class Subsystem:
 
 # ─── Supervisor ──────────────────────────────────────────
 
+
 class Supervisor:
     """
     Main OCTOPUS process supervisor.
@@ -231,8 +236,7 @@ class Supervisor:
             existing_pid = self._read_pid()
             owner = f"PID {existing_pid}" if existing_pid else "another process"
             raise AlreadyRunningError(
-                f"OCTOPUS already running ({owner}). "
-                "Use 'octopus stop' before starting another instance."
+                f"OCTOPUS already running ({owner}). Use 'octopus stop' before starting another instance."
             ) from e
         self._lock_fd = lock_fd
 
@@ -305,10 +309,7 @@ class Supervisor:
                 "lifecycle": self._lifecycle,
                 "clean_shutdown": self._clean_shutdown,
                 "metrics": self._metrics.copy(),
-                "subsystems": {
-                    name: sub.to_dict()
-                    for name, sub in self._subsystems.items()
-                },
+                "subsystems": {name: sub.to_dict() for name, sub in self._subsystems.items()},
             }
             try:
                 _atomic_write_json(STATE_FILE, state)
@@ -419,11 +420,12 @@ class Supervisor:
         crash_info = self.get_crash_info()
         if crash_info:
             logger.warning(
-                f"[supervisor] Previous instance (PID {crash_info['previous_pid']}) "
-                f"crashed. Recovery available."
+                f"[supervisor] Previous instance (PID {crash_info['previous_pid']}) crashed. Recovery available."
             )
-            print(f"\033[93m[!] Previous OCTOPUS instance (PID {crash_info['previous_pid']}) "
-                  f"did not shut down cleanly.\033[0m")
+            print(
+                f"\033[93m[!] Previous OCTOPUS instance (PID {crash_info['previous_pid']}) "
+                f"did not shut down cleanly.\033[0m"
+            )
 
         # Acquire lock
         self._acquire_lock()
@@ -458,10 +460,13 @@ class Supervisor:
             logger.info(f"[supervisor] Started (PID={self._pid})")
 
             # Log to event store if available
-            self._emit_event("supervisor.start", {
-                "pid": self._pid,
-                "subsystems": list(self._subsystems.keys()),
-            })
+            self._emit_event(
+                "supervisor.start",
+                {
+                    "pid": self._pid,
+                    "subsystems": list(self._subsystems.keys()),
+                },
+            )
         except BaseException:
             self._running = False
             watchdog = self._watchdog_thread
@@ -490,8 +495,7 @@ class Supervisor:
 
             # No watchdog write or restart may race the terminal lifecycle state.
             watchdog = self._watchdog_thread
-            if (watchdog and watchdog.is_alive()
-                    and watchdog is not threading.current_thread()):
+            if watchdog and watchdog.is_alive() and watchdog is not threading.current_thread():
                 watchdog.join(timeout=max(2.0, min(float(HEALTH_INTERVAL) + 1.0, 10.0)))
                 if watchdog.is_alive():
                     shutdown_errors.append("watchdog did not stop before timeout")
@@ -533,11 +537,14 @@ class Supervisor:
             self._release_lock()
 
             # Emit event
-            self._emit_event("supervisor.stop", {
-                "pid": self._pid,
-                "uptime": time.time() - self._start_time if self._start_time else 0,
-                "clean": self._clean_shutdown,
-            })
+            self._emit_event(
+                "supervisor.stop",
+                {
+                    "pid": self._pid,
+                    "uptime": time.time() - self._start_time if self._start_time else 0,
+                    "clean": self._clean_shutdown,
+                },
+            )
 
             if self._clean_shutdown:
                 logger.info("[supervisor] Shutdown complete")
@@ -585,10 +592,7 @@ class Supervisor:
             "uptime_seconds": round(uptime, 1),
             "uptime_human": str(timedelta(seconds=int(uptime))),
             "metrics": self._metrics.copy(),
-            "subsystems": {
-                name: sub.to_dict()
-                for name, sub in self._subsystems.items()
-            },
+            "subsystems": {name: sub.to_dict() for name, sub in self._subsystems.items()},
         }
 
     # ─── Event Emission ────────────────────────────────
@@ -597,6 +601,7 @@ class Supervisor:
         """Emit lifecycle event to event store (if available)."""
         try:
             from core.c2.event_store import EventStore
+
             db_path = os.path.join(DATA_DIR, "c2.db")
             if os.path.exists(os.path.dirname(db_path)):
                 es = EventStore(db_path=db_path)
@@ -654,10 +659,12 @@ class Supervisor:
 
 # ─── Default Health Checks ───────────────────────────────
 
+
 def _check_ollama() -> bool:
     """Check if Ollama is reachable."""
     try:
         import urllib.request
+
         url = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
         req = urllib.request.Request(f"{url}/api/tags", method="GET")
         with urllib.request.urlopen(req, timeout=5) as resp:
@@ -672,6 +679,7 @@ def _check_database() -> bool:
     cursor = None
     try:
         from db import get_connection
+
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT 1")
@@ -692,6 +700,7 @@ def _check_event_store() -> bool:
     """Check if event store is operational."""
     try:
         from core.c2.event_store import EventStore
+
         db_path = os.path.join(DATA_DIR, "c2.db")
         if not os.path.exists(db_path):
             return False
@@ -704,6 +713,7 @@ def _check_event_store() -> bool:
 
 
 # ─── Factory ─────────────────────────────────────────────
+
 
 def create_supervisor(
     monitor_ollama: bool = True,
@@ -727,12 +737,13 @@ def create_supervisor(
 
 # ─── CLI ─────────────────────────────────────────────────
 
+
 def cli():
     """Standalone supervisor CLI."""
     import argparse
+
     parser = argparse.ArgumentParser(description="OCTOPUS Supervisor")
-    parser.add_argument("action", choices=["status", "stop", "health", "pid"],
-                        help="Action to perform")
+    parser.add_argument("action", choices=["status", "stop", "health", "pid"], help="Action to perform")
     args = parser.parse_args()
 
     if args.action == "pid":

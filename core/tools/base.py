@@ -17,13 +17,13 @@ from datetime import datetime, timezone
 from typing import Optional
 
 # ANSI COLORS
-C_GREY    = "\033[90m"
-C_RESET   = "\033[0m"
-C_CYAN    = "\033[96m"
-C_GREEN   = "\033[92m"
-C_YELLOW  = "\033[93m"
-C_RED     = "\033[91m"
-C_BLUE    = "\033[94m"
+C_GREY = "\033[90m"
+C_RESET = "\033[0m"
+C_CYAN = "\033[96m"
+C_GREEN = "\033[92m"
+C_YELLOW = "\033[93m"
+C_RED = "\033[91m"
+C_BLUE = "\033[94m"
 C_MAGENTA = "\033[95m"
 
 # TOOL AVAILABILITY CACHE
@@ -41,6 +41,7 @@ def is_tool_available(name: str) -> bool:
 @dataclasses.dataclass
 class ToolResult:
     """Structured tool execution result."""
+
     tool_name: str = ""
     command: str = ""
     stdout: str = ""
@@ -114,6 +115,7 @@ def get_tool_config(tool_name: str) -> dict:
     """Get tool-specific config from config.yaml."""
     try:
         from config import CFG
+
         return CFG.get("tools", {}).get(tool_name, {})
     except ImportError:
         return {}
@@ -169,7 +171,7 @@ def _bounded_process_output(value: str, max_output_bytes: int) -> str:
         return str(value or "")
     marker = f"\n[OUTPUT LIMIT] truncated at {max_output_bytes} bytes"
     marker_bytes = marker.encode("utf-8")
-    kept = encoded[:max(0, max_output_bytes - len(marker_bytes))]
+    kept = encoded[: max(0, max_output_bytes - len(marker_bytes))]
     return kept.decode("utf-8", "ignore") + marker
 
 
@@ -250,14 +252,33 @@ def run_tool(command: list, timeout: int = 120) -> str:
                         elapsed = int(time.monotonic() - start_time)
                         print(f"      [{elapsed}s] {redact_sensitive_command(rendered)[:160]}")
                 if tool_bin in {
-                    "hydra", "nmap", "masscan", "nikto", "sqlmap", "gobuster", "ffuf",
+                    "hydra",
+                    "nmap",
+                    "masscan",
+                    "nikto",
+                    "sqlmap",
+                    "gobuster",
+                    "ffuf",
                 } and any(
                     keyword in line.lower()
                     for keyword in (
-                        "host:", "[22]", "[80]", "valid", "login:", "found",
-                        "open", "discovered", "password", "success", "[ssh]",
-                        "ports", "vuln", "error", "complete",
-                        "1 of 1 target completed", "successfully completed",
+                        "host:",
+                        "[22]",
+                        "[80]",
+                        "valid",
+                        "login:",
+                        "found",
+                        "open",
+                        "discovered",
+                        "password",
+                        "success",
+                        "[ssh]",
+                        "ports",
+                        "vuln",
+                        "error",
+                        "complete",
+                        "1 of 1 target completed",
+                        "successfully completed",
                     )
                 ):
                     elapsed = int(time.monotonic() - start_time)
@@ -279,19 +300,14 @@ def run_tool(command: list, timeout: int = 120) -> str:
             if elapsed_float >= effective_timeout:
                 _terminate_process_tree(proc)
                 reader.join(timeout=2)
-                lines.append(
-                    f"[PARTIAL OUTPUT - {tool_bin} - {len(lines)} lines captured before timeout]"
-                )
+                lines.append(f"[PARTIAL OUTPUT - {tool_bin} - {len(lines)} lines captured before timeout]")
                 lines.append(f"[TIMEOUT] {tool_bin} killed after {effective_timeout}s")
                 print(f"      [TIMEOUT] {tool_bin} killed after {effective_timeout}s")
                 break
             if reader.is_alive() and elapsed - last_heartbeat >= heartbeat_interval:
                 last_heartbeat = elapsed
                 if tool_bin == "hydra" and last_hydra_status[0]:
-                    print(
-                        f"      [♻ hydra {_fmt_elapsed(elapsed)} / "
-                        f"{_fmt_elapsed(effective_timeout)} max]"
-                    )
+                    print(f"      [♻ hydra {_fmt_elapsed(elapsed)} / {_fmt_elapsed(effective_timeout)} max]")
                 else:
                     print(
                         f"      [♻ {tool_bin} running... {_fmt_elapsed(elapsed)} / "

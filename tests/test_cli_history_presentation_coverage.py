@@ -306,9 +306,7 @@ def test_reporting_sections_are_silent_when_no_sections_apply(capsys) -> None:
     presentation.print_reporting_sections({})
     assert capsys.readouterr().out == ""
 
-    presentation.print_reporting_sections(
-        {"coverage": {"checked_but_not_confirmed": [{"status": "clean"}]}}
-    )
+    presentation.print_reporting_sections({"coverage": {"checked_but_not_confirmed": [{"status": "clean"}]}})
     output = capsys.readouterr().out
     assert "COVERAGE" in output
     assert "checked: clean" in output

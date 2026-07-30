@@ -163,6 +163,7 @@ update_session_status = _lazy_db("update_session_status")
 
 # LOGGING SETUP
 
+
 def _setup_logging():
     """Set up dual logging: file + console-critical only."""
     log_dir = os.path.expanduser(CFG.get("paths", {}).get("logs", "~/OCTOPUS/logs"))
@@ -175,7 +176,7 @@ def _setup_logging():
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
             logging.FileHandler(log_file, encoding="utf-8"),
-        ]
+        ],
     )
     from core.secrets import install_logging_redaction
 
@@ -188,7 +189,8 @@ def _setup_logging():
 # SIGINT HANDLER (graceful Ctrl+C)
 
 _current_sl_no = None  # track active scan for checkpoint on interrupt
-_supervisor = None     # set in __main__ block
+_supervisor = None  # set in __main__ block
+
 
 def _sigint_handler(signum, frame):
     """Handle Ctrl+C gracefully — save checkpoint if mid-scan."""
@@ -219,6 +221,7 @@ def _sigint_handler(signum, frame):
     # Let Python unwind so mission transactions, process groups, and supervisor
     # finally blocks can persist partial state and release their resources.
     raise KeyboardInterrupt
+
 
 def _save_trace_report(pipeline: AIPipeline, scan_id: str, target: str) -> None:
     try:
@@ -263,11 +266,13 @@ def _setup_readline() -> None:
 
 # PRE-FLIGHT CHECKS
 
+
 def preflight_checks() -> bool:
     """Verify critical dependencies before starting."""
     import shutil
 
     import requests  # type: ignore[import-untyped]
+
     all_ok = True
 
     divider("PRE-FLIGHT CHECKS")
@@ -325,6 +330,7 @@ def preflight_checks() -> bool:
     # 4. Wordlists
     try:
         from config import find_wordlist
+
         pw = find_wordlist("passwords")
         if pw:
             success(f"Password wordlist: {os.path.basename(pw)}")
@@ -386,6 +392,7 @@ def preflight_checks() -> bool:
 
 
 # NEW SCAN
+
 
 def new_scan():
     global _current_sl_no
@@ -449,7 +456,7 @@ def _new_scan_direct():
 
     # Calculate duration
     duration = _datetime.now() - scan_start
-    duration_str = str(duration).split('.')[0]  # HH:MM:SS
+    duration_str = str(duration).split(".")[0]  # HH:MM:SS
 
     update_session_status(sl_no, "complete")
     _save_and_show_results(sl_no, result, duration_str)
@@ -459,8 +466,8 @@ def _new_scan_direct():
 
 # SHODAN DISCOVERY SCAN
 
-def _clamp_shodan_workers(raw_value, target_count: int,
-                          default: int = 5, maximum: int = 16) -> int:
+
+def _clamp_shodan_workers(raw_value, target_count: int, default: int = 5, maximum: int = 16) -> int:
     """Return a safe worker count bounded by both policy and job count."""
     try:
         requested = int(str(raw_value).strip())
@@ -488,10 +495,7 @@ def _build_shodan_context(target: dict) -> str:
     for service in target.get("services", []):
         if not isinstance(service, dict):
             continue
-        lines.append(
-            f"  {service.get('port', '')}/{service.get('name', '')} "
-            f"{service.get('version', '')}".rstrip()
-        )
+        lines.append(f"  {service.get('port', '')}/{service.get('name', '')} {service.get('version', '')}".rstrip())
     return "\n".join(lines) + "\n\n"
 
 
@@ -505,9 +509,13 @@ def _shodan_recon_worker(index: int, total: int, target: dict) -> dict:
     context = _build_shodan_context(target)
     if not target_ip:
         return {
-            "index": index, "total": total, "target": target_ip,
-            "raw_scan": context, "error": "Shodan target has no IP",
-            "traceback": "", "elapsed_seconds": time.monotonic() - started,
+            "index": index,
+            "total": total,
+            "target": target_ip,
+            "raw_scan": context,
+            "error": "Shodan target has no IP",
+            "traceback": "",
+            "elapsed_seconds": time.monotonic() - started,
         }
 
     try:
@@ -583,7 +591,9 @@ def _write_shodan_scan_log(sl_no: int, target: str, content: str) -> str:
     path = ""
     try:
         fd, path = tempfile.mkstemp(
-            prefix=f"shodan_SL{safe_sl}_{safe_target}_", suffix=".log", dir=root,
+            prefix=f"shodan_SL{safe_sl}_{safe_target}_",
+            suffix=".log",
+            dir=root,
         )
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             fd = None
@@ -624,11 +634,11 @@ def _run_shodan_parallel_scans(selected: list, workers: int) -> dict:
                     pending_sessions.discard(pending_sl_no)
                 except Exception:
                     logging.exception(
-                        "Could not mark Shodan session SL#%s failed", pending_sl_no,
+                        "Could not mark Shodan session SL#%s failed",
+                        pending_sl_no,
                     )
 
-    with _terminal_session_guard(), concurrent.futures.ThreadPoolExecutor(
-            max_workers=worker_count) as executor:
+    with _terminal_session_guard(), concurrent.futures.ThreadPoolExecutor(max_workers=worker_count) as executor:
         for index, target in enumerate(selected, 1):
             target_ip = str(target.get("ip", "")).strip()
             try:
@@ -680,11 +690,13 @@ def _run_shodan_parallel_scans(selected: list, workers: int) -> dict:
             worker_error = worker_data.get("error")
             if worker_error:
                 failed += 1
-                log_lines.extend([
-                    "Status: failed",
-                    f"Error: {worker_error}",
-                    worker_data.get("traceback", ""),
-                ])
+                log_lines.extend(
+                    [
+                        "Status: failed",
+                        f"Error: {worker_error}",
+                        worker_data.get("traceback", ""),
+                    ]
+                )
                 try:
                     update_session_status(sl_no, "failed")
                     pending_sessions.discard(sl_no)
@@ -702,10 +714,14 @@ def _run_shodan_parallel_scans(selected: list, workers: int) -> dict:
                 state = pipeline.run_scan(str(sl_no), target_ip, raw_scan=raw_scan)
                 _save_trace_report(pipeline, str(sl_no), target_ip)
                 result = _adapt_state_to_result(
-                    state, pipeline.fact_store, str(sl_no), target_ip, raw_scan,
+                    state,
+                    pipeline.fact_store,
+                    str(sl_no),
+                    target_ip,
+                    raw_scan,
                 )
                 duration = _datetime.now() - job["scan_start"]
-                duration_str = str(duration).split('.')[0]
+                duration_str = str(duration).split(".")[0]
 
                 # Result persistence and every interactive prompt stay on main.
                 _save_and_show_results(sl_no, result, duration_str)
@@ -713,17 +729,20 @@ def _run_shodan_parallel_scans(selected: list, workers: int) -> dict:
                 pending_sessions.discard(sl_no)
                 completed += 1
                 risk = str(result.get("risk_level", "UNKNOWN"))
-                log_lines.extend([
-                    "Status: complete",
-                    f"Risk: {risk}",
-                    f"Duration: {duration_str}",
-                    f"Recon seconds: {worker_data.get('elapsed_seconds', 0.0):.3f}",
-                ])
+                log_lines.extend(
+                    [
+                        "Status: complete",
+                        f"Risk: {risk}",
+                        f"Duration: {duration_str}",
+                        f"Recon seconds: {worker_data.get('elapsed_seconds', 0.0):.3f}",
+                    ]
+                )
                 log_path = _write_shodan_scan_log(sl_no, target_ip, "\n".join(log_lines))
-                color = ("\033[91m" if risk == "CRITICAL" else
-                         "\033[93m" if risk == "HIGH" else "\033[92m")
-                print(f"  \033[96m[{job['index']}/{total}]\033[0m {target_ip} finished "
-                      f"→ Risk: {color}{risk}\033[0m (Log: {log_path})")
+                color = "\033[91m" if risk == "CRITICAL" else "\033[93m" if risk == "HIGH" else "\033[92m"
+                print(
+                    f"  \033[96m[{job['index']}/{total}]\033[0m {target_ip} finished "
+                    f"→ Risk: {color}{risk}\033[0m (Log: {log_path})"
+                )
             except BaseException as exc:
                 failed += 1
                 log_lines.extend(["Status: failed", f"Error: {exc}"])
@@ -767,7 +786,7 @@ def _new_scan_shodan():
     print("  \033[92m[2]\033[0m  By service/product  \033[90m(e.g. Apache, nginx, OpenSSH)\033[0m")
     print("  \033[92m[3]\033[0m  By vulnerability    \033[90m(e.g. CVE-2021-44228)\033[0m")
     print("  \033[92m[4]\033[0m  By subnet/range     \033[90m(e.g. 83.166.241.0/24)\033[0m")
-    print("  \033[92m[5]\033[0m  By organization     \033[90m(e.g. org:\"Google\")\033[0m")
+    print('  \033[92m[5]\033[0m  By organization     \033[90m(e.g. org:"Google")\033[0m')
     print("  \033[92m[6]\033[0m  By country + port   \033[90m(e.g. country:RU port:22)\033[0m")
     print("  \033[92m[7]\033[0m  By tag/label        \033[90m(e.g. tag:ics, tag:webcam)\033[0m")
     print("  \033[92m[8]\033[0m  Raw dork            \033[90m(free-form Shodan query)\033[0m")
@@ -948,6 +967,7 @@ def _new_scan_shodan():
             idx = int(num) - 1
             if 0 <= idx < len(targets):
                 from shodan_module import run_shodan_host
+
                 print(run_shodan_host(targets[idx]["ip"]))
         return
 
@@ -974,7 +994,7 @@ def _new_scan_shodan():
 
     # Confirm
     for i, t in enumerate(selected[:20], 1):
-        vuln_str = f" [{len(t.get('vulns',[]))} CVEs]" if t.get("vulns") else ""
+        vuln_str = f" [{len(t.get('vulns', []))} CVEs]" if t.get("vulns") else ""
         print(f"  {i}. {t['ip']} ports={','.join(str(p) for p in t['ports'][:5])}{vuln_str}")
 
     if len(selected) > 20:
@@ -989,8 +1009,7 @@ def _new_scan_shodan():
     print(f"\n  \033[96m[*] Starting parallel scan ({workers} workers). Output saved to logs.\033[0m\n")
     outcome = _run_shodan_parallel_scans(selected, workers)
     if outcome["failed"]:
-        warn(f"Pipeline finished: {outcome['completed']} complete, "
-             f"{outcome['failed']} failed.")
+        warn(f"Pipeline finished: {outcome['completed']} complete, {outcome['failed']} failed.")
     else:
         success(f"Pipeline complete: {outcome['completed']} target(s) scanned.")
 
@@ -1054,9 +1073,8 @@ def _shodan_load_saved(sr):
             selected_query = rows[int(choice) - 1][0]
             cur2 = conn.cursor(dictionary=True)
             cur2.execute(
-                "SELECT ip, port, service, version, vulns, os_name, org "
-                "FROM shodan_results WHERE query = %s",
-                (selected_query,)
+                "SELECT ip, port, service, version, vulns, os_name, org FROM shodan_results WHERE query = %s",
+                (selected_query,),
             )
             db_rows = cur2.fetchall()
             cur2.close()
@@ -1072,6 +1090,7 @@ def _shodan_load_saved(sr):
 
 
 # RESUME UNFINISHED SCAN
+
 
 def resume_scan():
     """Check /tmp for saved octopus checkpoints and offer to resume them."""
@@ -1102,18 +1121,18 @@ def resume_scan():
         return
 
     print("\n  \033[93m[ UNFINISHED SESSIONS DETECTED ]\033[0m")
-    print(f"  {'─'*58}")
+    print(f"  {'─' * 58}")
     print(f"  {'#':<4} {'SL#':<8} {'TARGET':<30} {'LOOP':<8} {'FACTS'}")
-    print(f"  {'─'*58}")
+    print(f"  {'─' * 58}")
 
     for idx, (_path, data) in enumerate(parsed, 1):
-        sl_no   = data.get("sl_no", "?")
-        target  = data.get("target", "?")
-        loop    = data.get("loop", "?")
-        facts   = data.get("facts", [])
+        sl_no = data.get("sl_no", "?")
+        target = data.get("target", "?")
+        loop = data.get("loop", "?")
+        facts = data.get("facts", [])
         print(f"  {idx:<4} {sl_no:<8} {target:<30} {loop:<8} {len(facts)} facts")
 
-    print(f"  {'─'*58}")
+    print(f"  {'─' * 58}")
 
     choice_str = prompt("Enter # to resume (or Enter to go back): ")
     if not choice_str:
@@ -1124,10 +1143,10 @@ def resume_scan():
 
     idx = int(choice_str) - 1
     path, ck_data = parsed[idx]
-    sl_no  = ck_data.get("sl_no", 0)
+    sl_no = ck_data.get("sl_no", 0)
     target = ck_data.get("target", "")
-    facts  = ck_data.get("facts", [])
-    loop   = ck_data.get("loop", 0)
+    facts = ck_data.get("facts", [])
+    loop = ck_data.get("loop", 0)
 
     if not target:
         error("Checkpoint has no target field — cannot resume.")
@@ -1170,7 +1189,7 @@ def resume_scan():
     result = _adapt_state_to_result(state, pipeline.fact_store, str(sl_no), target, raw_scan)
 
     duration = _datetime.now() - scan_start
-    duration_str = str(duration).split('.')[0]
+    duration_str = str(duration).split(".")[0]
 
     # Save results to DB
     update_session_status(sl_no, "complete")
@@ -1198,77 +1217,87 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
 
     vulns = []
     exploits = []
-    has_exploit_success = any(f['type'] == 'exploit_success' for f in facts)
-    has_confirmed_vuln = any(f['type'] == 'vulnerability' for f in facts)
-    has_potential_vuln = any(f['type'] == 'potential_vulnerability' for f in facts)
+    has_exploit_success = any(f["type"] == "exploit_success" for f in facts)
+    has_confirmed_vuln = any(f["type"] == "vulnerability" for f in facts)
+    has_potential_vuln = any(f["type"] == "potential_vulnerability" for f in facts)
     suppress_potential_vulns = bool(state.get("root_access_confirmed") or has_exploit_success or has_confirmed_vuln)
 
     for f in facts:
-        ftype = f['type']
-        fval = f['value']
-        fconf = f.get('confidence', 0)
+        ftype = f["type"]
+        fval = f["value"]
+        fconf = f.get("confidence", 0)
 
-        if ftype == 'vulnerability':
+        if ftype == "vulnerability":
             meta = _vulnerability_metadata(f, facts, state)
-            vulns.append({
-                "vuln_id": f.get("id", ""),
-                "vuln_name": fval,
-                "cvss": 0.0,
-                "severity": meta["severity"],
-                "port": meta["port"],
-                "service": meta["service"],
-                "description": meta["description"],
-                "confidence": meta.get("confidence", "CONFIRMED"),
-                "evidence_state": meta.get("evidence_state", "verified"),
-                "exploit_executed": meta.get("exploit_executed", False),
-                "impact_confirmed": meta.get("impact_confirmed", False),
-                "evidence_tool": f.get("source", ""),
-            })
+            vulns.append(
+                {
+                    "vuln_id": f.get("id", ""),
+                    "vuln_name": fval,
+                    "cvss": 0.0,
+                    "severity": meta["severity"],
+                    "port": meta["port"],
+                    "service": meta["service"],
+                    "description": meta["description"],
+                    "confidence": meta.get("confidence", "CONFIRMED"),
+                    "evidence_state": meta.get("evidence_state", "verified"),
+                    "exploit_executed": meta.get("exploit_executed", False),
+                    "impact_confirmed": meta.get("impact_confirmed", False),
+                    "evidence_tool": f.get("source", ""),
+                }
+            )
 
-        elif ftype == 'exploit_success':
+        elif ftype == "exploit_success":
             meta = _exploit_success_metadata(f, facts, state)
-            vulns.append({
-                "vuln_id": f.get("id", ""),
-                "vuln_name": fval,
-                "cvss": meta["cvss"],
-                "severity": meta["severity"],
-                "port": meta["port"],
-                "service": meta["service"],
-                "description": meta["description"],
-                "confidence": "CONFIRMED",
-                "evidence_tool": meta["evidence_tool"],
-            })
-            exploits.append({
-                "exploit_name": fval,
-                "tool_used": meta["tool_used"],
-                "payload": meta["payload"],
-                "result": meta["result"],
-                "notes": f"Confidence: {fconf}%"
-            })
+            vulns.append(
+                {
+                    "vuln_id": f.get("id", ""),
+                    "vuln_name": fval,
+                    "cvss": meta["cvss"],
+                    "severity": meta["severity"],
+                    "port": meta["port"],
+                    "service": meta["service"],
+                    "description": meta["description"],
+                    "confidence": "CONFIRMED",
+                    "evidence_tool": meta["evidence_tool"],
+                }
+            )
+            exploits.append(
+                {
+                    "exploit_name": fval,
+                    "tool_used": meta["tool_used"],
+                    "payload": meta["payload"],
+                    "result": meta["result"],
+                    "notes": f"Confidence: {fconf}%",
+                }
+            )
 
-        elif ftype == 'potential_vulnerability':
+        elif ftype == "potential_vulnerability":
             if suppress_potential_vulns:
                 continue
-            vulns.append({
-                "vuln_id": f.get("id", ""),
-                "vuln_name": fval,
-                "cvss": 0.0,
-                "severity": "MEDIUM",
-                "port": "unknown",
-                "service": "unknown",
-                "description": "Potential vulnerability (version match, unverified)",
-                "confidence": "POSSIBLE",
-                "evidence_tool": f.get("source", "vulners"),
-            })
+            vulns.append(
+                {
+                    "vuln_id": f.get("id", ""),
+                    "vuln_name": fval,
+                    "cvss": 0.0,
+                    "severity": "MEDIUM",
+                    "port": "unknown",
+                    "service": "unknown",
+                    "description": "Potential vulnerability (version match, unverified)",
+                    "confidence": "POSSIBLE",
+                    "evidence_tool": f.get("source", "vulners"),
+                }
+            )
 
-        elif ftype == 'exploit_attempted':
-            exploits.append({
-                "exploit_name": fval,
-                "tool_used": "auto_exploit",
-                "payload": "default",
-                "result": "Success" if fconf >= 80 else "Attempted",
-                "notes": f"From tool output (confidence: {fconf}%)"
-            })
+        elif ftype == "exploit_attempted":
+            exploits.append(
+                {
+                    "exploit_name": fval,
+                    "tool_used": "auto_exploit",
+                    "payload": "default",
+                    "result": "Success" if fconf >= 80 else "Attempted",
+                    "notes": f"From tool output (confidence: {fconf}%)",
+                }
+            )
 
     # Risk level from state
     risk = "LOW"
@@ -1284,8 +1313,8 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
     hidden_fact_count = 0
     potential_values: list[str] = []
     for f in facts:
-        if f['type'] == 'potential_vulnerability':
-            potential_values.append(str(f['value']))
+        if f["type"] == "potential_vulnerability":
+            potential_values.append(str(f["value"]))
             if suppress_potential_vulns:
                 continue
         if not _should_display_confirmed_fact(f):
@@ -1324,11 +1353,7 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
         "outcome_summary": outcome_summary,
     }
     command_result_reader = getattr(fact_store, "get_command_results", None)
-    command_results = (
-        command_result_reader(scan_id, target)
-        if callable(command_result_reader)
-        else []
-    )
+    command_results = command_result_reader(scan_id, target) if callable(command_result_reader) else []
     enriched = enrich_result_with_reporting(
         result,
         facts,
@@ -1350,18 +1375,18 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
 def _mask_secret_value(value: str) -> str:
     text = str(value or "")
     text = _re.sub(
-        r'((?:whm|cpanel)_session:)(:?)([A-Za-z0-9_-]{4})[A-Za-z0-9_-]+',
-        r'\1\2\3***',
+        r"((?:whm|cpanel)_session:)(:?)([A-Za-z0-9_-]{4})[A-Za-z0-9_-]+",
+        r"\1\2\3***",
         text,
     )
     text = _re.sub(
-        r'\b([^:\s]{1,40}):([^:\s]{3,})(\s+\(cached\))',
+        r"\b([^:\s]{1,40}):([^:\s]{3,})(\s+\(cached\))",
         lambda m: f"{m.group(1)}:{m.group(2)[:2]}***{m.group(3)}",
         text,
     )
     text = _re.sub(
-        r'((?:ssh|ftp|postgres|mysql|ldap)_credential:[^@\s]+@)',
-        r'\1',
+        r"((?:ssh|ftp|postgres|mysql|ldap)_credential:[^@\s]+@)",
+        r"\1",
         text,
     )
     return text
@@ -1535,10 +1560,7 @@ def _build_outcome_summary(facts, state) -> list:
 
 
 def _fact_text(facts) -> str:
-    return "\n".join(
-        f"{f.get('type', '')}:{f.get('value', '')}:{f.get('source', '')}"
-        for f in facts
-    ).lower()
+    return "\n".join(f"{f.get('type', '')}:{f.get('value', '')}:{f.get('source', '')}" for f in facts).lower()
 
 
 def _is_cpanel_evidence(f, facts) -> bool:
@@ -1559,11 +1581,7 @@ def _is_cpanel_evidence(f, facts) -> bool:
 def _is_pwnkit_evidence(f, facts) -> bool:
     text = _fact_text([f, *list(facts)])
     value = str(f.get("value", "")).lower()
-    return (
-        "pwnkit" in value
-        or "cve-2021-4034" in value
-        or "privesc_vector:suid_pkexec" in text
-    )
+    return "pwnkit" in value or "cve-2021-4034" in value or "privesc_vector:suid_pkexec" in text
 
 
 def _service_for_port(facts, port: str) -> str:
@@ -1695,7 +1713,9 @@ def _exploit_success_metadata(f, facts, state) -> dict:
         "result": "Success",
     }
 
+
 # SAVE & SHOW RESULTS (shared by new_scan + resume_scan)
+
 
 def _save_and_show_results(sl_no: int, result: dict, duration_str: str = ""):
     """Save AI analysis results to DB and display them."""
@@ -1728,24 +1748,12 @@ def _save_and_show_results(sl_no: int, result: dict, duration_str: str = ""):
 
     # save exploits
     for exp in result["exploits"]:
-        save_exploit(
-            sl_no,
-            exp["exploit_name"],
-            exp["tool_used"],
-            exp["payload"],
-            exp["result"],
-            exp["notes"]
-        )
+        save_exploit(sl_no, exp["exploit_name"], exp["tool_used"], exp["payload"], exp["result"], exp["notes"])
         success(f"Saved exploit: {exp['exploit_name']}")
 
     # save summary (skip if one already exists for this sl_no to avoid duplicates on resume)
     try:
-        save_summary(
-            sl_no,
-            result["raw_scan"],
-            result["full_response"],
-            result["risk_level"]
-        )
+        save_summary(sl_no, result["raw_scan"], result["full_response"], result["risk_level"])
     except Exception as e:
         warn(f"Summary save skipped (may already exist): {e}")
 
@@ -1789,6 +1797,7 @@ def _remediation_for_vulnerability(vuln: dict, remediations: list) -> str:
 
 # VIEW HISTORY
 
+
 def view_history():
     divider("SCAN HISTORY")
     rows = get_all_history()
@@ -1824,6 +1833,7 @@ def view_history():
 
 
 # EDIT / DELETE MENU
+
 
 def edit_delete_menu(sl_no: int):
     while True:
@@ -1980,7 +1990,7 @@ def edit_delete_menu(sl_no: int):
             if confirm(f"\n\033[91mPermanently delete ENTIRE session SL# {sl_no} from all tables?\033[0m"):
                 delete_full_session(sl_no)
                 success(f"Session SL# {sl_no} wiped.")
-                return   # go back to main menu
+                return  # go back to main menu
 
         # ── BACK ──────────────────────────────
         elif choice == "9":
@@ -1992,6 +2002,7 @@ def edit_delete_menu(sl_no: int):
 
 # CHECKPOINT NOTICE
 
+
 def _check_pending_checkpoints() -> int:
     """Return the count of pending checkpoint files."""
     ck_dir = CFG.get("paths", {}).get("checkpoints", "/tmp")
@@ -1999,6 +2010,7 @@ def _check_pending_checkpoints() -> int:
 
 
 # MAIN MENU
+
 
 def main_menu():
     while True:
@@ -2032,7 +2044,7 @@ def main_menu():
         elif choice == "3":
             resume_scan()
             input("\n\033[90mPress Enter to continue...\033[0m")
-            
+
         elif choice == "4":
             c2_management_menu()
 
@@ -2047,52 +2059,58 @@ def main_menu():
 
 # C2 MANAGEMENT MENU (THIN CLIENT)
 
+
 def _load_api_key() -> str:
     """Load the operator API key from file or environment."""
     # Check env first
     key = os.environ.get("OCTOPUS_API_KEY", "")
     if key:
         return key
-    
+
     # Try default admin key file
     key_file = os.path.join(PROJECT_ROOT, "data", "default_admin.key")
     if os.path.exists(key_file):
         with open(key_file) as f:
             return f.read().strip()
-    
+
     return ""
 
+
 _cached_api_key = None
+
 
 def _send_to_daemon(action: str, **kwargs) -> dict:
     """Send a command to the C2 Daemon via Unix Socket with RBAC auth."""
     import socket
+
     global _cached_api_key
-    
+
     sock_path = "/tmp/octopus.sock"
-    
+
     if not os.path.exists(sock_path):
         return {"status": "error", "msg": "Daemon socket not found. Is it running?"}
-    
+
     if _cached_api_key is None:
         _cached_api_key = _load_api_key()
-    
+
     req = {"action": action, "api_key": _cached_api_key}
     req.update(kwargs)
-    
+
     try:
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         s.connect(sock_path)
-        s.sendall(json.dumps(req).encode('utf-8'))
+        s.sendall(json.dumps(req).encode("utf-8"))
         data = s.recv(65536)
         s.close()
-        return json.loads(data.decode('utf-8'))
+        return json.loads(data.decode("utf-8"))
     except Exception as e:
         return {"status": "error", "msg": str(e)}
+
 
 def _start_c2_daemon():
     """Start the C2 Daemon in the background."""
     import subprocess
+
     sock_path = "/tmp/octopus.sock"
     if os.path.exists(sock_path):
         resp = _send_to_daemon("ping")
@@ -2120,15 +2138,19 @@ def _start_c2_daemon():
 
     # Run detached — log stderr to file for debugging
     import sys
+
     with open(log_path, "w") as log_f:
         proc = subprocess.Popen(
             [sys.executable, daemon_path],
-            stdout=log_f, stderr=log_f,
-            start_new_session=True, cwd=PROJECT_ROOT,
-            env={**os.environ, "PYTHONPATH": PROJECT_ROOT}
+            stdout=log_f,
+            stderr=log_f,
+            start_new_session=True,
+            cwd=PROJECT_ROOT,
+            env={**os.environ, "PYTHONPATH": PROJECT_ROOT},
         )
 
     import time
+
     for _i in range(8):
         time.sleep(1)
         if os.path.exists(sock_path):
@@ -2153,9 +2175,10 @@ def _start_c2_daemon():
         except Exception as _exc:
             logging.debug(f"Suppressed in octopus.py: {_exc}")
 
+
 def c2_management_menu():
     """Interact with the C2 Server via Unix Socket (Thin Client)."""
-    
+
     # Auto-start daemon if not running
     resp = _send_to_daemon("ping")
     if resp.get("status") != "ok":
@@ -2174,12 +2197,12 @@ def c2_management_menu():
         print("  \033[92m[5]\033[0m  Operator Management")
         print("  \033[91m[0]\033[0m  Back")
         divider()
-        
+
         choice = prompt("c2> ")
-        
+
         if choice == "0":
             break
-            
+
         elif choice == "1":
             resp = _send_to_daemon("list_agents")
             if resp.get("status") == "ok":
@@ -2189,27 +2212,29 @@ def c2_management_menu():
                 else:
                     print(f"\n  [ ACTIVE AGENTS: {len(agents)} ]")
                     for a_id, info in agents.items():
-                        print(f"  ID: \033[96m{a_id}\033[0m | User: {info['user']}@{info['hostname']} | IP: {info['ip']} | Last Seen: {info['last_seen']}")
+                        print(
+                            f"  ID: \033[96m{a_id}\033[0m | User: {info['user']}@{info['hostname']} | IP: {info['ip']} | Last Seen: {info['last_seen']}"
+                        )
             else:
                 error(f"Daemon error: {resp.get('msg')}")
-                
+
         elif choice == "2":
             a_id = prompt("Agent ID: ")
             cmd = prompt("Command: ")
             if not a_id or not cmd:
                 continue
-                
+
             resp = _send_to_daemon("queue_task", agent_id=a_id, command=cmd)
             if resp.get("status") == "ok":
                 success(f"Task queued. ID: {resp.get('task_id')}")
             else:
                 error(f"Failed to queue task: {resp.get('msg')}")
-                
+
         elif choice == "3":
             a_id = prompt("Agent ID: ")
             if not a_id:
                 continue
-                
+
             resp = _send_to_daemon("get_results", agent_id=a_id)
             if resp.get("status") == "ok":
                 results = resp.get("results", [])
@@ -2218,27 +2243,28 @@ def c2_management_menu():
                 else:
                     for res in results:
                         print(f"\n  \033[96m[Task: {res['task_id']}]\033[0m")
-                        if res.get('error'):
+                        if res.get("error"):
                             print(f"  \033[91mError: {res['error']}\033[0m")
                         print(f"{res['output']}")
             else:
                 error(f"Daemon error: {resp.get('msg')}")
-                
+
         elif choice == "4":
             import subprocess
+
             builder_path = os.path.join(PROJECT_ROOT, "core", "c2", "builder.py")
             os_target = prompt("Target OS (linux/windows/darwin) [linux]: ") or "linux"
             arch_target = prompt("Target Arch (amd64/arm64) [amd64]: ") or "amd64"
             c2_url = prompt("C2 URL(s) (comma-separated) [http://127.0.0.1:8443]: ") or "http://127.0.0.1:8443"
             pins = prompt("SPKI Pins (comma-separated) []: ") or ""
-            
+
             cmd = [sys.executable, builder_path, "--os", os_target, "--arch", arch_target, "--urls", c2_url]
             if pins:
                 cmd.extend(["--pins", pins])
-                
+
             subprocess.run(cmd, timeout=900)
             input("\n\033[90mPress Enter to continue...\033[0m")
-            
+
         elif choice == "5":
             # Operator Management (admin only)
             print("\n  \033[96m[ OPERATOR MANAGEMENT ]\033[0m")
@@ -2247,7 +2273,7 @@ def c2_management_menu():
             print("  \033[92m[c]\033[0m  Deactivate operator")
             print("  \033[92m[d]\033[0m  Rotate API key")
             sub = prompt("  op> ")
-            
+
             if sub == "a":
                 resp = _send_to_daemon("manage_operators", sub_action="list")
                 if resp.get("status") == "ok":
@@ -2281,8 +2307,8 @@ def c2_management_menu():
                     warn("Save this key — it will not be shown again.")
                 else:
                     error(resp.get("msg", "Failed"))
-            
+
             input("\n\033[90mPress Enter to continue...\033[0m")
-            
+
         else:
             warn("Invalid choice.")

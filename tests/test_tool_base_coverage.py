@@ -366,20 +366,13 @@ def test_bounded_output_and_nuclei_summary_variants() -> None:
     assert base._nuclei_live_summary("{}") == ""
     assert (
         base._nuclei_live_summary(
-            '{"info":{"severity":"HIGH","name":"Finding"},'
-            '"template-id":"tpl","matched-at":"https://host"}'
+            '{"info":{"severity":"HIGH","name":"Finding"},"template-id":"tpl","matched-at":"https://host"}'
         )
         == "nuclei high tpl https://host"
     )
-    assert base._nuclei_live_summary('{"severity":"low","template":"legacy","host":"h"}') == (
-        "nuclei low legacy h"
-    )
-    assert base._nuclei_live_summary('{"info":{"name":"Named"},"ip":"127.0.0.1"}') == (
-        "nuclei info Named 127.0.0.1"
-    )
-    assert base._nuclei_live_summary('{"template-id":"only-template"}') == (
-        "nuclei info only-template"
-    )
+    assert base._nuclei_live_summary('{"severity":"low","template":"legacy","host":"h"}') == ("nuclei low legacy h")
+    assert base._nuclei_live_summary('{"info":{"name":"Named"},"ip":"127.0.0.1"}') == ("nuclei info Named 127.0.0.1")
+    assert base._nuclei_live_summary('{"template-id":"only-template"}') == ("nuclei info only-template")
 
 
 def test_run_tool_empty_missing_and_regular_output(monkeypatch, capsys) -> None:
@@ -593,9 +586,7 @@ def test_run_tool_unexpected_errors_are_sanitized(
 ) -> None:
     terminations: list[Proc] = []
     selected_thread = (
-        thread_class(start_error=RuntimeError("thread failed"))
-        if needle == "thread failed"
-        else thread_class()
+        thread_class(start_error=RuntimeError("thread failed")) if needle == "thread failed" else thread_class()
     )
     configure_run(
         monkeypatch,

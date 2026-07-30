@@ -516,7 +516,7 @@ def test_timeout_connection_and_generic_exception_retry_boundaries(monkeypatch) 
 
 def test_extract_json_fences_boundaries_escapes_and_failures() -> None:
     assert ollama._extract_json('```json\n{"x": 1}\n```') == '{"x": 1}'
-    assert ollama._extract_json('```\n[1, 2]\n```') == "[1, 2]"
+    assert ollama._extract_json("```\n[1, 2]\n```") == "[1, 2]"
     assert ollama._extract_json("no json").startswith("[!]")
     assert ollama._extract_json("prefix {invalid} suffix") == "{invalid}"
     assert ollama._extract_json('prefix {"quoted": "} [ \\""} suffix')
@@ -531,10 +531,10 @@ def test_extract_json_fences_boundaries_escapes_and_failures() -> None:
     ("text", "expected"),
     [
         ('prose {"x": [1, {"y": "z"}]} tail', '{"x": [1, {"y": "z"}]}'),
-        ('bad {] then [1,2]', "[1,2]"),
+        ("bad {] then [1,2]", "[1,2]"),
         ('bad {invalid} then {"ok":true}', '{"ok":true}'),
-        ('{"escaped":"a\\\"b"}', '{"escaped":"a\\\"b"}'),
-        ('text only', ""),
+        ('{"escaped":"a\\"b"}', '{"escaped":"a\\"b"}'),
+        ("text only", ""),
         ('{"open": [1,2}', ""),
     ],
 )
@@ -565,9 +565,7 @@ def test_structured_success_partial_errors_retries_and_exhaustion(monkeypatch) -
     cancellation = Cancellation(cancelled=True, reason="operator")
     monkeypatch.setattr(ollama, "ask_ollama", lambda *_args, **_kwargs: "[!] cancelled")
     with ollama.bind_ollama_cancellation(cancellation):
-        assert ollama.ask_ollama_structured("prompt", {}, max_retries=2) == {
-            "error": "[!] cancelled"
-        }
+        assert ollama.ask_ollama_structured("prompt", {}, max_retries=2) == {"error": "[!] cancelled"}
 
 
 def test_stream_generator_options_lines_done_and_error(monkeypatch) -> None:
@@ -608,9 +606,7 @@ def test_stream_generator_options_lines_done_and_error(monkeypatch) -> None:
 def test_stream_generator_cancellation_and_exception_paths(monkeypatch) -> None:
     cancellation = Cancellation(cancelled=True, reason="before")
     with ollama.bind_ollama_cancellation(cancellation):
-        assert list(ollama.ask_ollama_stream("stream")) == [
-            "[!] Ollama request cancelled: before."
-        ]
+        assert list(ollama.ask_ollama_stream("stream")) == ["[!] Ollama request cancelled: before."]
 
     cancellation = Cancellation()
 
@@ -623,9 +619,7 @@ def test_stream_generator_cancellation_and_exception_paths(monkeypatch) -> None:
     response.iter_lines = cancel_lines
     configure_ask(monkeypatch, [response])
     with ollama.bind_ollama_cancellation(cancellation):
-        assert list(ollama.ask_ollama_stream("stream")) == [
-            "[!] Ollama request cancelled: during."
-        ]
+        assert list(ollama.ask_ollama_stream("stream")) == ["[!] Ollama request cancelled: during."]
     assert response.closed == 1
 
     cancellation = Cancellation()

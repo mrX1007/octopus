@@ -383,7 +383,9 @@ def test_worker_environment_keeps_only_allowlisted_values(monkeypatch: pytest.Mo
     assert environment["OCTOPUS_PLUGIN_WORKER"] == "1"
 
 
-@pytest.mark.parametrize(("method", "sig", "fallback"), (("term", signal.SIGTERM, "terminate"), ("kill", signal.SIGKILL, "kill")))
+@pytest.mark.parametrize(
+    ("method", "sig", "fallback"), (("term", signal.SIGTERM, "terminate"), ("kill", signal.SIGKILL, "kill"))
+)
 def test_process_group_helpers_cover_finished_posix_missing_and_nonposix(
     monkeypatch: pytest.MonkeyPatch,
     method: str,

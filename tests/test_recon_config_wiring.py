@@ -13,12 +13,14 @@ def test_nmap_smart_phases_use_configured_aggressive_flags_and_timeout(monkeypat
     monkeypatch.setattr(
         recon_tools,
         "get_tool_config",
-        lambda name: {
-            "timeout": 77,
-            "aggressive_flags": ["-A", "-T2"],
-        }
-        if name == "nmap"
-        else {},
+        lambda name: (
+            {
+                "timeout": 77,
+                "aggressive_flags": ["-A", "-T2"],
+            }
+            if name == "nmap"
+            else {}
+        ),
     )
     monkeypatch.setattr(recon_tools.os.path, "exists", lambda _path: False)
     monkeypatch.setattr("builtins.open", mock_open())
@@ -48,9 +50,7 @@ def test_curl_headers_uses_configured_flags_and_timeout(monkeypatch):
     monkeypatch.setattr(
         recon_tools,
         "get_tool_config",
-        lambda name: {"timeout": 41, "flags": ["-sS", "--max-time", "7"]}
-        if name == "curl"
-        else {},
+        lambda name: {"timeout": 41, "flags": ["-sS", "--max-time", "7"]} if name == "curl" else {},
     )
     monkeypatch.setattr(recon_tools, "_url_candidates", lambda _target: ["https://app.example/login"])
     monkeypatch.setattr(
@@ -61,9 +61,7 @@ def test_curl_headers_uses_configured_flags_and_timeout(monkeypatch):
 
     output = recon_tools.run_curl_headers("app.example")
 
-    assert calls == [
-        (["curl", "-sS", "--max-time", "7", "-k", "https://app.example/login"], 41)
-    ]
+    assert calls == [(["curl", "-sS", "--max-time", "7", "-k", "https://app.example/login"], 41)]
     assert "HTTP/2 200" in output
 
 
@@ -78,16 +76,18 @@ def test_ffuf_uses_configured_flags_and_limits(monkeypatch):
     monkeypatch.setattr(
         recon_tools,
         "get_tool_config",
-        lambda name: {
-            "threads": 11,
-            "timeout": 93,
-            "match_codes": [200, 302],
-            "flags": ["-s"],
-            "maxtime": 73,
-            "request_timeout": 9,
-        }
-        if name == "ffuf"
-        else {},
+        lambda name: (
+            {
+                "threads": 11,
+                "timeout": 93,
+                "match_codes": [200, 302],
+                "flags": ["-s"],
+                "maxtime": 73,
+                "request_timeout": 9,
+            }
+            if name == "ffuf"
+            else {}
+        ),
     )
     monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(

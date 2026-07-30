@@ -118,9 +118,7 @@ def test_campaign_preflight_passes_complete_inputs_without_executing_commands(
     assert serialized["status"] == "passed"
     assert serialized["failed_check_count"] == 0
     assert serialized["check_count"] == len(report.checks)
-    assert checks["required_environment"].detail == (
-        "all_required_environment_present"
-    )
+    assert checks["required_environment"].detail == ("all_required_environment_present")
     assert checks["environment_executable:TOOL_BIN"].passed is True
     assert checks["environment_file_permissions"].detail == "private_mode"
     assert checks["completed_placeholders"].detail == "no_placeholders"
@@ -186,9 +184,7 @@ def test_campaign_preflight_collects_every_failure_before_raising(
     assert checks["scenario_catalog"].passed is False
     assert checks["matrix_compatibility"].passed is False
     assert checks["required_environment"].detail == "missing:MISSING"
-    assert checks["authorized_lab_acknowledgement"].detail == (
-        "authorization_ack_required"
-    )
+    assert checks["authorized_lab_acknowledgement"].detail == ("authorization_ack_required")
     assert checks["environment_executable:TOOL_BIN"].passed is False
     assert checks["adapter_cwd:incomplete"].passed is False
     assert checks["adapter_executable:incomplete"].passed is False
@@ -238,9 +234,7 @@ def test_campaign_preflight_rejects_non_private_environment_file(
         environment_file=environment_file,
     )
 
-    assert _checks_by_id(report)["environment_file_permissions"].detail == (
-        "environment_file_not_private"
-    )
+    assert _checks_by_id(report)["environment_file_permissions"].detail == ("environment_file_not_private")
 
 
 def test_manifest_adapter_rejects_escape_missing_cwd_and_placeholder(
@@ -263,11 +257,9 @@ def test_manifest_adapter_rejects_escape_missing_cwd_and_placeholder(
     assert missing_cwd == (base / "missing").resolve()
     assert missing_available is False
 
-    placeholder_cwd, placeholder_available = (
-        preflight._manifest_adapter_available(
-            _manifest(base, "placeholder", argv=("{adapter_path}",)),
-            {},
-        )
+    placeholder_cwd, placeholder_available = preflight._manifest_adapter_available(
+        _manifest(base, "placeholder", argv=("{adapter_path}",)),
+        {},
     )
     assert placeholder_cwd == base.resolve()
     assert placeholder_available is False
@@ -347,12 +339,8 @@ def test_environment_executable_resolution_is_hermetic(tmp_path, monkeypatch) ->
 
 def test_placeholder_detection_traverses_strings_mappings_and_sequences() -> None:
     assert preflight._contains_placeholder(" Change-Me ") is True
-    assert preflight._contains_placeholder(
-        {"configuration": ["your-key-here"]}
-    ) is True
-    assert preflight._contains_placeholder(
-        {"replace-with-name": "complete"}
-    ) is True
+    assert preflight._contains_placeholder({"configuration": ["your-key-here"]}) is True
+    assert preflight._contains_placeholder({"replace-with-name": "complete"}) is True
     assert preflight._contains_placeholder("complete") is False
     assert preflight._contains_placeholder(["complete", 1]) is False
     assert preflight._contains_placeholder(b"change-me") is False
@@ -372,10 +360,7 @@ def test_matrix_compatibility_covers_all_contract_dimensions(tmp_path) -> None:
         (alpha, _manifest(tmp_path, "model", model_name="other")),
         (alpha, _manifest(tmp_path, "tools", tool_version="2.0")),
     )
-    assert all(
-        not preflight._matrix_inputs_compatible(pair)
-        for pair in incompatible_pairs
-    )
+    assert all(not preflight._matrix_inputs_compatible(pair) for pair in incompatible_pairs)
 
     blackbox = (
         _manifest(tmp_path, "blackbox-alpha", track="blackbox"),

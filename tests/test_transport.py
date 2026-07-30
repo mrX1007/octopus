@@ -214,9 +214,7 @@ def test_python_transport_maps_success_timeout_dependency_and_other_errors(
         raise RequestTimeout
 
     fake_requests.request = timeout_request
-    assert transport._do_request("GET", "https://example.invalid", {"A": "B"})["error"] == (
-        "Request timed out"
-    )
+    assert transport._do_request("GET", "https://example.invalid", {"A": "B"})["error"] == ("Request timed out")
 
     def broken_request(**_kwargs: Any) -> Any:
         raise RuntimeError("socket closed")
@@ -284,15 +282,9 @@ def test_go_tls_transport_serializes_requests_and_maps_adapter_failures(
         b"hello",
     )
     assert failed["error"] == "Go client failed: bad certificate"
-    assert transport._do_request("get", "https://example.invalid", timeout=3.0)["error"] == (
-        "Request timed out"
-    )
-    assert transport._do_request("get", "https://example.invalid")["error"] == (
-        "Invalid JSON from Go client"
-    )
-    assert transport._do_request("get", "https://example.invalid")["error"] == (
-        "Go binary not found: /test/ja3_client"
-    )
+    assert transport._do_request("get", "https://example.invalid", timeout=3.0)["error"] == ("Request timed out")
+    assert transport._do_request("get", "https://example.invalid")["error"] == ("Invalid JSON from Go client")
+    assert transport._do_request("get", "https://example.invalid")["error"] == ("Go binary not found: /test/ja3_client")
     assert serialized[0] == {
         "method": "GET",
         "url": "https://example.invalid",

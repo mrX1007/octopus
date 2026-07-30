@@ -106,11 +106,7 @@ def test_linpeas_wget_inline_and_short_output_paths(monkeypatch):
 
 def test_linpeas_pid_completion_cves_and_truncation(monkeypatch):
     important = "\n".join(f"SUID finding {index}" for index in range(400))
-    linpeas_output = (
-        "\nshort\nordinary harmless line\n"
-        "CVE-2021-4034 CVE-2021-4034 CVE-2022-0847\n"
-        f"{important}"
-    )
+    linpeas_output = f"\nshort\nordinary harmless line\nCVE-2021-4034 CVE-2021-4034 CVE-2022-0847\n{important}"
 
     def ssh_exec(_client, command, **_kwargs):
         if command.startswith("curl"):

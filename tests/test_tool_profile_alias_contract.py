@@ -40,11 +40,7 @@ def test_every_builtin_alias_inherits_its_canonical_execution_profile():
 
 def test_coverage_buckets_partition_every_builtin_name_and_alias():
     registry = ToolRegistry()
-    spellings = {
-        spelling
-        for tool_def in _builtin_definitions()
-        for spelling in (tool_def.name, *tool_def.aliases)
-    }
+    spellings = {spelling for tool_def in _builtin_definitions() for spelling in (tool_def.name, *tool_def.aliases)}
     registered = spellings | {"unregistered-tool"}
 
     report = registry.get_coverage_report(list(registered))

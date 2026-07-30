@@ -64,16 +64,19 @@ class MissionPlanCompiler:
                 requested=True,
             )
             if assessment.hard_unavailable:
-                rejected.append({
-                    "agent": agent,
-                    "task": assessment.capability,
-                    "reason": f"capability_{assessment.provider_availability}",
-                    "blocking_reasons": list(assessment.blocking_reasons),
-                    "assessment": assessment.to_dict(),
-                })
+                rejected.append(
+                    {
+                        "agent": agent,
+                        "task": assessment.capability,
+                        "reason": f"capability_{assessment.provider_availability}",
+                        "blocking_reasons": list(assessment.blocking_reasons),
+                        "assessment": assessment.to_dict(),
+                    }
+                )
                 continue
             accepted.append(step)
         return PlanCompilation(tuple(accepted), tuple(rejected))
+
 
 class MissionPlanner:
     def __init__(self):
@@ -108,7 +111,7 @@ RULES:
 {json.dumps(llm_context, ensure_ascii=False, separators=(",", ":"))}
 
 Recent Task History (do not repeat failed tasks):
-{json.dumps(task_history[-max(1, int(CONTEXT_WINDOW)):], ensure_ascii=False, separators=(",", ":"))}
+{json.dumps(task_history[-max(1, int(CONTEXT_WINDOW)) :], ensure_ascii=False, separators=(",", ":"))}
 
 Director's Goal: {goal}
 
@@ -139,38 +142,55 @@ Output your plan in JSON format. Keep thought under 180 characters."""
     def _fallback_logic(self, goal: str) -> dict[str, Any]:
         """Deterministic plan logic if LLM fails. Each goal gets a proper multi-step plan."""
         plans = {
-            "service_discovery": {"thought": "fallback: discover services then analyze", "plan": [
-                {"agent": "DiscoveryAgent", "task": "service_discovery"},
-                {"agent": "AnalysisAgent", "task": "analyze_vulnerabilities"}
-            ]},
-            "vulnerability_assessment": {"thought": "fallback: vuln scan, web mapping, then analyze", "plan": [
-                {"agent": "DiscoveryAgent", "task": "vulnerability_assessment"},
-                {"agent": "DiscoveryAgent", "task": "web_application_mapping"},
-                {"agent": "AnalysisAgent", "task": "analyze_vulnerabilities"}
-            ]},
-            "credential_harvesting": {"thought": "fallback: harvest then test creds", "plan": [
-                {"agent": "DiscoveryAgent", "task": "credential_harvesting"},
-                {"agent": "VerificationAgent", "task": "test_credentials"}
-            ]},
-            "privilege_escalation": {"thought": "fallback: find and exploit privesc", "plan": [
-                {"agent": "DiscoveryAgent", "task": "find_privesc_vectors"},
-                {"agent": "VerificationAgent", "task": "exploit_privesc"}
-            ]},
-            "post_access_inventory": {"thought": "fallback: controlled post-access SSH inventory", "plan": [
-                {"agent": "VerificationAgent", "task": "post_access_inventory"}
-            ]},
-            "persistence": {"thought": "fallback: establish persistence", "plan": [
-                {"agent": "VerificationAgent", "task": "establish_persistence"}
-            ]},
-            "internal_reconnaissance": {"thought": "fallback: map internal network from established access", "plan": [
-                {"agent": "VerificationAgent", "task": "internal_network_recon"}
-            ]},
-            "data_exfiltration": {"thought": "fallback: exfiltrate data", "plan": [
-                {"agent": "VerificationAgent", "task": "exfiltrate_data"}
-            ]},
-            "cleanup": {"thought": "fallback: stealth cleanup", "plan": [
-                {"agent": "VerificationAgent", "task": "stealth_cleanup"}
-            ]},
+            "service_discovery": {
+                "thought": "fallback: discover services then analyze",
+                "plan": [
+                    {"agent": "DiscoveryAgent", "task": "service_discovery"},
+                    {"agent": "AnalysisAgent", "task": "analyze_vulnerabilities"},
+                ],
+            },
+            "vulnerability_assessment": {
+                "thought": "fallback: vuln scan, web mapping, then analyze",
+                "plan": [
+                    {"agent": "DiscoveryAgent", "task": "vulnerability_assessment"},
+                    {"agent": "DiscoveryAgent", "task": "web_application_mapping"},
+                    {"agent": "AnalysisAgent", "task": "analyze_vulnerabilities"},
+                ],
+            },
+            "credential_harvesting": {
+                "thought": "fallback: harvest then test creds",
+                "plan": [
+                    {"agent": "DiscoveryAgent", "task": "credential_harvesting"},
+                    {"agent": "VerificationAgent", "task": "test_credentials"},
+                ],
+            },
+            "privilege_escalation": {
+                "thought": "fallback: find and exploit privesc",
+                "plan": [
+                    {"agent": "DiscoveryAgent", "task": "find_privesc_vectors"},
+                    {"agent": "VerificationAgent", "task": "exploit_privesc"},
+                ],
+            },
+            "post_access_inventory": {
+                "thought": "fallback: controlled post-access SSH inventory",
+                "plan": [{"agent": "VerificationAgent", "task": "post_access_inventory"}],
+            },
+            "persistence": {
+                "thought": "fallback: establish persistence",
+                "plan": [{"agent": "VerificationAgent", "task": "establish_persistence"}],
+            },
+            "internal_reconnaissance": {
+                "thought": "fallback: map internal network from established access",
+                "plan": [{"agent": "VerificationAgent", "task": "internal_network_recon"}],
+            },
+            "data_exfiltration": {
+                "thought": "fallback: exfiltrate data",
+                "plan": [{"agent": "VerificationAgent", "task": "exfiltrate_data"}],
+            },
+            "cleanup": {
+                "thought": "fallback: stealth cleanup",
+                "plan": [{"agent": "VerificationAgent", "task": "stealth_cleanup"}],
+            },
         }
 
         return plans.get(goal, {"thought": "fallback: unknown goal, concluding", "plan": []})

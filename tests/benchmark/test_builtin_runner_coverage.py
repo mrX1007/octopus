@@ -44,10 +44,7 @@ def test_every_catalog_replay_runs_once_entirely_in_process() -> None:
     scenarios = load_scenarios(SCENARIO_DIRECTORY)
     runner = builtin_runner.BuiltinReplayRunner()
 
-    results = {
-        scenario.category: runner(scenario, 1, scenario.seed)
-        for scenario in scenarios
-    }
+    results = {scenario.category: runner(scenario, 1, scenario.seed) for scenario in scenarios}
 
     assert set(results) == {
         "authorized_internal_discovery",
@@ -68,13 +65,9 @@ def test_every_catalog_replay_runs_once_entirely_in_process() -> None:
         assert result["metrics"]["component_checks"] >= 1
         assert result["metrics"]["no_op_task_rate"] == 0.0
         assert result["metrics"]["repeated_task_rate"] == 0.0
-        assert result["artifact_refs"] == (
-            f"benchmark-replay://{scenario.scenario_id}/1/{scenario.seed}",
-        )
+        assert result["artifact_refs"] == (f"benchmark-replay://{scenario.scenario_id}/1/{scenario.seed}",)
         assert len(result["actions"]) <= scenario.budgets["max_tools"]
-        assert len(json.dumps(result, sort_keys=True, default=str).encode()) <= (
-            scenario.budgets["max_output_bytes"]
-        )
+        assert len(json.dumps(result, sort_keys=True, default=str).encode()) <= (scenario.budgets["max_output_bytes"])
 
 
 def test_unknown_category_is_rejected_before_creating_a_replay() -> None:
@@ -90,9 +83,7 @@ def test_action_budget_is_enforced_with_an_in_process_handler(monkeypatch) -> No
         "time",
         SimpleNamespace(monotonic=lambda: 10.0),
     )
-    runner = _runner_with_handler(
-        lambda _scenario, _root: {"actions": ("first", "second")}
-    )
+    runner = _runner_with_handler(lambda _scenario, _root: {"actions": ("first", "second")})
 
     with pytest.raises(ValueError, match="exceeds scenario max_tools budget"):
         runner(_scenario(max_tools=1), 1, 1)
@@ -117,9 +108,7 @@ def test_serialized_output_budget_is_enforced_in_memory(monkeypatch) -> None:
         "time",
         SimpleNamespace(monotonic=lambda: 10.0),
     )
-    runner = _runner_with_handler(
-        lambda _scenario, _root: {"actions": (), "payload": "x" * 1_000}
-    )
+    runner = _runner_with_handler(lambda _scenario, _root: {"actions": (), "payload": "x" * 1_000})
 
     with pytest.raises(ValueError, match="exceeds scenario max_output_bytes budget"):
         runner(_scenario(max_output_bytes=32), 1, 1)

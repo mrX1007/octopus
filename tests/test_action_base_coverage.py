@@ -53,11 +53,7 @@ def _request(
         actor="fixture",
         origin="test",
         target_scope=(target,) if target else (),
-        capabilities=(
-            frozenset({"present"})
-            if capabilities is None
-            else capabilities
-        ),
+        capabilities=(frozenset({"present"}) if capabilities is None else capabilities),
         request_id="fixture-request",
         max_output_bytes=321,
     )
@@ -112,13 +108,7 @@ def test_applicability_reports_each_missing_requirement_and_satisfied_state(
 
     monkeypatch.setattr(base.shutil, "which", lambda _dependency: "/fixture/bin")
     monkeypatch.setattr(base.importlib.util, "find_spec", lambda _name: object())
-    satisfied = adapter.applicability(
-        _request(
-            capabilities=frozenset(
-                {"present", "missing"}
-            )
-        )
-    )
+    satisfied = adapter.applicability(_request(capabilities=frozenset({"present", "missing"})))
     assert satisfied.applicable is True
     assert satisfied.reasons == ("requirements_satisfied",)
     assert satisfied.missing_requirements == ()
@@ -195,13 +185,16 @@ def test_normalize_result_forwards_redaction_and_resource_boundaries(
     monkeypatch.setattr(base, "adapt_execution_result", fake_adapt)
     raw = {"status": "succeeded", "output": "fixture"}
 
-    assert adapter.normalize_result(
-        raw,
-        request,
-        phase="execute",
-        redact_text=redact_text,
-        redact_data=redact_data,
-    ) is normalized
+    assert (
+        adapter.normalize_result(
+            raw,
+            request,
+            phase="execute",
+            redact_text=redact_text,
+            redact_data=redact_data,
+        )
+        is normalized
+    )
     assert observed == {
         "value": raw,
         "request_id": "fixture-request",

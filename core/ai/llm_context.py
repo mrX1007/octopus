@@ -135,9 +135,7 @@ def _compact_target_model(model: dict[str, Any], role: str) -> dict[str, Any]:
     security_findings = model.get("security_findings")
     if isinstance(security_findings, dict):
         compact["security_findings"] = {
-            bucket: _trim_list(items, role, max(4, limit // 2))
-            for bucket, items in security_findings.items()
-            if items
+            bucket: _trim_list(items, role, max(4, limit // 2)) for bucket, items in security_findings.items() if items
         }
 
     web_app = model.get("web_app")
@@ -158,9 +156,7 @@ def _compact_target_model(model: dict[str, Any], role: str) -> dict[str, Any]:
     typed_facts = model.get("typed_facts")
     if isinstance(typed_facts, dict):
         compact["typed_fact_counts"] = {
-            str(key): len(value) if isinstance(value, list) else 1
-            for key, value in typed_facts.items()
-            if value
+            str(key): len(value) if isinstance(value, list) else 1 for key, value in typed_facts.items() if value
         }
 
     return compact

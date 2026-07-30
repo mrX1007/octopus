@@ -138,9 +138,7 @@ def test_reveal_entrypoint_requires_closure_and_publishes_after_ack(monkeypatch,
 
     writes: list[tuple] = []
     variant = SimpleNamespace(
-        write_reveal_manifest=lambda path, *, campaign_closed: writes.append(
-            (path, campaign_closed)
-        )
+        write_reveal_manifest=lambda path, *, campaign_closed: writes.append((path, campaign_closed))
     )
     loads: list[Path] = []
 
@@ -158,4 +156,3 @@ def test_reveal_entrypoint_requires_closure_and_publishes_after_ack(monkeypatch,
 
     assert loads == [private_path]
     assert writes == [(reveal_path, True)]
-

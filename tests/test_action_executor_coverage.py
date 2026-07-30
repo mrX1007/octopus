@@ -157,9 +157,7 @@ def test_applicability_exception_is_a_typed_not_applicable_report() -> None:
     assert report.lifecycle.applicability is ApplicabilityStatus.NOT_APPLICABLE
     assert report.applicability is not None
     assert report.applicability.reasons == ("applicability_error",)
-    assert report.applicability.missing_requirements == (
-        "adapter_error:RuntimeError",
-    )
+    assert report.applicability.missing_requirements == ("adapter_error:RuntimeError",)
 
 
 def test_check_authorization_exception_fails_closed_before_provider_call() -> None:
@@ -294,18 +292,12 @@ def test_invalid_or_raising_cleanup_results_fail_without_relabeling_outcome() ->
 
 
 def test_check_status_maps_unavailable_failures_and_completed_results() -> None:
-    assert ActionExecutor._check_status(
-        ExecutionResult(status=ExecutionStatus.UNAVAILABLE)
-    ) is CheckStatus.UNAVAILABLE
+    assert ActionExecutor._check_status(ExecutionResult(status=ExecutionStatus.UNAVAILABLE)) is CheckStatus.UNAVAILABLE
     for status in (
         ExecutionStatus.FAILED,
         ExecutionStatus.TIMEOUT,
         ExecutionStatus.CANCELLED,
         ExecutionStatus.BLOCKED,
     ):
-        assert ActionExecutor._check_status(ExecutionResult(status=status)) is (
-            CheckStatus.FAILED
-        )
-    assert ActionExecutor._check_status(
-        ExecutionResult(status=ExecutionStatus.SUCCEEDED)
-    ) is CheckStatus.COMPLETED
+        assert ActionExecutor._check_status(ExecutionResult(status=status)) is (CheckStatus.FAILED)
+    assert ActionExecutor._check_status(ExecutionResult(status=ExecutionStatus.SUCCEEDED)) is CheckStatus.COMPLETED

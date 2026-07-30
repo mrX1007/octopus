@@ -37,9 +37,7 @@ def test_schema_init_retries_lock_and_propagates_nonlock_errors(monkeypatch):
         nonlocking._init_db()
     assert nonlocking.calls == 1
 
-    exhausted = StoreDouble(
-        [sqlite3.OperationalError("database is busy") for _ in range(12)]
-    )
+    exhausted = StoreDouble([sqlite3.OperationalError("database is busy") for _ in range(12)])
     with pytest.raises(sqlite3.OperationalError, match="busy"):
         exhausted._init_db()
     assert exhausted.calls == 12
@@ -51,9 +49,7 @@ def test_memory_schema_path_and_schema_version_race(monkeypatch):
     assert store._memory_conn is not None
 
     def delete_schema_row(conn):
-        conn.execute(
-            "DELETE FROM mission_lifecycle_schema WHERE component = 'mission_store'"
-        )
+        conn.execute("DELETE FROM mission_lifecycle_schema WHERE component = 'mission_store'")
 
     monkeypatch.setattr(store, "_migrate_task_identity_rows", delete_schema_row)
     with pytest.raises(MissionStoreError, match="schema version race"):

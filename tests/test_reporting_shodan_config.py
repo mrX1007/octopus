@@ -14,8 +14,7 @@ def test_cvss_scoring_switch_preserves_stored_scores_and_disables_inference(monk
     import export
 
     monkeypatch.setattr(export, "CFG", {"reporting": {"cvss_scoring": False}})
-    stored = (1, 1, "stored", "HIGH", "443", "https", "desc", "CONFIRMED",
-              "source", "evidence", "repro", 8.4)
+    stored = (1, 1, "stored", "HIGH", "443", "https", "desc", "CONFIRMED", "source", "evidence", "repro", 8.4)
     inferred = (2, 1, "inferred", "HIGH", "80", "http", "desc")
 
     assert export._vuln_cvss(stored) == 8.4
@@ -24,7 +23,9 @@ def test_cvss_scoring_switch_preserves_stored_scores_and_disables_inference(monk
 
 
 def test_json_raw_output_is_controlled_by_reporting_config(
-    monkeypatch, sample_session_data, tmp_path,
+    monkeypatch,
+    sample_session_data,
+    tmp_path,
 ):
     import export
 
@@ -69,8 +70,9 @@ def test_auto_shodan_context_only_runs_when_enabled(monkeypatch):
     monkeypatch.setattr(
         octopus,
         "_lazy_module_call",
-        lambda module, function, target: calls.append((module, function, target))
-        or "[SHODAN HOST: 192.0.2.10]\nPorts: 443",
+        lambda module, function, target: (
+            calls.append((module, function, target)) or "[SHODAN HOST: 192.0.2.10]\nPorts: 443"
+        ),
     )
 
     monkeypatch.setattr(octopus, "CFG", {"shodan": {"auto_scan": False}})
@@ -107,10 +109,12 @@ def test_shodan_save_results_false_keeps_results_in_memory_only():
     import shodan_module
 
     recon = shodan_module.ShodanRecon.__new__(shodan_module.ShodanRecon)
-    recon.api = SimpleNamespace(search=lambda _query, limit: {
-        "total": 1,
-        "matches": [{"ip_str": "192.0.2.10", "port": 443, "product": "https"}],
-    })
+    recon.api = SimpleNamespace(
+        search=lambda _query, limit: {
+            "total": 1,
+            "matches": [{"ip_str": "192.0.2.10", "port": 443, "product": "https"}],
+        }
+    )
     recon.max_results = 10
     recon.save_results = False
     recon._last_results = []

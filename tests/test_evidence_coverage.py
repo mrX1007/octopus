@@ -48,44 +48,36 @@ nikto timed out after 20s
     assert evidence_module._canonical_scope_url("") == ""
     assert evidence_module._canonical_scope_url("EXAMPLE.COM/") == "example.com"
     assert evidence_module._canonical_scope_url("http:///missing-host/") == "http:///missing-host"
-    assert evidence_module._canonical_scope_url("HTTP://Example.COM:80/path?x=1]") == (
-        "http://example.com/path?x=1"
-    )
-    assert evidence_module._canonical_scope_url("https://Example.COM:8443/") == (
-        "https://example.com:8443"
-    )
+    assert evidence_module._canonical_scope_url("HTTP://Example.COM:80/path?x=1]") == ("http://example.com/path?x=1")
+    assert evidence_module._canonical_scope_url("https://Example.COM:8443/") == ("https://example.com:8443")
 
-    assert evidence_module._tool_target_from_output(
-        "nuclei", "nuclei -u https://fallback.example", "[NUCLEI SAFE - https://first.example]"
-    ) == "https://fallback.example"
-    assert evidence_module._tool_target_from_output(
-        "nikto", "nikto", "[NIKTO - https://nikto.example]"
-    ) == "https://nikto.example"
-    assert evidence_module._tool_target_from_output(
-        "other", "other https://generic.example/path", ""
-    ) == "https://generic.example/path"
+    assert (
+        evidence_module._tool_target_from_output(
+            "nuclei", "nuclei -u https://fallback.example", "[NUCLEI SAFE - https://first.example]"
+        )
+        == "https://fallback.example"
+    )
+    assert (
+        evidence_module._tool_target_from_output("nikto", "nikto", "[NIKTO - https://nikto.example]")
+        == "https://nikto.example"
+    )
+    assert (
+        evidence_module._tool_target_from_output("other", "other https://generic.example/path", "")
+        == "https://generic.example/path"
+    )
     assert evidence_module._tool_target_from_output("other", "other", "") == ""
     timed = "[NUCLEI SAFE - https://before.example]\n[TIMEOUT] nuclei killed after 3s"
-    assert evidence_module._tool_target_before_timeout("nuclei", "nuclei", timed, 40) == (
-        "https://before.example"
+    assert evidence_module._tool_target_before_timeout("nuclei", "nuclei", timed, 40) == ("https://before.example")
+    assert (
+        evidence_module._tool_target_before_timeout("nikto", "nikto https://whole.example", "[TIMEOUT] nikto killed", 0)
+        == "https://whole.example"
     )
-    assert evidence_module._tool_target_before_timeout(
-        "nikto", "nikto https://whole.example", "[TIMEOUT] nikto killed", 0
-    ) == "https://whole.example"
 
     endpoint = json.loads(
-        evidence_module._check_result_fact(
-            "nuclei", "completed", "https://EXAMPLE.com:443/", "session"
-        )["value"]
+        evidence_module._check_result_fact("nuclei", "completed", "https://EXAMPLE.com:443/", "session")["value"]
     )
-    host = json.loads(
-        evidence_module._check_result_fact("custom", "timeout", "10.0.0.1", "session")[
-            "value"
-        ]
-    )
-    unknown = json.loads(
-        evidence_module._check_result_fact("", "timeout", "", "session")["value"]
-    )
+    host = json.loads(evidence_module._check_result_fact("custom", "timeout", "10.0.0.1", "session")["value"])
+    unknown = json.loads(evidence_module._check_result_fact("", "timeout", "", "session")["value"])
     assert endpoint["scope"] == {"type": "endpoint", "value": "https://example.com"}
     assert host["scope"] == {"type": "host", "value": "10.0.0.1"}
     assert unknown["scope"] == {"type": "unknown", "value": "tool"}
@@ -195,21 +187,13 @@ def test_evidence_verifier_term_and_hard_evidence_helpers() -> None:
         {"id": 3, "type": "port_open", "value": "22/tcp (ssh)"},
     ]
     assert verifier._supporting_fact_ids("service:ssh", facts) == [3]
-    terms = verifier._fact_evidence_terms(
-        {"type": "system_access", "value": "root_access_confirmed"}
-    )
+    terms = verifier._fact_evidence_terms({"type": "system_access", "value": "root_access_confirmed"})
     assert "ssh_access_confirmed" in terms
     assert verifier._fact_is_hard_evidence({"assessment_status": "verified"}) is True
     assert verifier._fact_is_hard_evidence({"assessment_status": "inferred"}) is False
-    assert verifier._fact_is_hard_evidence(
-        {"type": "vulnerability_candidate", "source": "scanner"}
-    ) is False
-    assert verifier._fact_is_hard_evidence(
-        {"type": "observation", "source": "llm"}
-    ) is False
-    assert verifier._fact_is_hard_evidence(
-        {"type": "observation", "source": "scanner"}
-    ) is True
+    assert verifier._fact_is_hard_evidence({"type": "vulnerability_candidate", "source": "scanner"}) is False
+    assert verifier._fact_is_hard_evidence({"type": "observation", "source": "llm"}) is False
+    assert verifier._fact_is_hard_evidence({"type": "observation", "source": "scanner"}) is True
     assert verifier._workflow_marker_cannot_prove_claim("unknown", "status unknown") is False
     assert verifier._workflow_marker_cannot_prove_claim("unknown", "target vulnerable") is True
 
@@ -218,9 +202,7 @@ def test_evidence_verifier_term_and_hard_evidence_helpers() -> None:
     assert "coverage_gap_check_nuclei" in aliases("coverage_gaps[0].check: nuclei")
     assert "service_version_nginx" in aliases("services[0].banner: nginx")
     assert "internal_service_port_5432" in aliases("internal_services[0].port: 5432")
-    assert "security_findings_verified_value_cve_2026_1" in aliases(
-        "security_findings.verified.value: CVE-2026-1"
-    )
+    assert "security_findings_verified_value_cve_2026_1" in aliases("security_findings.verified.value: CVE-2026-1")
     assert "" in aliases("security_findings.verified.value: ''")
 
 
@@ -241,22 +223,12 @@ def test_evidence_verifier_builds_rich_context_terms_and_handles_context_failure
         "target_model": {
             "coverage": {
                 "gaps": [{"status": "needed"}],
-                "external_services": [
-                    {"host": "example", "port": 443, "service": "https", "banner": "nginx"}
-                ],
-                "internal_services": [
-                    {"host": "10.0.0.2", "port": 5432, "service": "postgresql"}
-                ],
+                "external_services": [{"host": "example", "port": 443, "service": "https", "banner": "nginx"}],
+                "internal_services": [{"host": "10.0.0.2", "port": 5432, "service": "postgresql"}],
             },
-            "services": [
-                {"host": "example", "port": 22, "service": "ssh", "state": "open"}
-            ],
-            "internal_services": [
-                {"host": "10.0.0.3", "port": 6379, "service": "redis", "banner": "7.0"}
-            ],
-            "security_findings": {
-                "verified": ["invalid", {"value": "CVE-2026-1"}, {"value": ""}]
-            },
+            "services": [{"host": "example", "port": 22, "service": "ssh", "state": "open"}],
+            "internal_services": [{"host": "10.0.0.3", "port": 6379, "service": "redis", "banner": "7.0"}],
+            "security_findings": {"verified": ["invalid", {"value": "CVE-2026-1"}, {"value": ""}]},
         },
     }
 
@@ -297,9 +269,7 @@ def test_evidence_verifier_builds_rich_context_terms_and_handles_context_failure
         {"host": "10.0.0.1", "port": 80, "service": "http", "banner": "server"},
         "internal_services",
     )
-    verifier._add_service_evidence_terms(
-        terms, {"port": 80, "service": "http"}, "services"
-    )
+    verifier._add_service_evidence_terms(terms, {"port": 80, "service": "http"}, "services")
     verifier._add_service_evidence_terms(terms, {"banner": "only"}, "other")
 
     class BrokenBuilder(Builder):
@@ -400,9 +370,7 @@ login success
         "[+] 10.0.0.1:22 - Success: 'alice:secret'",
         "session",
     )
-    assert parser.parse(
-        "msf_check host exploit/test", "The target appears to be vulnerable", "session"
-    )
+    assert parser.parse("msf_check host exploit/test", "The target appears to be vulnerable", "session")
 
 
 def test_regex_parser_post_access_web_and_protocol_boundaries() -> None:
@@ -767,23 +735,17 @@ def test_structured_web_llm_and_output_parser_boundaries(
     }
     assert structured.parse("plugin", '{"plugin":"x","success":false}', "session")
     assert structured.parse("plugin", "{bad}", "session") == []
-    assert structured.parse("plugin", '{}\n--- plugin output ---\nignored', "session") == []
+    assert structured.parse("plugin", "{}\n--- plugin output ---\nignored", "session") == []
 
     web = WebEndpointParser()
     assert web._url_from_text("none") == ""
     assert web._tool_name_is_web_facing("") is False
     assert web._candidate_is_negative("anything", "not-a-url") is False
-    assert web._candidate_is_negative(
-        "web_fetch_failed:https://x.test", "https://x.test"
-    ) is True
-    assert web._candidate_is_negative(
-        "requests fallback failed: x.test", "https://x.test"
-    ) is True
+    assert web._candidate_is_negative("web_fetch_failed:https://x.test", "https://x.test") is True
+    assert web._candidate_is_negative("requests fallback failed: x.test", "https://x.test") is True
     assert web._candidate_has_positive_signal("", "not-a-url") is False
     for signal in ("status: 200", "[201]", "title: yes"):
-        assert web._candidate_has_positive_signal(
-            f"x.test {signal}", "https://x.test"
-        ) is True
+        assert web._candidate_has_positive_signal(f"x.test {signal}", "https://x.test") is True
     assert web._canonical_endpoint("") == ""
     assert web._canonical_endpoint("ftp://x.test") == ""
     assert web._canonical_endpoint("https://x.test/{bad}") == ""
@@ -801,7 +763,7 @@ def test_structured_web_llm_and_output_parser_boundaries(
     )
     assert positive
 
-    monkeypatch.setattr("core.ai.ollama_client.ask_ollama", lambda *_args, **_kwargs: '[!] error')
+    monkeypatch.setattr("core.ai.ollama_client.ask_ollama", lambda *_args, **_kwargs: "[!] error")
     extractor = LLMExtractor()
     assert extractor.parse("tool", "raw", "session") == []
     monkeypatch.setattr(
@@ -837,9 +799,7 @@ def test_structured_web_llm_and_output_parser_boundaries(
     output.web_endpoint_parser.parse = MagicMock(return_value=[])
     output.regex_parser.parse = MagicMock(return_value=[])
     output.structured_parser.parse = MagicMock(return_value=[])
-    output.llm_extractor.parse = MagicMock(
-        return_value=[{"type": "observation", "value": "llm", "session_id": "none"}]
-    )
+    output.llm_extractor.parse = MagicMock(return_value=[{"type": "observation", "value": "llm", "session_id": "none"}])
     assert output.parse_tool_output("custom", "meaningful output " * 10)[0]["value"] == "llm"
 
     timeout = output._parse_negative_status(
@@ -849,9 +809,7 @@ def test_structured_web_llm_and_output_parser_boundaries(
     )
     assert any(fact["type"] == "check_result" for fact in timeout)
     output._parse_negative_status("custom", "[TIMEOUT]", "session")
-    output._parse_negative_status(
-        "custom_tool args", "[TIMEOUT] nikto killed after 1s", "session"
-    )
+    output._parse_negative_status("custom_tool args", "[TIMEOUT] nikto killed after 1s", "session")
     complete = output._parse_negative_status(
         "nuclei nikto",
         "[NUCLEI COMPLETE - https://x.test]\n[NIKTO COMPLETE - host.test]",

@@ -50,20 +50,14 @@ class EnrollmentDatabaseStub:
 
 
 def _signed_enrollment_token(authority: EnrollmentAuthority, payload: Any) -> str:
-    encoded = enrollment_module._b64encode(
-        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-    )
-    signature = enrollment_module._b64encode(
-        hmac.new(authority._key, encoded.encode("ascii"), hashlib.sha256).digest()
-    )
+    encoded = enrollment_module._b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    signature = enrollment_module._b64encode(hmac.new(authority._key, encoded.encode("ascii"), hashlib.sha256).digest())
     return f"{encoded}.{signature}"
 
 
 def _signed_raw_enrollment_token(authority: EnrollmentAuthority, payload: bytes) -> str:
     encoded = enrollment_module._b64encode(payload)
-    signature = enrollment_module._b64encode(
-        hmac.new(authority._key, encoded.encode("ascii"), hashlib.sha256).digest()
-    )
+    signature = enrollment_module._b64encode(hmac.new(authority._key, encoded.encode("ascii"), hashlib.sha256).digest())
     return f"{encoded}.{signature}"
 
 
@@ -241,12 +235,15 @@ def test_event_store_appends_filters_serializes_and_isolates_subscriber_errors(
     }
 
     assert [event.event_id for event in store.read_stream(limit=2)] == [1, 2]
-    assert store.read_stream(
-        aggregate_type="agent",
-        aggregate_id="agent-1",
-        event_type="agent.updated",
-        after_id=first.event_id,
-    )[0].to_dict() == second.to_dict()
+    assert (
+        store.read_stream(
+            aggregate_type="agent",
+            aggregate_id="agent-1",
+            event_type="agent.updated",
+            after_id=first.event_id,
+        )[0].to_dict()
+        == second.to_dict()
+    )
     assert store.read_stream(after_id=third.event_id) == []
 
 
@@ -386,10 +383,7 @@ def test_generate_python_implant_serializes_supplied_configuration(
         enrollment_token="single-use-token",
     )
 
-    split_key = bytes.fromhex(
-        _generated_string_constant(source, "_KP1")
-        + _generated_string_constant(source, "_KP2")
-    )
+    split_key = bytes.fromhex(_generated_string_constant(source, "_KP1") + _generated_string_constant(source, "_KP2"))
     encrypted = base64.b64decode(_generated_string_constant(source, "_ENC_BLOB"))
     config = json.loads(AESGCM(split_key).decrypt(encrypted[:12], encrypted[12:], None))
     assert config == {
@@ -438,10 +432,7 @@ def test_generate_python_implant_loads_default_key_and_enrollment_authority(
     expected_root = tmp_path / "project"
     assert loaded_paths == [str(expected_root / "data" / "keys" / "server_x25519_public.pem")]
     assert authority_paths == [str(expected_root / "data" / "keys" / "enrollment.key")]
-    split_key = bytes.fromhex(
-        _generated_string_constant(source, "_KP1")
-        + _generated_string_constant(source, "_KP2")
-    )
+    split_key = bytes.fromhex(_generated_string_constant(source, "_KP1") + _generated_string_constant(source, "_KP2"))
     encrypted = base64.b64decode(_generated_string_constant(source, "_ENC_BLOB"))
     config = json.loads(AESGCM(split_key).decrypt(encrypted[:12], encrypted[12:], None))
     assert config["enrollment_token"] == "issued-enrollment-token"

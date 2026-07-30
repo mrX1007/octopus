@@ -12,9 +12,27 @@ class DeterministicPolicy:
 
     CATEGORY_TASKS: ClassVar[dict[str, set[str]]] = {
         "asm": {"asm_discovery", "asm_http_probe", "asm_dns_resolution", "asm_port_discovery", "asm_url_discovery"},
-        "web": {"web_application_mapping", "web_vulnerability_testing", "web_app_deep_testing", "web_content_discovery", "browser_surface_analysis", "template_verification"},
+        "web": {
+            "web_application_mapping",
+            "web_vulnerability_testing",
+            "web_app_deep_testing",
+            "web_content_discovery",
+            "browser_surface_analysis",
+            "template_verification",
+        },
         "api": {"api_security_testing"},
-        "ad": {"active_directory_enumeration", "ad_security_review", "bloodhound_ingest", "password_policy_review", "delegation_analysis", "gpo_review", "adcs_review", "local_admin_paths", "acl_review", "kerberos_assessment"},
+        "ad": {
+            "active_directory_enumeration",
+            "ad_security_review",
+            "bloodhound_ingest",
+            "password_policy_review",
+            "delegation_analysis",
+            "gpo_review",
+            "adcs_review",
+            "local_admin_paths",
+            "acl_review",
+            "kerberos_assessment",
+        },
         "cloud": {"cloud_security_assessment"},
         "secrets": {"secrets_scanning"},
         "code": {"code_security_assessment"},
@@ -66,14 +84,20 @@ class DeterministicPolicy:
             if not bool(automated_stages.get(killchain_stage, True)):
                 return False
         if task in {"establish_persistence", "payload_generation"}:
-            return state in {"root_access_confirmed", "persistence_established"} and bool(policy.get("auto_persistence", False))
+            return state in {"root_access_confirmed", "persistence_established"} and bool(
+                policy.get("auto_persistence", False)
+            )
         if task in {"internal_network_recon", "internal_service_discovery"}:
             return state in {
-                "root_access_confirmed", "persistence_established",
-                "internal_recon_completed", "exfiltration_completed",
+                "root_access_confirmed",
+                "persistence_established",
+                "internal_recon_completed",
+                "exfiltration_completed",
             } and bool(policy.get("auto_internal_recon", True))
         if task == "exfiltrate_data":
-            return state in {"persistence_established", "internal_recon_completed"} and bool(policy.get("auto_data_exfil", False))
+            return state in {"persistence_established", "internal_recon_completed"} and bool(
+                policy.get("auto_data_exfil", False)
+            )
         if task == "stealth_cleanup":
             return state == "exfiltration_completed" and bool(policy.get("auto_cleanup", False))
         return True

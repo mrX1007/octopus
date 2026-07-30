@@ -73,12 +73,12 @@ def test_resilient_session_configures_retries_adapters_and_user_agent(monkeypatc
     monkeypatch.setattr(
         search,
         "Retry",
-        lambda **kwargs: (retry_calls.append(kwargs) or "retry-policy"),
+        lambda **kwargs: retry_calls.append(kwargs) or "retry-policy",
     )
     monkeypatch.setattr(
         search,
         "HTTPAdapter",
-        lambda **kwargs: (adapter_calls.append(kwargs) or "adapter"),
+        lambda **kwargs: adapter_calls.append(kwargs) or "adapter",
     )
 
     assert search.get_resilient_session() is session
@@ -151,9 +151,7 @@ def test_web_search_dependency_empty_results_success_error_and_timeout(monkeypat
 def test_search_cve_combines_optional_nvd_data(monkeypatch) -> None:
     monkeypatch.setattr(search, "web_search", lambda query, max_results: "web")
     monkeypatch.setattr(search, "_fetch_nvd_cvss", lambda cve: "cvss")
-    assert search.search_cve("CVE-2026-0001") == (
-        "web\n\n[NVD CVSS DATA: CVE-2026-0001]\ncvss"
-    )
+    assert search.search_cve("CVE-2026-0001") == ("web\n\n[NVD CVSS DATA: CVE-2026-0001]\ncvss")
     monkeypatch.setattr(search, "_fetch_nvd_cvss", lambda cve: "")
     assert search.search_cve("CVE-2026-0001") == "web"
 
@@ -240,7 +238,7 @@ def test_exploit_and_fix_searches_build_expected_queries(monkeypatch) -> None:
     monkeypatch.setattr(
         search,
         "web_search",
-        lambda query, max_results: (calls.append((query, max_results)) or "result"),
+        lambda query, max_results: calls.append((query, max_results)) or "result",
     )
     assert search.search_exploit("apache", "2.4.49") == "result"
     assert search.search_fix("log4shell") == "result"
@@ -294,7 +292,7 @@ def test_fetch_page_scrapling_parser_truncation_and_all_errors(monkeypatch) -> N
     monkeypatch.setattr(
         search,
         "BeautifulSoup",
-        lambda text, parser: (soup_instances.append(Soup(text)) or soup_instances[-1]),
+        lambda text, parser: soup_instances.append(Soup(text)) or soup_instances[-1],
     )
     monkeypatch.setattr(
         search,
@@ -315,9 +313,7 @@ def test_fetch_page_scrapling_parser_truncation_and_all_errors(monkeypatch) -> N
         monkeypatch.setattr(
             search,
             "session",
-            SimpleNamespace(
-                get=lambda *_args, _exception=exception, **_kwargs: (_ for _ in ()).throw(_exception)
-            ),
+            SimpleNamespace(get=lambda *_args, _exception=exception, **_kwargs: (_ for _ in ()).throw(_exception)),
         )
         assert needle in search.fetch_page("https://page.test")
 
@@ -346,9 +342,7 @@ def test_scrapling_fetch_body_fallback_truncation_status_import_and_runtime_erro
             text=lambda: "123456789",
         )
     )
-    assert search._fetch_with_scrapling("https://page.test", max_chars=4) == (
-        "1234\n... [truncated at 4 chars]"
-    )
+    assert search._fetch_with_scrapling("https://page.test", max_chars=4) == ("1234\n... [truncated at 4 chars]")
     pages.append(SimpleNamespace(status=404))
     assert search._fetch_with_scrapling("https://page.test") is None
     pages.append(RuntimeError("browser failed"))
@@ -448,7 +442,7 @@ def test_dispatch_service_versions_keywords_fix_and_default_paths(monkeypatch, c
     monkeypatch.setattr(
         search,
         "web_search",
-        lambda query, max_results: (calls.append((query, max_results)) or f"web:{query}"),
+        lambda query, max_results: calls.append((query, max_results)) or f"web:{query}",
     )
     monkeypatch.setattr(
         search.subprocess,

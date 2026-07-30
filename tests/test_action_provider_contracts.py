@@ -5,6 +5,7 @@ import pytest
 
 pytestmark = pytest.mark.contract
 
+
 def test_n_mode_uses_registry_safe_deep_coverage_without_real_tools():
     import builtins
 
@@ -39,6 +40,7 @@ def test_n_mode_uses_registry_safe_deep_coverage_without_real_tools():
         def _run(target, *args, **kwargs):
             calls.append((name, target))
             return f"{name} ok {target}"
+
         return _run
 
     try:
@@ -54,9 +56,18 @@ def test_n_mode_uses_registry_safe_deep_coverage_without_real_tools():
         runner.run_bruteforce = fake_tool("bruteforce")
 
         for tool_name in (
-            "wpscan", "sqlmap", "nikto", "scrapling",
-            "httpx_probe", "naabu", "tlsx", "security_headers_check",
-            "cors_check", "nuclei_safe", "katana_crawl", "openapi_import",
+            "wpscan",
+            "sqlmap",
+            "nikto",
+            "scrapling",
+            "httpx_probe",
+            "naabu",
+            "tlsx",
+            "security_headers_check",
+            "cors_check",
+            "nuclei_safe",
+            "katana_crawl",
+            "openapi_import",
             "graphql_check",
         ):
             tool_def = get_tool(tool_name)
@@ -93,7 +104,17 @@ def test_n_mode_uses_registry_safe_deep_coverage_without_real_tools():
     assert "web_login_brute" not in called_tools
     assert "bruteforce" not in called_tools
     assert "sqlmap" not in called_tools
-    assert {"httpx_probe", "naabu", "tlsx", "security_headers_check", "cors_check", "nuclei_safe", "katana_crawl", "openapi_import", "graphql_check"}.issubset(called_tools)
+    assert {
+        "httpx_probe",
+        "naabu",
+        "tlsx",
+        "security_headers_check",
+        "cors_check",
+        "nuclei_safe",
+        "katana_crawl",
+        "openapi_import",
+        "graphql_check",
+    }.issubset(called_tools)
     assert ("security_headers_check", "http://10.0.0.5") in calls
     assert ("openapi_import", "http://10.0.0.5/openapi.json") in calls
 
@@ -105,16 +126,18 @@ def test_plugin_manager_skips_optional_import_failures_without_warning(tmp_path,
     plugin_dir.mkdir()
     plugin_file = plugin_dir / "optional_plugin.py"
     plugin_file.write_text(
-        "\n".join([
-            "import octopus_missing_optional_dep",
-            "from core.plugins.base import OctopusPlugin, PluginType, PluginResult",
-            "class OptionalPlugin(OctopusPlugin):",
-            "    name = 'optional_plugin'",
-            "    version = '1.0.0'",
-            "    plugin_type = PluginType.AUXILIARY",
-            "    def run(self, **kwargs):",
-            "        return PluginResult(success=True)",
-        ])
+        "\n".join(
+            [
+                "import octopus_missing_optional_dep",
+                "from core.plugins.base import OctopusPlugin, PluginType, PluginResult",
+                "class OptionalPlugin(OctopusPlugin):",
+                "    name = 'optional_plugin'",
+                "    version = '1.0.0'",
+                "    plugin_type = PluginType.AUXILIARY",
+                "    def run(self, **kwargs):",
+                "        return PluginResult(success=True)",
+            ]
+        )
     )
 
     with caplog.at_level("WARNING"):
@@ -170,8 +193,14 @@ def test_registry_expands_nested_web_and_plugin_capabilities():
 
     registry = ToolRegistry()
     available = {
-        "nmap", "nikto", "exploit_select", "wpscan", "sqlmap",
-        "jmx2rce_scan", "plugin", "cpanel_exploit",
+        "nmap",
+        "nikto",
+        "exploit_select",
+        "wpscan",
+        "sqlmap",
+        "jmx2rce_scan",
+        "plugin",
+        "cpanel_exploit",
     }
     registry._is_tool_available = lambda name: name in available or name in registry.task_map
 
@@ -198,12 +227,27 @@ def test_registry_coverage_classifies_gated_and_legacy_tools():
 
     registry = ToolRegistry()
     registered = [
-        "bruteforce", "exploit_select", "jmx2rce_cleanup", "jmx2rce_rce",
-        "jmx2rce_read", "jmx2rce_scan", "msf_check", "msf_run",
-        "stealth_brute", "web_login_brute", "deploy_c2_beacon",
-        "killchain_exploit", "killchain_full", "killchain_vuln_assess",
-        "ssh_exec", "ssh_inventory", "ssh_session", "plugin",
-        "ftp_anonymous_check", "smtp_probe", "db_inventory",
+        "bruteforce",
+        "exploit_select",
+        "jmx2rce_cleanup",
+        "jmx2rce_rce",
+        "jmx2rce_read",
+        "jmx2rce_scan",
+        "msf_check",
+        "msf_run",
+        "stealth_brute",
+        "web_login_brute",
+        "deploy_c2_beacon",
+        "killchain_exploit",
+        "killchain_full",
+        "killchain_vuln_assess",
+        "ssh_exec",
+        "ssh_inventory",
+        "ssh_session",
+        "plugin",
+        "ftp_anonymous_check",
+        "smtp_probe",
+        "db_inventory",
     ]
 
     report = registry.get_coverage_report(registered)
@@ -246,13 +290,9 @@ def test_exploit_base_normalizes_legacy_tuple_results():
     assert isinstance(check, ExploitResult)
     assert check.success
     assert check.status == "vulnerable"
-    assert ("vulnerability", "CVE-2099-0001") in {
-        (fact["type"], fact["value"]) for fact in check.facts
-    }
+    assert ("vulnerability", "CVE-2099-0001") in {(fact["type"], fact["value"]) for fact in check.facts}
     assert run.as_tuple() == (True, "uid=0(root)")
-    assert ("exploit_success", "CVE-2099-0001:Demo") in {
-        (fact["type"], fact["value"]) for fact in run.facts
-    }
+    assert ("exploit_success", "CVE-2099-0001:Demo") in {(fact["type"], fact["value"]) for fact in run.facts}
 
 
 def test_exploit_selector_handles_local_inventory_without_msf_run():
@@ -300,7 +340,9 @@ def test_pipeline_feeds_compact_state_to_exploit_selector_without_raw_recon_bits
     pipeline.fact_store.add_fact(scan_id, host, "os_version", "CentOS Linux 7 (Core)", "ssh_inventory")
     pipeline.fact_store.add_fact(scan_id, host, "kernel_version", "3.10.0-1160.el7.x86_64", "ssh_inventory")
     pipeline.fact_store.add_fact(scan_id, host, "system_access", "uid=0", "ssh_inventory")
-    pipeline.fact_store.add_fact(scan_id, host, "internal_service", "172.24.108.2:53/tcp (dns)", "internal_service_probe")
+    pipeline.fact_store.add_fact(
+        scan_id, host, "internal_service", "172.24.108.2:53/tcp (dns)", "internal_service_probe"
+    )
 
     cmd = pipeline._augment_command_with_context(f"exploit_select {host}", scan_id, host)
 
@@ -314,7 +356,7 @@ def test_exploit_selector_strips_compact_state_before_regex_parsing():
     from core.exploits.selector import _extract_services
 
     services = _extract_services(
-        'service_version -> ssh:22:OpenSSH 7.4 | '
+        "service_version -> ssh:22:OpenSSH 7.4 | "
         'compact_state -> {"open_ports":[{"port":22,"service":"ssh","banner":"OpenSSH 7.4"}]}'
     )
 
@@ -457,12 +499,14 @@ def test_pipeline_promotes_msf_run_only_after_positive_check_and_scope():
             return "[+] Command shell session 1 opened"
         return ""
 
-    config.CFG.setdefault("strategy", {}).update({
-        "allow_active_msf": True,
-        "active_authorized": True,
-        "authorized_targets": ["10.0.0.0/24"],
-        "max_active_msf_runs_per_scan": 1,
-    })
+    config.CFG.setdefault("strategy", {}).update(
+        {
+            "allow_active_msf": True,
+            "active_authorized": True,
+            "authorized_targets": ["10.0.0.0/24"],
+            "max_active_msf_runs_per_scan": 1,
+        }
+    )
     pipeline_mod.run_arbitrary_cmd = fake_runner
     try:
         db_path = f"/tmp/octopus_pipeline_active_msf_{uuid.uuid4().hex}.db"
@@ -510,12 +554,14 @@ def test_pipeline_does_not_promote_msf_run_outside_authorized_scope():
             return "[+] The target appears to be vulnerable."
         return ""
 
-    config.CFG.setdefault("strategy", {}).update({
-        "allow_active_msf": True,
-        "active_authorized": True,
-        "authorized_targets": ["192.0.2.0/24"],
-        "max_active_msf_runs_per_scan": 1,
-    })
+    config.CFG.setdefault("strategy", {}).update(
+        {
+            "allow_active_msf": True,
+            "active_authorized": True,
+            "authorized_targets": ["192.0.2.0/24"],
+            "max_active_msf_runs_per_scan": 1,
+        }
+    )
     pipeline_mod.run_arbitrary_cmd = fake_runner
     try:
         db_path = f"/tmp/octopus_pipeline_active_scope_{uuid.uuid4().hex}.db"
@@ -569,9 +615,7 @@ def test_fact_driven_actions_add_protocol_and_db_probes():
 
     db_path = f"/tmp/octopus_pipeline_service_actions_{uuid.uuid4().hex}.db"
     pipeline = AIPipeline(db_path)
-    pipeline._known_credentials_for_target = lambda target: {
-        "postgresql": [("postgres", "secret")]
-    }
+    pipeline._known_credentials_for_target = lambda target: {"postgresql": [("postgres", "secret")]}
     scan_id = "scan-service-actions"
     host = "10.0.0.5"
     facts = [

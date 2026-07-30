@@ -59,9 +59,10 @@ def test_plaintext_exists_only_inside_explicit_execution_context(credential_stor
 
     assert material.password == ""
 
-    with pytest.warns(FutureWarning, match="deprecated"), deprecated_plaintext_credential_for_execution(
-        credential.handle
-    ) as compatibility_material:
+    with (
+        pytest.warns(FutureWarning, match="deprecated"),
+        deprecated_plaintext_credential_for_execution(credential.handle) as compatibility_material,
+    ):
         assert compatibility_material.password == CANARY
     assert compatibility_material.password == ""
 

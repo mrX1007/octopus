@@ -80,10 +80,7 @@ def manifest_payload():
         ),
         (
             adapter_payload(
-                environment_passthrough=[
-                    f"VARIABLE_{index}"
-                    for index in range(schema._MAX_ENVIRONMENT_NAMES + 1)
-                ]
+                environment_passthrough=[f"VARIABLE_{index}" for index in range(schema._MAX_ENVIRONMENT_NAMES + 1)]
             ),
             "too_many_items:adapter.env_passthrough",
         ),
@@ -120,9 +117,7 @@ def test_fairness_flags_and_optional_notes_are_validated() -> None:
     ):
         schema.FairnessProfile.from_dict(fairness_payload(same_model="yes"))
 
-    profile = schema.FairnessProfile.from_dict(
-        fairness_payload(notes="Explicit fixture note")
-    )
+    profile = schema.FairnessProfile.from_dict(fairness_payload(notes="Explicit fixture note"))
     assert profile.to_dict()["notes"] == "Explicit fixture note"
 
 

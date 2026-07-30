@@ -14,18 +14,23 @@ try:
     from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
-    def find_wordlist(cat): return ""
-    def find_all_wordlists(cat): return []
+
+    def find_wordlist(cat):
+        return ""
+
+    def find_all_wordlists(cat):
+        return []
+
 
 # ANSI Colors
-C_GREEN  = "\033[92m"
+C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
-C_RED    = "\033[91m"
-C_CYAN   = "\033[96m"
-C_GREY   = "\033[90m"
-C_BLUE   = "\033[94m"
+C_RED = "\033[91m"
+C_CYAN = "\033[96m"
+C_GREY = "\033[90m"
+C_BLUE = "\033[94m"
 C_MAGENTA = "\033[95m"
-C_RESET  = "\033[0m"
+C_RESET = "\033[0m"
 
 
 # PARAMIKO SSH HELPERS (shared across stages)
@@ -54,9 +59,15 @@ def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: i
             try:
                 pkey = paramiko.RSAKey.from_private_key_file(key_path)
                 client.connect(
-                    hostname=host, port=port, username=user, pkey=pkey,
-                    timeout=timeout, allow_agent=False, look_for_keys=False,
-                    banner_timeout=10, auth_timeout=15
+                    hostname=host,
+                    port=port,
+                    username=user,
+                    pkey=pkey,
+                    timeout=timeout,
+                    allow_agent=False,
+                    look_for_keys=False,
+                    banner_timeout=10,
+                    auth_timeout=15,
                 )
                 try:
                     _ssh_exec(client, "unset HISTFILE; export HISTFILE=/dev/null; export HISTSIZE=0", timeout=5)
@@ -70,9 +81,15 @@ def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: i
     # Standard password auth
     try:
         client.connect(
-            hostname=host, port=port, username=user, password=password,
-            timeout=timeout, look_for_keys=False, allow_agent=False,
-            banner_timeout=10, auth_timeout=15
+            hostname=host,
+            port=port,
+            username=user,
+            password=password,
+            timeout=timeout,
+            look_for_keys=False,
+            allow_agent=False,
+            banner_timeout=10,
+            auth_timeout=15,
         )
         # Disable history immediately
         try:
@@ -90,9 +107,15 @@ def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: i
                     client2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                     pkey = paramiko.RSAKey.from_private_key_file(key_path)
                     client2.connect(
-                        hostname=host, port=port, username="root", pkey=pkey,
-                        timeout=timeout, allow_agent=False, look_for_keys=False,
-                        banner_timeout=10, auth_timeout=15
+                        hostname=host,
+                        port=port,
+                        username="root",
+                        pkey=pkey,
+                        timeout=timeout,
+                        allow_agent=False,
+                        look_for_keys=False,
+                        banner_timeout=10,
+                        auth_timeout=15,
                     )
                     try:
                         _ssh_exec(client2, "unset HISTFILE; export HISTFILE=/dev/null; export HISTSIZE=0", timeout=5)
@@ -151,14 +174,14 @@ def _ssh_exec(client, cmd: str, timeout: int = 30) -> str:
         def _filter_bin(text):
             if not text:
                 return text
-            printable_count = sum(1 for c in text[:500] if c.isprintable() or c in '\n\r\t')
+            printable_count = sum(1 for c in text[:500] if c.isprintable() or c in "\n\r\t")
             total = min(len(text), 500)
             if total > 20 and printable_count / total < 0.7:
                 return "[BINARY DATA — not displayed]"
             clean_lines = []
             for line in text.splitlines():
                 if len(line) > 10:
-                    lp = sum(1 for c in line if c.isprintable() or c in '\t')
+                    lp = sum(1 for c in line if c.isprintable() or c in "\t")
                     if lp / len(line) < 0.6:
                         continue
                 clean_lines.append(line)

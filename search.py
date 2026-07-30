@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-"""
+""" """
 
 import logging
 import re
@@ -27,6 +26,7 @@ except ImportError:
 
 # HTTP SESSION SETUP (Resilience)
 
+
 def get_resilient_session() -> requests.Session:
     """
     Returns a requests Session with robust retry logic
@@ -34,10 +34,10 @@ def get_resilient_session() -> requests.Session:
     """
     session = requests.Session()
     retries = Retry(
-        total=2,           # Was 5 — too many retries cause hangs
-        backoff_factor=0.5, # Was 1 — faster recovery
+        total=2,  # Was 5 — too many retries cause hangs
+        backoff_factor=0.5,  # Was 1 — faster recovery
         status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["HEAD", "GET", "OPTIONS"]
+        allowed_methods=["HEAD", "GET", "OPTIONS"],
     )
     adapter = HTTPAdapter(max_retries=retries)
     session.mount("http://", adapter)
@@ -45,10 +45,12 @@ def get_resilient_session() -> requests.Session:
     session.headers.update({"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/120.0"})
     return session
 
+
 session = get_resilient_session()
 
 
 # DDG SEARCH
+
 
 def web_search(query: str, max_results: int = 5) -> str:
     """
@@ -243,6 +245,7 @@ def _fetch_with_scrapling(url: str, max_chars: int = 3000) -> str:
     """
     try:
         from scrapling import StealthyFetcher
+
         fetcher = StealthyFetcher()
         page = fetcher.fetch(url)
 
@@ -268,6 +271,7 @@ def _fetch_with_scrapling(url: str, max_chars: int = 3000) -> str:
 
 # TOOL DISPATCH HANDLER
 
+
 def search_searchsploit(query: str) -> str:
     """
     Searches Exploit-DB locally using the searchsploit binary (common on Athena OS/Parrot).
@@ -278,24 +282,20 @@ def search_searchsploit(query: str) -> str:
 
     try:
         # -t = search in title
-        result = subprocess.run(
-            ["searchsploit", "-t", query],
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
+        result = subprocess.run(["searchsploit", "-t", query], capture_output=True, text=True, timeout=30)
         out = result.stdout.strip()
         if not out or "No Results" in out:
             return f"[!] No searchsploit results for {query}. Try broadening the search or use [SEARCH: ...]."
-        
+
         # limit output size so we don't blow up context
         lines = out.splitlines()
         if len(lines) > 20:
             out = "\n".join(lines[:20]) + "\n... [TRUNCATED]"
-            
+
         return f"[SEARCHSPLOIT RESULTS]\n{out}"
     except Exception as e:
         return f"[!] searchsploit failed: {e}. Use [SEARCH: ...] instead."
+
 
 def handle_search_dispatch(query: str) -> str:
     """
@@ -305,13 +305,14 @@ def handle_search_dispatch(query: str) -> str:
     query = query.strip()
 
     # 1. CVE pattern — CVE-YYYY-NNNNN
-    cve_pattern = re.compile(r'CVE-\d{4}-\d{4,7}', re.IGNORECASE)
+    cve_pattern = re.compile(r"CVE-\d{4}-\d{4,7}", re.IGNORECASE)
     cve_match = cve_pattern.search(query)
     if cve_match:
         # Local searchsploit lookup is generally faster than a web search.
         cve_id = cve_match.group()
         import shutil
         import subprocess
+
         if shutil.which("searchsploit"):
             try:
                 res = subprocess.run(["searchsploit", "--cve", cve_id], capture_output=True, text=True, timeout=10)
@@ -323,14 +324,15 @@ def handle_search_dispatch(query: str) -> str:
 
     # 2. Explicit searchsploit request
     if "searchsploit" in query.lower():
-        return search_searchsploit(query.replace("searchsploit","",1).strip())
+        return search_searchsploit(query.replace("searchsploit", "", 1).strip())
 
     # 3. Detect "Service + Version" strings (e.g. "vsftpd 2.3.4" or "OpenSSH 7.2")
     # If the query looks like a service version, hit searchsploit BEFORE web search
-    version_pattern = re.compile(r'^[a-zA-Z0-9\-\_]+\s+\d+\.\d+')
+    version_pattern = re.compile(r"^[a-zA-Z0-9\-\_]+\s+\d+\.\d+")
     if version_pattern.search(query):
         import shutil
         import subprocess
+
         if shutil.which("searchsploit"):
             try:
                 res = subprocess.run(["searchsploit", query], capture_output=True, text=True, timeout=10)
@@ -343,8 +345,9 @@ def handle_search_dispatch(query: str) -> str:
     if any(word in query.lower() for word in ["exploit", "poc", "payload", "rce", "lfi", "sqli"]):
         # Prefer recent GitHub PoCs.
         from datetime import datetime
+
         year = datetime.now().year
-        enhanced_query = f"{query} exploit OR poc site:github.com ({year} OR {year-1} OR {year-2})"
+        enhanced_query = f"{query} exploit OR poc site:github.com ({year} OR {year - 1} OR {year - 2})"
         return web_search(enhanced_query, max_results=5)
 
     # 5. Fix/patch keywords
@@ -356,6 +359,7 @@ def handle_search_dispatch(query: str) -> str:
 
 
 # QUICK TEST
+
 
 def _quick_test(input_fn, output_fn) -> None:
     """Run the small manual smoke menu with injectable console boundaries."""

@@ -21,9 +21,7 @@ DIGEST = "a" * 64
 
 def _entry_payload():
     ledger = ControlPlaneLedger(variant_digest=DIGEST, clock=lambda: 1.0)
-    return ledger.record(
-        method="GET", target="/", route_id="route", status=200
-    ).to_dict()
+    return ledger.record(method="GET", target="/", route_id="route", status=200).to_dict()
 
 
 @pytest.mark.parametrize(
@@ -73,18 +71,14 @@ def test_snapshot_dict_empty_and_populated_status_classes():
     assert ledger.snapshot().violations == ("get_mutation_attempt",)
 
 
-def test_constructor_record_validation_persistence_reload_and_fsync(
-    tmp_path, monkeypatch
-):
+def test_constructor_record_validation_persistence_reload_and_fsync(tmp_path, monkeypatch):
     with pytest.raises(BenchmarkV3SchemaError, match=r"invalid:variant_digest"):
         ControlPlaneLedger(variant_digest="bad")
 
     path = tmp_path / "ledger.jsonl"
     fsync_calls = []
     monkeypatch.setattr(ledger_module.os, "fsync", lambda fd: fsync_calls.append(fd))
-    ledger = ControlPlaneLedger(
-        variant_digest=DIGEST, path=path, clock=lambda: 2.0, fsync=True
-    )
+    ledger = ControlPlaneLedger(variant_digest=DIGEST, path=path, clock=lambda: 2.0, fsync=True)
     assert path.exists()
     assert path.stat().st_mode & 0o777 == 0o600
     with pytest.raises(BenchmarkV3SchemaError, match="invalid_ledger_method"):
@@ -123,13 +117,9 @@ def test_verifier_rejects_variant_payload_chain_and_digest_errors():
     with pytest.raises(BenchmarkV3SchemaError, match="broken_ledger_chain"):
         verify_ledger_entries([{**payload, "sequence": 2}], variant_digest=DIGEST)
     with pytest.raises(BenchmarkV3SchemaError, match="broken_ledger_chain"):
-        verify_ledger_entries(
-            [{**payload, "previous_digest": "b" * 64}], variant_digest=DIGEST
-        )
+        verify_ledger_entries([{**payload, "previous_digest": "b" * 64}], variant_digest=DIGEST)
     with pytest.raises(BenchmarkV3SchemaError, match="ledger_digest_mismatch"):
-        verify_ledger_entries(
-            [{**payload, "entry_digest": "b" * 64}], variant_digest=DIGEST
-        )
+        verify_ledger_entries([{**payload, "entry_digest": "b" * 64}], variant_digest=DIGEST)
 
 
 def test_digest_helper_short_circuit_boundaries():

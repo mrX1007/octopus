@@ -58,8 +58,7 @@ class ActionCatalog:
             adapter=self._adapters[action_id],
             canonical_id=action_id,
             requested_name=str(name),
-            alias_used=requested
-            not in {action_id, self._key(self._adapters[action_id].descriptor.name)},
+            alias_used=requested not in {action_id, self._key(self._adapters[action_id].descriptor.name)},
         )
 
     def require(self, name: str) -> ResolvedAction:
@@ -69,10 +68,7 @@ class ActionCatalog:
         return resolved
 
     def descriptors(self) -> tuple[ActionDescriptor, ...]:
-        return tuple(
-            self._adapters[action_id].descriptor
-            for action_id in sorted(self._adapters)
-        )
+        return tuple(self._adapters[action_id].descriptor for action_id in sorted(self._adapters))
 
     def register_exploit(self, exploit) -> ActionAdapter:
         from .adapters import ExploitBaseAdapter

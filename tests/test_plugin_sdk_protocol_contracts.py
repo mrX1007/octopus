@@ -225,10 +225,7 @@ def test_event_bus_unsubscribe_matching_and_history_queries() -> None:
     assert [event.data["id"] for event in bus.get_events(event_type="credential.*")] == [1, 2]
     assert [event.data["id"] for event in bus.get_events(source="runner")] == [2, 3]
     assert [event.data["id"] for event in bus.get_events(since=20)] == [2, 3]
-    assert [
-        event.data["id"]
-        for event in bus.get_events(event_type="credential.*", source="runner", since=15)
-    ] == [2]
+    assert [event.data["id"] for event in bus.get_events(event_type="credential.*", source="runner", since=15)] == [2]
 
     history_copy = bus.history
     history_copy.clear()
@@ -314,10 +311,7 @@ def test_wire_decode_validates_bytes_envelopes_and_regular_mappings() -> None:
 def test_message_serialization_is_compact_utf8_and_round_trips() -> None:
     message = {"greeting": "Grüezi", "payload": b"data"}
     raw = protocol.dumps_message(message)
-    assert raw == (
-        b'{"greeting":"Gr\xc3\xbcezi","payload":'
-        b'{"__octopus_wire_type__":"bytes","base64":"ZGF0YQ=="}}'
-    )
+    assert raw == (b'{"greeting":"Gr\xc3\xbcezi","payload":{"__octopus_wire_type__":"bytes","base64":"ZGF0YQ=="}}')
     assert protocol.loads_message(raw) == message
 
 

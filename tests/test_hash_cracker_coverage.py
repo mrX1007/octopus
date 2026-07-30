@@ -200,9 +200,7 @@ def test_hashcat_missing_success_timeout_error_and_output_read_failure(
     monkeypatch.setattr(
         hash_cracker.subprocess,
         "run",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            subprocess.TimeoutExpired("hashcat", 3)
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired("hashcat", 3)),
     )
     monkeypatch.setattr(hash_cracker.time, "time", Clock(1.0, 2.0))
     assert cracker.crack_with_hashcat("hashes", str(wordlist), timeout=3)["elapsed"] == 1.0
@@ -240,9 +238,7 @@ def test_john_missing_success_timeouts_and_show_failure(monkeypatch, tmp_path, c
     def run(cmd, **kwargs):
         calls.append((cmd, kwargs))
         if "--show" in cmd:
-            return SimpleNamespace(
-                stdout="no delimiter\n#comment:value\nlocked:*:rest\nalice:secret:rest\n"
-            )
+            return SimpleNamespace(stdout="no delimiter\n#comment:value\nlocked:*:rest\nalice:secret:rest\n")
         return SimpleNamespace(stdout="")
 
     monkeypatch.setattr(hash_cracker.subprocess, "run", run)

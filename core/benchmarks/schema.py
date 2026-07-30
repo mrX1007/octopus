@@ -62,9 +62,7 @@ class BenchmarkScenario:
     def from_dict(cls, payload: Mapping[str, Any]) -> BenchmarkScenario:
         schema_version = str(payload.get("schema_version") or "")
         if schema_version != BENCHMARK_SCHEMA_VERSION:
-            raise BenchmarkSchemaError(
-                f"unsupported_schema_version:{schema_version or 'missing'}"
-            )
+            raise BenchmarkSchemaError(f"unsupported_schema_version:{schema_version or 'missing'}")
         scenario_id = _identifier(payload.get("scenario_id"), "scenario_id")
         name = _text(payload.get("name"), "name")
         category = _identifier(payload.get("category"), "category")
@@ -83,29 +81,21 @@ class BenchmarkScenario:
         if "parameters" not in model or not isinstance(model.get("parameters"), Mapping):
             raise BenchmarkSchemaError("invalid:model.parameters")
         tool_versions = {
-            _identifier(key, "tool_name"): _text(value, "tool_version")
-            for key, value in tool_versions_raw.items()
+            _identifier(key, "tool_name"): _text(value, "tool_version") for key, value in tool_versions_raw.items()
         }
         if not tool_versions:
             raise BenchmarkSchemaError("empty:tool_versions")
-        allowed_actions = _identifiers(
-            payload.get("allowed_actions"), "allowed_actions"
-        )
+        allowed_actions = _identifiers(payload.get("allowed_actions"), "allowed_actions")
         repetitions = _integer(payload.get("repetitions", MIN_BENCHMARK_REPETITIONS))
         if repetitions < MIN_BENCHMARK_REPETITIONS:
-            raise BenchmarkSchemaError(
-                f"repetitions_below_minimum:{MIN_BENCHMARK_REPETITIONS}"
-            )
+            raise BenchmarkSchemaError(f"repetitions_below_minimum:{MIN_BENCHMARK_REPETITIONS}")
         seed = _integer(payload.get("seed", 0), minimum=0)
         _validate_budgets(budgets)
         ablations_raw = payload.get("ablations") or []
-        if not isinstance(ablations_raw, Sequence) or isinstance(
-            ablations_raw, (str, bytes)
-        ):
+        if not isinstance(ablations_raw, Sequence) or isinstance(ablations_raw, (str, bytes)):
             raise BenchmarkSchemaError("invalid:ablations")
         ablations = tuple(
-            _mapping(item, f"ablations[{index}]")
-            for index, item in enumerate(ablations_raw[:_MAX_ITEMS])
+            _mapping(item, f"ablations[{index}]") for index, item in enumerate(ablations_raw[:_MAX_ITEMS])
         )
         for ablation in ablations:
             _identifier(ablation.get("toggle"), "ablation.toggle")
@@ -212,9 +202,7 @@ class BenchmarkAggregate:
             "aggregate_id": self.aggregate_id,
             "scenario": self.scenario.to_dict(),
             "runs": [item.to_dict() for item in self.runs],
-            "metric_statistics": {
-                key: dict(value) for key, value in self.metric_statistics.items()
-            },
+            "metric_statistics": {key: dict(value) for key, value in self.metric_statistics.items()},
             "status_counts": dict(self.status_counts),
             "generated_at": self.generated_at,
         }
@@ -225,9 +213,7 @@ def load_scenario(path: str | Path) -> BenchmarkScenario:
     try:
         payload = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise BenchmarkSchemaError(
-            f"scenario_load_failed:{source.name}:{type(exc).__name__}"
-        ) from exc
+        raise BenchmarkSchemaError(f"scenario_load_failed:{source.name}:{type(exc).__name__}") from exc
     if not isinstance(payload, Mapping):
         raise BenchmarkSchemaError(f"scenario_not_mapping:{source.name}")
     return BenchmarkScenario.from_dict(payload)
@@ -260,9 +246,7 @@ def _validate_budgets(budgets: Mapping[str, Any]) -> None:
         _strict_positive_number(budgets["max_cost_usd"], "budgets.max_cost_usd")
 
     policy = budgets.get("policy")
-    observational = tuple(
-        name for name in _OBSERVATIONAL_BUDGETS if name in budgets
-    )
+    observational = tuple(name for name in _OBSERVATIONAL_BUDGETS if name in budgets)
     if policy is None:
         if any(name in budgets for name in _OPTIONAL_OBSERVATIONAL_BUDGETS):
             raise BenchmarkSchemaError("missing:budgets.policy")
@@ -307,9 +291,7 @@ def _identifiers(
 ) -> tuple[str, ...]:
     if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
         raise BenchmarkSchemaError(f"invalid:{name}")
-    result = tuple(
-        dict.fromkeys(_identifier(value, name) for value in values[:_MAX_ITEMS])
-    )
+    result = tuple(dict.fromkeys(_identifier(value, name) for value in values[:_MAX_ITEMS]))
     if not allow_empty and not result:
         raise BenchmarkSchemaError(f"empty:{name}")
     return result
@@ -349,14 +331,9 @@ def _json_safe(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     if isinstance(value, Mapping):
-        return {
-            str(key): _json_safe(item, depth=depth + 1)
-            for key, item in list(value.items())[:_MAX_ITEMS]
-        }
+        return {str(key): _json_safe(item, depth=depth + 1) for key, item in list(value.items())[:_MAX_ITEMS]}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return [
-            _json_safe(item, depth=depth + 1) for item in value[:_MAX_ITEMS]
-        ]
+        return [_json_safe(item, depth=depth + 1) for item in value[:_MAX_ITEMS]]
     return str(value)
 
 

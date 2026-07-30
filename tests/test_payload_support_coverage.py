@@ -76,7 +76,9 @@ def test_payload_keying_strategy_uses_best_available_identity(
     keying = PayloadKeying()
     calls = []
     monkeypatch.setattr(keying, "key_to_multi", lambda payload, *args: calls.append(("multi", args)) or b"multi")
-    monkeypatch.setattr(keying, "key_to_machine_id", lambda payload, value: calls.append(("machine_id", value)) or b"machine")
+    monkeypatch.setattr(
+        keying, "key_to_machine_id", lambda payload, value: calls.append(("machine_id", value)) or b"machine"
+    )
     monkeypatch.setattr(keying, "key_to_hostname", lambda payload, value: calls.append(("hostname", value)) or b"host")
     monkeypatch.setattr(keying, "key_to_user", lambda payload, value: calls.append(("user", value)) or b"user")
     monkeypatch.setattr(
@@ -344,9 +346,7 @@ def test_beacon_handles_state_results_tasks_recursion_and_network_errors(monkeyp
     agent.agent_id = "agent-1"
     agent.encrypt = lambda data: f"encrypted:{sorted(data)}"
     agent.decrypt = lambda data: (
-        {"tasks": [{"task_id": "task-1", "command": "whoami"}]}
-        if data == "tasks"
-        else {"tasks": []}
+        {"tasks": [{"task_id": "task-1", "command": "whoami"}]} if data == "tasks" else {"tasks": []}
     )
     agent.execute_task = lambda command: {"command": command, "output": "alice"}
     session.responses.extend(

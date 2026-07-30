@@ -58,7 +58,11 @@ def _patch_preflight(
         "get_connection",
         MagicMock(return_value=connection) if db_ok else MagicMock(side_effect=RuntimeError("db down")),
     )
-    monkeypatch.setattr(requests, "get", MagicMock(side_effect=response) if isinstance(response, Exception) else MagicMock(return_value=response))
+    monkeypatch.setattr(
+        requests,
+        "get",
+        MagicMock(side_effect=response) if isinstance(response, Exception) else MagicMock(return_value=response),
+    )
     monkeypatch.setattr(shutil, "which", lambda name: f"/bin/{name}" if name in tools else None)
     monkeypatch.setattr(config, "find_wordlist", lambda name: wordlists.get(name))
     monkeypatch.setattr(
@@ -184,9 +188,9 @@ class ShodanFixture:
     def __init__(self, *, api=True, results=None, targets=None):
         self.api = object() if api else None
         self.results = results if results is not None else {"matches": [{"ip": "x"}], "total": 1}
-        self.targets = targets if targets is not None else [
-            {"ip": "192.0.2.1", "ports": [80], "org": "Example", "vulns": []}
-        ]
+        self.targets = (
+            targets if targets is not None else [{"ip": "192.0.2.1", "ports": [80], "org": "Example", "vulns": []}]
+        )
         self.results_dir = "/fixture/results"
         self.search_calls = []
 
@@ -266,7 +270,11 @@ def test_shodan_import_api_and_empty_search_builder_paths(monkeypatch):
 @pytest.mark.parametrize(
     ("answers", "expected_query", "expected_limit"),
     (
-        (("1", "443", "US", "Linux", "2026-01-01", "2025-01-01", "7", "0"), "port:443 country:US os:\"Linux\" before:2026-01-01 after:2025-01-01", 7),
+        (
+            ("1", "443", "US", "Linux", "2026-01-01", "2025-01-01", "7", "0"),
+            'port:443 country:US os:"Linux" before:2026-01-01 after:2025-01-01',
+            7,
+        ),
         (("1", "80, ,443", "", "", "", "", "bad", "0"), "port:80 port:443", 100),
         (("2", "nginx", "1.2", "DE", "", "", "", "", "0"), 'product:"nginx" version:"1.2" country:DE', 100),
         (("2", "nginx", "", "", "", "", "", "", "0"), 'product:"nginx"', 100),
@@ -286,11 +294,33 @@ def test_shodan_valid_query_builders(monkeypatch, answers, expected_query, expec
 
 def test_shodan_empty_result_error_and_matches_short_circuit(monkeypatch):
     error_fixture = ShodanFixture(results={"error": "quota", "matches": [{"ip": "x"}]})
-    run_shodan(monkeypatch, ("8", "query", "", "", "", "",), fixture=error_fixture)
+    run_shodan(
+        monkeypatch,
+        (
+            "8",
+            "query",
+            "",
+            "",
+            "",
+            "",
+        ),
+        fixture=error_fixture,
+    )
     app.error.assert_called_with("No results: quota")
 
     empty_fixture = ShodanFixture(results={"matches": []})
-    run_shodan(monkeypatch, ("8", "query", "", "", "", "",), fixture=empty_fixture)
+    run_shodan(
+        monkeypatch,
+        (
+            "8",
+            "query",
+            "",
+            "",
+            "",
+            "",
+        ),
+        fixture=empty_fixture,
+    )
     app.error.assert_called_with("No results: empty")
 
 
@@ -635,17 +665,38 @@ def test_c2_missing_agent_or_command_immediately_continues(monkeypatch):
 
 def test_c2_agent_task_result_and_builder_paths(monkeypatch):
     answers = (
-        "1", "1", "1",
-        "2", "",
-        "2", "agent", "",
-        "2", "agent", "id",
-        "2", "agent", "id",
-        "3", "",
-        "3", "agent",
-        "3", "agent",
-        "3", "agent",
-        "4", "", "", "", "",
-        "4", "windows", "arm64", "https://c2", "pin",
+        "1",
+        "1",
+        "1",
+        "2",
+        "",
+        "2",
+        "agent",
+        "",
+        "2",
+        "agent",
+        "id",
+        "2",
+        "agent",
+        "id",
+        "3",
+        "",
+        "3",
+        "agent",
+        "3",
+        "agent",
+        "3",
+        "agent",
+        "4",
+        "",
+        "",
+        "",
+        "",
+        "4",
+        "windows",
+        "arm64",
+        "https://c2",
+        "pin",
         "bad",
         "0",
     )
@@ -691,15 +742,32 @@ def test_c2_agent_task_result_and_builder_paths(monkeypatch):
 
 def test_c2_operator_management_success_and_failure_paths(monkeypatch):
     answers = (
-        "5", "a",
-        "5", "a",
-        "5", "b", "alice", "",
-        "5", "b", "bob", "admin",
-        "5", "c", "alice",
-        "5", "c", "bob",
-        "5", "d", "alice",
-        "5", "d", "bob",
-        "5", "unknown",
+        "5",
+        "a",
+        "5",
+        "a",
+        "5",
+        "b",
+        "alice",
+        "",
+        "5",
+        "b",
+        "bob",
+        "admin",
+        "5",
+        "c",
+        "alice",
+        "5",
+        "c",
+        "bob",
+        "5",
+        "d",
+        "alice",
+        "5",
+        "d",
+        "bob",
+        "5",
+        "unknown",
         "0",
     )
     responses = {

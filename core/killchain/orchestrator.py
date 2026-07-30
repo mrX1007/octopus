@@ -15,8 +15,13 @@ try:
     from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
-    def find_wordlist(cat): return ""
-    def find_all_wordlists(cat): return []
+
+    def find_wordlist(cat):
+        return ""
+
+    def find_all_wordlists(cat):
+        return []
+
 
 from typing import Any, Callable, Optional, Union
 
@@ -45,14 +50,14 @@ logger = logging.getLogger("octopus.killchain.orchestrator")
 _CredentialInput = Union[CredentialRef, str]
 
 # ANSI Colors
-C_GREEN  = "\033[92m"
+C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
-C_RED    = "\033[91m"
-C_CYAN   = "\033[96m"
-C_GREY   = "\033[90m"
-C_BLUE   = "\033[94m"
+C_RED = "\033[91m"
+C_CYAN = "\033[96m"
+C_GREY = "\033[90m"
+C_BLUE = "\033[94m"
 C_MAGENTA = "\033[95m"
-C_RESET  = "\033[0m"
+C_RESET = "\033[0m"
 
 
 # PARAMIKO SSH HELPERS (shared across stages)
@@ -137,10 +142,7 @@ def _connect_with_credential(
                 port,
             )
         except Exception as exc:
-            failure = (
-                f"{type(exc).__name__}: "
-                f"{sanitize_credential_text(exc, material.password)}"
-            )
+            failure = f"{type(exc).__name__}: {sanitize_credential_text(exc, material.password)}"
         else:
             return client, sanitize_credential_text(error or "", material.password)
     return None, failure or "SSH connection failed"
@@ -200,8 +202,7 @@ def run_full_killchain(
         selected_user = selected_credential.username
         effective_credential = selected_credential
         full_output += (
-            f"[*] Credentials available ({selected_user}@{target}) -- "
-            "running configured post-access stages.\n\n"
+            f"[*] Credentials available ({selected_user}@{target}) -- running configured post-access stages.\n\n"
         )
         print(f"  {C_GREEN}[+] Credentials available -- applying named post-access stage policy{C_RESET}")
 
@@ -296,20 +297,15 @@ def run_full_killchain(
         full_output += vuln_denial or vuln_assess(target, recon_data)
 
         exploit_denial = stage_gate_message("exploitation")
-        full_output += "\n" + (
-            exploit_denial or auto_exploit(target, recon_data)
-        )
+        full_output += "\n" + (exploit_denial or auto_exploit(target, recon_data))
 
         full_output += "\n[!] No SSH credentials available -- credential-required stages skipped.\n"
-        full_output += (
-            "AI: Find credentials first, then run killchain_full with its "
-            "credential:// handle.\n"
-        )
+        full_output += "AI: Find credentials first, then run killchain_full with its credential:// handle.\n"
 
     # Generate final report after all stages complete
     if selected_credential is not None:
         loot_base = os.path.expanduser("~/OCTOPUS/loot")
-        loot_dir = os.path.join(loot_base, target.replace('.', '_'))
+        loot_dir = os.path.join(loot_base, target.replace(".", "_"))
         os.makedirs(loot_dir, exist_ok=True)
         _generate_target_report(
             target,
@@ -325,8 +321,7 @@ def run_full_killchain(
 # STAGE 9: STEALTH CLEANUP
 
 
-def _generate_target_report(host: str, user: str, loot_dir: str,
-                            exfil_files: list, full_output: str):
+def _generate_target_report(host: str, user: str, loot_dir: str, exfil_files: list, full_output: str):
     """Generate a comprehensive target intelligence report.
     Saves to loot_dir/<IP>_report.txt with all discovered credentials,
     keys, tokens, services, and kill chain results."""
@@ -354,8 +349,7 @@ def _generate_target_report(host: str, user: str, loot_dir: str,
     for service, credential_refs in all_creds.items():
         for credential_ref in credential_refs:
             lines.append(
-                f"  [{service}] {credential_ref.username} "
-                f"({credential_ref.auth_kind}; {credential_ref.handle})"
+                f"  [{service}] {credential_ref.username} ({credential_ref.auth_kind}; {credential_ref.handle})"
             )
 
     # From output text
@@ -383,7 +377,7 @@ def _generate_target_report(host: str, user: str, loot_dir: str,
     if "PRIVATE KEY" in full_output:
         lines.append("[SSH PRIVATE KEYS FOUND]")
         lines.append("-" * 40)
-        for m in _re.finditer(r'SSH PRIVATE KEY found: (\S+)', full_output):
+        for m in _re.finditer(r"SSH PRIVATE KEY found: (\S+)", full_output):
             lines.append(f"  Key: {m.group(1)}")
         lines.append("")
 
@@ -391,7 +385,7 @@ def _generate_target_report(host: str, user: str, loot_dir: str,
     if "shadow" in full_output.lower() and "$" in full_output:
         lines.append("[SHADOW HASHES]")
         lines.append("-" * 40)
-        for m in _re.finditer(r'(\w+):\s*(\$[\dy]+\$[^\s:]+)', full_output):
+        for m in _re.finditer(r"(\w+):\s*(\$[\dy]+\$[^\s:]+)", full_output):
             lines.append(f"  {m.group(1)}: {m.group(2)[:50]}...")
         lines.append("")
 
@@ -406,11 +400,11 @@ def _generate_target_report(host: str, user: str, loot_dir: str,
     # ── NETWORK INFO ──────────────────────────────────────────
     lines.append("[NETWORK INFORMATION]")
     lines.append("-" * 40)
-    for m in _re.finditer(r'Internal subnet: (\S+)', full_output):
+    for m in _re.finditer(r"Internal subnet: (\S+)", full_output):
         lines.append(f"  Subnet: {m.group(1)}")
-    for m in _re.finditer(r'DISCOVERED INTERNAL HOSTS: (\d+)', full_output):
+    for m in _re.finditer(r"DISCOVERED INTERNAL HOSTS: (\d+)", full_output):
         lines.append(f"  Internal hosts found: {m.group(1)}")
-    for m in _re.finditer(r'→ (\d+\.\d+\.\d+\.\d+)', full_output):
+    for m in _re.finditer(r"→ (\d+\.\d+\.\d+\.\d+)", full_output):
         lines.append(f"  Internal host: {m.group(1)}")
     lines.append("")
 
@@ -425,7 +419,7 @@ def _generate_target_report(host: str, user: str, loot_dir: str,
     ]
     for stage_name, marker in stages:
         if marker in full_output:
-            m = _re.search(rf'{_re.escape(marker)}' + r'[:\s]*(\d+)', full_output)
+            m = _re.search(rf"{_re.escape(marker)}" + r"[:\s]*(\d+)", full_output)
             count = m.group(1) if m else "?"
             lines.append(f"  {stage_name}: {count}")
     lines.append("")

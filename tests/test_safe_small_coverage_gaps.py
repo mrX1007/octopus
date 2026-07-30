@@ -46,6 +46,4 @@ def test_cancelled_generic_stream_exception_finishes_cleanly(monkeypatch) -> Non
     monkeypatch.setattr(ollama, "_post_ollama", cancelled_request)
 
     with ollama.bind_ollama_cancellation(cancellation):
-        assert list(ollama.ask_ollama_stream("prompt")) == [
-            "[!] Ollama request cancelled: operator."
-        ]
+        assert list(ollama.ask_ollama_stream("prompt")) == ["[!] Ollama request cancelled: operator."]

@@ -75,15 +75,11 @@ def test_operator_context_builds_all_explicit_capabilities_and_binds():
 
 
 def test_redactor_handles_json_flags_and_malformed_shell_text():
-    value = redact_sensitive_command(
-        'tool --token value {"password": "json-value"} API_KEY=named-value'
-    )
+    value = redact_sensitive_command('tool --token value {"password": "json-value"} API_KEY=named-value')
 
     assert "value" not in value.replace("[REDACTED]", "")
     assert value.count("[REDACTED]") == 3
-    assert redact_sensitive_command("tool 'unterminated PASSWORD=value").endswith(
-        "PASSWORD=[REDACTED]"
-    )
+    assert redact_sensitive_command("tool 'unterminated PASSWORD=value").endswith("PASSWORD=[REDACTED]")
 
 
 @pytest.mark.parametrize(
@@ -158,9 +154,7 @@ def test_parse_invocation_rejects_untyped_commands(command, reason):
 
 
 def test_parse_invocation_marks_shell_and_extracts_unique_targets():
-    invocation = parse_invocation(
-        "tool https://example.com/a https://example.com/a 10.0.0.5 | next"
-    )
+    invocation = parse_invocation("tool https://example.com/a https://example.com/a 10.0.0.5 | next")
 
     assert invocation.uses_shell
     assert invocation.targets == ("https://example.com/a", "10.0.0.5")
@@ -180,9 +174,10 @@ def test_registered_policy_covers_limits_capabilities_special_actions_and_local_
     policy = ExecutionPolicy()
     normal = _invocation()
 
-    assert policy.authorize_registered(
-        normal, _context(CAP_REGISTERED_TOOL, max_runtime_seconds=0)
-    ).reason == "invalid_resource_limits"
+    assert (
+        policy.authorize_registered(normal, _context(CAP_REGISTERED_TOOL, max_runtime_seconds=0)).reason
+        == "invalid_resource_limits"
+    )
     assert policy.authorize_registered(normal, _context()).reason == "missing_capability:registered_tool"
     assert policy.authorize_registered(
         _invocation(targets=("bad target",)), _context(CAP_REGISTERED_TOOL)
@@ -241,9 +236,7 @@ def test_registered_policy_rejects_forged_and_mismatched_registry_identity():
     assert policy.authorize_registered(unknown, context).reason == (
         "unknown_registered_tool:totally_fake_registered_tool"
     )
-    assert policy.authorize_registered(mismatched, context).reason == (
-        "registered_tool_mismatch"
-    )
+    assert policy.authorize_registered(mismatched, context).reason == ("registered_tool_mismatch")
 
 
 def test_direct_policy_is_disabled_and_capability_gated():
@@ -255,35 +248,33 @@ def test_direct_policy_is_disabled_and_capability_gated():
         targets=("10.0.0.5",),
     )
 
-    assert policy.authorize_direct(
-        invocation, _context(CAP_DIRECT_BINARY, max_output_bytes=1)
-    ).reason == "invalid_resource_limits"
+    assert (
+        policy.authorize_direct(invocation, _context(CAP_DIRECT_BINARY, max_output_bytes=1)).reason
+        == "invalid_resource_limits"
+    )
     assert policy.authorize_direct(invocation, _context()).reason == "missing_capability:direct_binary"
-    assert policy.authorize_direct(
-        invocation, _context(CAP_DIRECT_BINARY, scope=("10.0.0.5",))
-    ).reason == "unknown_tool:rustscan"
+    assert (
+        policy.authorize_direct(invocation, _context(CAP_DIRECT_BINARY, scope=("10.0.0.5",))).reason
+        == "unknown_tool:rustscan"
+    )
     unknown = ToolInvocation("unknown", ("unknown",), "unknown")
-    assert policy.authorize_direct(
-        unknown, _context(CAP_DIRECT_BINARY)
-    ).reason == "unknown_tool:unknown"
+    assert policy.authorize_direct(unknown, _context(CAP_DIRECT_BINARY)).reason == "unknown_tool:unknown"
 
 
 def test_shell_policy_covers_every_authority_gate_without_execution():
     policy = ExecutionPolicy()
 
     assert policy.authorize_shell("echo 'unterminated", _context()).reason == "invalid_quoting"
-    assert policy.authorize_shell(
-        "echo ok", _context(CAP_MANAGED_SHELL, origin="operator", max_runtime_seconds=0)
-    ).reason == "invalid_resource_limits"
-    assert policy.authorize_shell(
-        "echo ok", _context(CAP_MANAGED_SHELL)
-    ).reason == "shell_origin_not_interactive"
-    assert policy.authorize_shell(
-        "echo ok", _context(origin="operator")
-    ).reason == "missing_capability:managed_shell"
-    assert policy.authorize_shell(
-        "echo ok", _context(CAP_MANAGED_SHELL, origin="operator")
-    ).reason == "shell_requires_approval"
+    assert (
+        policy.authorize_shell("echo ok", _context(CAP_MANAGED_SHELL, origin="operator", max_runtime_seconds=0)).reason
+        == "invalid_resource_limits"
+    )
+    assert policy.authorize_shell("echo ok", _context(CAP_MANAGED_SHELL)).reason == "shell_origin_not_interactive"
+    assert policy.authorize_shell("echo ok", _context(origin="operator")).reason == "missing_capability:managed_shell"
+    assert (
+        policy.authorize_shell("echo ok", _context(CAP_MANAGED_SHELL, origin="operator")).reason
+        == "shell_requires_approval"
+    )
     destructive = _context(
         CAP_MANAGED_SHELL,
         CAP_DESTRUCTIVE_SHELL,
@@ -314,21 +305,24 @@ def test_shell_policy_falls_back_when_shell_target_lexer_fails(monkeypatch):
 def test_python_repl_policy_covers_every_authority_gate():
     policy = ExecutionPolicy()
 
-    assert policy.authorize_python_repl(
-        "print(1)", _context(CAP_PYTHON_REPL, origin="operator", max_output_bytes=1)
-    ).reason == "invalid_resource_limits"
-    assert policy.authorize_python_repl(
-        "print(1)", _context(CAP_PYTHON_REPL)
-    ).reason == "python_repl_origin_not_interactive"
-    assert policy.authorize_python_repl(
-        "print(1)", _context(origin="operator")
-    ).reason == "missing_capability:python_repl"
-    assert policy.authorize_python_repl(
-        "print(1)", _context(CAP_PYTHON_REPL, origin="operator")
-    ).reason == "python_repl_requires_approval"
-    assert policy.authorize_python_repl(
-        "print(1)", _context(CAP_PYTHON_REPL, origin="operator", approved=True)
-    ).allowed
+    assert (
+        policy.authorize_python_repl(
+            "print(1)", _context(CAP_PYTHON_REPL, origin="operator", max_output_bytes=1)
+        ).reason
+        == "invalid_resource_limits"
+    )
+    assert (
+        policy.authorize_python_repl("print(1)", _context(CAP_PYTHON_REPL)).reason
+        == "python_repl_origin_not_interactive"
+    )
+    assert (
+        policy.authorize_python_repl("print(1)", _context(origin="operator")).reason == "missing_capability:python_repl"
+    )
+    assert (
+        policy.authorize_python_repl("print(1)", _context(CAP_PYTHON_REPL, origin="operator")).reason
+        == "python_repl_requires_approval"
+    )
+    assert policy.authorize_python_repl("print(1)", _context(CAP_PYTHON_REPL, origin="operator", approved=True)).allowed
 
 
 def test_command_policy_routes_registered_direct_shell_and_parse_failures():
@@ -347,9 +341,7 @@ def test_command_policy_routes_registered_direct_shell_and_parse_failures():
         _context(CAP_REGISTERED_TOOL, scope=("10.0.0.5",)),
     ).allowed
     assert policy.authorize_command("unknown", automatic).reason == "unknown_tool:unknown"
-    assert policy.authorize_command(
-        "unknown | next", automatic
-    ).reason == "shell_origin_not_interactive"
+    assert policy.authorize_command("unknown | next", automatic).reason == "shell_origin_not_interactive"
     assert policy.authorize_command("jmx2rce scan 10.0.0.5", automatic).allowed
 
 

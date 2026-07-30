@@ -216,7 +216,7 @@ def test_mapping_and_formatting_helpers_cover_invalid_and_empty_values() -> None
     with pytest.raises(matrix.CompetitorSchemaError, match="invalid:items"):
         matrix._mapping_items("not-a-sequence", "items")
     with pytest.raises(matrix.CompetitorSchemaError, match="invalid:items"):
-        matrix._mapping_items([{} , "not-a-mapping"], "items")
+        matrix._mapping_items([{}, "not-a-mapping"], "items")
 
     assert matrix._compact_json("fixture") == "fixture"
     assert matrix._format_metric(None) == "—"

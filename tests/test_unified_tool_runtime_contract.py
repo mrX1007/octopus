@@ -89,11 +89,7 @@ def test_builtin_registry_ai_classification_and_action_catalog_are_complete():
 def test_ai_leaf_provider_namespace_is_registry_complete():
     registry = ToolRegistry()
     builtin_names = set(core.tools.BUILTIN_TOOL_NAMES)
-    leaf_providers = {
-        provider
-        for task in registry.task_map
-        for provider in registry._tool_names_for_task(task)
-    }
+    leaf_providers = {provider for task in registry.task_map for provider in registry._tool_names_for_task(task)}
 
     assert leaf_providers <= builtin_names
     assert builtin_names - leaf_providers == PROFILE_ONLY_BUILTINS
@@ -145,11 +141,7 @@ def test_every_task_map_entry_has_explicit_fail_closed_scheduling_metadata():
 
 def test_registry_and_action_catalog_reject_undeclared_fuzzy_names():
     definitions = _builtin_tool_defs()
-    declared_names = {
-        spelling
-        for tool_def in definitions
-        for spelling in (tool_def.name, *tool_def.aliases)
-    }
+    declared_names = {spelling for tool_def in definitions for spelling in (tool_def.name, *tool_def.aliases)}
     catalog = build_action_catalog(
         lambda _command, _context: "unused",
         tool_defs=definitions,
@@ -166,10 +158,7 @@ def test_registry_and_action_catalog_reject_undeclared_fuzzy_names():
 def test_every_legacy_numeric_menu_entry_resolves_to_registered_policy_identity():
     assert len(tool_runner.TOOLS_MENU) == 48
     assert set(tool_runner._MENU_TOOL_IDS) == set(tool_runner.TOOLS_MENU)
-    assert {
-        key: tool_runner._MENU_TOOL_IDS[key]
-        for key in ("1", "13", "16", "33", "45", "50")
-    } == {
+    assert {key: tool_runner._MENU_TOOL_IDS[key] for key in ("1", "13", "16", "33", "45", "50")} == {
         "1": "nmap",
         "13": "scrapling",
         "16": "bruteforce",
@@ -306,10 +295,7 @@ def test_legacy_menu_special_arguments_are_explicit_and_hermetic(monkeypatch):
 
 
 def test_every_builtin_name_and_alias_dispatches_through_one_runtime(tmp_path):
-    definitions = tuple(
-        replace(tool_def, requires=[], enabled=True)
-        for tool_def in _builtin_tool_defs()
-    )
+    definitions = tuple(replace(tool_def, requires=[], enabled=True) for tool_def in _builtin_tool_defs())
     context = _approved_context()
     calls: list[tuple[str, ExecutionContext]] = []
 
@@ -353,10 +339,7 @@ def test_every_builtin_name_and_alias_dispatches_through_one_runtime(tmp_path):
 
 
 def test_every_builtin_name_and_alias_crosses_scheduler_and_action_catalog(tmp_path):
-    definitions = tuple(
-        replace(tool_def, requires=[], enabled=True)
-        for tool_def in _builtin_tool_defs()
-    )
+    definitions = tuple(replace(tool_def, requires=[], enabled=True) for tool_def in _builtin_tool_defs())
     context = _approved_context()
     calls: list[tuple[str, ExecutionContext]] = []
 
@@ -388,19 +371,14 @@ def test_every_builtin_name_and_alias_crosses_scheduler_and_action_catalog(tmp_p
             assert decision.invocation.registered_name == tool_def.name
             assert result.status is ExecutionStatus.SUCCEEDED
             assert result.metadata["action_catalog"] is True
-            assert result.metadata["action_id"] == (
-                runtime.action_catalog.require(tool_def.name).canonical_id
-            )
+            assert result.metadata["action_id"] == (runtime.action_catalog.require(tool_def.name).canonical_id)
             assert calls[-1] == (command, context)
 
     assert len(calls) == expected_calls
 
 
 def test_automatic_context_never_dispatches_policy_active_builtin_or_alias(tmp_path):
-    definitions = tuple(
-        replace(tool_def, requires=[], enabled=True)
-        for tool_def in _builtin_tool_defs()
-    )
+    definitions = tuple(replace(tool_def, requires=[], enabled=True) for tool_def in _builtin_tool_defs())
     context = ExecutionContext.automatic(target_scope=(TARGET,))
     calls: list[str] = []
 
@@ -435,9 +413,7 @@ def test_automatic_context_never_dispatches_policy_active_builtin_or_alias(tmp_p
 
             if requires_approval:
                 assert len(calls) == call_count
-                assert [denial.reason_code for denial in report.policy_denials] == [
-                    "active_tool_requires_approval"
-                ]
+                assert [denial.reason_code for denial in report.policy_denials] == ["active_tool_requires_approval"]
                 assert report.lifecycle.outcome is OutcomeStatus.BLOCKED
             else:
                 assert calls[-1] == command

@@ -28,6 +28,7 @@ except ImportError:
     def get_secret(key: str, default: str = "") -> str:
         return os.environ.get(key, default)
 
+
 try:
     import mysql as _mysql_package
 
@@ -36,15 +37,15 @@ except ImportError:
     mysql = None
 
 # ANSI Colors
-C_GREEN  = "\033[92m"
+C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
-C_RED    = "\033[91m"
-C_CYAN   = "\033[96m"
-C_GREY   = "\033[90m"
-C_BLUE   = "\033[94m"
+C_RED = "\033[91m"
+C_CYAN = "\033[96m"
+C_GREY = "\033[90m"
+C_BLUE = "\033[94m"
 C_MAGENTA = "\033[95m"
-C_RESET  = "\033[0m"
-C_BOLD   = "\033[1m"
+C_RESET = "\033[0m"
+C_BOLD = "\033[1m"
 
 
 def _safe_file_component(value, fallback: str = "results") -> str:
@@ -88,7 +89,9 @@ def _configure_http_timeout(client, timeout: float) -> bool:
     session.request = functools.partial(request, timeout=timeout)
     return True
 
+
 # SHODAN RECON CLASS
+
 
 class ShodanRecon:
     """Full Shodan API wrapper with DB storage and pipeline integration."""
@@ -118,8 +121,10 @@ class ShodanRecon:
             self.api = shodan.Shodan(self.api_key)
             _configure_http_timeout(self.api, self.timeout)
             info = self.api.info()
-            print(f"  {C_GREEN}[✓] Shodan API connected — credits: {info.get('query_credits', '?')}, "
-                  f"scan credits: {info.get('scan_credits', '?')}{C_RESET}")
+            print(
+                f"  {C_GREEN}[✓] Shodan API connected — credits: {info.get('query_credits', '?')}, "
+                f"scan credits: {info.get('scan_credits', '?')}{C_RESET}"
+            )
         except Exception as e:
             print(f"  {C_RED}[!] Shodan API error: {e}{C_RESET}")
             self.api = None
@@ -234,7 +239,7 @@ class ShodanRecon:
 
             if self.save_results:
                 self.save_to_db(structured)
-                self._save_json(structured, f"search_{query[:30].replace(' ','_')}")
+                self._save_json(structured, f"search_{query[:30].replace(' ', '_')}")
 
             return structured
 
@@ -275,18 +280,22 @@ class ShodanRecon:
             }
 
             for svc in host.get("data", []):
-                info["services"].append({
-                    "port": svc.get("port", 0),
-                    "transport": svc.get("transport", "tcp"),
-                    "product": svc.get("product", ""),
-                    "version": svc.get("version", ""),
-                    "banner": (svc.get("data", "")[:300]),
-                    "vulns": list(svc.get("vulns", {}).keys()) if svc.get("vulns") else [],
-                    "cpe": svc.get("cpe", []),
-                })
+                info["services"].append(
+                    {
+                        "port": svc.get("port", 0),
+                        "transport": svc.get("transport", "tcp"),
+                        "product": svc.get("product", ""),
+                        "version": svc.get("version", ""),
+                        "banner": (svc.get("data", "")[:300]),
+                        "vulns": list(svc.get("vulns", {}).keys()) if svc.get("vulns") else [],
+                        "cpe": svc.get("cpe", []),
+                    }
+                )
 
-            print(f"  {C_GREEN}[+] {ip}: {len(info['ports'])} ports, "
-                  f"{len(info['vulns'])} vulns, OS: {info['os']}{C_RESET}")
+            print(
+                f"  {C_GREEN}[+] {ip}: {len(info['ports'])} ports, "
+                f"{len(info['vulns'])} vulns, OS: {info['os']}{C_RESET}"
+            )
 
             if self.save_results:
                 stored = {
@@ -309,7 +318,7 @@ class ShodanRecon:
                     ],
                 }
                 self.save_to_db(stored)
-                self._save_json(info, f"host_{ip.replace('.','_')}")
+                self._save_json(info, f"host_{ip.replace('.', '_')}")
             return info
 
         except shodan.APIError as e:
@@ -331,14 +340,16 @@ class ShodanRecon:
             results = self.api.exploits.search(query, limit=20)
             exploits = []
             for e in results.get("matches", []):
-                exploits.append({
-                    "description": e.get("description", "")[:200],
-                    "source": e.get("source", ""),
-                    "id": e.get("_id", ""),
-                    "cve": e.get("cve", []),
-                    "type": e.get("type", ""),
-                    "platform": e.get("platform", ""),
-                })
+                exploits.append(
+                    {
+                        "description": e.get("description", "")[:200],
+                        "source": e.get("source", ""),
+                        "id": e.get("_id", ""),
+                        "cve": e.get("cve", []),
+                        "type": e.get("type", ""),
+                        "platform": e.get("platform", ""),
+                    }
+                )
 
             print(f"  {C_GREEN}[+] Found {len(exploits)} exploits{C_RESET}")
             return exploits
@@ -372,21 +383,23 @@ class ShodanRecon:
 
             rows = []
             for m in matches:
-                rows.append((
-                    m.get("ip", ""),
-                    m.get("port", 0),
-                    m.get("transport", "tcp"),
-                    m.get("service", ""),
-                    m.get("version", ""),
-                    m.get("banner", "")[:2000],
-                    json.dumps(m.get("vulns", [])),
-                    m.get("os", ""),
-                    m.get("country", ""),
-                    m.get("org", ""),
-                    json.dumps(m.get("hostnames", [])),
-                    query_str,
-                    json.dumps(m),
-                ))
+                rows.append(
+                    (
+                        m.get("ip", ""),
+                        m.get("port", 0),
+                        m.get("transport", "tcp"),
+                        m.get("service", ""),
+                        m.get("version", ""),
+                        m.get("banner", "")[:2000],
+                        json.dumps(m.get("vulns", [])),
+                        m.get("os", ""),
+                        m.get("country", ""),
+                        m.get("org", ""),
+                        json.dumps(m.get("hostnames", [])),
+                        query_str,
+                        json.dumps(m),
+                    )
+                )
 
             cur.executemany(sql, rows)
             conn.commit()
@@ -411,7 +424,9 @@ class ShodanRecon:
         filepath = ""
         try:
             fd, filepath = tempfile.mkstemp(
-                prefix=f"{clean_prefix}_{ts}_", suffix=".json", dir=root,
+                prefix=f"{clean_prefix}_{ts}_",
+                suffix=".json",
+                dir=root,
             )
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 fd = None
@@ -455,11 +470,13 @@ class ShodanRecon:
             port = m.get("port", 0)
             if port and port not in by_ip[ip]["ports"]:
                 by_ip[ip]["ports"].append(port)
-            by_ip[ip]["services"].append({
-                "port": port,
-                "name": m.get("service", ""),
-                "version": m.get("version", ""),
-            })
+            by_ip[ip]["services"].append(
+                {
+                    "port": port,
+                    "name": m.get("service", ""),
+                    "version": m.get("version", ""),
+                }
+            )
             for v in m.get("vulns", []):
                 by_ip[ip]["vulns"].add(v)
 
@@ -535,6 +552,7 @@ class ShodanRecon:
 
 
 # STANDALONE FUNCTIONS (called from tools.py)
+
 
 def run_shodan_search(query: str) -> str:
     """[TOOL: shodan search QUERY] handler."""
@@ -730,10 +748,11 @@ def run_shodan_smart(target: str) -> str:
     - anything else  → search query
     """
     import re as _re
+
     target = target.strip()
 
     # CIDR notation: 1.2.3.0/24
-    if _re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$', target):
+    if _re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$", target):
         return run_shodan_range(target)
 
     # net: prefix
@@ -741,7 +760,7 @@ def run_shodan_smart(target: str) -> str:
         return run_shodan_range(target)
 
     # Single IP
-    if _re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', target):
+    if _re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", target):
         return run_shodan_host(target)
 
     # Everything else = search query
@@ -759,7 +778,8 @@ if __name__ == "__main__":
         if len(sys.argv) > 1:
             target = sys.argv[1]
             import re
-            if re.match(r'^\d+\.\d+\.\d+\.\d+$', target):
+
+            if re.match(r"^\d+\.\d+\.\d+\.\d+$", target):
                 print(run_shodan_host(target))
             else:
                 print(run_shodan_search(target))

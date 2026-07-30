@@ -484,6 +484,7 @@ def test_event_emission_absent_success_and_allowed_errors(monkeypatch, paths, ca
         TypeError("type"),
         ValueError("value"),
     ):
+
         class BrokenStore:
             def __init__(self, selected_error=error, **_kwargs) -> None:
                 raise selected_error

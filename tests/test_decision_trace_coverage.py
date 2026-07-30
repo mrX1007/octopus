@@ -44,10 +44,7 @@ def test_memory_store_connection_lifecycle_and_rollback():
 def test_constructor_rejects_unknown_schema_version(tmp_path):
     path = tmp_path / "unsupported.db"
     conn = sqlite3.connect(path)
-    conn.execute(
-        "CREATE TABLE decision_trace_schema "
-        "(schema_version TEXT PRIMARY KEY, applied_at REAL NOT NULL)"
-    )
+    conn.execute("CREATE TABLE decision_trace_schema (schema_version TEXT PRIMARY KEY, applied_at REAL NOT NULL)")
     conn.execute(
         "INSERT INTO decision_trace_schema(schema_version, applied_at) VALUES (?, ?)",
         ("999", 1.0),
@@ -165,12 +162,8 @@ def test_text_and_rejection_collections_cover_deduplication_and_bounds():
 
     assert store._rejected("bad") == []
     assert store._rejected(123) == []
-    assert store._rejected({"action_id": "a", "reasons": ["why"]}) == [
-        {"candidate": "a", "reason": "['why']"}
-    ]
-    assert store._rejected(["plain"]) == [
-        {"candidate": "", "reason": "plain"}
-    ]
+    assert store._rejected({"action_id": "a", "reasons": ["why"]}) == [{"candidate": "a", "reason": "['why']"}]
+    assert store._rejected(["plain"]) == [{"candidate": "", "reason": "plain"}]
 
 
 def test_metrics_fallbacks_filters_and_empty_denominators():

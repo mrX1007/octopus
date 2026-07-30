@@ -12,6 +12,7 @@ import yaml
 # Load .env before constructing defaults.
 try:
     from dotenv import load_dotenv
+
     # Search for .env in: 1) script dir  2) cwd  3) home dir
     _SCRIPT_DIR_ENV = os.path.dirname(os.path.abspath(__file__))
     for _env_path in [
@@ -44,9 +45,7 @@ def _find_config() -> str:
     if explicit:
         explicit = os.path.abspath(os.path.expanduser(explicit))
         if not os.path.isfile(explicit):
-            raise ConfigValidationError(
-                f"OCTOPUS_CONFIG does not reference a readable file: {explicit}"
-            )
+            raise ConfigValidationError(f"OCTOPUS_CONFIG does not reference a readable file: {explicit}")
         return explicit
 
     for candidate in (
@@ -111,10 +110,10 @@ DEFAULTS = {
         "auto_pipeline": True,
     },
     "hash_cracker": {
-        "preferred": "hashcat",   # hashcat (GPU) or john (CPU)
-        "gpu_device": 0,          # CUDA device ID
-        "workload": 3,            # hashcat -w (1=low, 2=med, 3=high, 4=insane)
-        "timeout": 600,           # max seconds per cracking phase
+        "preferred": "hashcat",  # hashcat (GPU) or john (CPU)
+        "gpu_device": 0,  # CUDA device ID
+        "workload": 3,  # hashcat -w (1=low, 2=med, 3=high, 4=insane)
+        "timeout": 600,  # max seconds per cracking phase
         "max_wordlist_size": 50_000_000,  # max lines from wordlist
     },
     "killchain": {
@@ -230,28 +229,53 @@ DEFAULTS = {
         "use_stealth": True,
     },
     "default_users": [
-        "root", "admin", "administrator", "support", "user",
-        "test", "guest", "operator", "ftp", "www",
+        "root",
+        "admin",
+        "administrator",
+        "support",
+        "user",
+        "test",
+        "guest",
+        "operator",
+        "ftp",
+        "www",
     ],
     "tools": {
-        "nmap":         {"default_flags": ["-sV", "-sC", "-T4", "--open", "-Pn", "-sT"], "timeout": 300, "aggressive_flags": ["-A", "-T4", "-p-", "-Pn", "-sT"]},
-        "hydra":        {"threads": 16, "timeout": 600, "flags": ["-V"]},
-        "ffuf":         {"threads": 50, "timeout": 120, "match_codes": "200,204,301,302,307,401,403", "flags": ["-c"], "maxtime": 60, "request_timeout": 5},
-        "nikto":        {"timeout": 300, "flags": ["-nointeractive"]},
-        "sqlmap":       {"level": 1, "risk": 1, "timeout": 180, "flags": ["--batch", "--crawl=1"]},
-        "wpscan":       {"timeout": 180, "flags": ["--no-update", "--random-user-agent"]},
-        "enum4linux":   {"timeout": 150, "flags": ["-a"]},
-        "sslscan":      {"timeout": 120, "flags": ["--no-colour"]},
-        "smbclient":    {"timeout": 45, "flags": ["-N"]},
-        "curl":         {"timeout": 20, "flags": ["-sI", "--max-time", "10", "--location"]},
-        "dig":          {"timeout": 15, "record_types": ["A", "MX", "NS", "TXT", "AAAA", "CNAME"]},
-        "whois":        {"timeout": 30},
-        "whatweb":      {"timeout": 90, "aggression": 3},
+        "nmap": {
+            "default_flags": ["-sV", "-sC", "-T4", "--open", "-Pn", "-sT"],
+            "timeout": 300,
+            "aggressive_flags": ["-A", "-T4", "-p-", "-Pn", "-sT"],
+        },
+        "hydra": {"threads": 16, "timeout": 600, "flags": ["-V"]},
+        "ffuf": {
+            "threads": 50,
+            "timeout": 120,
+            "match_codes": "200,204,301,302,307,401,403",
+            "flags": ["-c"],
+            "maxtime": 60,
+            "request_timeout": 5,
+        },
+        "nikto": {"timeout": 300, "flags": ["-nointeractive"]},
+        "sqlmap": {"level": 1, "risk": 1, "timeout": 180, "flags": ["--batch", "--crawl=1"]},
+        "wpscan": {"timeout": 180, "flags": ["--no-update", "--random-user-agent"]},
+        "enum4linux": {"timeout": 150, "flags": ["-a"]},
+        "sslscan": {"timeout": 120, "flags": ["--no-colour"]},
+        "smbclient": {"timeout": 45, "flags": ["-N"]},
+        "curl": {"timeout": 20, "flags": ["-sI", "--max-time", "10", "--location"]},
+        "dig": {"timeout": 15, "record_types": ["A", "MX", "NS", "TXT", "AAAA", "CNAME"]},
+        "whois": {"timeout": 30},
+        "whatweb": {"timeout": 90, "aggression": 3},
         "searchsploit": {"timeout": 30, "max_results": 20},
-        "msfconsole":   {"timeout": 300},
-        "gobuster":     {"threads": 50, "timeout": 180, "flags": []},
-        "dirb":         {"timeout": 180, "flags": []},
-        "nuclei":       {"timeout": 1200, "request_timeout": 20, "retries": 2, "severity": "info,low,medium,high,critical", "exclude_tags": "dos,fuzz,bruteforce,intrusive,destructive"},
+        "msfconsole": {"timeout": 300},
+        "gobuster": {"threads": 50, "timeout": 180, "flags": []},
+        "dirb": {"timeout": 180, "flags": []},
+        "nuclei": {
+            "timeout": 1200,
+            "request_timeout": 20,
+            "retries": 2,
+            "severity": "info,low,medium,high,critical",
+            "exclude_tags": "dos,fuzz,bruteforce,intrusive,destructive",
+        },
     },
 }
 
@@ -270,9 +294,7 @@ _EMPTY_LIST_ITEM_TYPES: dict[tuple[str, ...], type] = {
     ("tools", "dirb", "flags"): str,
 }
 
-_NUMERIC_RANGES: dict[
-    tuple[str, ...], tuple[Optional[float], Optional[float]]
-] = {
+_NUMERIC_RANGES: dict[tuple[str, ...], tuple[Optional[float], Optional[float]]] = {
     ("ollama", "max_tokens"): (1, None),
     ("ollama", "json_max_tokens"): (1, None),
     ("ollama", "temperature"): (0, 2),
@@ -341,9 +363,7 @@ _NUMERIC_RANGES.update(
     }
 )
 
-_NUMERIC_LIST_RANGES: dict[
-    tuple[str, ...], tuple[Optional[float], Optional[float]]
-] = {
+_NUMERIC_LIST_RANGES: dict[tuple[str, ...], tuple[Optional[float], Optional[float]]] = {
     ("bruteforce", "ssh_thread_levels"): (1, 256),
     ("bruteforce", "backoff_seconds"): (0, None),
 }
@@ -390,9 +410,7 @@ def _matches_default_type(
             exemplar = default[0]
             return all(_matches_default_type(item, exemplar, path) for item in value)
         item_type = _EMPTY_LIST_ITEM_TYPES.get(path)
-        return not value if item_type is None else all(
-            isinstance(item, item_type) for item in value
-        )
+        return not value if item_type is None else all(isinstance(item, item_type) for item in value)
     if isinstance(default, dict):
         return isinstance(value, dict)
     return isinstance(value, type(default))
@@ -400,36 +418,24 @@ def _matches_default_type(
 
 def _validate_value(path: tuple[str, ...], value) -> None:
     if isinstance(value, float) and not math.isfinite(value):
-        raise ConfigValidationError(
-            f"{_path_label(path)} must be finite; got {value!r}"
-        )
+        raise ConfigValidationError(f"{_path_label(path)} must be finite; got {value!r}")
 
     bounds = _NUMERIC_RANGES.get(path)
     if bounds is not None:
         minimum, maximum = bounds
         if minimum is not None and value < minimum:
-            raise ConfigValidationError(
-                f"{_path_label(path)} must be >= {minimum:g}; got {value!r}"
-            )
+            raise ConfigValidationError(f"{_path_label(path)} must be >= {minimum:g}; got {value!r}")
         if maximum is not None and value > maximum:
-            raise ConfigValidationError(
-                f"{_path_label(path)} must be <= {maximum:g}; got {value!r}"
-            )
+            raise ConfigValidationError(f"{_path_label(path)} must be <= {maximum:g}; got {value!r}")
 
     list_bounds = _NUMERIC_LIST_RANGES.get(path)
     if list_bounds is not None:
         minimum, maximum = list_bounds
         for index, item in enumerate(value):
             if minimum is not None and item < minimum:
-                raise ConfigValidationError(
-                    f"{_path_label(path)}[{index}] must be >= {minimum:g}; "
-                    f"got {item!r}"
-                )
+                raise ConfigValidationError(f"{_path_label(path)}[{index}] must be >= {minimum:g}; got {item!r}")
             if maximum is not None and item > maximum:
-                raise ConfigValidationError(
-                    f"{_path_label(path)}[{index}] must be <= {maximum:g}; "
-                    f"got {item!r}"
-                )
+                raise ConfigValidationError(f"{_path_label(path)}[{index}] must be <= {maximum:g}; got {item!r}")
 
 
 def _deep_merge(
@@ -440,37 +446,26 @@ def _deep_merge(
 ) -> dict:
     """Strictly merge a validated mapping into a detached defaults copy."""
     if not isinstance(base, Mapping) or not isinstance(override, Mapping):
-        raise ConfigValidationError(
-            f"{_path_label(_path)} must be a mapping"
-        )
+        raise ConfigValidationError(f"{_path_label(_path)} must be a mapping")
     result = copy.deepcopy(base)
     for key, value in override.items():
         path = (*_path, str(key))
         if key not in base:
             if _path == ("killchain", "stages"):
                 allowed = ", ".join(KILLCHAIN_STAGE_KEYS)
-                raise ConfigValidationError(
-                    f"unknown killchain stage {_path_label(path)!r}; "
-                    f"allowed stages: {allowed}"
-                )
-            raise ConfigValidationError(
-                f"unknown configuration key {_path_label(path)!r}"
-            )
+                raise ConfigValidationError(f"unknown killchain stage {_path_label(path)!r}; allowed stages: {allowed}")
+            raise ConfigValidationError(f"unknown configuration key {_path_label(path)!r}")
 
         default = base[key]
         if isinstance(default, dict):
             if not isinstance(value, Mapping):
-                raise ConfigValidationError(
-                    f"{_path_label(path)} must be a mapping; "
-                    f"got {type(value).__name__}"
-                )
+                raise ConfigValidationError(f"{_path_label(path)} must be a mapping; got {type(value).__name__}")
             result[key] = _deep_merge(default, value, _path=path)
             continue
 
         if not _matches_default_type(value, default, path):
             raise ConfigValidationError(
-                f"{_path_label(path)} must be {_expected_type_name(default)}; "
-                f"got {type(value).__name__}"
+                f"{_path_label(path)} must be {_expected_type_name(default)}; got {type(value).__name__}"
             )
         _validate_value(path, value)
         result[key] = copy.deepcopy(value)
@@ -484,9 +479,7 @@ def _env_int(name: str, path: tuple[str, ...]) -> Optional[int]:
     try:
         value = int(raw)
     except ValueError as exc:
-        raise ConfigValidationError(
-            f"environment variable {name} must be an integer; got {raw!r}"
-        ) from exc
+        raise ConfigValidationError(f"environment variable {name} must be an integer; got {raw!r}") from exc
     _validate_value(path, value)
     return value
 
@@ -502,18 +495,12 @@ def load_config() -> dict:
             if user_config is None:
                 user_config = {}
             if not isinstance(user_config, Mapping):
-                raise ConfigValidationError(
-                    "the top-level YAML value must be a mapping"
-                )
+                raise ConfigValidationError("the top-level YAML value must be a mapping")
             cfg = _deep_merge(DEFAULTS, user_config)
         except ConfigValidationError as exc:
-            raise ConfigValidationError(
-                f"invalid configuration in {config_path}: {exc}"
-            ) from exc
+            raise ConfigValidationError(f"invalid configuration in {config_path}: {exc}") from exc
         except Exception as exc:
-            raise ConfigValidationError(
-                f"failed to read configuration {config_path}: {exc}"
-            ) from exc
+            raise ConfigValidationError(f"failed to read configuration {config_path}: {exc}") from exc
     else:
         print("\033[93m[!] No config.yaml found. Using built-in defaults.\033[0m")
         cfg = copy.deepcopy(DEFAULTS)
@@ -524,8 +511,8 @@ def load_config() -> dict:
                 cfg["paths"][key] = os.path.expanduser(val)
 
     # Environment values take precedence over YAML.
-    cfg["db"]["host"]     = os.environ.get("OCTOPUS_DB_HOST", cfg["db"]["host"])
-    cfg["db"]["user"]     = os.environ.get("OCTOPUS_DB_USER", cfg["db"]["user"])
+    cfg["db"]["host"] = os.environ.get("OCTOPUS_DB_HOST", cfg["db"]["host"])
+    cfg["db"]["user"] = os.environ.get("OCTOPUS_DB_USER", cfg["db"]["user"])
     cfg["db"]["password"] = os.environ.get("OCTOPUS_DB_PASS", cfg["db"]["password"])
     cfg["db"]["database"] = os.environ.get("OCTOPUS_DB_NAME", cfg["db"]["database"])
 

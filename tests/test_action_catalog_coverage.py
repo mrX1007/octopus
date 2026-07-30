@@ -89,9 +89,7 @@ def test_registration_rejects_empty_duplicate_and_colliding_identifiers() -> Non
     with pytest.raises(ValueError, match="Duplicate action_id"):
         catalog.register(FakeAdapter(" TOOL:FIRST ", "duplicate"))
     with pytest.raises(ValueError, match="Action alias collision"):
-        catalog.register(
-            FakeAdapter("tool:second", "Second", aliases=("SHARED",))
-        )
+        catalog.register(FakeAdapter("tool:second", "Second", aliases=("SHARED",)))
 
 
 def test_empty_display_names_and_aliases_are_ignored() -> None:
@@ -146,9 +144,7 @@ def test_convenience_registration_wraps_providers_and_plugin_order(
     plugin_adapters = catalog.register_plugins(manager)
 
     assert exploit_adapter is catalog.require("exploit:fixture").adapter
-    assert metasploit_adapter is catalog.require(
-        "metasploit:fixture/module"
-    ).adapter
+    assert metasploit_adapter is catalog.require("metasploit:fixture/module").adapter
     assert [item.descriptor.name for item in plugin_adapters] == ["alpha", "zulu"]
     assert calls[:2] == [
         ("exploit", exploit),
@@ -220,9 +216,6 @@ def test_candidates_apply_kind_and_category_filters_without_execution() -> None:
             kind=ActionKind.EXPLOIT.value,
         )
     ] == ["Exploit"]
-    assert [
-        item[0].name
-        for item in catalog.candidates(request, category="recon")
-    ] == ["Recon"]
+    assert [item[0].name for item in catalog.candidates(request, category="recon")] == ["Recon"]
     assert exploit.applicability_requests == [request, request]
     assert recon.applicability_requests == [request, request]

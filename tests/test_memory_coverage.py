@@ -26,10 +26,7 @@ class Redactor:
 
     def redact_data(self, value):
         self.calls.append(("data", value))
-        return {
-            key: item if key == "category" else f"safe:{item}"
-            for key, item in value.items()
-        }
+        return {key: item if key == "category" else f"safe:{item}" for key, item in value.items()}
 
     def protect(self, value, *, kind: str):
         self.calls.append(("protect", value, kind))
@@ -136,14 +133,12 @@ def test_initialization_disabled_success_and_backend_failure(monkeypatch, tmp_pa
     monkeypatch.setattr(
         memory_module,
         "get_secret_store",
-        lambda: (get_store_calls.append(True) or store),
+        lambda: get_store_calls.append(True) or store,
     )
     monkeypatch.setattr(
         memory_module,
         "chromadb",
-        SimpleNamespace(
-            PersistentClient=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("db failure"))
-        ),
+        SimpleNamespace(PersistentClient=lambda **kwargs: (_ for _ in ()).throw(RuntimeError("db failure"))),
     )
     with caplog.at_level("ERROR"):
         failed = memory_module.VectorMemory("failed")
@@ -224,9 +219,7 @@ def test_recall_redacts_sorts_priority_and_supports_sparse_metadata() -> None:
     }
 
     sparse = _memory(collection=Collection(query_results={"documents": [["doc"]]}))
-    assert sparse.recall("query", priority_first=False) == [
-        {"content": "safe:doc", "metadata": {}, "distance": 0}
-    ]
+    assert sparse.recall("query", priority_first=False) == [{"content": "safe:doc", "metadata": {}, "distance": 0}]
     assert sparse.collection.last_query["where"] is None
     assert sparse.recall_by_category("root_access", n_results=7)[0]["content"] == "safe:doc"
 
@@ -243,9 +236,7 @@ def test_recall_contains_query_errors(caplog) -> None:
 def test_convenience_stores_protect_credentials_and_forward_root_access(monkeypatch) -> None:
     memory = _memory()
     calls = []
-    memory.store_finding = lambda category, content, metadata=None: (
-        calls.append((category, content, metadata)) or True
-    )
+    memory.store_finding = lambda category, content, metadata=None: calls.append((category, content, metadata)) or True
 
     assert memory.store_credential("ssh", "host", "alice", "plaintext") is True
     memory.store_root_access("host", "root")
@@ -290,9 +281,7 @@ def test_summary_all_states_and_clear_session_lifecycle(caplog) -> None:
     assert deleted == ["session_fixture"]
     assert memory.collection is replacement
 
-    memory.client = SimpleNamespace(
-        delete_collection=lambda name: (_ for _ in ()).throw(RuntimeError("clear secret"))
-    )
+    memory.client = SimpleNamespace(delete_collection=lambda name: (_ for _ in ()).throw(RuntimeError("clear secret")))
     with caplog.at_level("ERROR"):
         memory.clear_session()
     assert "safe:clear secret" in caplog.text

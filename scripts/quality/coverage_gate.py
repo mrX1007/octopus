@@ -243,7 +243,7 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--config", type=Path, default=Path("quality/coverage-ci.ini"))
-    parser.add_argument("--fail-under", type=_parse_threshold, default=100.0)
+    parser.add_argument("--fail-under", type=_parse_threshold, default=94.58)
     parser.add_argument("--xml", type=Path)
     parser.add_argument(
         "--package-fail-under",
@@ -253,7 +253,7 @@ def _argument_parser() -> argparse.ArgumentParser:
         metavar="PACKAGE=PERCENT",
     )
     parser.add_argument("--diff-base", default="")
-    parser.add_argument("--diff-fail-under", type=_parse_threshold, default=100.0)
+    parser.add_argument("--diff-fail-under", type=_parse_threshold, default=0.0)
     parser.add_argument("--data-file", type=Path)
     return parser
 

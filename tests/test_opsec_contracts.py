@@ -143,15 +143,9 @@ def test_opsec_client_selects_transport_and_encodes_body(monkeypatch: pytest.Mon
     assert existing.request("GET", "https://example.invalid") == {"transport": "go"}
     assert python_client.request("GET", "https://example.invalid") == {"transport": "python"}
     assert compiled.transport is _FakeGoTransport.instances[0]
-    assert _FakeGoTransport.instances[0].calls == [
-        ("POST", "https://example.invalid", {"X-Test": "1"}, b"payload")
-    ]
-    assert _FakeGoTransport.instances[1].calls == [
-        ("GET", "https://example.invalid", None, None)
-    ]
-    assert _FakePythonTransport.instances[0].calls == [
-        ("GET", "https://example.invalid", None, None)
-    ]
+    assert _FakeGoTransport.instances[0].calls == [("POST", "https://example.invalid", {"X-Test": "1"}, b"payload")]
+    assert _FakeGoTransport.instances[1].calls == [("GET", "https://example.invalid", None, None)]
+    assert _FakePythonTransport.instances[0].calls == [("GET", "https://example.invalid", None, None)]
     assert profiles == ["stealth", "browser", "scraper"]
     assert len(compile_calls) == 1
     assert compile_calls[0][1].endswith(os.path.join("core", "opsec", "ja3_client"))

@@ -44,11 +44,7 @@ class TargetModel:
         self.scan_id = scan_id
         self.target = target
         self.host = self._target_host(target)
-        self.facts = [
-            fact
-            for fact in (facts or [])
-            if fact_is_decision_usable(fact)
-        ]
+        self.facts = [fact for fact in (facts or []) if fact_is_decision_usable(fact)]
 
     @classmethod
     def from_facts(cls, scan_id: str, target: str, facts: list[dict[str, Any]]) -> "TargetModel":
@@ -162,12 +158,14 @@ class TargetModel:
                 kind = "material"
             elif fact.get("type") == "hash_material":
                 kind = "hash"
-            credentials.append({
-                "kind": kind,
-                "value": value,
-                "confidence": fact.get("confidence", 100),
-                "sources": fact.get("sources") or ([fact.get("source")] if fact.get("source") else []),
-            })
+            credentials.append(
+                {
+                    "kind": kind,
+                    "value": value,
+                    "confidence": fact.get("confidence", 100),
+                    "sources": fact.get("sources") or ([fact.get("source")] if fact.get("source") else []),
+                }
+            )
         return credentials
 
     def _api(self) -> dict[str, list[dict[str, Any]]]:
@@ -288,9 +286,7 @@ class TargetModel:
             "credential_material": "credential_material",
             "domain_hash_dump": "domain_hash_dumps",
         }
-        seen: dict[str, set[str]] = {
-            name: set() for name in buckets if isinstance(buckets[name], list)
-        }
+        seen: dict[str, set[str]] = {name: set() for name in buckets if isinstance(buckets[name], list)}
         for fact in self.facts:
             ftype = str(fact.get("type") or "")
             value = str(fact.get("value", "")).strip()
@@ -320,15 +316,14 @@ class TargetModel:
         return {
             "ssh_authenticated": any(v.startswith("ssh_login_success:") or v == "ssh_authenticated" for v in values),
             "root_confirmed": any(
-                v in {"uid=0", "root_access_confirmed"}
-                or v.startswith("ssh_login_success:root@")
-                or "root access" in v
+                v in {"uid=0", "root_access_confirmed"} or v.startswith("ssh_login_success:root@") or "root access" in v
                 for v in values
             ),
             "application_sessions": [
                 str(f.get("value", ""))
                 for f in self.facts
-                if f.get("type") == "application_access" or (
+                if f.get("type") == "application_access"
+                or (
                     f.get("type") == "credential"
                     and str(f.get("value", "")).startswith(("whm_session:", "cpanel_session:"))
                 )
@@ -376,18 +371,20 @@ class TargetModel:
                 canonical_id = canonical_service(host, port, proto).entity_id
             except ValueError:
                 continue
-            services.append({
-                "canonical_id": canonical_id,
-                "normalization_version": ENTITY_NORMALIZATION_VERSION,
-                "host": host,
-                "port": int(port),
-                "proto": proto.lower(),
-                "service": (service or "unknown").lower(),
-                "state": "confirmed_present",
-                "reachable_via": self._internal_service_reachability(fact),
-                "sources": fact.get("sources") or ([fact.get("source")] if fact.get("source") else []),
-                **self._fact_identity_metadata(fact),
-            })
+            services.append(
+                {
+                    "canonical_id": canonical_id,
+                    "normalization_version": ENTITY_NORMALIZATION_VERSION,
+                    "host": host,
+                    "port": int(port),
+                    "proto": proto.lower(),
+                    "service": (service or "unknown").lower(),
+                    "state": "confirmed_present",
+                    "reachable_via": self._internal_service_reachability(fact),
+                    "sources": fact.get("sources") or ([fact.get("source")] if fact.get("source") else []),
+                    **self._fact_identity_metadata(fact),
+                }
+            )
         return services
 
     def _internal_service_reachability(self, fact: dict[str, Any]) -> str:
@@ -461,9 +458,7 @@ class TargetModel:
     ) -> dict[str, Any]:
         checks_by_scope: dict[tuple, dict[str, dict[str, Any]]] = {}
         for result in check_results:
-            scope: dict[str, Any] = (
-                result["scope"] if isinstance(result.get("scope"), dict) else {}
-            )
+            scope: dict[str, Any] = result["scope"] if isinstance(result.get("scope"), dict) else {}
             scope_type = str(scope.get("type") or result.get("scope_type") or "").strip().lower()
             scope_value = str(scope.get("value") or result.get("scope_value") or "").strip()
             if scope_type and scope_value:
@@ -503,7 +498,9 @@ class TargetModel:
             item = dict(service)
             item["checks"] = self._coverage_checks(checks)
             internal_items.append(item)
-            gaps.extend(self._coverage_gaps_for("internal_service", service_id, ("internal_vulnerability_assessment",), checks))
+            gaps.extend(
+                self._coverage_gaps_for("internal_service", service_id, ("internal_vulnerability_assessment",), checks)
+            )
 
         return {
             "external_services": service_items,
@@ -535,21 +532,25 @@ class TargetModel:
         for check in expected:
             result = checks.get(check)
             if not result:
-                gaps.append({
-                    "surface": surface_type,
-                    "id": surface_id,
-                    "check": check,
-                    "status": "pending",
-                })
+                gaps.append(
+                    {
+                        "surface": surface_type,
+                        "id": surface_id,
+                        "check": check,
+                        "status": "pending",
+                    }
+                )
                 continue
             status = str(result.get("status", "unknown")).lower()
             if status in degraded:
-                gaps.append({
-                    "surface": surface_type,
-                    "id": surface_id,
-                    "check": check,
-                    "status": status,
-                })
+                gaps.append(
+                    {
+                        "surface": surface_type,
+                        "id": surface_id,
+                        "check": check,
+                        "status": status,
+                    }
+                )
         return gaps
 
     def _normalize_scope_value(self, scope_type: str, value: str) -> str:
@@ -579,7 +580,9 @@ class TargetModel:
             return url.lower().rstrip("/")
         port = parsed.port
         netloc = parsed.hostname.lower()
-        if port and not ((parsed.scheme.lower() == "http" and port == 80) or (parsed.scheme.lower() == "https" and port == 443)):
+        if port and not (
+            (parsed.scheme.lower() == "http" and port == 80) or (parsed.scheme.lower() == "https" and port == 443)
+        ):
             netloc = f"{netloc}:{port}"
         return urlunparse((parsed.scheme.lower(), netloc, parsed.path or "/", "", parsed.query, "")).rstrip("/")
 
@@ -588,13 +591,17 @@ class TargetModel:
         for fact in self.facts:
             ftype = str(fact.get("type", ""))
             value = str(fact.get("value", ""))
-            if ftype in {"negative_fact", "tool_unavailable"} or any(value.startswith(p) for p in self.NEGATIVE_PREFIXES):
-                negatives.append({
-                    "type": ftype,
-                    "value": value,
-                    "confidence": fact.get("confidence", 100),
-                    "sources": fact.get("sources") or ([fact.get("source")] if fact.get("source") else []),
-                })
+            if ftype in {"negative_fact", "tool_unavailable"} or any(
+                value.startswith(p) for p in self.NEGATIVE_PREFIXES
+            ):
+                negatives.append(
+                    {
+                        "type": ftype,
+                        "value": value,
+                        "confidence": fact.get("confidence", 100),
+                        "sources": fact.get("sources") or ([fact.get("source")] if fact.get("source") else []),
+                    }
+                )
         return negatives
 
     def _unknowns(self, services: list[dict[str, Any]], endpoints: list[dict[str, Any]]) -> dict[str, str]:
@@ -609,8 +616,12 @@ class TargetModel:
             "cloud": "confirmed_present" if self._security_findings().get("cloud") else "unknown",
             "code_security": "confirmed_present" if self._security_findings().get("code") else "unknown",
             "web_security_notes": "confirmed_present" if self._web_app().get("security_notes") else "unknown",
-            "active_directory": "confirmed_present" if self._active_directory().get("domains") or self._active_directory().get("counts") else (
-                "confirmed_absent" if not any(marker in service_names for marker in ("ldap", "kerberos", "microsoft-ds", "smb")) else "unknown"
+            "active_directory": "confirmed_present"
+            if self._active_directory().get("domains") or self._active_directory().get("counts")
+            else (
+                "confirmed_absent"
+                if not any(marker in service_names for marker in ("ldap", "kerberos", "microsoft-ds", "smb"))
+                else "unknown"
             ),
         }
 
@@ -660,14 +671,16 @@ class TargetModel:
         if not url_parts.hostname:
             return {}
         port = parsed.get("port") or url_parts.port or (443 if url_parts.scheme == "https" else 80)
-        canonical_url = urlunparse((
-            url_parts.scheme.lower(),
-            url_parts.netloc.lower(),
-            url_parts.path or "/",
-            "",
-            url_parts.query,
-            "",
-        ))
+        canonical_url = urlunparse(
+            (
+                url_parts.scheme.lower(),
+                url_parts.netloc.lower(),
+                url_parts.path or "/",
+                "",
+                url_parts.query,
+                "",
+            )
+        )
         try:
             identity = canonical_endpoint(canonical_url)
         except ValueError:
@@ -691,14 +704,8 @@ class TargetModel:
         assessment = assessment if isinstance(assessment, dict) else {}
         return {
             "fact_ids": [int(fact["id"])] if fact.get("id") is not None else [],
-            "assessment_refs": (
-                [str(assessment.get("assessment_id"))]
-                if assessment.get("assessment_id")
-                else []
-            ),
-            "assessment_status": str(
-                assessment.get("status") or fact.get("assessment_status") or "observed"
-            ),
+            "assessment_refs": ([str(assessment.get("assessment_id"))] if assessment.get("assessment_id") else []),
+            "assessment_status": str(assessment.get("status") or fact.get("assessment_status") or "observed"),
             "evidence_fact_ids": list(assessment.get("evidence_fact_ids") or []),
             "source_execution_ids": list(assessment.get("source_execution_ids") or []),
         }

@@ -308,10 +308,7 @@ def test_http_probe_title_server_plain_response_and_errors_are_mocked(
     ]
     actions = [
         (
-            Reader(
-                b"HTTP/1.1 200 OK\r\nServer: Fixture\r\n\r\n"
-                b"<TITLE> Example </TITLE>"
-            ),
+            Reader(b"HTTP/1.1 200 OK\r\nServer: Fixture\r\n\r\n<TITLE> Example </TITLE>"),
             writers[0],
         ),
         (Reader(b"HTTP/1.1 200 OK\r\n\r\n<title>broken"), writers[1]),
@@ -453,9 +450,7 @@ def test_sync_adapter_and_script_entrypoint_use_mocked_async_runner(
             return {targets[0]: "direct result"}
 
     monkeypatch.setattr(recon_module, "ReconEngine", Engine)
-    assert recon_module.run_async_recon(["direct"], concurrency=3) == {
-        "direct": "direct result"
-    }
+    assert recon_module.run_async_recon(["direct"], concurrency=3) == {"direct": "direct result"}
     assert seen == [3]
 
     def fake_run(coroutine):

@@ -20,31 +20,37 @@ class TestCvssMapping:
 
     def test_critical_maps_high(self):
         from export import _cvss_from_severity
+
         score = _cvss_from_severity("critical")
         assert score >= 9.0
 
     def test_high_maps_correctly(self):
         from export import _cvss_from_severity
+
         score = _cvss_from_severity("high")
         assert 7.0 <= score < 9.0
 
     def test_medium_maps_correctly(self):
         from export import _cvss_from_severity
+
         score = _cvss_from_severity("medium")
         assert 4.0 <= score < 7.0
 
     def test_low_maps_correctly(self):
         from export import _cvss_from_severity
+
         score = _cvss_from_severity("low")
         assert 0.0 < score < 4.0
 
     def test_unknown_returns_zero(self):
         from export import _cvss_from_severity
+
         score = _cvss_from_severity("unknown")
         assert score == 0.0
 
     def test_case_insensitive(self):
         from export import _cvss_from_severity
+
         assert _cvss_from_severity("HIGH") == _cvss_from_severity("high")
         assert _cvss_from_severity("Critical") == _cvss_from_severity("critical")
 
@@ -54,6 +60,7 @@ class TestJsonExport:
 
     def test_creates_json_file(self, sample_session_data, tmp_path):
         from export import export_json
+
         filepath = export_json(sample_session_data, str(tmp_path))
 
         assert os.path.exists(filepath)
@@ -61,6 +68,7 @@ class TestJsonExport:
 
     def test_json_valid_structure(self, sample_session_data, tmp_path):
         from export import export_json
+
         filepath = export_json(sample_session_data, str(tmp_path))
 
         with open(filepath) as f:
@@ -74,6 +82,7 @@ class TestJsonExport:
 
     def test_json_vuln_count_matches(self, sample_session_data, tmp_path):
         from export import export_json
+
         filepath = export_json(sample_session_data, str(tmp_path))
 
         with open(filepath) as f:
@@ -84,6 +93,7 @@ class TestJsonExport:
 
     def test_json_target_correct(self, sample_session_data, tmp_path):
         from export import export_json
+
         filepath = export_json(sample_session_data, str(tmp_path))
 
         with open(filepath) as f:
@@ -92,7 +102,10 @@ class TestJsonExport:
         assert data["scan"]["target"] == "192.168.1.100"
 
     def test_json_preserves_vulnerability_provenance(
-        self, monkeypatch, sample_session_data, tmp_path,
+        self,
+        monkeypatch,
+        sample_session_data,
+        tmp_path,
     ):
         import export
         from export import export_json
@@ -123,6 +136,7 @@ class TestCsvExport:
 
     def test_creates_csv_file(self, sample_session_data, tmp_path):
         from export import export_csv
+
         filepath = export_csv(sample_session_data, str(tmp_path))
 
         assert os.path.exists(filepath)
@@ -130,6 +144,7 @@ class TestCsvExport:
 
     def test_csv_has_header(self, sample_session_data, tmp_path):
         from export import export_csv
+
         filepath = export_csv(sample_session_data, str(tmp_path))
 
         with open(filepath) as f:
@@ -143,6 +158,7 @@ class TestCsvExport:
 
     def test_csv_row_count(self, sample_session_data, tmp_path):
         from export import export_csv
+
         filepath = export_csv(sample_session_data, str(tmp_path))
 
         with open(filepath) as f:
@@ -153,14 +169,17 @@ class TestCsvExport:
         assert len(rows) == 3
 
     def test_csv_neutralizes_spreadsheet_formulas(
-        self, monkeypatch, sample_session_data, tmp_path,
+        self,
+        monkeypatch,
+        sample_session_data,
+        tmp_path,
     ):
         import export
         from export import export_csv
 
         monkeypatch.setattr(export, "CFG", {"reporting": {"include_raw_output": True}})
         report = copy.deepcopy(sample_session_data)
-        report["history"] = (1, "=HYPERLINK(\"https://example.test\")", "date", "complete")
+        report["history"] = (1, '=HYPERLINK("https://example.test")', "date", "complete")
         original = list(report["vulns"][0])
         original[2] = "  +SUM(1,1)"
         original[6] = "@malicious"
@@ -182,7 +201,10 @@ class TestCsvExport:
 
 class TestRenderedExports:
     def test_html_escapes_all_dynamic_markup(
-        self, monkeypatch, sample_session_data, tmp_path,
+        self,
+        monkeypatch,
+        sample_session_data,
+        tmp_path,
     ):
         import export
         from export import export_html
@@ -227,6 +249,7 @@ class TestExecutiveSummary:
 
     def test_summary_generation(self, sample_session_data):
         from export import _generate_executive_summary
+
         summary = _generate_executive_summary(sample_session_data)
 
         assert isinstance(summary, str)

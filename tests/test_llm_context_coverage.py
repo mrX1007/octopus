@@ -13,9 +13,7 @@ pytestmark = pytest.mark.unit
 
 def test_compaction_accepts_non_mapping_and_surface_state_contexts():
     assert llm_context.compact_context_for_llm("raw") == {"context": "raw"}
-    compact = llm_context.compact_context_for_llm(
-        {"host": "host", "surface_states": {"web": "confirmed_present"}}
-    )
+    compact = llm_context.compact_context_for_llm({"host": "host", "surface_states": {"web": "confirmed_present"}})
     assert compact["surface_states"] == {"web": "confirmed_present"}
 
 

@@ -13,18 +13,23 @@ try:
     from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
-    def find_wordlist(cat): return ""
-    def find_all_wordlists(cat): return []
+
+    def find_wordlist(cat):
+        return ""
+
+    def find_all_wordlists(cat):
+        return []
+
 
 # ANSI Colors
-C_GREEN  = "\033[92m"
+C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
-C_RED    = "\033[91m"
-C_CYAN   = "\033[96m"
-C_GREY   = "\033[90m"
-C_BLUE   = "\033[94m"
+C_RED = "\033[91m"
+C_CYAN = "\033[96m"
+C_GREY = "\033[90m"
+C_BLUE = "\033[94m"
 C_MAGENTA = "\033[95m"
-C_RESET  = "\033[0m"
+C_RESET = "\033[0m"
 
 
 # PARAMIKO SSH HELPERS (shared across stages)
@@ -44,7 +49,7 @@ def vuln_assess(target: str, recon_data: str = "") -> str:
     # Extract service versions from recon data
     services = []
     # Pattern: PORT/tcp open SERVICE VERSION_INFO
-    for match in re.finditer(r'(\d+)/tcp\s+open\s+(\S+)\s+(.*?)$', recon_data, re.MULTILINE):
+    for match in re.finditer(r"(\d+)/tcp\s+open\s+(\S+)\s+(.*?)$", recon_data, re.MULTILINE):
         port, service, version = match.groups()
         version = version.strip()
         if version and version != "tcpwrapped":
@@ -52,7 +57,7 @@ def vuln_assess(target: str, recon_data: str = "") -> str:
 
     if not services:
         # Try to extract from other formats
-        for match in re.finditer(r'Port (\d+) version: (.+)', recon_data):
+        for match in re.finditer(r"Port (\d+) version: (.+)", recon_data):
             port, version = match.groups()
             services.append({"port": port, "service": "unknown", "version": version.strip()})
 
@@ -87,10 +92,7 @@ def vuln_assess(target: str, recon_data: str = "") -> str:
             query = " ".join(search_terms)
             print(f"    [*] searchsploit: {query}")
             try:
-                result = subprocess.run(
-                    ["searchsploit", "--color", query],
-                    capture_output=True, text=True, timeout=30
-                )
+                result = subprocess.run(["searchsploit", "--color", query], capture_output=True, text=True, timeout=30)
                 sp_output = result.stdout.strip()
                 if sp_output and "No Results" not in sp_output:
                     output += f"\n[SEARCHSPLOIT: {query}]\n{sp_output}\n"
@@ -112,9 +114,22 @@ def vuln_assess(target: str, recon_data: str = "") -> str:
         print(f"  {C_CYAN}[*] Running nuclei template scan...{C_RESET}")
         try:
             result = subprocess.run(
-                ["nuclei", "-target", target, "-severity", "critical,high,medium",
-                 "-silent", "-timeout", "10", "-retries", "1", "-no-color"],
-                capture_output=True, text=True, timeout=180
+                [
+                    "nuclei",
+                    "-target",
+                    target,
+                    "-severity",
+                    "critical,high,medium",
+                    "-silent",
+                    "-timeout",
+                    "10",
+                    "-retries",
+                    "1",
+                    "-no-color",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=180,
             )
             nuclei_out = result.stdout.strip()
             if nuclei_out:
@@ -125,7 +140,9 @@ def vuln_assess(target: str, recon_data: str = "") -> str:
         except Exception as e:
             output += f"\n[!] nuclei error: {e}\n"
     else:
-        output += "\n[!] nuclei not installed — install: go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest\n"
+        output += (
+            "\n[!] nuclei not installed — install: go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest\n"
+        )
 
     output += f"\n{'═' * 60}\n"
     output += f"Total exploitable findings: {vuln_count}\n"

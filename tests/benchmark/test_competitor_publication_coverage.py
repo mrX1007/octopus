@@ -216,9 +216,7 @@ def test_checksum_duplicates_symlinks_coverage_digest_and_required_files(tmp_pat
     external = tmp_path / "external"
     external.write_text("value")
     (symlinked / "payload.txt").symlink_to(external)
-    (symlinked / "SHA256SUMS").write_text(
-        f"{publication._sha256_file(external)}  payload.txt\n"
-    )
+    (symlinked / "SHA256SUMS").write_text(f"{publication._sha256_file(external)}  payload.txt\n")
     with pytest.raises(publication.CampaignPublicationError, match="symlink_forbidden"):
         publication.verify_campaign_bundle(symlinked)
 
@@ -403,21 +401,15 @@ def test_provenance_canonical_secret_and_path_helpers(tmp_path):
         scenarios=scenarios,
     )
     with pytest.raises(publication.CampaignPublicationError):
-        publication._verify_provenance_inputs(
-            {}, campaign=campaign, systems=systems, scenarios=scenarios
-        )
+        publication._verify_provenance_inputs({}, campaign=campaign, systems=systems, scenarios=scenarios)
     invalid = dict(published)
     invalid["input_sha256"] = {}
     with pytest.raises(publication.CampaignPublicationError):
-        publication._verify_provenance_inputs(
-            invalid, campaign=campaign, systems=systems, scenarios=scenarios
-        )
+        publication._verify_provenance_inputs(invalid, campaign=campaign, systems=systems, scenarios=scenarios)
     invalid = json.loads(json.dumps(published))
     invalid["input_sha256"]["campaign"] = "wrong"
     with pytest.raises(publication.CampaignPublicationError):
-        publication._verify_provenance_inputs(
-            invalid, campaign=campaign, systems=systems, scenarios=scenarios
-        )
+        publication._verify_provenance_inputs(invalid, campaign=campaign, systems=systems, scenarios=scenarios)
 
     stable = publication._stable_id("namespace", {"a": 1})
     assert stable == f"namespace://sha256/{publication._canonical_digest({'a': 1})}"
@@ -437,9 +429,10 @@ def test_provenance_canonical_secret_and_path_helpers(tmp_path):
     written = tmp_path / "nested" / "payload.json"
     publication._write_json(written, {"value": 1})
     assert json.loads(written.read_text()) == {"value": 1}
-    assert publication._sha256_file(written) == publication._canonical_digest(
-        json.loads(written.read_text())
-    ) or len(publication._sha256_file(written)) == 64
+    assert (
+        publication._sha256_file(written) == publication._canonical_digest(json.loads(written.read_text()))
+        or len(publication._sha256_file(written)) == 64
+    )
 
     assert publication._safe_component("safe") == "safe"
     for value in ("", ".", "..", "a/b", "a\\b", "a\x00b"):

@@ -62,9 +62,7 @@ class _Pipeline:
     def __init__(self):
         self.cancellation = SimpleNamespace(checkpoint=lambda: None)
         self.tool_registry = _Registry()
-        self.state_resolver = SimpleNamespace(
-            resolve_state=lambda _scan_id, _target: {"state": "resolved"}
-        )
+        self.state_resolver = SimpleNamespace(resolve_state=lambda _scan_id, _target: {"state": "resolved"})
         self.context_builder = _Context()
         self.fact_store = _Facts()
         self.output_parser = SimpleNamespace(parse_tool_output=lambda *_args: [])
@@ -77,9 +75,7 @@ class _Pipeline:
         )
         self.planner = SimpleNamespace(create_plan=lambda *_args: {"plan": []})
         self.discovery_agent = SimpleNamespace(execute_task=lambda *_args: [])
-        self.analysis_agent = SimpleNamespace(
-            analyze=lambda *_args: {"hypotheses": [], "llm_status": "ok"}
-        )
+        self.analysis_agent = SimpleNamespace(analyze=lambda *_args: {"hypotheses": [], "llm_status": "ok"})
         self.verification_agent = SimpleNamespace(
             execute_task=lambda *_args: [],
             verify_hypothesis=lambda *_args: {"status": "rejected"},
@@ -323,12 +319,8 @@ def test_zero_iteration_limit_exits_loop_and_records_stop_reason():
 
 def test_registered_empty_plan_with_deferred_work_stops_resumably():
     pipeline = _Pipeline()
-    pipeline.director = SimpleNamespace(
-        decide_goal=lambda *_args: {"goal": "work", "thought": "plan"}
-    )
-    pipeline.planner = SimpleNamespace(
-        create_plan=lambda *_args: {"plan": [{"agent": "Unknown", "task": "task"}]}
-    )
+    pipeline.director = SimpleNamespace(decide_goal=lambda *_args: {"goal": "work", "thought": "plan"})
+    pipeline.planner = SimpleNamespace(create_plan=lambda *_args: {"plan": [{"agent": "Unknown", "task": "task"}]})
     pipeline._register_mission_plan = lambda _plan: []
     deferred = iter((None, 12.0))
     pipeline._next_deferred_mission_time = lambda: next(deferred)
@@ -353,9 +345,7 @@ def test_fallback_director_planner_and_analysis_skip_paths():
         "goal": "work",
         "thought": "fallback",
     }
-    pipeline._planner_fallback_result = lambda _goal: {
-        "plan": [{"agent": "AnalysisAgent", "task": "analysis"}]
-    }
+    pipeline._planner_fallback_result = lambda _goal: {"plan": [{"agent": "AnalysisAgent", "task": "analysis"}]}
 
     ScanLifecycle._run_active(
         pipeline,

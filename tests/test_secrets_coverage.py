@@ -266,9 +266,7 @@ def test_logging_filter_redacts_messages_exceptions_and_failures(monkeypatch) ->
     assert filter_instance.filter(clean) is True
     assert clean.msg == "clean"
 
-    broken_redactor = SimpleNamespace(
-        redact_text=MagicMock(side_effect=RuntimeError("redaction failed"))
-    )
+    broken_redactor = SimpleNamespace(redact_text=MagicMock(side_effect=RuntimeError("redaction failed")))
     broken_filter = RedactionFilter(broken_redactor)
     broken = logging.LogRecord("fixture", logging.INFO, __file__, 1, "value", (), None)
     assert broken_filter.filter(broken) is True
@@ -277,9 +275,7 @@ def test_logging_filter_redacts_messages_exceptions_and_failures(monkeypatch) ->
 
 
 def test_logging_installation_is_idempotent_for_logger_and_handlers() -> None:
-    secrets_module._DEFAULT_REDACTOR = Redactor(
-        SecretStore(":memory:", key=b"i" * 32)
-    )
+    secrets_module._DEFAULT_REDACTOR = Redactor(SecretStore(":memory:", key=b"i" * 32))
     logger = logging.Logger("secret-coverage")
     handler = logging.NullHandler()
     logger.addHandler(handler)

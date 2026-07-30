@@ -44,33 +44,23 @@ def test_truth_claim_validates_text_alias_and_evidence_identifiers():
         _truth(canonical_text="   ")
     with pytest.raises(BenchmarkV3SchemaError, match=r"invalid:truth.alias"):
         _truth(aliases=("",))
-    with pytest.raises(
-        BenchmarkV3SchemaError, match=r"invalid:truth.required_evidence_id"
-    ):
+    with pytest.raises(BenchmarkV3SchemaError, match=r"invalid:truth.required_evidence_id"):
         _truth(required_evidence_ids=("bad value",))
 
 
 def test_reported_claim_direct_and_mapping_validation_paths():
-    assert ReportedClaim("claim", ("evidence-one",)).evidence_refs == (
-        "evidence-one",
-    )
+    assert ReportedClaim("claim", ("evidence-one",)).evidence_refs == ("evidence-one",)
     for text in ("", "x" * 16_385):
         with pytest.raises(BenchmarkV3SchemaError, match=r"invalid:reported_claim.text"):
             ReportedClaim(text)
-    with pytest.raises(
-        BenchmarkV3SchemaError, match=r"invalid:reported_claim.evidence_ref"
-    ):
+    with pytest.raises(BenchmarkV3SchemaError, match=r"invalid:reported_claim.evidence_ref"):
         ReportedClaim("claim", ("bad value",))
-    with pytest.raises(
-        BenchmarkV3SchemaError, match=r"invalid:reported_claim.evidence_refs"
-    ):
+    with pytest.raises(BenchmarkV3SchemaError, match=r"invalid:reported_claim.evidence_refs"):
         ReportedClaim.from_value({"text": "claim", "evidence_refs": "bad"})
     for value in ("", "x" * 16_385):
         with pytest.raises(BenchmarkV3SchemaError, match=r"invalid:reported_claim.text"):
             ReportedClaim.from_value(value)
-    claim = ReportedClaim.from_value(
-        {"claim": " Claim ", "evidence_refs": ["", "EVIDENCE-ONE"]}
-    )
+    claim = ReportedClaim.from_value({"claim": " Claim ", "evidence_refs": ["", "EVIDENCE-ONE"]})
     assert claim.text == "Claim"
     assert claim.evidence_refs == ("evidence-one",)
 
@@ -80,9 +70,7 @@ def test_completion_rule_rejects_duplicate_and_out_of_range_threshold():
     with pytest.raises(BenchmarkV3SchemaError, match="duplicate_completion_truth_id"):
         _rule(required_truth_ids=("truth-one", "truth-one"))
     for value in (-0.1, 1.1):
-        with pytest.raises(
-            BenchmarkV3SchemaError, match=r"invalid:minimum_verified_recall"
-        ):
+        with pytest.raises(BenchmarkV3SchemaError, match=r"invalid:minimum_verified_recall"):
             _rule(minimum_verified_recall=value)
 
 
@@ -117,9 +105,7 @@ def test_evaluate_rejects_invalid_inputs_and_ambiguous_matchers():
             completion_rule=_rule(),
             verified_truth_ids=("missing",),
         )
-    with pytest.raises(
-        BenchmarkV3SchemaError, match=r"invalid:observed_evidence_id"
-    ):
+    with pytest.raises(BenchmarkV3SchemaError, match=r"invalid:observed_evidence_id"):
         evaluate_claims(
             execution_status="succeeded",
             reported_claims=(),
@@ -161,9 +147,7 @@ def test_evaluate_invalid_policy_and_unmatched_claim_status_paths():
     )
     assert execution_invalid.task_status == "invalid"
     assert all(
-        not metric.available
-        for metric in execution_invalid.metrics
-        if metric.population == "completion_conditional"
+        not metric.available for metric in execution_invalid.metrics if metric.population == "completion_conditional"
     )
 
     completed_with_extra = evaluate_claims(
@@ -178,15 +162,9 @@ def test_evaluate_invalid_policy_and_unmatched_claim_status_paths():
 
 def test_verified_truth_helper_validates_and_filters_evidence():
     truth = _truth()
-    assert verified_truth_ids_from_evidence((truth,), ("evidence-one",)) == (
-        "truth-one",
-    )
-    assert verified_truth_ids_from_evidence(
-        (_truth(required_evidence_ids=()),), ("evidence-one",)
-    ) == ()
-    with pytest.raises(
-        BenchmarkV3SchemaError, match=r"invalid:observed_evidence_id"
-    ):
+    assert verified_truth_ids_from_evidence((truth,), ("evidence-one",)) == ("truth-one",)
+    assert verified_truth_ids_from_evidence((_truth(required_evidence_ids=()),), ("evidence-one",)) == ()
+    with pytest.raises(BenchmarkV3SchemaError, match=r"invalid:observed_evidence_id"):
         verified_truth_ids_from_evidence((truth,), ("bad value",))
 
 

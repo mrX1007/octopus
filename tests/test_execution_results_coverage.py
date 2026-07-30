@@ -66,12 +66,8 @@ def test_legacy_redactor_signatures_fall_back_without_losing_json_safety() -> No
         data_calls.append(value)
         return {"safe": value}
 
-    assert results._redact_text(text_redactor, b"value", kind="fixture") == (
-        "safe:value"
-    )
-    assert results._redact_data(data_redactor, {"value": b"bytes"}) == {
-        "safe": {"value": "bytes"}
-    }
+    assert results._redact_text(text_redactor, b"value", kind="fixture") == ("safe:value")
+    assert results._redact_data(data_redactor, {"value": b"bytes"}) == {"safe": {"value": "bytes"}}
     assert text_calls == ["value"]
     assert data_calls == [{"value": "bytes"}]
 
@@ -84,12 +80,15 @@ def test_small_output_and_json_budgets_cover_single_stream_boundaries() -> None:
 
 
 def test_status_and_artifact_scalar_fallbacks() -> None:
-    assert results._status_from_value(
-        "unknown-status",
-        success=False,
-        exit_code=None,
-        error="",
-    ) is ExecutionStatus.FAILED
+    assert (
+        results._status_from_value(
+            "unknown-status",
+            success=False,
+            exit_code=None,
+            error="",
+        )
+        is ExecutionStatus.FAILED
+    )
     assert results._artifact_values("artifact.txt") == ("artifact.txt",)
     assert results._artifact_values(b"artifact-bytes") == ("artifact-bytes",)
     assert results._artifact_values(Path("artifact-path")) == ("artifact-path",)
@@ -108,9 +107,7 @@ def test_artifact_and_metadata_defensive_size_boundaries(monkeypatch) -> None:
     assert bounded == ()
     assert truncated is True
     assert count == 1
-    assert results._bounded_metadata(["legacy", "metadata"]) == {
-        "legacy_metadata": ["legacy", "metadata"]
-    }
+    assert results._bounded_metadata(["legacy", "metadata"]) == {"legacy_metadata": ["legacy", "metadata"]}
 
 
 def test_audit_facades_cover_absent_mapping_and_nonmapping_decisions() -> None:

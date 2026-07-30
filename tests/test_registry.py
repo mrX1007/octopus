@@ -27,6 +27,7 @@ def clean_registry():
 
 # ─── Registration Tests ─────────────────────────
 
+
 class TestToolDecorator:
     """Test @tool() decorator registration."""
 
@@ -155,6 +156,7 @@ class TestToolDecorator:
 
 # ─── Lookup Tests ────────────────────────────────
 
+
 class TestGetTool:
     """Test tool lookup by name and alias."""
 
@@ -199,28 +201,34 @@ class TestGetTool:
 
 # ─── List and Menu Tests ─────────────────────────
 
+
 class TestListTools:
     """Test tool listing and filtering."""
 
     def test_list_all_tools(self):
         @tool("a_tool", category="recon")
-        def t1(x): pass
+        def t1(x):
+            pass
 
         @tool("b_tool", category="exploit")
-        def t2(x): pass
+        def t2(x):
+            pass
 
         tools = list_tools()
         assert len(tools) == 2
 
     def test_filter_by_category(self):
         @tool("recon1", category="recon")
-        def t1(x): pass
+        def t1(x):
+            pass
 
         @tool("exploit1", category="exploit")
-        def t2(x): pass
+        def t2(x):
+            pass
 
         @tool("recon2", category="recon")
-        def t3(x): pass
+        def t3(x):
+            pass
 
         recon = list_tools(category="recon")
         assert len(recon) == 2
@@ -228,17 +236,20 @@ class TestListTools:
 
     def test_deduplicates_aliases(self):
         @tool("scanner", aliases=["scan", "s"], category="recon")
-        def run_scanner(x): pass
+        def run_scanner(x):
+            pass
 
         tools = list_tools()
         assert len(tools) == 1  # Not 3
 
     def test_build_menu_numbered(self):
         @tool("tool_a", category="recon")
-        def t1(x): pass
+        def t1(x):
+            pass
 
         @tool("tool_b", category="recon")
-        def t2(x): pass
+        def t2(x):
+            pass
 
         menu = build_menu()
         assert 1 in menu
@@ -248,36 +259,42 @@ class TestListTools:
 
 # ─── Availability Tests ─────────────────────────
 
+
 class TestToolAvailability:
     """Test dependency checking."""
 
     def test_available_when_no_requires(self):
         @tool("simple", category="util", requires=[])
-        def simple(x): pass
+        def simple(x):
+            pass
 
         t = get_tool("simple")
         assert t.is_available()
 
     def test_available_with_existing_binary(self):
         @tool("with_python", category="util", requires=["python3"])
-        def with_dep(x): pass
+        def with_dep(x):
+            pass
 
         t = get_tool("with_python")
         assert t.is_available()
 
     def test_unavailable_with_missing_binary(self):
         @tool("needs_fake", category="util", requires=["totally_fake_binary_xyz"])
-        def needs_fake(x): pass
+        def needs_fake(x):
+            pass
 
         t = get_tool("needs_fake")
         assert not t.is_available()
 
     def test_status_icon(self):
         @tool("avail", category="util", requires=[])
-        def t1(x): pass
+        def t1(x):
+            pass
 
         @tool("unavail", category="util", requires=["nonexistent_bin_xyz"])
-        def t2(x): pass
+        def t2(x):
+            pass
 
         assert get_tool("avail").status_icon == "✓"
         assert get_tool("unavail").status_icon == "✗"

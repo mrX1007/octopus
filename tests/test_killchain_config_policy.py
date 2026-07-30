@@ -66,21 +66,9 @@ def test_stage_registry_is_the_single_source_for_public_stage_maps():
         "data_exfil",
         "cleanup",
     )
-    assert {
-        task: spec.name
-        for spec in STAGE_REGISTRY
-        for task in spec.tasks
-    } == TASK_STAGE_MAP
-    assert {
-        goal: spec.name
-        for spec in STAGE_REGISTRY
-        for goal in spec.goals
-    } == GOAL_STAGE_MAP
-    assert {
-        tool: spec.name
-        for spec in STAGE_REGISTRY
-        for tool in spec.tools
-    } == TOOL_STAGE_MAP
+    assert {task: spec.name for spec in STAGE_REGISTRY for task in spec.tasks} == TASK_STAGE_MAP
+    assert {goal: spec.name for spec in STAGE_REGISTRY for goal in spec.goals} == GOAL_STAGE_MAP
+    assert {tool: spec.name for spec in STAGE_REGISTRY for tool in spec.tools} == TOOL_STAGE_MAP
     assert runtime_config_module.KILLCHAIN_STAGE_KEYS == KILLCHAIN_STAGES
     assert tuple(runtime_config_module.DEFAULTS["killchain"]["stages"]) == KILLCHAIN_STAGES
 
@@ -144,9 +132,7 @@ def test_missing_mistyped_or_misspelled_stage_value_fails_closed(stages):
     malformed = {"killchain": {"enabled": True, "stages": stages}}
 
     assert not stage_enabled("privesc", malformed)
-    assert registered_tool_gate_reason("privesc", malformed) == (
-        "killchain_stage_disabled:privesc"
-    )
+    assert registered_tool_gate_reason("privesc", malformed) == ("killchain_stage_disabled:privesc")
 
 
 def test_final_execution_policy_denies_disabled_stage_through_alias_dispatch(monkeypatch):

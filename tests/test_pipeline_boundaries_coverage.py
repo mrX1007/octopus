@@ -77,14 +77,17 @@ def test_import_fallback_properties_and_cancellation(monkeypatch: pytest.MonkeyP
         namespace["run_arbitrary_cmd"]("probe host")
 
     pipeline = _bare_pipeline()
-    markers = {name: object() for name in (
-        "action_catalog",
-        "action_executor",
-        "provider_telemetry",
-        "provider_selector",
-        "provider_fallback_executor",
-        "decision_trace",
-    )}
+    markers = {
+        name: object()
+        for name in (
+            "action_catalog",
+            "action_executor",
+            "provider_telemetry",
+            "provider_selector",
+            "provider_fallback_executor",
+            "decision_trace",
+        )
+    }
     pipeline.runtime = SimpleNamespace(**markers)
 
     assert pipeline.action_catalog is markers["action_catalog"]
@@ -220,9 +223,7 @@ def test_execute_command_without_execution_id_skips_source_attachment(tmp_path: 
         metadata={"provider_attempts": 1},
     )
     synced: list[list[dict]] = []
-    pipeline._sync_runtime_credentials_from_facts = (
-        lambda _target, facts: synced.append(list(facts))
-    )
+    pipeline._sync_runtime_credentials_from_facts = lambda _target, facts: synced.append(list(facts))
 
     result = pipeline._execute_pipeline_command(
         "scan",
@@ -257,16 +258,17 @@ def test_task_snapshot_guards_and_runtime_signature_compatibility(
     assert pipeline._accepted_task_decision_facts("scan", "host") == [{"type": "fallback"}]
 
     calls: list[tuple] = []
-    pipeline.runtime = SimpleNamespace(
-        execute=lambda *args, **kwargs: calls.append((args, kwargs)) or "result"
-    )
+    pipeline.runtime = SimpleNamespace(execute=lambda *args, **kwargs: calls.append((args, kwargs)) or "result")
     monkeypatch.setattr(pipeline_module.inspect, "signature", lambda _callable: (_ for _ in ()).throw(ValueError()))
-    assert pipeline._execute_runtime_compatibly(
-        object(),
-        object(),
-        facts=(),
-        capability="probe",
-    ) == "result"
+    assert (
+        pipeline._execute_runtime_compatibly(
+            object(),
+            object(),
+            facts=(),
+            capability="probe",
+        )
+        == "result"
+    )
     assert calls[-1][1] == {}
 
     def accepts_everything(*args, **kwargs):
@@ -275,14 +277,17 @@ def test_task_snapshot_guards_and_runtime_signature_compatibility(
 
     pipeline.runtime.execute = accepts_everything
     monkeypatch.undo()
-    assert pipeline._execute_runtime_compatibly(
-        object(),
-        object(),
-        facts=({"type": "fact"},),
-        capability="probe",
-        provider_commands=("probe host",),
-        partial_result_ingest=object(),
-    ) == "keywords"
+    assert (
+        pipeline._execute_runtime_compatibly(
+            object(),
+            object(),
+            facts=({"type": "fact"},),
+            capability="probe",
+            provider_commands=("probe host",),
+            partial_result_ingest=object(),
+        )
+        == "keywords"
+    )
     assert set(calls[-1][1]) == {
         "facts",
         "capability",
@@ -334,9 +339,7 @@ def test_store_fact_preserves_secret_refs_and_deduplicates_derived_facts() -> No
         return calls, calls == 1
 
     pipeline.fact_store = SimpleNamespace(
-        redactor=SimpleNamespace(
-            redact_fact=lambda _fact_type, _value: ("[REDACTED]", ("secret-ref",))
-        ),
+        redactor=SimpleNamespace(redact_fact=lambda _fact_type, _value: ("[REDACTED]", ("secret-ref",))),
         add_fact_with_status=add_fact,
     )
     pipeline.runtime = SimpleNamespace(project_fact_ids=lambda _ids: None)
@@ -387,8 +390,8 @@ def test_fact_driven_action_execution_reaches_active_and_post_access_paths() -> 
     pipeline = _bare_pipeline()
     pipeline._fact_action_max_depth = lambda: None
     pipeline._fact_action_max_commands = lambda: None
-    pipeline._fact_driven_action_commands = (
-        lambda _scan, _target, facts: ["root"] if facts and facts[0].get("stage") == "initial" else []
+    pipeline._fact_driven_action_commands = lambda _scan, _target, facts: (
+        ["root"] if facts and facts[0].get("stage") == "initial" else []
     )
     execution_results = {
         "root": _command_result(
@@ -509,12 +512,9 @@ def test_fact_action_mapping_and_service_intelligence_boundaries() -> None:
     pipeline._augment_command_with_context = lambda command, *_args: command
     pipeline._strategy_limit = lambda key, default=None: 1 if key == "fact_action_batch_commands" else default
 
-    assert pipeline._fact_driven_action_commands("scan", "host", [{"type": "credential"}]) == [
-        "ssh_inventory host"
-    ]
+    assert pipeline._fact_driven_action_commands("scan", "host", [{"type": "credential"}]) == ["ssh_inventory host"]
     assert AIPipeline._facts_include_cached_ssh_credential(
-        pipeline,
-        [{"type": "credential", "value": "ssh_key_available:key-1"}]
+        pipeline, [{"type": "credential", "value": "ssh_key_available:key-1"}]
     )
 
     pipeline._service_intelligence_evidence_key = lambda fact: str(fact.get("key", ""))
@@ -571,9 +571,7 @@ def test_service_evidence_and_search_query_edge_cases() -> None:
 def test_inventory_cpanel_and_service_seen_boundaries() -> None:
     pipeline = _bare_pipeline()
 
-    assert pipeline._post_access_inventory_seen(
-        {("post_exploit_stage", "post_access_inventory_completed")}
-    )
+    assert pipeline._post_access_inventory_seen({("post_exploit_stage", "post_access_inventory_completed")})
     assert pipeline._post_access_inventory_seen({("service_status", "ssh_inventory_completed")})
     assert not pipeline._facts_indicate_cpanel_surface(
         [{"type": "application_access", "value": "cpanel authenticated"}]
@@ -625,9 +623,7 @@ def test_web_surface_command_limits_cover_each_stage() -> None:
     ]
 
     pipeline._browser_render_seen = lambda *_args: True
-    assert pipeline._web_surface_action_commands("scan", "host", [{}], set()) == [
-        "security_headers_check http://host/"
-    ]
+    assert pipeline._web_surface_action_commands("scan", "host", [{}], set()) == ["security_headers_check http://host/"]
 
     availability = {"cors_check"}
     pipeline.tool_registry = SimpleNamespace(_is_tool_available=lambda tool: tool in availability)
@@ -784,9 +780,7 @@ def test_web_endpoint_compact_context_and_cpanel_boundaries() -> None:
         {"type": "credential", "value": "ssh_login_success:ref"},
     ]
     context = pipeline._exploit_select_compact_context(facts)
-    assert context["open_ports"] == [
-        {"port": 53, "proto": "udp", "service": "dns", "host": "host", "banner": "banner"}
-    ]
+    assert context["open_ports"] == [{"port": 53, "proto": "udp", "service": "dns", "host": "host", "banner": "banner"}]
     assert len(context["internal_services"]) == 1
     assert context["access"] == ["root", "ssh_authenticated", "ssh_login_success"]
     assert pipeline._parse_port_fact_for_context("malformed") == {}
@@ -808,16 +802,22 @@ def test_web_endpoint_compact_context_and_cpanel_boundaries() -> None:
     assert pipeline._augment_cpanel_command("plugin demo host scan", "scan", "host") == "plugin demo host scan"
     pipeline._best_cpanel_port = lambda *_args: "2087"
     assert pipeline._augment_cpanel_command("plugin demo host scan", "scan", "host") == "plugin demo host scan"
-    assert pipeline._augment_cpanel_command(
-        "plugin cpanel_auth_bypass host scan",
-        "scan",
-        "host",
-    ) == "plugin cpanel_auth_bypass host:2087 scan"
-    assert pipeline._augment_cpanel_command(
-        "cpanel_exploit host scan",
-        "scan",
-        "host",
-    ) == "cpanel_exploit host:2087 scan"
+    assert (
+        pipeline._augment_cpanel_command(
+            "plugin cpanel_auth_bypass host scan",
+            "scan",
+            "host",
+        )
+        == "plugin cpanel_auth_bypass host:2087 scan"
+    )
+    assert (
+        pipeline._augment_cpanel_command(
+            "cpanel_exploit host scan",
+            "scan",
+            "host",
+        )
+        == "cpanel_exploit host:2087 scan"
+    )
 
     pipeline.fact_store.get_facts = lambda *_args: [
         {"type": "other", "value": "2087/tcp (https)"},
@@ -832,9 +832,7 @@ def test_exploit_context_augmentation_covers_empty_and_compact_context() -> None
     pipeline.fact_store = SimpleNamespace(get_facts=lambda *_args: stored_facts)
     pipeline._strategy_limit = lambda _key, default=None: default
 
-    assert pipeline._augment_command_with_context("exploit_select host", "scan", "host") == (
-        "exploit_select host"
-    )
+    assert pipeline._augment_command_with_context("exploit_select host", "scan", "host") == ("exploit_select host")
 
     stored_facts.append({"type": "port_open", "value": "80/tcp (http)"})
     augmented = pipeline._augment_command_with_context("exploit_select host", "scan", "host")

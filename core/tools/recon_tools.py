@@ -49,11 +49,15 @@ try:
     from config import CFG, find_wordlist
 except ImportError:
     CFG = {}
-    def find_wordlist(cat): return ""
+
+    def find_wordlist(cat):
+        return ""
+
 
 # Scrapling availability
 try:
     from scrapling import StealthyFetcher as _StealthyFetcher
+
     _SCRAPLING_OK = True
 except ImportError:
     _StealthyFetcher = None
@@ -122,7 +126,13 @@ def _decode_jwt_segment(segment: str) -> dict:
         return {}
 
 
-@tool(name="nmap", aliases=["nmap_scan"], category="recon", description="Run Nmap with smart caching and two-phase scanning.", requires=["nmap"])
+@tool(
+    name="nmap",
+    aliases=["nmap_scan"],
+    category="recon",
+    description="Run Nmap with smart caching and two-phase scanning.",
+    requires=["nmap"],
+)
 def run_nmap(target: str, extra_flags: Optional[list] = None) -> str:
     """Run Nmap with config-driven flags, caching, and two-phase scanning.
     Prevents duplicate '-p-' scans which waste immense time.
@@ -151,7 +161,7 @@ def run_nmap(target: str, extra_flags: Optional[list] = None) -> str:
     # Reuse Nmap results across staged execution.
     if "-p-" in flags:
         print(f"  {C_YELLOW}[FIX] Full port scan (-p-) intercepted → using Smart Nmap{C_RESET}")
-        
+
         # Check if we already did a big scan on this target in this run
         cache_file = f"/tmp/nmap_smart_{target.replace('/', '_')}.log"
         if os.path.exists(cache_file):
@@ -182,14 +192,14 @@ def run_nmap(target: str, extra_flags: Optional[list] = None) -> str:
             result2 = run_tool(["nmap", *flags_stage2, target], timeout=timeout)
 
         final_output = f"[PHASE 1 — Top 1000 ports]\n{result1}\n\n[PHASE 2 — Deep Scan]\n{result2}"
-        
+
         # Save to cache
         try:
             with open(cache_file, "w") as f:
                 f.write(final_output)
         except Exception as _exc:
             logging.debug(f"Suppressed in recon_tools.py: {_exc}")
-            
+
         return final_output
 
     print(f"  [*] nmap {' '.join(flags)} {target}")
@@ -222,7 +232,13 @@ def run_whois(target: str) -> str:
     return run_tool(["whois", target], timeout=tc.get("timeout", 30))
 
 
-@tool(name="whatweb", aliases=[], category="recon", description="Run whatweb with configurable aggression.", requires=["whatweb"])
+@tool(
+    name="whatweb",
+    aliases=[],
+    category="recon",
+    description="Run whatweb with configurable aggression.",
+    requires=["whatweb"],
+)
 def run_whatweb(target: str) -> str:
     """whatweb with configurable aggression."""
     tc = get_tool_config("whatweb")
@@ -231,7 +247,13 @@ def run_whatweb(target: str) -> str:
     return run_tool(["whatweb", "-a", aggr, target], timeout=tc.get("timeout", 90))
 
 
-@tool(name="curl_headers", aliases=["curl"], category="recon", description="Run curl -sI for HTTP(S) headers.", requires=["curl"])
+@tool(
+    name="curl_headers",
+    aliases=["curl"],
+    category="recon",
+    description="Run curl -sI for HTTP(S) headers.",
+    requires=["curl"],
+)
 def run_curl_headers(target: str) -> str:
     """curl -sI http and https"""
     tc = get_tool_config("curl")
@@ -264,7 +286,13 @@ def run_dig(target: str) -> str:
     return "\n\n".join(parts)
 
 
-@tool(name="subfinder", aliases=["subdomain_discovery"], category="recon", description="Passive subdomain discovery with subfinder.", requires=["subfinder"])
+@tool(
+    name="subfinder",
+    aliases=["subdomain_discovery"],
+    category="recon",
+    description="Passive subdomain discovery with subfinder.",
+    requires=["subfinder"],
+)
 def run_subfinder(target: str) -> str:
     domain = _target_host(target)
     if not _is_probably_domain(domain):
@@ -274,7 +302,13 @@ def run_subfinder(target: str) -> str:
     return f"[ASM SUBFINDER - {domain}]\n{output}"
 
 
-@tool(name="amass_enum", aliases=["amass", "amass_passive"], category="recon", description="Passive subdomain discovery with amass.", requires=["amass"])
+@tool(
+    name="amass_enum",
+    aliases=["amass", "amass_passive"],
+    category="recon",
+    description="Passive subdomain discovery with amass.",
+    requires=["amass"],
+)
 def run_amass_enum(target: str) -> str:
     domain = _target_host(target)
     if not _is_probably_domain(domain):
@@ -284,7 +318,13 @@ def run_amass_enum(target: str) -> str:
     return f"[ASM AMASS - {domain}]\n{output}"
 
 
-@tool(name="dnsx", aliases=["dns_resolve"], category="recon", description="Resolve domains/subdomains with dnsx.", requires=["dnsx"])
+@tool(
+    name="dnsx",
+    aliases=["dns_resolve"],
+    category="recon",
+    description="Resolve domains/subdomains with dnsx.",
+    requires=["dnsx"],
+)
 def run_dnsx(target: str) -> str:
     host = _target_host(target)
     print(f"  [*] dnsx -silent -a -aaaa -cname -resp-only {host}")
@@ -292,18 +332,39 @@ def run_dnsx(target: str) -> str:
     return f"[ASM DNSX - {host}]\n{output}"
 
 
-@tool(name="httpx_probe", aliases=["httpx", "http_probe"], category="recon", description="HTTP service probing with projectdiscovery httpx.", requires=["httpx"])
+@tool(
+    name="httpx_probe",
+    aliases=["httpx", "http_probe"],
+    category="recon",
+    description="HTTP service probing with projectdiscovery httpx.",
+    requires=["httpx"],
+)
 def run_httpx_probe(target: str) -> str:
     host = _target_host(target)
     print(f"  [*] httpx -silent -title -tech-detect -status-code {host}")
-    output = run_tool([
-        "httpx", "-silent", "-title", "-tech-detect", "-status-code",
-        "-follow-redirects", "-u", host,
-    ], timeout=180)
+    output = run_tool(
+        [
+            "httpx",
+            "-silent",
+            "-title",
+            "-tech-detect",
+            "-status-code",
+            "-follow-redirects",
+            "-u",
+            host,
+        ],
+        timeout=180,
+    )
     return f"[ASM HTTPX - {host}]\n{output}"
 
 
-@tool(name="naabu", aliases=["port_discovery"], category="recon", description="Fast safe TCP port discovery with naabu.", requires=["naabu"])
+@tool(
+    name="naabu",
+    aliases=["port_discovery"],
+    category="recon",
+    description="Fast safe TCP port discovery with naabu.",
+    requires=["naabu"],
+)
 def run_naabu(target: str) -> str:
     host = _target_host(target)
     print(f"  [*] naabu -silent -host {host} -top-ports 1000")
@@ -311,7 +372,13 @@ def run_naabu(target: str) -> str:
     return f"[ASM NAABU - {host}]\n{output}"
 
 
-@tool(name="tlsx", aliases=["tls_probe"], category="recon", description="TLS certificate/metadata discovery with tlsx.", requires=["tlsx"])
+@tool(
+    name="tlsx",
+    aliases=["tls_probe"],
+    category="recon",
+    description="TLS certificate/metadata discovery with tlsx.",
+    requires=["tlsx"],
+)
 def run_tlsx(target: str) -> str:
     host = _target_host(target)
     print(f"  [*] tlsx -silent -san -cn -tls-probe {host}")
@@ -319,7 +386,13 @@ def run_tlsx(target: str) -> str:
     return f"[ASM TLSX - {host}]\n{output}"
 
 
-@tool(name="wayback_urls", aliases=["wayback"], category="recon", description="Historical URL discovery with waybackurls.", requires=["waybackurls"])
+@tool(
+    name="wayback_urls",
+    aliases=["wayback"],
+    category="recon",
+    description="Historical URL discovery with waybackurls.",
+    requires=["waybackurls"],
+)
 def run_wayback_urls(target: str) -> str:
     domain = _target_host(target)
     print(f"  [*] waybackurls {domain}")
@@ -327,7 +400,13 @@ def run_wayback_urls(target: str) -> str:
     return f"[ASM WAYBACK - {domain}]\n{output}"
 
 
-@tool(name="gau_urls", aliases=["gau"], category="recon", description="Historical URL discovery with gau.", requires=["gau"])
+@tool(
+    name="gau_urls",
+    aliases=["gau"],
+    category="recon",
+    description="Historical URL discovery with gau.",
+    requires=["gau"],
+)
 def run_gau_urls(target: str) -> str:
     domain = _target_host(target)
     print(f"  [*] gau --subs {domain}")
@@ -335,7 +414,13 @@ def run_gau_urls(target: str) -> str:
     return f"[ASM GAU - {domain}]\n{output}"
 
 
-@tool(name="nuclei_safe", aliases=["nuclei"], category="recon", description="Safe nuclei template verification.", requires=["nuclei"])
+@tool(
+    name="nuclei_safe",
+    aliases=["nuclei"],
+    category="recon",
+    description="Safe nuclei template verification.",
+    requires=["nuclei"],
+)
 def run_nuclei_safe(target: str) -> str:
     scan_target = _as_url(target)
     tc = get_tool_config("nuclei")
@@ -350,13 +435,24 @@ def run_nuclei_safe(target: str) -> str:
         f"-severity {severity} -target {scan_target} "
         f"(wall={wall_timeout or 'unlimited'}s)"
     )
-    output = run_tool([
-        "nuclei", "-silent", "-jsonl", "-target", scan_target,
-        "-severity", severity,
-        "-exclude-tags", exclude_tags,
-        "-timeout", str(request_timeout),
-        "-retries", str(retries),
-    ], timeout=wall_timeout)
+    output = run_tool(
+        [
+            "nuclei",
+            "-silent",
+            "-jsonl",
+            "-target",
+            scan_target,
+            "-severity",
+            severity,
+            "-exclude-tags",
+            exclude_tags,
+            "-timeout",
+            str(request_timeout),
+            "-retries",
+            str(retries),
+        ],
+        timeout=wall_timeout,
+    )
     if str(output).strip() == "[!] nuclei returned no output.":
         output = "No nuclei findings detected."
     completed = ""
@@ -365,7 +461,13 @@ def run_nuclei_safe(target: str) -> str:
     return f"[NUCLEI SAFE - {scan_target}]\n{output}{completed}"
 
 
-@tool(name="katana_crawl", aliases=["katana"], category="recon", description="Passive web crawl and JS route discovery with katana.", requires=["katana"])
+@tool(
+    name="katana_crawl",
+    aliases=["katana"],
+    category="recon",
+    description="Passive web crawl and JS route discovery with katana.",
+    requires=["katana"],
+)
 def run_katana_crawl(target: str) -> str:
     scan_target = _as_url(target)
     print(f"  [*] katana -silent -js-crawl -known-files all -u {scan_target}")
@@ -373,7 +475,12 @@ def run_katana_crawl(target: str) -> str:
     return f"[KATANA CRAWL - {scan_target}]\n{output}"
 
 
-@tool(name="openapi_import", aliases=["swagger_import", "openapi"], category="recon", description="Import OpenAPI/Swagger spec and build endpoint map.")
+@tool(
+    name="openapi_import",
+    aliases=["swagger_import", "openapi"],
+    category="recon",
+    description="Import OpenAPI/Swagger spec and build endpoint map.",
+)
 def run_openapi_import(target: str) -> str:
     """Read a local or URL OpenAPI document. URL fetch is read-only."""
     source = (target or "").strip()
@@ -382,6 +489,7 @@ def run_openapi_import(target: str) -> str:
     try:
         if source.startswith(("http://", "https://")):
             import requests
+
             resp = requests.get(source, timeout=20, verify=False)
             body = resp.text
         else:
@@ -391,12 +499,17 @@ def run_openapi_import(target: str) -> str:
             data = json.loads(body)
         except json.JSONDecodeError:
             import yaml
+
             data = yaml.safe_load(body)
     except Exception as exc:
         return f"[API] OpenAPI import failed: {str(exc)[:180]}"
 
     paths = data.get("paths") or {}
-    lines = [f"[OPENAPI IMPORT - {source}]", f"Title: {data.get('info', {}).get('title', '')}", f"Endpoints: {len(paths)}"]
+    lines = [
+        f"[OPENAPI IMPORT - {source}]",
+        f"Title: {data.get('info', {}).get('title', '')}",
+        f"Endpoints: {len(paths)}",
+    ]
     for path, methods in list(paths.items())[:300]:
         if isinstance(methods, dict):
             for method in sorted(methods):
@@ -406,21 +519,42 @@ def run_openapi_import(target: str) -> str:
     return "\n".join(lines)
 
 
-@tool(name="graphql_check", aliases=["graphql_introspection"], category="recon", description="GraphQL endpoint presence/introspection safety check.", requires=["curl"])
+@tool(
+    name="graphql_check",
+    aliases=["graphql_introspection"],
+    category="recon",
+    description="GraphQL endpoint presence/introspection safety check.",
+    requires=["curl"],
+)
 def run_graphql_check(target: str) -> str:
     url = _as_url(target).rstrip("/")
     if not url.endswith("/graphql"):
         url = url + "/graphql"
     query = '{"query":"query { __schema { queryType { name } } }"}'
     print(f"  [*] GraphQL introspection check {url}")
-    output = run_tool([
-        "curl", "-sk", "--max-time", "15", "-H", "Content-Type: application/json",
-        "-d", query, url,
-    ], timeout=30)
+    output = run_tool(
+        [
+            "curl",
+            "-sk",
+            "--max-time",
+            "15",
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            query,
+            url,
+        ],
+        timeout=30,
+    )
     return f"[GRAPHQL CHECK - {url}]\n{output}"
 
 
-@tool(name="session_profile_import", aliases=["session_import"], category="recon", description="Import authenticated web session headers/cookies from a local JSON profile.")
+@tool(
+    name="session_profile_import",
+    aliases=["session_import"],
+    category="recon",
+    description="Import authenticated web session headers/cookies from a local JSON profile.",
+)
 def run_session_profile_import(target: str) -> str:
     path = _path_or_target(target)
     profile = _load_session_profile(path)
@@ -434,10 +568,17 @@ def run_session_profile_import(target: str) -> str:
     return "\n".join(lines)
 
 
-@tool(name="authenticated_crawl", aliases=["auth_crawl"], category="recon", description="Authenticated read-only crawl using a local session profile.", requires=["python:requests"])
+@tool(
+    name="authenticated_crawl",
+    aliases=["auth_crawl"],
+    category="recon",
+    description="Authenticated read-only crawl using a local session profile.",
+    requires=["python:requests"],
+)
 def run_authenticated_crawl(target: str, session_profile: str = "") -> str:
     import requests
     import urllib3
+
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     url = _as_url(target)
@@ -454,9 +595,9 @@ def run_authenticated_crawl(target: str, session_profile: str = "") -> str:
         if title:
             title_text = re.sub(r"\s+", " ", title.group(1)).strip()[:180]
             lines.append(f"Title: {title_text}")
-        links = sorted(set(re.findall(r'''href=["']([^"']+)["']''', body, re.IGNORECASE)))[:300]
+        links = sorted(set(re.findall(r"""href=["']([^"']+)["']""", body, re.IGNORECASE)))[:300]
         forms = re.findall(r"<form\b", body, re.IGNORECASE)
-        csrf = re.search(r'(?i)(csrf|xsrf|_token|nonce)', body) is not None
+        csrf = re.search(r"(?i)(csrf|xsrf|_token|nonce)", body) is not None
         lines.append(f"Forms: {len(forms)}")
         lines.append(f"CSRF token observed: {'yes' if csrf else 'no'}")
         for link in links:
@@ -466,10 +607,17 @@ def run_authenticated_crawl(target: str, session_profile: str = "") -> str:
     return "\n".join(lines)
 
 
-@tool(name="api_auth_check", aliases=["missing_auth_check"], category="recon", description="Read-only API missing-auth probe with GET/HEAD only.", requires=["python:requests"])
+@tool(
+    name="api_auth_check",
+    aliases=["missing_auth_check"],
+    category="recon",
+    description="Read-only API missing-auth probe with GET/HEAD only.",
+    requires=["python:requests"],
+)
 def run_api_auth_check(target: str, session_profile: str = "") -> str:
     import requests
     import urllib3
+
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     url = _as_url(target)
@@ -499,7 +647,13 @@ def run_api_auth_check(target: str, session_profile: str = "") -> str:
     return "\n".join(lines)
 
 
-@tool(name="gitleaks_scan", aliases=["gitleaks"], category="recon", description="Secret scanning with gitleaks.", requires=["gitleaks"])
+@tool(
+    name="gitleaks_scan",
+    aliases=["gitleaks"],
+    category="recon",
+    description="Secret scanning with gitleaks.",
+    requires=["gitleaks"],
+)
 def run_gitleaks_scan(target: str = ".") -> str:
     path = _path_or_target(target)
     print(f"  [*] gitleaks detect --no-git --redact --source {path}")
@@ -507,7 +661,13 @@ def run_gitleaks_scan(target: str = ".") -> str:
     return f"[GITLEAKS SCAN - {path}]\n{output}"
 
 
-@tool(name="trufflehog_scan", aliases=["trufflehog"], category="recon", description="Secret scanning with TruffleHog.", requires=["trufflehog"])
+@tool(
+    name="trufflehog_scan",
+    aliases=["trufflehog"],
+    category="recon",
+    description="Secret scanning with TruffleHog.",
+    requires=["trufflehog"],
+)
 def run_trufflehog_scan(target: str = ".") -> str:
     path = _path_or_target(target)
     print(f"  [*] trufflehog filesystem --json --no-update {path}")
@@ -515,7 +675,13 @@ def run_trufflehog_scan(target: str = ".") -> str:
     return f"[TRUFFLEHOG SCAN - {path}]\n{output}"
 
 
-@tool(name="semgrep_scan", aliases=["semgrep"], category="recon", description="Static analysis with Semgrep.", requires=["semgrep"])
+@tool(
+    name="semgrep_scan",
+    aliases=["semgrep"],
+    category="recon",
+    description="Static analysis with Semgrep.",
+    requires=["semgrep"],
+)
 def run_semgrep_scan(target: str = ".") -> str:
     path = _path_or_target(target)
     print(f"  [*] semgrep scan --json --config auto {path}")
@@ -523,7 +689,13 @@ def run_semgrep_scan(target: str = ".") -> str:
     return f"[SEMGREP SCAN - {path}]\n{output}"
 
 
-@tool(name="trivy_scan", aliases=["trivy"], category="recon", description="Filesystem/IaC/dependency scanning with Trivy.", requires=["trivy"])
+@tool(
+    name="trivy_scan",
+    aliases=["trivy"],
+    category="recon",
+    description="Filesystem/IaC/dependency scanning with Trivy.",
+    requires=["trivy"],
+)
 def run_trivy_scan(target: str = ".") -> str:
     path = _path_or_target(target)
     print(f"  [*] trivy fs --format json --scanners vuln,secret,misconfig {path}")
@@ -531,7 +703,13 @@ def run_trivy_scan(target: str = ".") -> str:
     return f"[TRIVY SCAN - {path}]\n{output}"
 
 
-@tool(name="checkov_scan", aliases=["checkov"], category="recon", description="IaC/cloud misconfiguration scanning with Checkov.", requires=["checkov"])
+@tool(
+    name="checkov_scan",
+    aliases=["checkov"],
+    category="recon",
+    description="IaC/cloud misconfiguration scanning with Checkov.",
+    requires=["checkov"],
+)
 def run_checkov_scan(target: str = ".") -> str:
     path = _path_or_target(target)
     print(f"  [*] checkov -d {path} -o json")
@@ -539,7 +717,13 @@ def run_checkov_scan(target: str = ".") -> str:
     return f"[CHECKOV SCAN - {path}]\n{output}"
 
 
-@tool(name="prowler_scan", aliases=["prowler"], category="recon", description="Cloud security posture review with Prowler.", requires=["prowler"])
+@tool(
+    name="prowler_scan",
+    aliases=["prowler"],
+    category="recon",
+    description="Cloud security posture review with Prowler.",
+    requires=["prowler"],
+)
 def run_prowler_scan(target: str = "aws") -> str:
     provider = (target or "aws").strip().lower()
     if provider not in {"aws", "azure", "gcp", "kubernetes", "m365"}:
@@ -549,7 +733,13 @@ def run_prowler_scan(target: str = "aws") -> str:
     return f"[PROWLER SCAN - {provider}]\n{output}"
 
 
-@tool(name="scoutsuite_scan", aliases=["scoutsuite"], category="recon", description="Cloud security posture review with ScoutSuite.", requires=["scout"])
+@tool(
+    name="scoutsuite_scan",
+    aliases=["scoutsuite"],
+    category="recon",
+    description="Cloud security posture review with ScoutSuite.",
+    requires=["scout"],
+)
 def run_scoutsuite_scan(target: str = "aws") -> str:
     provider = (target or "aws").strip().lower()
     if provider not in {"aws", "azure", "gcp"}:
@@ -559,7 +749,13 @@ def run_scoutsuite_scan(target: str = "aws") -> str:
     return f"[SCOUTSUITE SCAN - {provider}]\n{output}"
 
 
-@tool(name="sslscan", aliases=[], category="recon", description="Run sslscan to check for TLS/SSL vulnerabilities.", requires=["sslscan"])
+@tool(
+    name="sslscan",
+    aliases=[],
+    category="recon",
+    description="Run sslscan to check for TLS/SSL vulnerabilities.",
+    requires=["sslscan"],
+)
 def run_sslscan(target: str) -> str:
     """sslscan to check for TLS/SSL vulnerabilities"""
     tc = get_tool_config("sslscan")
@@ -678,12 +874,20 @@ def run_smtp_probe(target: str, port: int = 25) -> str:
                     logging.debug("Suppressed SMTP close error: %s", _exc)
 
 
-@tool(name="ffuf", aliases=["dirbuster", "dirb_fuzz"], category="recon", description="Run ffuf for fast directory discovery.", requires=["ffuf"])
+@tool(
+    name="ffuf",
+    aliases=["dirbuster", "dirb_fuzz"],
+    category="recon",
+    description="Run ffuf for fast directory discovery.",
+    requires=["ffuf"],
+)
 def run_ffuf(target: str) -> str:
     """ffuf for fast directory discovery using config-driven wordlists."""
     print(f"  [*] ffuf {target}")
     if not shutil.which("ffuf"):
-        return "[!] ffuf is not installed. AI: do NOT attempt dirb_fuzz anymore! Fall back to curl or finding logic bugs."
+        return (
+            "[!] ffuf is not installed. AI: do NOT attempt dirb_fuzz anymore! Fall back to curl or finding logic bugs."
+        )
 
     tc = get_tool_config("ffuf")
     threads = str(_config_int(tc, "threads", 50, minimum=1))
@@ -698,6 +902,7 @@ def run_ffuf(target: str) -> str:
     try:
         import requests
         import urllib3
+
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         reachable = ""
         for candidate in _url_candidates(target):
@@ -719,14 +924,34 @@ def run_ffuf(target: str) -> str:
         return "[!] No common web wordlists found on system. Add paths to config.yaml → wordlists → web_dirs."
 
     print(f"  [*] Using wordlist: {os.path.basename(wordlist)}")
-    return run_tool([
-        "ffuf", "-w", wordlist, "-u", f"{base_url}/FUZZ",
-        "-t", threads, "-mc", match_codes, *flags,
-        "-timeout", request_timeout, "-maxtime", maxtime,
-    ], timeout=timeout)
+    return run_tool(
+        [
+            "ffuf",
+            "-w",
+            wordlist,
+            "-u",
+            f"{base_url}/FUZZ",
+            "-t",
+            threads,
+            "-mc",
+            match_codes,
+            *flags,
+            "-timeout",
+            request_timeout,
+            "-maxtime",
+            maxtime,
+        ],
+        timeout=timeout,
+    )
 
 
-@tool(name="gobuster", aliases=["gobuster_dir"], category="recon", description="Run gobuster directory discovery.", requires=["gobuster"])
+@tool(
+    name="gobuster",
+    aliases=["gobuster_dir"],
+    category="recon",
+    description="Run gobuster directory discovery.",
+    requires=["gobuster"],
+)
 def run_gobuster(target: str) -> str:
     """Run the configured native gobuster provider with the shared web wordlist."""
     tc = get_tool_config("gobuster")
@@ -744,7 +969,13 @@ def run_gobuster(target: str) -> str:
     )
 
 
-@tool(name="dirb", aliases=["dirb_native"], category="recon", description="Run native dirb directory discovery.", requires=["dirb"])
+@tool(
+    name="dirb",
+    aliases=["dirb_native"],
+    category="recon",
+    description="Run native dirb directory discovery.",
+    requires=["dirb"],
+)
 def run_dirb(target: str) -> str:
     """Run the configured native dirb provider with the shared web wordlist."""
     tc = get_tool_config("dirb")
@@ -758,7 +989,13 @@ def run_dirb(target: str) -> str:
     return run_tool(["dirb", url, wordlist, *flags], timeout=timeout)
 
 
-@tool(name="enum4linux", aliases=[], category="recon", description="Run enum4linux for SMB and Windows enumeration.", requires=["enum4linux"])
+@tool(
+    name="enum4linux",
+    aliases=[],
+    category="recon",
+    description="Run enum4linux for SMB and Windows enumeration.",
+    requires=["enum4linux"],
+)
 def run_enum4linux(target: str) -> str:
     """enum4linux for SMB and Windows enumeration"""
     tc = get_tool_config("enum4linux")
@@ -767,7 +1004,13 @@ def run_enum4linux(target: str) -> str:
     return run_tool(["enum4linux", *flags, target], timeout=tc.get("timeout", 150))
 
 
-@tool(name="smbclient", aliases=[], category="recon", description="Run smbclient -L to list shares anonymously.", requires=["smbclient"])
+@tool(
+    name="smbclient",
+    aliases=[],
+    category="recon",
+    description="Run smbclient -L to list shares anonymously.",
+    requires=["smbclient"],
+)
 def run_smbclient(target: str) -> str:
     """smbclient -L to list shares anonymously"""
     tc = get_tool_config("smbclient")
@@ -795,10 +1038,7 @@ def run_sqlmap(target: str) -> str:
     flags = tc.get("flags", ["--batch", "--crawl=1"])
     url = _ensure_url(target)
     print(f"  [*] sqlmap -u {url} --level={level} --risk={risk}")
-    return run_tool(
-        ["sqlmap", "-u", url, *flags, f"--level={level}", f"--risk={risk}"],
-        timeout=tc.get("timeout", 180)
-    )
+    return run_tool(["sqlmap", "-u", url, *flags, f"--level={level}", f"--risk={risk}"], timeout=tc.get("timeout", 180))
 
 
 @tool(name="nikto", aliases=["nikto_scan"], category="recon", description="Run nikto -h.", requires=["nikto"])
@@ -816,7 +1056,13 @@ def run_nikto(target: str) -> str:
     return f"[NIKTO - {scan_target}]\n{output}{completed}"
 
 
-@tool(name="security_headers_check", aliases=["security_headers"], category="recon", description="Read-only HTTP security headers and cookie review.", requires=["curl"])
+@tool(
+    name="security_headers_check",
+    aliases=["security_headers"],
+    category="recon",
+    description="Read-only HTTP security headers and cookie review.",
+    requires=["curl"],
+)
 def run_security_headers_check(target: str) -> str:
     url = _as_url(target)
     print(f"  [*] Security headers check {url}")
@@ -824,21 +1070,42 @@ def run_security_headers_check(target: str) -> str:
     return f"[SECURITY HEADERS - {url}]\n{output}"
 
 
-@tool(name="cors_check", aliases=["cors"], category="recon", description="Read-only CORS preflight check.", requires=["curl"])
+@tool(
+    name="cors_check",
+    aliases=["cors"],
+    category="recon",
+    description="Read-only CORS preflight check.",
+    requires=["curl"],
+)
 def run_cors_check(target: str) -> str:
     url = _as_url(target)
     origin = "https://octopus.invalid"
     print(f"  [*] CORS check {url}")
-    output = run_tool([
-        "curl", "-skI", "--max-time", "15", "-X", "OPTIONS",
-        "-H", f"Origin: {origin}",
-        "-H", "Access-Control-Request-Method: GET",
-        url,
-    ], timeout=30)
+    output = run_tool(
+        [
+            "curl",
+            "-skI",
+            "--max-time",
+            "15",
+            "-X",
+            "OPTIONS",
+            "-H",
+            f"Origin: {origin}",
+            "-H",
+            "Access-Control-Request-Method: GET",
+            url,
+        ],
+        timeout=30,
+    )
     return f"[CORS CHECK - {url}]\nOrigin: {origin}\n{output}"
 
 
-@tool(name="jwt_analyze", aliases=["jwt"], category="recon", description="Decode JWT header/payload without verifying or brute forcing.")
+@tool(
+    name="jwt_analyze",
+    aliases=["jwt"],
+    category="recon",
+    description="Decode JWT header/payload without verifying or brute forcing.",
+)
 def run_jwt_analyze(target: str) -> str:
     token = (target or "").strip()
     if os.path.exists(token):
@@ -847,41 +1114,58 @@ def run_jwt_analyze(target: str) -> str:
                 token = token_file.read().strip()
         except Exception as exc:
             return f"[JWT ANALYZE] failed to read token file: {str(exc)[:180]}"
-    match = re.search(r'eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*', token)
+    match = re.search(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*", token)
     if not match:
         return "[JWT ANALYZE] no JWT token found"
     jwt_value = match.group(0)
     header_b64, payload_b64, _sig = jwt_value.split(".", 2)
     header = _decode_jwt_segment(header_b64)
     payload = _decode_jwt_segment(payload_b64)
-    return "\n".join([
-        "[JWT ANALYZE]",
-        f"alg: {header.get('alg', '')}",
-        f"typ: {header.get('typ', '')}",
-        f"kid: {header.get('kid', '')}",
-        f"claims: {', '.join(sorted(str(k) for k in payload))}",
-        f"issuer: {payload.get('iss', '')}",
-        f"audience: {payload.get('aud', '')}",
-        f"expires: {payload.get('exp', '')}",
-    ])
+    return "\n".join(
+        [
+            "[JWT ANALYZE]",
+            f"alg: {header.get('alg', '')}",
+            f"typ: {header.get('typ', '')}",
+            f"kid: {header.get('kid', '')}",
+            f"claims: {', '.join(sorted(str(k) for k in payload))}",
+            f"issuer: {payload.get('iss', '')}",
+            f"audience: {payload.get('aud', '')}",
+            f"expires: {payload.get('exp', '')}",
+        ]
+    )
 
 
-@tool(name="js_route_extract", aliases=["js_routes"], category="recon", description="Fetch JavaScript and extract likely client-side/API routes.", requires=["curl"])
+@tool(
+    name="js_route_extract",
+    aliases=["js_routes"],
+    category="recon",
+    description="Fetch JavaScript and extract likely client-side/API routes.",
+    requires=["curl"],
+)
 def run_js_route_extract(target: str) -> str:
     url = _as_url(target)
     print(f"  [*] JS route extraction {url}")
     body = run_tool(["curl", "-skL", "--max-time", "20", url], timeout=35)
-    routes = sorted(set(re.findall(
-        r'["\']((?:/[A-Za-z0-9_./{}:-]+|https?://[^"\'\s]+)(?:\?[^"\'\s]*)?)["\']',
-        body,
-    )))
+    routes = sorted(
+        set(
+            re.findall(
+                r'["\']((?:/[A-Za-z0-9_./{}:-]+|https?://[^"\'\s]+)(?:\?[^"\'\s]*)?)["\']',
+                body,
+            )
+        )
+    )
     lines = [f"[JS ROUTE EXTRACT - {url}]", f"Routes: {len(routes)}"]
     for route in routes[:300]:
         lines.append(route[:300])
     return "\n".join(lines)
 
 
-@tool(name="burp_import", aliases=["burp"], category="recon", description="Import Burp Suite XML/JSON export into normalized facts.")
+@tool(
+    name="burp_import",
+    aliases=["burp"],
+    category="recon",
+    description="Import Burp Suite XML/JSON export into normalized facts.",
+)
 def run_burp_import(target: str) -> str:
     path = _path_or_target(target)
     if not os.path.exists(path):
@@ -905,7 +1189,12 @@ def run_burp_import(target: str) -> str:
     return "\n".join(lines)
 
 
-@tool(name="zap_import", aliases=["zap"], category="recon", description="Import OWASP ZAP JSON/XML report into normalized facts.")
+@tool(
+    name="zap_import",
+    aliases=["zap"],
+    category="recon",
+    description="Import OWASP ZAP JSON/XML report into normalized facts.",
+)
 def run_zap_import(target: str) -> str:
     path = _path_or_target(target)
     if not os.path.exists(path):
@@ -935,7 +1224,13 @@ def run_zap_import(target: str) -> str:
 
 # SCRAPLING INTEGRATION
 
-@tool(name="scrapling", aliases=["scrapling_fetch"], category="recon", description="Fetch a URL using scrapling's StealthyFetcher.")
+
+@tool(
+    name="scrapling",
+    aliases=["scrapling_fetch"],
+    category="recon",
+    description="Fetch a URL using scrapling's StealthyFetcher.",
+)
 def run_scrapling_fetch(url: str) -> str:
     """
     Fetch a URL using scrapling's StealthyFetcher for JS-rendered pages and anti-bot bypass.
@@ -993,6 +1288,7 @@ def run_scrapling_fetch(url: str) -> str:
         else:
             # BeautifulSoup fallback
             from bs4 import BeautifulSoup
+
             soup = BeautifulSoup(html_str, "html.parser")
             title_el = soup.find("title")
             if title_el:
@@ -1064,8 +1360,12 @@ def run_scrapling_fetch(url: str) -> str:
     session.mount("https://", HTTPAdapter(max_retries=retries))
 
     try:
-        resp = session.get(url, timeout=(min(5, timeout), timeout), verify=False,
-                          headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/120.0"})
+        resp = session.get(
+            url,
+            timeout=(min(5, timeout), timeout),
+            verify=False,
+            headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/120.0"},
+        )
         return _extract_page_data(html_str=resp.text, status_code=resp.status_code, source="requests+bs4")
     except Exception as e:
         print(f"  {C_YELLOW}[!] Requests fallback failed: {str(e)[:80]}{C_RESET}")
@@ -1077,18 +1377,25 @@ def run_scrapling_fetch(url: str) -> str:
             if alt_url == url:
                 continue
             try:
-                resp = session.get(alt_url, timeout=(min(3, timeout), timeout), verify=False,
-                                  headers={"User-Agent": "Mozilla/5.0"})
+                resp = session.get(
+                    alt_url, timeout=(min(3, timeout), timeout), verify=False, headers={"User-Agent": "Mozilla/5.0"}
+                )
                 if resp.status_code == 200:
                     print(f"  {C_GREEN}[+] Alt port {alt_port} responded!{C_RESET}")
-                    return _extract_page_data(html_str=resp.text, status_code=resp.status_code,
-                                           source=f"requests+bs4 (port {alt_port})")
+                    return _extract_page_data(
+                        html_str=resp.text, status_code=resp.status_code, source=f"requests+bs4 (port {alt_port})"
+                    )
             except Exception:
                 continue
         return f"[!] All scrapling/requests attempts failed for {url}. Target web service may be down."
 
 
-@tool(name="scrapling_crawl", aliases=["crawl"], category="recon", description="Deep crawl a website using scrapling or requests+BeautifulSoup fallback for link discovery.")
+@tool(
+    name="scrapling_crawl",
+    aliases=["crawl"],
+    category="recon",
+    description="Deep crawl a website using scrapling or requests+BeautifulSoup fallback for link discovery.",
+)
 def run_scrapling_crawl(url: str, max_pages: Optional[int] = None) -> str:
     """
     Deep crawl a website using scrapling for link discovery and content extraction.
@@ -1149,6 +1456,7 @@ def run_scrapling_crawl(url: str, max_pages: Optional[int] = None) -> str:
                         results.append(f"  [{status or 'ERR'}] {current_url}")
                 else:
                     import requests as _req
+
                     resp = _req.get(
                         current_url,
                         timeout=(min(5, timeout), timeout),
@@ -1157,12 +1465,15 @@ def run_scrapling_crawl(url: str, max_pages: Optional[int] = None) -> str:
                     )
                     try:
                         from bs4 import BeautifulSoup
+
                         soup = BeautifulSoup(resp.text, "html.parser")
                         title_el = soup.find("title")
                         title = title_el.get_text(strip=True) if title_el else "No title"
                         hrefs = [a.get("href", "") for a in soup.find_all("a", href=True)]
                     except ImportError:
-                        title_match = re.search(r"<title[^>]*>(.*?)</title>", resp.text or "", re.IGNORECASE | re.DOTALL)
+                        title_match = re.search(
+                            r"<title[^>]*>(.*?)</title>", resp.text or "", re.IGNORECASE | re.DOTALL
+                        )
                         title = re.sub(r"\s+", " ", title_match.group(1)).strip() if title_match else "No title"
                         hrefs = re.findall(r'href=["\']([^"\']+)["\']', resp.text or "", re.IGNORECASE)
                     results.append(f"  [{resp.status_code}] {current_url} — {title[:60]}")
@@ -1186,7 +1497,14 @@ def run_scrapling_crawl(url: str, max_pages: Optional[int] = None) -> str:
 
 # SSH USER ENUMERATION (CVE-2018-15473)
 
-@tool(name="ssh_user_enum", aliases=["ssh-user-enum", "sshenum"], category="recon", description="Enumerate valid SSH usernames via CVE-2018-15473.", requires=["python:paramiko"])
+
+@tool(
+    name="ssh_user_enum",
+    aliases=["ssh-user-enum", "sshenum"],
+    category="recon",
+    description="Enumerate valid SSH usernames via CVE-2018-15473.",
+    requires=["python:paramiko"],
+)
 def run_ssh_user_enum(target: str, port: int = 22) -> str:
     """
     Enumerate valid SSH usernames via CVE-2018-15473 (OpenSSH ≤ 7.7).
@@ -1215,16 +1533,39 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
         sock.close()
 
     # Trimmed default user list — only the most common ones
-    default_users = CFG.get("default_users", [
-        "root", "admin", "support", "administrator", "user",
-        "test", "guest", "operator", "ftp", "www",
-    ])
+    default_users = CFG.get(
+        "default_users",
+        [
+            "root",
+            "admin",
+            "support",
+            "administrator",
+            "user",
+            "test",
+            "guest",
+            "operator",
+            "ftp",
+            "www",
+        ],
+    )
 
     # Extended list for full scan (only used if server is vulnerable)
     extended_users = [
-        "www-data", "mysql", "postgres", "oracle", "tomcat", "jenkins",
-        "git", "nagios", "zabbix", "pi", "ubnt", "deploy", "ansible",
-        "backup", "service"
+        "www-data",
+        "mysql",
+        "postgres",
+        "oracle",
+        "tomcat",
+        "jenkins",
+        "git",
+        "nagios",
+        "zabbix",
+        "pi",
+        "ubnt",
+        "deploy",
+        "ansible",
+        "backup",
+        "service",
     ]
 
     def _check_user(username: str) -> bool:
@@ -1328,7 +1669,7 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
 
     # Double-check false positive (if >70% valid despite canary passing)
     if total_tested > 0 and len(valid_users) / total_tested > 0.70:
-        output += f"\n[!] WARNING: {len(valid_users)}/{total_tested} ({100*len(valid_users)//total_tested}%) users returned valid.\n"
+        output += f"\n[!] WARNING: {len(valid_users)}/{total_tested} ({100 * len(valid_users) // total_tested}%) users returned valid.\n"
         output += "[!] Server is likely PATCHED against CVE-2018-15473 — results UNRELIABLE.\n"
         output += "[!] Falling back to default priority users for bruteforce.\n"
         output += "\nAI: ssh_user_enum results are UNRELIABLE. Use default users for bruteforce.\n"

@@ -82,8 +82,7 @@ def build_action_catalog(
         missing = ", ".join(sorted(expected - covered)) or "none"
         unexpected = ", ".join(sorted(covered - expected)) or "none"
         raise RuntimeError(
-            "Action catalog does not match the decorator registry: "
-            f"missing={missing}; unexpected={unexpected}"
+            f"Action catalog does not match the decorator registry: missing={missing}; unexpected={unexpected}"
         )
     return catalog
 

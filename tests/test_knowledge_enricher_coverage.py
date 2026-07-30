@@ -100,14 +100,30 @@ def test_enricher_routes_every_supported_fact_to_typed_graph_operations() -> Non
     assert ("add_service", ("10.0.0.5", 80), {"service_name": "http", "version": "nginx/1.25"}) in services
 
     credentials = _calls(graph, "add_credential")
-    assert ("add_credential", ("admin", "secret"), {"source": "ssh", "service": "ssh", "verified": True, "host": "10.0.0.5"}) in credentials
-    assert ("add_credential", ("root", "database-secret"), {"source": "mysql", "service": "mysql", "host": "10.0.0.5"}) in credentials
-    assert ("add_credential", ("api_key", "api-secret"), {"source": "secrets", "secret_type": "token", "host": "10.0.0.5"}) in credentials
+    assert (
+        "add_credential",
+        ("admin", "secret"),
+        {"source": "ssh", "service": "ssh", "verified": True, "host": "10.0.0.5"},
+    ) in credentials
+    assert (
+        "add_credential",
+        ("root", "database-secret"),
+        {"source": "mysql", "service": "mysql", "host": "10.0.0.5"},
+    ) in credentials
+    assert (
+        "add_credential",
+        ("api_key", "api-secret"),
+        {"source": "secrets", "secret_type": "token", "host": "10.0.0.5"},
+    ) in credentials
 
     identities = _calls(graph, "add_identity")
     assert ("add_identity", ("deploy",), {"identity_type": "local", "host": "10.0.0.5"}) in identities
     assert ("add_identity", ("service",), {"identity_type": "local", "host": "10.0.0.5", "uid": 1001}) in identities
-    assert ("add_identity", ("operator",), {"identity_type": "local", "host": "10.0.0.5", "shell": "/bin/bash"}) in identities
+    assert (
+        "add_identity",
+        ("operator",),
+        {"identity_type": "local", "host": "10.0.0.5", "shell": "/bin/bash"},
+    ) in identities
     assert ("add_identity", ("reporting",), {"identity_type": "service"}) in identities
 
     links = _calls(graph, "link")
@@ -192,4 +208,3 @@ def test_credential_ranking_covers_every_supported_credential_class() -> None:
     assert rank_credentials(credentials) == list(reversed(credentials))
     assert best_credential(credentials) == ("root", "password")
     assert best_credential([]) == (None, None)
-

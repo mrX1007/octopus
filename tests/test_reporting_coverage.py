@@ -102,16 +102,19 @@ def test_contradicted_candidate_finalizes_as_medium_not_verified():
 
 def test_access_findings_cover_legacy_verified_and_rejected_assessments():
     assert reporting.build_access_findings([], {}) == []
-    assert reporting.build_access_findings(
-        [
-            {
-                "type": "system_access",
-                "value": "uid=0",
-                "assessment": _assessment("contradicted"),
-            }
-        ],
-        {"root_access_confirmed": True},
-    ) == []
+    assert (
+        reporting.build_access_findings(
+            [
+                {
+                    "type": "system_access",
+                    "value": "uid=0",
+                    "assessment": _assessment("contradicted"),
+                }
+            ],
+            {"root_access_confirmed": True},
+        )
+        == []
+    )
 
     supporting = [
         {"type": "credential", "value": "ssh_login_success:root"},
@@ -148,9 +151,7 @@ def test_coverage_summary_deduplicates_scopes_and_checked_results():
         return {
             "id": identifier,
             "type": "check_result",
-            "value": json.dumps(
-                {"status": status, "tool": tool, "kind": kind, "scope": scope or {}}
-            ),
+            "value": json.dumps({"status": status, "tool": tool, "kind": kind, "scope": scope or {}}),
         }
 
     facts = [
@@ -174,11 +175,7 @@ def test_coverage_summary_deduplicates_scopes_and_checked_results():
     assert summary["confidence"] == "partial"
     assert len(summary["degraded"]) == 4
     assert len(summary["checked_but_not_confirmed"]) == 3
-    probe = next(
-        item
-        for item in summary["degraded"]
-        if item["tool"] == "probe" and item.get("kind") == "kind"
-    )
+    probe = next(item for item in summary["degraded"] if item["tool"] == "probe" and item.get("kind") == "kind")
     assert probe["scopes"] == [{"host": "a"}, {"host": "b"}]
 
 
@@ -244,7 +241,7 @@ def test_remediations_cover_all_service_specific_and_fallback_paths():
 
 def test_private_parsers_group_updates_and_service_fallbacks():
     assert reporting._parser_name_for_fact({"source": "replay:tool"}) == "replay_output_parser"
-    assert reporting._parse_exploit_candidate(" {\"module\": \"x\"}") == {}
+    assert reporting._parse_exploit_candidate(' {"module": "x"}') == {}
     assert reporting._parse_exploit_candidate("invalid") == {}
     assert reporting._parse_exploit_candidate("m on svc:1 [v]")["port"] == "1"
     assert reporting._parse_msf_endpoint("bad") == {}

@@ -23,11 +23,7 @@ def validate_wheel(path: str | Path) -> dict[str, int]:
     wheel = Path(path).resolve(strict=True)
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
-    scenarios = {
-        name
-        for name in names
-        if name.startswith("benchmarks/scenarios/") and name.endswith(".json")
-    }
+    scenarios = {name for name in names if name.startswith("benchmarks/scenarios/") and name.endswith(".json")}
     required = {
         "config.yaml",
         "benchmarks/results/noop-repeat-comparison-v1.json",
@@ -40,10 +36,7 @@ def validate_wheel(path: str | Path) -> dict[str, int]:
     }
     missing = required - names
     if len(scenarios) != 10 or missing:
-        raise WheelSmokeError(
-            "wheel_data_missing:"
-            + ",".join(sorted({*missing, f"scenario_count={len(scenarios)}"}))
-        )
+        raise WheelSmokeError("wheel_data_missing:" + ",".join(sorted({*missing, f"scenario_count={len(scenarios)}"})))
 
     with tempfile.TemporaryDirectory(prefix="octopus-wheel-smoke-") as temporary:
         root = Path(temporary)
@@ -118,10 +111,7 @@ def validate_sdist(path: str | Path) -> dict[str, int]:
     with tarfile.open(sdist, mode="r:gz") as archive:
         names = set(archive.getnames())
     config_files = {
-        name
-        for name in names
-        if len(PurePosixPath(name).parts) == 2
-        and PurePosixPath(name).name == "config.yaml"
+        name for name in names if len(PurePosixPath(name).parts) == 2 and PurePosixPath(name).name == "config.yaml"
     }
     if len(config_files) != 1:
         raise WheelSmokeError(f"sdist_config_count:{len(config_files)}")
@@ -135,23 +125,14 @@ def _validate_missing_c2_extra(*, python: Path, purelib: str, cwd: Path) -> None
                 str(python),
                 "-S",
                 "-c",
-                (
-                    "import sys; "
-                    "sys.path.insert(0, sys.argv[1]); "
-                    "import octopus_c2; "
-                    "raise SystemExit(octopus_c2.main())"
-                ),
+                ("import sys; sys.path.insert(0, sys.argv[1]); import octopus_c2; raise SystemExit(octopus_c2.main())"),
                 purelib,
             ],
             cwd=str(cwd),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             check=False,
-            env={
-                key: value
-                for key, value in os.environ.items()
-                if key not in {"PYTHONHOME", "PYTHONPATH"}
-            },
+            env={key: value for key, value in os.environ.items() if key not in {"PYTHONHOME", "PYTHONPATH"}},
             timeout=120,
             text=True,
         )
@@ -187,9 +168,7 @@ def _run(
     except (OSError, subprocess.SubprocessError) as exc:
         raise WheelSmokeError(f"installed_command_failed:{Path(argv[0]).name}") from exc
     if require_empty_stderr and completed.stderr:
-        raise WheelSmokeError(
-            f"installed_command_stderr_not_clean:{Path(argv[0]).name}"
-        )
+        raise WheelSmokeError(f"installed_command_stderr_not_clean:{Path(argv[0]).name}")
     return completed.stdout
 
 
@@ -204,10 +183,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, WheelSmokeError, tarfile.TarError, zipfile.BadZipFile) as exc:
         print(f"wheel smoke failed: {exc}", file=sys.stderr)
         return 1
-    summary = (
-        f"wheel smoke passed: {result['files']} files, "
-        f"{result['scenarios']} scenarios"
-    )
+    summary = f"wheel smoke passed: {result['files']} files, {result['scenarios']} scenarios"
     if sdist_result:
         summary += f", sdist {sdist_result['files']} files"
     print(summary)

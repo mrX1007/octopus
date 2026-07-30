@@ -68,9 +68,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
         except ImportError:
             CFG = {}
         strategy = CFG.get("strategy", {})
-        active_authorized = bool(
-            strategy.get("active_authorized", False)
-        ) and self._target_in_authorized_scope(
+        active_authorized = bool(strategy.get("active_authorized", False)) and self._target_in_authorized_scope(
             target,
             strategy.get("authorized_targets", []),
         )
@@ -158,15 +156,11 @@ class PipelinePlanningMixin(PipelineMixinBase):
         for rejection in compilation.rejected:
             rejection_dict = dict(rejection)
             self.plan_rejections.append(rejection_dict)
-            task = self.tool_registry.canonical_task(
-                rejection_dict.get("task", "")
-            )
+            task = self.tool_registry.canonical_task(rejection_dict.get("task", ""))
             if task:
                 self.blocked_tasks.add(task)
             reasons = ", ".join(rejection_dict.get("blocking_reasons") or [])
-            durable_reason = str(
-                rejection_dict.get("reason") or "capability_unavailable"
-            )
+            durable_reason = str(rejection_dict.get("reason") or "capability_unavailable")
             if reasons:
                 durable_reason += ":" + reasons
             self._persist_plan_rejection(
@@ -203,9 +197,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
             agent = step.get("agent") or self._agent_for_task(task, goal)
             if not agent or not task:
                 continue
-            task_key = (
-                (task or "").strip().lower().replace("-", "_").replace(" ", "_")
-            )
+            task_key = (task or "").strip().lower().replace("-", "_").replace(" ", "_")
             if goal == "privilege_escalation" and task_key in {
                 "verify_exploit",
                 "exploit",
@@ -251,10 +243,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
                 return [step for step in nested if isinstance(step, dict)]
             if isinstance(nested, dict):
                 return self._coerce_plan_steps(nested)
-        if any(
-            key in raw_plan
-            for key in ("agent", "task", "tool", "action", "name", "command")
-        ):
+        if any(key in raw_plan for key in ("agent", "task", "tool", "action", "name", "command")):
             return [raw_plan]
         return []
 
@@ -301,9 +290,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
         if forced_plan is not None:
             if plan != forced_plan:
                 tasks = ", ".join(step["task"] for step in forced_plan)
-                print(
-                    f"[*] Plan optimized for state={state}, goal={goal}: {tasks}"
-                )
+                print(f"[*] Plan optimized for state={state}, goal={goal}: {tasks}")
             return forced_plan
 
         optimized = []
@@ -316,13 +303,8 @@ class PipelinePlanningMixin(PipelineMixinBase):
             task_identity = (
                 str(agent),
                 task,
-                self._mission_task_scope_identity(
-                    self._mission_task_scope(step)
-                ),
-                str(
-                    step.get("task_definition_version")
-                    or TASK_DEFINITION_SCHEMA_VERSION
-                ),
+                self._mission_task_scope_identity(self._mission_task_scope(step)),
+                str(step.get("task_definition_version") or TASK_DEFINITION_SCHEMA_VERSION),
             )
             if task_identity in seen_tasks:
                 continue
@@ -354,27 +336,17 @@ class PipelinePlanningMixin(PipelineMixinBase):
         from core.killchain.policy import automated_stage_enabled
 
         killchain_allowed = {
-            stage: automated_stage_enabled(stage)
-            for stage in ("persistence", "data_exfil", "cleanup")
+            stage: automated_stage_enabled(stage) for stage in ("persistence", "data_exfil", "cleanup")
         }
         if goal == "post_access_inventory" and state in post_states:
-            return [
-                {"agent": "VerificationAgent", "task": "post_access_inventory"}
-            ]
+            return [{"agent": "VerificationAgent", "task": "post_access_inventory"}]
         if goal == "persistence" and state in post_states:
-            if (
-                not self._strategy_enabled("auto_persistence", False)
-                or not killchain_allowed["persistence"]
-            ):
+            if not self._strategy_enabled("auto_persistence", False) or not killchain_allowed["persistence"]:
                 return []
             plan = []
             if self._strategy_enabled("auto_payload_generation", False):
-                plan.append(
-                    {"agent": "VerificationAgent", "task": "payload_generation"}
-                )
-            plan.append(
-                {"agent": "VerificationAgent", "task": "establish_persistence"}
-            )
+                plan.append({"agent": "VerificationAgent", "task": "payload_generation"})
+            plan.append({"agent": "VerificationAgent", "task": "establish_persistence"})
             return plan
         if goal == "internal_reconnaissance" and state in post_states:
             if not self._strategy_enabled("auto_internal_recon", True):
@@ -386,21 +358,13 @@ class PipelinePlanningMixin(PipelineMixinBase):
                         "task": "internal_service_discovery",
                     }
                 ]
-            return [
-                {"agent": "VerificationAgent", "task": "internal_network_recon"}
-            ]
+            return [{"agent": "VerificationAgent", "task": "internal_network_recon"}]
         if goal == "data_exfiltration" and state in post_states:
-            if (
-                not self._strategy_enabled("auto_data_exfil", False)
-                or not killchain_allowed["data_exfil"]
-            ):
+            if not self._strategy_enabled("auto_data_exfil", False) or not killchain_allowed["data_exfil"]:
                 return []
             return [{"agent": "VerificationAgent", "task": "exfiltrate_data"}]
         if goal == "cleanup" and state in post_states:
-            if (
-                not self._strategy_enabled("auto_cleanup", False)
-                or not killchain_allowed["cleanup"]
-            ):
+            if not self._strategy_enabled("auto_cleanup", False) or not killchain_allowed["cleanup"]:
                 return []
             return [{"agent": "VerificationAgent", "task": "stealth_cleanup"}]
         return None
@@ -414,16 +378,10 @@ class PipelinePlanningMixin(PipelineMixinBase):
         services = set(context.get("services") or [])
         open_questions = set(context.get("open_questions") or [])
         target_model = context.get("target_model") or {}
-        surface_states = (
-            target_model.get("surface_states")
-            or context.get("surface_states")
-            or {}
-        )
+        surface_states = target_model.get("surface_states") or context.get("surface_states") or {}
         assets = target_model.get("assets") or {}
         explicit_coverage = "coverage_gaps" in context
-        coverage_gaps = set(
-            context.get("coverage_gaps") or context.get("open_questions") or []
-        )
+        coverage_gaps = set(context.get("coverage_gaps") or context.get("open_questions") or [])
         candidates = []
         critical_candidates = set()
         if goal == "vulnerability_assessment":
@@ -433,9 +391,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
                 if "external_vulnerability_assessment_pending" not in coverage_gaps:
                     candidates.append("exploit_selection")
                 candidates.append("internal_service_discovery")
-            if surface_states.get("asm") != "confirmed_present" and self._target_looks_domain(
-                context.get("host", "")
-            ):
+            if surface_states.get("asm") != "confirmed_present" and self._target_looks_domain(context.get("host", "")):
                 candidates.append("asm_discovery")
             if "cpanel_auth_bypass_unknown" in open_questions:
                 candidates.append("cpanel_assessment")
@@ -449,9 +405,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
                     "api_security_testing_pending",
                 }
             ):
-                if "web_mapping_pending" in coverage_gaps or services.intersection(
-                    {"http", "https"}
-                ):
+                if "web_mapping_pending" in coverage_gaps or services.intersection({"http", "https"}):
                     candidates.append("web_application_mapping")
                 if "web_app_deep_testing_pending" in coverage_gaps or not explicit_coverage:
                     candidates.append("web_app_deep_testing")
@@ -460,10 +414,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
                 if "template_verification_pending" in coverage_gaps or not explicit_coverage:
                     candidates.append("template_verification")
                 candidates.append("web_vulnerability_testing")
-                if (
-                    "api_security_testing_pending" in coverage_gaps
-                    or surface_states.get("api") != "confirmed_absent"
-                ):
+                if "api_security_testing_pending" in coverage_gaps or surface_states.get("api") != "confirmed_absent":
                     candidates.append("api_security_testing")
             if "https" in services:
                 candidates.append("transport_security_assessment")
@@ -498,9 +449,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
         present = {step.get("task") for step in plan}
         enriched = list(plan)
         short_specialized_vuln_plan = (
-            goal == "vulnerability_assessment"
-            and len(plan) <= 3
-            and "cpanel_assessment" in candidates
+            goal == "vulnerability_assessment" and len(plan) <= 3 and "cpanel_assessment" in candidates
         )
         enrichment_limit = self._plan_enrichment_limit()
         noncritical_added = 0
@@ -530,33 +479,19 @@ class PipelinePlanningMixin(PipelineMixinBase):
             if not self.tool_registry.task_has_available_tools(task):
                 continue
             insert_at = next(
-                (
-                    idx
-                    for idx, step in enumerate(enriched)
-                    if step.get("agent") != "DiscoveryAgent"
-                ),
+                (idx for idx, step in enumerate(enriched) if step.get("agent") != "DiscoveryAgent"),
                 len(enriched),
             )
             enriched.insert(insert_at, {"agent": "DiscoveryAgent", "task": task})
             present.add(task)
             if not is_critical:
                 noncritical_added += 1
-            print(
-                f"[*] Plan enriched with {task} "
-                f"from context services={sorted(services)}"
-            )
+            print(f"[*] Plan enriched with {task} from context services={sorted(services)}")
             if short_specialized_vuln_plan and task == "cpanel_assessment":
                 self._trim_low_priority_enrichment(enriched, protected={task})
 
-        if (
-            goal == "vulnerability_assessment"
-            and "external_vulnerability_assessment_pending" in coverage_gaps
-        ):
-            enriched.sort(
-                key=lambda step: (
-                    0 if step.get("task") == "vulnerability_assessment" else 1
-                )
-            )
+        if goal == "vulnerability_assessment" and "external_vulnerability_assessment_pending" in coverage_gaps:
+            enriched.sort(key=lambda step: 0 if step.get("task") == "vulnerability_assessment" else 1)
 
         return self.policy.validate_plan(enriched, context)
 
@@ -566,10 +501,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
         context: dict[str, Any],
         critical_candidates: set | None = None,
     ) -> list[str]:
-        critical_candidates = {
-            self.tool_registry.canonical_task(task)
-            for task in (critical_candidates or set())
-        }
+        critical_candidates = {self.tool_registry.canonical_task(task) for task in (critical_candidates or set())}
         seen = set()
         normalized = []
         for task in candidates or []:
@@ -619,19 +551,10 @@ class PipelinePlanningMixin(PipelineMixinBase):
         unmet = self._unmet_task_preconditions(preconditions, context)
         open_questions = tuple(str(item) for item in context.get("open_questions") or ())
         coverage_gaps = tuple(
-            str(item)
-            for item in (
-                context.get("coverage_gaps")
-                or context.get("open_questions")
-                or ()
-            )
+            str(item) for item in (context.get("coverage_gaps") or context.get("open_questions") or ())
         )
-        next_capability = self.tool_registry.canonical_task(
-            str(context.get("next_required_capability") or "")
-        )
-        tokens = tuple(
-            token for token in task.split("_") if len(token) >= 3
-        )
+        next_capability = self.tool_registry.canonical_task(str(context.get("next_required_capability") or ""))
+        tokens = tuple(token for token in task.split("_") if len(token) >= 3)
 
         def relevant(value: str) -> bool:
             normalized_value = value.lower().replace("-", "_").replace(" ", "_")
@@ -644,16 +567,8 @@ class PipelinePlanningMixin(PipelineMixinBase):
         question_match = any(relevant(item) for item in open_questions)
         coverage_match = any(relevant(item) for item in coverage_gaps)
         on_path = bool(task == next_capability or critical)
-        information_gain = (
-            1.0
-            if on_path or question_match
-            else 0.65 if open_questions else 0.35
-        )
-        coverage_value = (
-            1.0
-            if coverage_match
-            else 0.45 if coverage_gaps else 0.15
-        )
+        information_gain = 1.0 if on_path or question_match else 0.65 if open_questions else 0.35
+        coverage_value = 1.0 if coverage_match else 0.45 if coverage_gaps else 0.15
         verification_markers = (
             "verify",
             "verification",
@@ -661,17 +576,12 @@ class PipelinePlanningMixin(PipelineMixinBase):
             "assessment",
             "exploit_selection",
         )
-        is_verification_task = any(
-            marker in task for marker in verification_markers
-        )
+        is_verification_task = any(marker in task for marker in verification_markers)
         verification_value = (
             1.0
             if critical
             or str(profile.get("risk")) == "check_only"
-            or (
-                is_verification_task
-                and (question_match or coverage_match or on_path)
-            )
+            or (is_verification_task and (question_match or coverage_match or on_path))
             else 0.35
         )
         if on_path:
@@ -693,11 +603,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
             raw_cost = 5.0
         cost = self._bounded_scoring_signal((raw_cost + time_penalty) / 10.0)
 
-        history_count = len([
-            item
-            for item in self.task_history
-            if str(item).split(":", 1)[-1] == task
-        ])
+        history_count = len([item for item in self.task_history if str(item).split(":", 1)[-1] == task])
         if task in self.completed_tasks or task in self.blocked_tasks:
             history_count += 2
         repeat = self._bounded_scoring_signal(history_count / 2.0)
@@ -711,11 +617,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
             "post_access_change": 1.0,
             "unknown": 0.8,
         }.get(str(profile.get("risk") or "unknown"), 0.8)
-        uncertainty = (
-            self._bounded_scoring_signal(len(unmet) / max(1, len(preconditions)))
-            if preconditions
-            else 0.0
-        )
+        uncertainty = self._bounded_scoring_signal(len(unmet) / max(1, len(preconditions))) if preconditions else 0.0
         if str(profile.get("risk") or "unknown") == "unknown":
             uncertainty = max(uncertainty, 0.5)
         return TaskScoringSignals(
@@ -746,9 +648,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
         ranked = []
         for item in scored:
             payload = item.to_trace_dict()
-            payload["priority_tier"] = (
-                "critical" if item.task_id in critical_candidates else "scored"
-            )
+            payload["priority_tier"] = "critical" if item.task_id in critical_candidates else "scored"
             ranked.append(payload)
         chosen = scored[0]
         self.decision_trace.record(
@@ -760,15 +660,10 @@ class PipelinePlanningMixin(PipelineMixinBase):
                 "event_type": "task_scoring",
                 "mission_id": self.mission_id or "",
                 "scan_id": self._current_scan_id,
-                "goal": str(
-                    (self.goal_trace[-1] if self.goal_trace else {}).get("goal")
-                    or ""
-                ),
+                "goal": str((self.goal_trace[-1] if self.goal_trace else {}).get("goal") or ""),
                 "candidates": [item.task_id for item in scored],
                 "chosen_action": chosen.task_id,
-                "capability_ref": str(
-                    context.get("next_required_capability") or ""
-                ),
+                "capability_ref": str(context.get("next_required_capability") or ""),
                 "supporting_fact_ids": context.get("supporting_fact_ids") or [],
                 "expected_outcome": {
                     "weights": self.task_scorer.weights.to_dict(),

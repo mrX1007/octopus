@@ -234,9 +234,7 @@ def test_exploit_search_all_outcomes():
     assert _recon().search_exploits("query") == []
     api = SimpleNamespace(
         exploits=SimpleNamespace(
-            search=lambda _query, limit: {
-                "matches": [{"description": "x" * 300, "source": "db", "cve": ["CVE-1"]}]
-            }
+            search=lambda _query, limit: {"matches": [{"description": "x" * 300, "source": "db", "cve": ["CVE-1"]}]}
         )
     )
     result = _recon(api=api).search_exploits("query")
@@ -400,7 +398,14 @@ def test_host_wrapper_paths(monkeypatch):
         "ports": [22, 443],
         "vulns": ["CVE-1"],
         "services": [
-            {"port": 443, "transport": "tcp", "product": "https", "version": "1", "vulns": ["CVE-1"], "banner": "hello"},
+            {
+                "port": 443,
+                "transport": "tcp",
+                "product": "https",
+                "version": "1",
+                "vulns": ["CVE-1"],
+                "banner": "hello",
+            },
             {"port": 22, "transport": "tcp", "product": "ssh", "version": "2", "vulns": [], "banner": ""},
         ],
     }

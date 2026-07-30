@@ -24,9 +24,7 @@ def test_automatic_shell_syntax_is_denied():
     from core.execution import ExecutionContext
     from core.tools.runner import run_arbitrary_cmd
 
-    context = ExecutionContext.automatic(
-        ("127.0.0.1",), actor="test-ai", origin="ai_pipeline"
-    )
+    context = ExecutionContext.automatic(("127.0.0.1",), actor="test-ai", origin="ai_pipeline")
 
     result = run_arbitrary_cmd("printf octopus | tr a-z A-Z", context)
 
@@ -148,9 +146,7 @@ def test_registered_tool_is_bound_to_execution_target_scope():
 
     tool_def.func = fake_nmap
     try:
-        context = ExecutionContext.automatic(
-            ("10.0.0.5",), actor="scan:test", origin="ai_pipeline"
-        )
+        context = ExecutionContext.automatic(("10.0.0.5",), actor="scan:test", origin="ai_pipeline")
         denied = run_tool_by_command("nmap -sV 10.0.0.6", context)
         allowed = run_tool_by_command("nmap -sV 10.0.0.5", context)
     finally:
@@ -177,9 +173,7 @@ def test_target_metacharacters_do_not_reach_registered_tool():
 
     tool_def.func = fake_nmap
     try:
-        context = ExecutionContext.automatic(
-            ("10.0.0.5",), actor="scan:test", origin="ai_pipeline"
-        )
+        context = ExecutionContext.automatic(("10.0.0.5",), actor="scan:test", origin="ai_pipeline")
         result = run_tool_by_command("nmap '10.0.0.5;touch'", context)
     finally:
         tool_def.func = old_func
@@ -199,12 +193,8 @@ def test_url_query_is_passed_as_one_typed_argument_not_shell_syntax():
     captured = []
     tool_def.func = lambda target: captured.append(target) or "ok"
     try:
-        context = ExecutionContext.automatic(
-            ("app.example.com",), actor="scan:test", origin="ai_pipeline"
-        )
-        result = run_tool_by_command(
-            "curl_headers 'https://app.example.com/?x=1&y=2'", context
-        )
+        context = ExecutionContext.automatic(("app.example.com",), actor="scan:test", origin="ai_pipeline")
+        result = run_tool_by_command("curl_headers 'https://app.example.com/?x=1&y=2'", context)
     finally:
         tool_def.func = old_func
 
@@ -228,9 +218,7 @@ def test_registered_dispatch_preserves_ipv6_target():
 
     tool_def.func = fake_nmap
     try:
-        context = ExecutionContext.automatic(
-            ("2001:db8::1",), actor="scan:test", origin="ai_pipeline"
-        )
+        context = ExecutionContext.automatic(("2001:db8::1",), actor="scan:test", origin="ai_pipeline")
         result = run_tool_by_command("nmap 2001:db8::1", context)
     finally:
         tool_def.func = old_func
@@ -253,9 +241,7 @@ def test_registered_dispatch_extracts_targets_from_legacy_cli_flags():
     curl_def.func = lambda target: captured.append(("curl", target)) or "curl-ok"
     enum_def.func = lambda target: captured.append(("enum", target)) or "enum-ok"
     try:
-        context = ExecutionContext.automatic(
-            ("10.0.0.5",), actor="scan:test", origin="ai_pipeline"
-        )
+        context = ExecutionContext.automatic(("10.0.0.5",), actor="scan:test", origin="ai_pipeline")
         curl_result = run_tool_by_command("curl -sL http://10.0.0.5/login", context)
         enum_result = run_tool_by_command("enum4linux -a 10.0.0.5", context)
     finally:
@@ -281,9 +267,7 @@ def test_active_registered_tool_needs_capability_and_approval():
     calls = []
     tool_def.func = lambda target_ip, user=None, pwd=None: calls.append(target_ip) or "ok"
     try:
-        automatic = ExecutionContext.automatic(
-            ("10.0.0.5",), actor="scan:test", origin="ai_pipeline"
-        )
+        automatic = ExecutionContext.automatic(("10.0.0.5",), actor="scan:test", origin="ai_pipeline")
         operator = ExecutionContext.operator(
             actor="test-operator",
             approval_id="approval-active-1",
@@ -322,13 +306,9 @@ def test_scheduler_records_auditable_policy_denial():
     from core.ai.command_scheduler import CommandScheduler
     from core.execution import ExecutionContext
 
-    context = ExecutionContext.automatic(
-        ("10.0.0.5",), actor="scan:test", origin="ai_pipeline"
-    )
+    context = ExecutionContext.automatic(("10.0.0.5",), actor="scan:test", origin="ai_pipeline")
 
-    decision = CommandScheduler().decide(
-        "nmap 10.0.0.6", [], set(), execution_context=context
-    )
+    decision = CommandScheduler().decide("nmap 10.0.0.6", [], set(), execution_context=context)
     payload = decision.to_dict()
 
     assert decision.action == "skip"
@@ -342,9 +322,7 @@ def test_scheduler_records_auditable_policy_denial():
 def test_scheduler_audit_redacts_positional_and_named_secrets():
     from core.ai.command_scheduler import CommandDecision
 
-    positional = CommandDecision(
-        "ssh_session 10.0.0.5 admin super-secret", "key", "execute", "test"
-    ).to_dict()
+    positional = CommandDecision("ssh_session 10.0.0.5 admin super-secret", "key", "execute", "test").to_dict()
     named = CommandDecision(
         "msf_check 10.0.0.5 module PASSWORD=super-secret API_KEY=key-value",
         "key",
@@ -363,13 +341,9 @@ def test_invalid_scope_fails_closed_instead_of_crashing_policy():
     from core.ai.command_scheduler import CommandScheduler
     from core.execution import ExecutionContext
 
-    context = ExecutionContext.automatic(
-        ("/tmp/not-a-network-scope",), actor="scan:test", origin="ai_pipeline"
-    )
+    context = ExecutionContext.automatic(("/tmp/not-a-network-scope",), actor="scan:test", origin="ai_pipeline")
 
-    decision = CommandScheduler().decide(
-        "nmap 10.0.0.5", [], set(), execution_context=context
-    )
+    decision = CommandScheduler().decide("nmap 10.0.0.5", [], set(), execution_context=context)
 
     assert decision.action == "skip"
     assert decision.reason == "policy_denied:target_out_of_scope:10.0.0.5"

@@ -376,7 +376,15 @@ def test_all_graph_models_expose_canonical_and_serializable_views(
 
     for model in (asset, identity, plaintext_credential, service, endpoint, session, vulnerability):
         assert model.node_id.startswith(
-            ("asset:v1:", "identity:v1:", "credential:v1:", "service:v1:", "endpoint:v1:", "session:v1:", "vulnerability:v1:")
+            (
+                "asset:v1:",
+                "identity:v1:",
+                "credential:v1:",
+                "service:v1:",
+                "endpoint:v1:",
+                "session:v1:",
+                "vulnerability:v1:",
+            )
         )
         assert model.legacy_node_ids
         rendered = model.to_dict()
@@ -418,9 +426,7 @@ def test_projection_result_collections_and_skip_paths() -> None:
 
     missing_id, _graph, _projector = _project(_fact(fact_id=0))
     assert missing_id.status == "skipped"
-    missing_assessment, _graph, _projector = _project(
-        _fact(assessment={}, assessment_id="")
-    )
+    missing_assessment, _graph, _projector = _project(_fact(assessment={}, assessment_id=""))
     assert missing_assessment.status == "skipped"
     invalid_host, _graph, _projector = _project(_fact(host=""))
     assert invalid_host.status == "skipped"
@@ -450,9 +456,7 @@ def test_projection_detects_unchanged_fingerprints() -> None:
 
 
 def test_projection_covers_service_endpoint_asset_and_vulnerability_families() -> None:
-    remote_service, remote_graph, _service = _project(
-        _fact("asset_service", "10.0.0.2:22/tcp (ssh) [OpenSSH]")
-    )
+    remote_service, remote_graph, _service = _project(_fact("asset_service", "10.0.0.2:22/tcp (ssh) [OpenSSH]"))
     assert remote_service.status == "projected"
     assert {edge[2] for edge in remote_graph.edges} == {
         EdgeType.RUNS_SERVICE,
@@ -491,14 +495,10 @@ def test_projection_covers_service_endpoint_asset_and_vulnerability_families() -
     assert empty_asset.status == "projected"
     assert empty_asset_graph.edges == []
 
-    vulnerability, vulnerability_graph, _service = _project(
-        _fact("vulnerability", "finding CVE-2026-12345")
-    )
+    vulnerability, vulnerability_graph, _service = _project(_fact("vulnerability", "finding CVE-2026-12345"))
     assert vulnerability.status == "projected"
     assert [edge[2] for edge in vulnerability_graph.edges] == [EdgeType.HAS_VULNERABILITY]
-    no_vulnerability, no_vulnerability_graph, _service = _project(
-        _fact("vulnerability", "x" * 513)
-    )
+    no_vulnerability, no_vulnerability_graph, _service = _project(_fact("vulnerability", "x" * 513))
     assert no_vulnerability.status == "projected"
     assert no_vulnerability_graph.edges == []
 
@@ -527,9 +527,7 @@ def test_access_projection_covers_credentials_sessions_and_non_access_returns() 
     assert extracted_secret.status == "projected"
     assert EdgeType.HAS_CREDENTIAL in {edge[2] for edge in extracted_graph.edges}
 
-    identity_only, identity_graph, _service = _project(
-        _fact("service_status", "user=carol access")
-    )
+    identity_only, identity_graph, _service = _project(_fact("service_status", "user=carol access"))
     assert identity_only.status == "projected"
     assert EdgeType.HAS_IDENTITY in {edge[2] for edge in identity_graph.edges}
     assert EdgeType.HAS_CREDENTIAL not in {edge[2] for edge in identity_graph.edges}
@@ -619,16 +617,12 @@ def test_projection_parsing_helpers_cover_invalid_and_fallback_shapes() -> None:
 
     assert GraphProjectionService._endpoint_details("not-json") == {}
     assert GraphProjectionService._endpoint_details("[]") == {}
-    assert GraphProjectionService._endpoint_details('{"status": 200, "title": "", "extra": 1}') == {
-        "status": 200
-    }
+    assert GraphProjectionService._endpoint_details('{"status": 200, "title": "", "extra": 1}') == {"status": 200}
 
     assert GraphProjectionService._endpoint_url('{"endpoint": "https://example.com/a"}', "host") == (
         "https://example.com/a"
     )
-    assert GraphProjectionService._endpoint_url("see https://example.com/a], next", "host") == (
-        "https://example.com/a"
-    )
+    assert GraphProjectionService._endpoint_url("see https://example.com/a], next", "host") == ("https://example.com/a")
     assert GraphProjectionService._endpoint_url("/relative", "example.com") == "http://example.com/relative"
     assert GraphProjectionService._endpoint_url("[]", "example.com") == ""
     assert GraphProjectionService._endpoint_url("relative", "") == ""

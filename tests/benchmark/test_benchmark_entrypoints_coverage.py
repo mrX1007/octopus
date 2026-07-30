@@ -48,29 +48,35 @@ def test_builtin_main_full_and_comparison_only_paths(tmp_path, monkeypatch, caps
         lambda path: Path(path),
     )
 
-    assert builtin_main.main(
-        [
-            "--scenario-directory",
-            str(tmp_path),
-            "--output-directory",
-            str(tmp_path / "output"),
-            "--comparison-output",
-            str(comparison),
-        ]
-    ) == 0
+    assert (
+        builtin_main.main(
+            [
+                "--scenario-directory",
+                str(tmp_path),
+                "--output-directory",
+                str(tmp_path / "output"),
+                "--comparison-output",
+                str(comparison),
+            ]
+        )
+        == 0
+    )
     instance = HarnessDouble.instances[-1]
     assert instance.runs == [scenario]
     assert instance.writes[0][1].name == "one-v1.json"
     assert str(comparison) in capsys.readouterr().out
 
     before = len(HarnessDouble.instances)
-    assert builtin_main.main(
-        [
-            "--comparison-only",
-            "--comparison-output",
-            str(comparison),
-        ]
-    ) == 0
+    assert (
+        builtin_main.main(
+            [
+                "--comparison-only",
+                "--comparison-output",
+                str(comparison),
+            ]
+        )
+        == 0
+    )
     assert len(HarnessDouble.instances) == before
 
 
@@ -152,17 +158,13 @@ def test_competitor_main_requires_manifest_and_repetition_parser(tmp_path):
 
 
 def test_load_manifests_combines_files_and_directories(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        competitor_main, "load_system_manifest", lambda path: f"file:{path.name}"
-    )
+    monkeypatch.setattr(competitor_main, "load_system_manifest", lambda path: f"file:{path.name}")
     monkeypatch.setattr(
         competitor_main,
         "load_system_manifests",
         lambda path: (f"dir:{path.name}:one", f"dir:{path.name}:two"),
     )
-    result = competitor_main._load_manifests(
-        (tmp_path / "one.json",), (tmp_path / "systems",)
-    )
+    result = competitor_main._load_manifests((tmp_path / "one.json",), (tmp_path / "systems",))
     assert result == ("file:one.json", "dir:systems:one", "dir:systems:two")
 
 

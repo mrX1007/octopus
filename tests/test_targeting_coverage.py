@@ -75,14 +75,20 @@ unparseable status line
 
 
 def test_open_port_detection_handles_nonmatches_misses_and_early_success() -> None:
-    assert nmap_has_any_open_port(
-        "noise\n80/tcp open http\n443/tcp closed https",
-        {"443"},
-    ) is False
-    assert nmap_has_any_open_port(
-        "[10.0.0.1] 443/tcp OPEN https",
-        {"443"},
-    ) is True
+    assert (
+        nmap_has_any_open_port(
+            "noise\n80/tcp open http\n443/tcp closed https",
+            {"443"},
+        )
+        is False
+    )
+    assert (
+        nmap_has_any_open_port(
+            "[10.0.0.1] 443/tcp OPEN https",
+            {"443"},
+        )
+        is True
+    )
 
 
 def test_web_url_projection_covers_default_tls_custom_and_duplicate_ports() -> None:
@@ -107,6 +113,4 @@ def test_invalid_endpoint_and_compact_state_shapes_are_ignored() -> None:
         '{"host": "10.0.0.5", "port": null}, '
         '{"host": "10.0.0.6", "port": 53, "proto": "UDP"}]}'
     )
-    assert internal_service_scopes_from_compact_state(command) == [
-        "10.0.0.6:53/udp"
-    ]
+    assert internal_service_scopes_from_compact_state(command) == ["10.0.0.6:53/udp"]

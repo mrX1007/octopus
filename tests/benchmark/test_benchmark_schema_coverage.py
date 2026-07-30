@@ -19,12 +19,7 @@ pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 
 
 def _payload():
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "benchmarks"
-        / "scenarios"
-        / "01-service-discovery-verification.json"
-    )
+    path = Path(__file__).resolve().parents[2] / "benchmarks" / "scenarios" / "01-service-discovery-verification.json"
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -126,9 +121,7 @@ def test_strict_positive_integer_rejects_nonpositive_or_noninteger(value):
         schema_module._strict_positive_integer(value, "value")
 
 
-@pytest.mark.parametrize(
-    "value", [True, "1", 0, -1, float("inf"), float("-inf"), float("nan")]
-)
+@pytest.mark.parametrize("value", [True, "1", 0, -1, float("inf"), float("-inf"), float("nan")])
 def test_strict_positive_number_rejects_invalid_values(value):
     with pytest.raises(BenchmarkSchemaError, match="invalid_positive_number"):
         schema_module._strict_positive_number(value, "value")

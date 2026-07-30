@@ -189,11 +189,7 @@ def test_lifespan_initializes_and_task_projection_queues(
         SimpleNamespace(queue_task=lambda *args: queued.append(args)),
         raising=False,
     )
-    daemon._on_task_queued(
-        SimpleNamespace(
-            payload={"task_id": "task-1", "agent_id": "agent-1", "command": "status"}
-        )
-    )
+    daemon._on_task_queued(SimpleNamespace(payload={"task_id": "task-1", "agent_id": "agent-1", "command": "status"}))
     assert queued == [("task-1", "agent-1", "status")]
 
 
@@ -237,10 +233,12 @@ def test_agent_crypto_reload_handles_sealed_legacy_invalid_and_cached_state(
     assert crypto.agent_state["agent-sealed"]["key"] == b"\x11" * 32
     assert sealed_db.updated == []
 
-    legacy_db = DatabaseStub([
-        {"key": "22" * 32},
-        {"key": "22" * 32},
-    ])
+    legacy_db = DatabaseStub(
+        [
+            {"key": "22" * 32},
+            {"key": "22" * 32},
+        ]
+    )
     monkeypatch.setattr(daemon, "db", legacy_db)
     monkeypatch.setattr(
         daemon,
@@ -390,9 +388,7 @@ class BeaconCryptoStub:
     def __init__(self, payload: Any = None, error: Exception | None = None) -> None:
         self.payload = payload
         self.error = error
-        self.agent_state = {
-            "agent-1": {"key": b"k" * 32, "rx_seq": 1, "tx_seq": 1}
-        }
+        self.agent_state = {"agent-1": {"key": b"k" * 32, "rx_seq": 1, "tx_seq": 1}}
 
     def decrypt_aes_gcm(self, _agent_id: str, _value: str) -> str:
         if self.error is not None:

@@ -393,7 +393,7 @@ def test_v7_result_and_analytics_success_empty_and_failure(monkeypatch, capsys) 
 
     analytics_cursor = Cursor(
         fetchones=[(3, 2, 1, 4.44), (5, 4)],
-        fetchalls=[[('RECON',), ('EXPLOIT',)]],
+        fetchalls=[[("RECON",), ("EXPLOIT",)]],
     )
     monkeypatch.setattr(db, "_cursor", CursorContext(analytics_cursor))
     assert db.get_session_analytics(1) == {
@@ -485,9 +485,7 @@ def test_main_entrypoint_success_and_failure(monkeypatch, capsys, succeed) -> No
     for name, module in mysql_modules(pool_factory, connect).items():
         monkeypatch.setitem(sys.modules, name, module)
     config_module = ModuleType("config")
-    config_module.CFG = {
-        "db": {"host": "h", "user": "u", "password": "p", "database": "d"}
-    }
+    config_module.CFG = {"db": {"host": "h", "user": "u", "password": "p", "database": "d"}}
     monkeypatch.setitem(sys.modules, "config", config_module)
     source = Path(db.__file__).read_text(encoding="utf-8")
     exec(

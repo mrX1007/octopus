@@ -56,9 +56,7 @@ class OctopusCLIApplication:
             if not self._start_supervisor():
                 return 1
             if not self.workflows.preflight_checks():
-                self.workflows.error(
-                    "Critical pre-flight checks failed. Fix issues above and restart."
-                )
+                self.workflows.error("Critical pre-flight checks failed. Fix issues above and restart.")
                 return 1
             self.workflows.info(f"Logging to: {log_file}")
             self.workflows._start_c2_daemon()
@@ -169,11 +167,7 @@ def main(
 
     arguments = list(argv) if argv is not None else list(sys.argv[1:])
     known_commands = {"trace", *_SUPERVISOR_COMMANDS}
-    if (
-        arguments
-        and arguments[0] not in known_commands
-        and arguments[0] not in {"-h", "--help", "--version"}
-    ):
+    if arguments and arguments[0] not in known_commands and arguments[0] not in {"-h", "--help", "--version"}:
         # The historical script ignored unrecognized argv and entered the
         # interactive menu. Preserve that compatibility quirk while the
         # explicit parser owns all documented commands.

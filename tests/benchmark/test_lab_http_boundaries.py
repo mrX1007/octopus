@@ -236,30 +236,30 @@ def test_v3_server_constructor_and_factory_without_socket_binding(monkeypatch, t
     monkeypatch.setattr(
         v3_server,
         "ControlPlaneLedger",
-        lambda **kwargs: (constructed.append(("ledger", kwargs)) or ledger),
+        lambda **kwargs: constructed.append(("ledger", kwargs)) or ledger,
     )
     monkeypatch.setattr(
         v3_server,
         "FixtureRuntime",
         lambda selected_variant, selected_ledger: (
-            constructed.append(("runtime", selected_variant, selected_ledger))
-            or built_runtime
+            constructed.append(("runtime", selected_variant, selected_ledger)) or built_runtime
         ),
     )
     monkeypatch.setattr(
         v3_server,
         "FixtureHTTPServer",
-        lambda address, selected_runtime: (
-            constructed.append(("server", address, selected_runtime)) or "server"
-        ),
+        lambda address, selected_runtime: constructed.append(("server", address, selected_runtime)) or "server",
     )
 
-    assert v3_server.create_server(
-        private_manifest_path=tmp_path / "private.json",
-        ledger_path=tmp_path / "ledger.jsonl",
-        host="127.0.0.4",
-        port=8181,
-    ) == "server"
+    assert (
+        v3_server.create_server(
+            private_manifest_path=tmp_path / "private.json",
+            ledger_path=tmp_path / "ledger.jsonl",
+            host="127.0.0.4",
+            port=8181,
+        )
+        == "server"
+    )
     assert constructed == [
         ("ledger", {"variant_digest": "digest", "path": tmp_path / "ledger.jsonl"}),
         ("runtime", variant, ledger),
@@ -301,7 +301,7 @@ def test_v3_handler_health_normal_delay_headers_and_closed_clients(monkeypatch) 
     requests = []
     runtime = SimpleNamespace(
         variant=variant,
-        handle=lambda method, path: (requests.append((method, path)) or response),
+        handle=lambda method, path: requests.append((method, path)) or response,
     )
     server = SimpleNamespace(runtime=runtime)
 
@@ -407,7 +407,7 @@ def test_v3_main_validates_environment_and_always_closes_server(monkeypatch) -> 
     monkeypatch.setattr(
         v3_server,
         "create_server",
-        lambda **kwargs: (calls.append(("create", kwargs)) or Server()),
+        lambda **kwargs: calls.append(("create", kwargs)) or Server(),
     )
     monkeypatch.setenv("OCTOBENCH_V3_PORT", "8088")
     monkeypatch.setenv("OCTOBENCH_V3_HOST", "127.0.0.8")
@@ -436,10 +436,9 @@ def test_v3_main_validates_environment_and_always_closes_server(monkeypatch) -> 
     monkeypatch.setattr(
         v3_server,
         "create_server",
-        lambda **kwargs: (calls.append(("create", kwargs)) or server),
+        lambda **kwargs: calls.append(("create", kwargs)) or server,
     )
     v3_server.main()
     assert calls[0][1]["host"] == "127.0.0.1"
     assert calls[0][1]["port"] == 8080
     assert calls[-1] == ("close",)
-

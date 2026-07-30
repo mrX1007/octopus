@@ -139,10 +139,7 @@ class CapabilityAssessment:
 
     @property
     def ready(self) -> bool:
-        return (
-            not self.blocking_reasons
-            and self.authorization_decision in {"allowed", "not_applicable"}
-        )
+        return not self.blocking_reasons and self.authorization_decision in {"allowed", "not_applicable"}
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -188,18 +185,10 @@ class CapabilityResolver:
         requested: bool | None = None,
     ) -> CapabilityAssessment:
         canonical = self._canonical_capability(capability)
-        fact_list = [
-            dict(fact)
-            for fact in facts or []
-            if fact_is_decision_usable(fact)
-        ]
+        fact_list = [dict(fact) for fact in facts or [] if fact_is_decision_usable(fact)]
         tasks = self._tasks_for_capability(canonical)
         requirements = self._requirements_for(canonical, tasks)
-        missing = tuple(
-            requirement
-            for requirement in requirements
-            if not self.requirement_met(requirement, context)
-        )
+        missing = tuple(requirement for requirement in requirements if not self.requirement_met(requirement, context))
         supporting_facts = self._supporting_facts(
             fact_list,
             requirements,
@@ -223,11 +212,7 @@ class CapabilityResolver:
             authorization_reason,
             missing,
         )
-        requested_value = (
-            self._is_requested(canonical, context)
-            if requested is None
-            else bool(requested)
-        )
+        requested_value = self._is_requested(canonical, context) if requested is None else bool(requested)
         scope = tuple(execution_context.target_scope) if execution_context else ()
 
         return CapabilityAssessment(
@@ -298,7 +283,8 @@ class CapabilityResolver:
             return "ssh" in services
         if requirement == "access":
             return bool(
-                context.get("state") in {
+                context.get("state")
+                in {
                     "root_access_confirmed",
                     "persistence_established",
                     "internal_recon_completed",
@@ -308,10 +294,7 @@ class CapabilityResolver:
                 or access.get("root_confirmed")
             )
         if requirement == "internal_hosts":
-            return bool(
-                internal_graph.get("nodes")
-                or (target_model.get("internal_graph") or {}).get("nodes")
-            )
+            return bool(internal_graph.get("nodes") or (target_model.get("internal_graph") or {}).get("nodes"))
         if requirement == "internal_services":
             return bool(target_model.get("internal_services"))
         return False
@@ -322,9 +305,7 @@ class CapabilityResolver:
         context: Mapping[str, Any],
     ) -> list[str]:
         return [
-            requirement
-            for requirement in requirements or []
-            if not self.requirement_met(str(requirement), context)
+            requirement for requirement in requirements or [] if not self.requirement_met(str(requirement), context)
         ]
 
     def _canonical_capability(self, capability: str) -> str:
@@ -407,26 +388,30 @@ class CapabilityResolver:
         providers: list[ProviderAssessment] = []
         for (task, provider), metadata in grouped.items():
             if not metadata["available"]:
-                providers.append(ProviderAssessment(
-                    task=task,
-                    provider=provider,
-                    status="unavailable",
-                    authorization_decision="unknown",
-                    authorization_reason="provider_unavailable",
-                ))
+                providers.append(
+                    ProviderAssessment(
+                        task=task,
+                        provider=provider,
+                        status="unavailable",
+                        authorization_decision="unknown",
+                        authorization_reason="provider_unavailable",
+                    )
+                )
                 continue
             authorization, reason = self._authorize_templates(
                 metadata["templates"],
                 target,
                 execution_context,
             )
-            providers.append(ProviderAssessment(
-                task=task,
-                provider=provider,
-                status="available",
-                authorization_decision=authorization,
-                authorization_reason=reason,
-            ))
+            providers.append(
+                ProviderAssessment(
+                    task=task,
+                    provider=provider,
+                    status="available",
+                    authorization_decision=authorization,
+                    authorization_reason=reason,
+                )
+            )
         return tuple(providers)
 
     def _authorize_templates(
@@ -481,16 +466,13 @@ class CapabilityResolver:
         available = [provider for provider in providers if provider.status == "available"]
         if any(provider.authorization_decision == "allowed" for provider in available):
             reason = next(
-                provider.authorization_reason
-                for provider in available
-                if provider.authorization_decision == "allowed"
+                provider.authorization_reason for provider in available if provider.authorization_decision == "allowed"
             )
             return "allowed", reason
         if available and all(provider.authorization_decision == "denied" for provider in available):
-            reasons = tuple(dict.fromkeys(
-                f"{provider.provider}:{provider.authorization_reason}"
-                for provider in available
-            ))
+            reasons = tuple(
+                dict.fromkeys(f"{provider.provider}:{provider.authorization_reason}" for provider in available)
+            )
             return "denied", ";".join(reasons)
         if provider_availability in {"unavailable", "no_provider"}:
             return "unknown", "no_available_provider"
@@ -553,10 +535,7 @@ class CapabilityResolver:
                     "uid=0" in value
                     or "root_access_confirmed" in value
                     or (fact_type == "credential" and value.startswith("ssh_login_success:root@"))
-                    or (
-                        "exploit_success" in fact_type
-                        and self._is_system_access_exploit_value(value)
-                    )
+                    or ("exploit_success" in fact_type and self._is_system_access_exploit_value(value))
                 )
             if stage == "post_access_inventory":
                 return fact_type == "post_exploit_stage" and value == "post_access_inventory_completed"
@@ -579,13 +558,10 @@ class CapabilityResolver:
             return fact_type == "port_open" or fact_type in _WEB_FACT_TYPES
         if requirement == "web":
             return fact_type in _WEB_FACT_TYPES or (
-                fact_type == "port_open"
-                and any(marker in value for marker in ("http", "cpanel", "tomcat"))
+                fact_type == "port_open" and any(marker in value for marker in ("http", "cpanel", "tomcat"))
             )
         if requirement == "tls":
-            return (
-                fact_type == "web_endpoint" and "https" in value
-            ) or (
+            return (fact_type == "web_endpoint" and "https" in value) or (
                 fact_type == "port_open" and any(marker in value for marker in ("https", "ssl/http"))
             )
         if requirement == "domain":
@@ -614,16 +590,19 @@ class CapabilityResolver:
         app_only_markers = ("cpanel", "whm", "webmin", "joomla", "wordpress")
         if any(marker in value for marker in app_only_markers):
             return False
-        return any(marker in value for marker in (
-            "uid=0",
-            "root access",
-            "root shell",
-            "pwnkit",
-            "dirtycow",
-            "dirty pipe",
-            "baron samedit",
-            "local privilege escalation",
-        ))
+        return any(
+            marker in value
+            for marker in (
+                "uid=0",
+                "root access",
+                "root shell",
+                "pwnkit",
+                "dirtycow",
+                "dirty pipe",
+                "baron samedit",
+                "local privilege escalation",
+            )
+        )
 
     @staticmethod
     def _supporting_fact_ids(facts: Iterable[Mapping[str, Any]]) -> tuple[int, ...]:
@@ -694,11 +673,7 @@ class CapabilityResolver:
             newest_observed_at=max(timestamps) if timestamps else None,
             confidence_min=min(confidences) if confidences else None,
             confidence_max=max(confidences) if confidences else None,
-            confidence_average=(
-                round(sum(confidences) / len(confidences), 2)
-                if confidences
-                else None
-            ),
+            confidence_average=(round(sum(confidences) / len(confidences), 2) if confidences else None),
             freshness=freshness,
         )
 
@@ -711,9 +686,7 @@ class CapabilityResolver:
     ) -> str:
         if missing_requirements:
             surface_states = (
-                (context.get("target_model") or {}).get("surface_states")
-                or context.get("surface_states")
-                or {}
+                (context.get("target_model") or {}).get("surface_states") or context.get("surface_states") or {}
             )
             absent_surfaces = {
                 requirement

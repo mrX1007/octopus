@@ -144,8 +144,10 @@ class FreshnessPolicy:
                 evaluated_at=evaluated_at,
                 max_age_seconds=max_age,
             )
-        if statuses and not successful and statuses.intersection(
-            {"failed", "partial", "cancelled", "unavailable", "blocked"}
+        if (
+            statuses
+            and not successful
+            and statuses.intersection({"failed", "partial", "cancelled", "unavailable", "blocked"})
         ):
             return FreshnessAssessment(
                 status=FactFreshnessStatus.UNKNOWN,
@@ -158,11 +160,7 @@ class FreshnessPolicy:
             )
 
         timestamp = self._timestamp(observed_at)
-        coverage = (
-            EvidenceCoverageStatus.COMPLETE
-            if successful
-            else EvidenceCoverageStatus.UNKNOWN
-        )
+        coverage = EvidenceCoverageStatus.COMPLETE if successful else EvidenceCoverageStatus.UNKNOWN
         if timestamp is None:
             return FreshnessAssessment(
                 status=FactFreshnessStatus.UNKNOWN,
@@ -174,19 +172,13 @@ class FreshnessPolicy:
                 max_age_seconds=max_age,
             )
         age = max(0.0, evaluated_at - timestamp)
-        status = (
-            FactFreshnessStatus.STALE
-            if age > max_age
-            else FactFreshnessStatus.FRESH
-        )
+        status = FactFreshnessStatus.STALE if age > max_age else FactFreshnessStatus.FRESH
         return FreshnessAssessment(
             status=status,
             coverage=coverage,
             policy_version=self.policy_version,
             rule_id=(
-                "fact.freshness.max_age.v1"
-                if status is FactFreshnessStatus.STALE
-                else "fact.freshness.within_age.v1"
+                "fact.freshness.max_age.v1" if status is FactFreshnessStatus.STALE else "fact.freshness.within_age.v1"
             ),
             observed_at=timestamp,
             evaluated_at=evaluated_at,
@@ -282,9 +274,7 @@ class FactAssessmentStore:
         redactor: Redactor,
         freshness_policy: FreshnessPolicy | None = None,
         clock: Callable[[], float] | None = None,
-        transition_hook: (
-            Callable[[sqlite3.Connection, Sequence[int]], Any] | None
-        ) = None,
+        transition_hook: (Callable[[sqlite3.Connection, Sequence[int]], Any] | None) = None,
         post_commit_hook: Callable[[Sequence[int]], Any] | None = None,
     ) -> None:
         self.db_path = db_path
@@ -389,17 +379,11 @@ class FactAssessmentStore:
                 "TEXT NOT NULL DEFAULT 'fact.assessment.legacy.v1'",
             )
             versions = {
-                str(row[0])
-                for row in conn.execute(
-                    "SELECT schema_version FROM fact_assessment_schema"
-                ).fetchall()
+                str(row[0]) for row in conn.execute("SELECT schema_version FROM fact_assessment_schema").fetchall()
             }
             unsupported = versions - _SUPPORTED_ASSESSMENT_SCHEMA_VERSIONS
             if unsupported:
-                raise RuntimeError(
-                    "Unsupported fact-assessment schema version(s): "
-                    + ", ".join(sorted(unsupported))
-                )
+                raise RuntimeError("Unsupported fact-assessment schema version(s): " + ", ".join(sorted(unsupported)))
             conn.execute(
                 """
                 INSERT OR IGNORE INTO fact_assessment_schema(schema_version, applied_at)
@@ -422,10 +406,7 @@ class FactAssessmentStore:
         column: str,
         definition: str,
     ) -> None:
-        columns = {
-            str(row[1])
-            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-        }
+        columns = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         if column not in columns:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
@@ -572,22 +553,19 @@ class FactAssessmentStore:
                 dict.fromkeys((*current.source_execution_ids, *self._raw_texts(source_execution_ids)))
             )
             merged_confidence = max(current.confidence, self._confidence(confidence))
-            if (
-                merged_execution_ids == current.source_execution_ids
-                and merged_confidence == current.confidence
-            ):
+            if merged_execution_ids == current.source_execution_ids and merged_confidence == current.confidence:
                 return self._apply_automatic_rules_in_connection(conn, int(fact_id), current)
             updated = self._assess_in_connection(
-                    conn,
-                    fact_id=int(fact_id),
-                    status=current.status,
-                    confidence=merged_confidence,
-                    rule_id=current.rule_id,
-                    reason=current.reason,
-                    assessor=current.assessor,
-                    evidence_fact_ids=current.evidence_fact_ids,
-                    source_execution_ids=merged_execution_ids,
-                )[0]
+                conn,
+                fact_id=int(fact_id),
+                status=current.status,
+                confidence=merged_confidence,
+                rule_id=current.rule_id,
+                reason=current.reason,
+                assessor=current.assessor,
+                evidence_fact_ids=current.evidence_fact_ids,
+                source_execution_ids=merged_execution_ids,
+            )[0]
             return self._apply_automatic_rules_in_connection(conn, int(fact_id), updated)
 
         evidence_ids = self._positive_ids(derived_from)
@@ -710,16 +688,9 @@ class FactAssessmentStore:
             if self._target_key(candidate_host) != target_key:
                 continue
             candidate_claim = self._scoped_claim(str(candidate_type), str(candidate_value))
-            if (
-                candidate_claim is not None
-                and candidate_claim[0] == claim[0]
-                and candidate_claim[1] != claim[1]
-            ):
+            if candidate_claim is not None and candidate_claim[0] == claim[0] and candidate_claim[1] != claim[1]:
                 candidate_assessment = self._current_in_connection(conn, int(candidate_id))
-                if (
-                    candidate_assessment is None
-                    or candidate_assessment.status is AssessmentStatus.CONTRADICTED
-                ):
+                if candidate_assessment is None or candidate_assessment.status is AssessmentStatus.CONTRADICTED:
                     continue
                 candidate_keys = self._successful_execution_keys(
                     conn,
@@ -850,8 +821,7 @@ class FactAssessmentStore:
                 str(observation_method or "").strip().casefold(),
             )
             for execution_key, source_identity, observation_method in rows
-            if str(source_identity or "").strip()
-            and str(observation_method or "").strip()
+            if str(source_identity or "").strip() and str(observation_method or "").strip()
         ]
         return any(
             left[0] != right[0] and left[1:] != right[1:]
@@ -922,9 +892,7 @@ class FactAssessmentStore:
             (str(execution_key), str(scan_id)),
         ).fetchall()
         target_key = self._target_key(host)
-        direct_rows = [
-            row for row in direct_rows if self._target_key(row[2]) == target_key
-        ]
+        direct_rows = [row for row in direct_rows if self._target_key(row[2]) == target_key]
         if not direct_rows:
             return ()
 
@@ -976,11 +944,7 @@ class FactAssessmentStore:
         ).fetchone()
         if row is None:
             return False
-        return (
-            0.0
-            <= assessment.created_at - float(row[0])
-            <= float(self.freshness_policy.corroboration_window_seconds)
-        )
+        return 0.0 <= assessment.created_at - float(row[0]) <= float(self.freshness_policy.corroboration_window_seconds)
 
     def freshness_for(
         self,
@@ -1313,11 +1277,7 @@ class FactAssessmentStore:
             current = self._current_in_connection(conn, int(fact_id))
             if current is None:
                 raise KeyError(f"Unknown or unassessed fact_id: {fact_id}")
-            merged = tuple(
-                dict.fromkeys(
-                    (*current.source_execution_ids, *self._raw_texts(source_execution_ids))
-                )
-            )
+            merged = tuple(dict.fromkeys((*current.source_execution_ids, *self._raw_texts(source_execution_ids))))
             if merged == current.source_execution_ids:
                 refreshed = self._apply_automatic_rules_in_connection(
                     conn,
@@ -1408,11 +1368,7 @@ class FactAssessmentStore:
         status: AssessmentStatus | str | None = None,
         current_only: bool = True,
     ) -> tuple[FactAssessment, ...]:
-        join = (
-            "JOIN fact_assessment_heads AS h ON h.assessment_id = a.assessment_id"
-            if current_only
-            else ""
-        )
+        join = "JOIN fact_assessment_heads AS h ON h.assessment_id = a.assessment_id" if current_only else ""
         query = f"""
             SELECT a.assessment_id, a.fact_id, a.status, a.confidence,
                    a.rule_id, a.reason, a.assessor,
@@ -1537,9 +1493,7 @@ class FactAssessmentStore:
     def _rule_id(value: str | None, status: AssessmentStatus) -> str:
         normalized = str(value or f"fact.assessment.manual_{status.value}.v1").strip().casefold()
         if not _RULE_ID_RE.fullmatch(normalized):
-            raise ValueError(
-                "Fact assessment rule_id must be a stable lowercase dotted identifier"
-            )
+            raise ValueError("Fact assessment rule_id must be a stable lowercase dotted identifier")
         return normalized
 
     @staticmethod

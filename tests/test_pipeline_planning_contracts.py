@@ -5,6 +5,7 @@ import pytest
 
 pytestmark = pytest.mark.contract
 
+
 def test_post_exploit_goal_forces_verification_plan():
     import config
     from core.ai.pipeline import AIPipeline
@@ -139,11 +140,14 @@ def test_cpanel_enrichment_takes_priority_in_short_vuln_plan():
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline("/tmp/octopus_test_pipeline_cpanel.db")
-    pipeline.tool_registry.task_has_available_tools = lambda task: task in {
-        "cpanel_assessment",
-        "web_application_mapping",
-        "web_vulnerability_testing",
-    }
+    pipeline.tool_registry.task_has_available_tools = lambda task: (
+        task
+        in {
+            "cpanel_assessment",
+            "web_application_mapping",
+            "web_vulnerability_testing",
+        }
+    )
     context = {
         "state": "recon_completed",
         "services": ["http", "https", "cpanel"],
@@ -165,7 +169,9 @@ def test_cpanel_enrichment_takes_priority_in_short_vuln_plan():
 def test_ollama_json_extractor_recovers_valid_json_after_unclosed_think():
     from core.ai.ollama_client import _extract_json
 
-    raw = '<think>reasoning started but never closed\n{"goal": "internal_reconnaissance", "thought": "facts require it"}'
+    raw = (
+        '<think>reasoning started but never closed\n{"goal": "internal_reconnaissance", "thought": "facts require it"}'
+    )
 
     assert _extract_json(raw) == '{"goal": "internal_reconnaissance", "thought": "facts require it"}'
 
@@ -246,14 +252,16 @@ def test_planner_abstract_action_names_are_mapped_to_capabilities():
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline("/tmp/octopus_planner_action_aliases.db")
-    raw_steps = pipeline._extract_plan_steps({
-        "steps": [
-            {"name": "prioritize_high_value_targets"},
-            {"name": "execute_vulnerability_checks"},
-            {"name": "validate_findings"},
-            {"name": "map_attack_paths"},
-        ],
-    })
+    raw_steps = pipeline._extract_plan_steps(
+        {
+            "steps": [
+                {"name": "prioritize_high_value_targets"},
+                {"name": "execute_vulnerability_checks"},
+                {"name": "validate_findings"},
+                {"name": "map_attack_paths"},
+            ],
+        }
+    )
     normalized = pipeline._normalize_plan(raw_steps, "vulnerability_assessment")
 
     assert [step["task"] for step in normalized] == [
@@ -332,9 +340,7 @@ def test_plan_enrichment_limit_counts_only_new_noncritical_tasks(
     monkeypatch.setitem(config.CFG["strategy"], "plan_enrichment_limit", 1)
     pipeline = AIPipeline(str(tmp_path / "plan-enrichment-limit.db"))
     pipeline.tool_registry.task_has_available_tools = lambda _task: True
-    pipeline._rank_candidate_tasks = (
-        lambda candidates, _context, _critical: list(dict.fromkeys(candidates))
-    )
+    pipeline._rank_candidate_tasks = lambda candidates, _context, _critical: list(dict.fromkeys(candidates))
     base_plan = [
         {"agent": "DiscoveryAgent", "task": "vulnerability_assessment"},
         {"agent": "AnalysisAgent", "task": "analyze_vulnerabilities"},
@@ -484,9 +490,7 @@ def test_ollama_optional_shared_endpoint_key_is_sent_as_bearer(monkeypatch):
     monkeypatch.setattr(ollama, "OLLAMA_RETRIES", 1)
 
     assert ollama.ask_ollama("ready") == "ready"
-    assert observed["headers"] == {
-        "Authorization": "Bearer private-ollama-key-93824"
-    }
+    assert observed["headers"] == {"Authorization": "Bearer private-ollama-key-93824"}
 
 
 def test_ollama_json_mode_retries_relaxed_when_strict_controls_are_unsupported(monkeypatch):

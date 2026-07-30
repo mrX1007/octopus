@@ -350,10 +350,7 @@ def test_plugin_run_requires_target_gates_exploit_and_projects_session(monkeypat
     monkeypatch.setattr(
         cpanel.CpanelSniper,
         "exploit",
-        lambda self, target, **kwargs: (
-            exploit_calls.append((target, kwargs))
-            or {"status": "error", "error": "failed"}
-        ),
+        lambda self, target, **kwargs: exploit_calls.append((target, kwargs)) or {"status": "error", "error": "failed"},
     )
     exploited = plugin.run(
         target="explicit",
@@ -365,6 +362,4 @@ def test_plugin_run_requires_target_gates_exploit_and_projects_session(monkeypat
     assert exploited.success is False
     assert exploited.sessions == []
     assert exploited.error == "failed"
-    assert exploit_calls == [
-        ("explicit", {"action": "cmd", "cmd": "id", "timeout": 32})
-    ]
+    assert exploit_calls == [("explicit", {"action": "cmd", "cmd": "id", "timeout": 32})]

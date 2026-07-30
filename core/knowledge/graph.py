@@ -49,8 +49,7 @@ class KnowledgeGraph:
 
     def __init__(self, db_path: str | None = None):
         if not db_path:
-            base = os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__))))
+            base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             self.db_path = os.path.join(base, "data", "knowledge.db")
         else:
             self.db_path = db_path
@@ -112,15 +111,15 @@ class KnowledgeGraph:
             conn.execute("BEGIN IMMEDIATE")
             c = conn.cursor()
 
-            c.execute('''
+            c.execute("""
                 CREATE TABLE IF NOT EXISTS knowledge_graph_schema (
                     schema_version TEXT PRIMARY KEY,
                     normalization_version TEXT NOT NULL,
                     applied_at REAL NOT NULL
                 )
-            ''')
+            """)
 
-            c.execute('''
+            c.execute("""
                 CREATE TABLE IF NOT EXISTS nodes (
                     id TEXT PRIMARY KEY,
                     type TEXT NOT NULL,
@@ -128,9 +127,9 @@ class KnowledgeGraph:
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL
                 )
-            ''')
+            """)
 
-            c.execute('''
+            c.execute("""
                 CREATE TABLE IF NOT EXISTS edges (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     src TEXT NOT NULL,
@@ -141,9 +140,9 @@ class KnowledgeGraph:
                     updated_at REAL NOT NULL DEFAULT 0,
                     UNIQUE(src, dst, edge_type)
                 )
-            ''')
+            """)
 
-            c.execute('''
+            c.execute("""
                 CREATE TABLE IF NOT EXISTS node_aliases (
                     alias_id TEXT PRIMARY KEY,
                     canonical_id TEXT NOT NULL,
@@ -151,9 +150,9 @@ class KnowledgeGraph:
                     created_at REAL NOT NULL,
                     FOREIGN KEY(canonical_id) REFERENCES nodes(id) ON DELETE CASCADE
                 )
-            ''')
+            """)
 
-            c.execute('''
+            c.execute("""
                 CREATE TABLE IF NOT EXISTS graph_fact_projections (
                     fact_id INTEGER NOT NULL,
                     assessment_id TEXT NOT NULL,
@@ -164,28 +163,22 @@ class KnowledgeGraph:
                     projected_at REAL NOT NULL,
                     PRIMARY KEY(fact_id, assessment_id, normalization_version)
                 )
-            ''')
+            """)
 
-            c.execute('CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type)')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src)')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst)')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type)')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_alias_canonical ON node_aliases(canonical_id)')
-            c.execute('CREATE INDEX IF NOT EXISTS idx_projection_fact ON graph_fact_projections(fact_id)')
+            c.execute("CREATE INDEX IF NOT EXISTS idx_nodes_type ON nodes(type)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_edges_src ON edges(src)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst ON edges(dst)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_edges_type ON edges(edge_type)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_alias_canonical ON node_aliases(canonical_id)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_projection_fact ON graph_fact_projections(fact_id)")
             self._ensure_column(c, "edges", "updated_at", "REAL NOT NULL DEFAULT 0")
 
             versions = {
-                str(row[0])
-                for row in c.execute(
-                    "SELECT schema_version FROM knowledge_graph_schema"
-                ).fetchall()
+                str(row[0]) for row in c.execute("SELECT schema_version FROM knowledge_graph_schema").fetchall()
             }
             unsupported = versions - {KNOWLEDGE_GRAPH_SCHEMA_VERSION}
             if unsupported:
-                raise RuntimeError(
-                    "Unsupported knowledge-graph schema version(s): "
-                    + ", ".join(sorted(unsupported))
-                )
+                raise RuntimeError("Unsupported knowledge-graph schema version(s): " + ", ".join(sorted(unsupported)))
 
             for row in c.execute("SELECT id, properties FROM nodes").fetchall():
                 try:
@@ -226,24 +219,17 @@ class KnowledgeGraph:
         column: str,
         definition: str,
     ) -> None:
-        columns = {
-            str(row[1])
-            for row in cursor.execute(f"PRAGMA table_info({table})").fetchall()
-        }
+        columns = {str(row[1]) for row in cursor.execute(f"PRAGMA table_info({table})").fetchall()}
         if column not in columns:
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def _migrate_legacy_identities(self, cursor: sqlite3.Cursor) -> None:
         """Re-key legacy nodes and edges while preserving aliases and timestamps."""
 
-        node_rows = cursor.execute(
-            "SELECT id, type, properties, created_at, updated_at FROM nodes"
-        ).fetchall()
+        node_rows = cursor.execute("SELECT id, type, properties, created_at, updated_at FROM nodes").fetchall()
         if not node_rows:
             return
-        existing_aliases = cursor.execute(
-            "SELECT alias_id, canonical_id FROM node_aliases"
-        ).fetchall()
+        existing_aliases = cursor.execute("SELECT alias_id, canonical_id FROM node_aliases").fetchall()
         canonical_nodes: dict[str, dict[str, Any]] = {}
         alias_pairs: set[tuple[str, str]] = set()
         old_to_new: dict[str, str] = {}
@@ -255,17 +241,13 @@ class KnowledgeGraph:
             canonical_id = identity.entity_id if identity else old_id
             old_to_new[old_id] = canonical_id
             properties["canonical_id"] = canonical_id
-            properties["normalization_version"] = (
-                ENTITY_NORMALIZATION_VERSION if identity else "legacy"
-            )
+            properties["normalization_version"] = ENTITY_NORMALIZATION_VERSION if identity else "legacy"
             legacy_ids = list(properties.get("legacy_ids") or [])
             if old_id != canonical_id:
                 legacy_ids.append(old_id)
             if identity:
                 legacy_ids.extend(identity.aliases)
-            properties["legacy_ids"] = list(
-                dict.fromkeys(item for item in legacy_ids if item and item != canonical_id)
-            )
+            properties["legacy_ids"] = list(dict.fromkeys(item for item in legacy_ids if item and item != canonical_id))
             current = canonical_nodes.get(canonical_id)
             if current is None:
                 canonical_nodes[canonical_id] = {
@@ -394,11 +376,7 @@ class KnowledgeGraph:
                 continue
             if key in union_keys:
                 previous_items = merged.get(key) or []
-                left_items = (
-                    previous_items
-                    if isinstance(previous_items, list)
-                    else [previous_items]
-                )
+                left_items = previous_items if isinstance(previous_items, list) else [previous_items]
                 right = value if isinstance(value, list) else [value]
                 merged[key] = list(dict.fromkeys((*left_items, *right)))
             elif key == "first_seen" and merged.get(key) is not None:
@@ -407,11 +385,7 @@ class KnowledgeGraph:
                 merged[key] = max(float(merged[key]), float(value))
             elif key == "provenance" and isinstance(value, dict):
                 previous_provenance = merged.get(key)
-                existing_provenance = (
-                    previous_provenance
-                    if isinstance(previous_provenance, dict)
-                    else {}
-                )
+                existing_provenance = previous_provenance if isinstance(previous_provenance, dict) else {}
                 # Each fact owns one current provenance record. Replacing an
                 # incoming fact's record is required for one-way redaction:
                 # recursively merging it would retain superseded plaintext
@@ -456,11 +430,7 @@ class KnowledgeGraph:
         statuses = [str(item.get("assessment_status") or "observed") for item in records]
         priority = ("verified", "inferred", "observed", "contradicted")
         effective = next((status for status in priority if status in statuses), "observed")
-        effective_records = [
-            item
-            for item in records
-            if str(item.get("assessment_status") or "observed") == effective
-        ]
+        effective_records = [item for item in records if str(item.get("assessment_status") or "observed") == effective]
         normalized["assessment_status"] = effective
         if statuses and all(status == "contradicted" for status in statuses):
             normalized["contradiction_state"] = "contradicted"
@@ -491,9 +461,7 @@ class KnowledgeGraph:
             effective_records,
         )
         confidences = [
-            int(item.get("confidence", 0) or 0)
-            for item in effective_records
-            if str(item.get("confidence", "")).strip()
+            int(item.get("confidence", 0) or 0) for item in effective_records if str(item.get("confidence", "")).strip()
         ]
         if confidences:
             normalized["confidence"] = max(confidences)
@@ -557,14 +525,14 @@ class KnowledgeGraph:
             merged["canonical_id"] = node_id
             merged.setdefault("normalization_version", ENTITY_NORMALIZATION_VERSION)
             conn.execute(
-                '''
+                """
                     INSERT INTO nodes (id, type, properties, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         type = excluded.type,
                         properties = excluded.properties,
                         updated_at = excluded.updated_at
-                ''',
+                """,
                 (
                     node_id,
                     node_type.value,
@@ -588,11 +556,9 @@ class KnowledgeGraph:
 
         return self._upsert_node(node_id, node_type, properties, aliases=aliases)
 
-    def add_asset(self, ip: str, hostname: str = "", os: str = "",
-                  ports: list[int] | None = None, **kw) -> Asset:
+    def add_asset(self, ip: str, hostname: str = "", os: str = "", ports: list[int] | None = None, **kw) -> Asset:
         """Add or update a host asset."""
-        asset = Asset(ip=ip, hostname=hostname, os=os,
-                      ports=ports or [], **kw)
+        asset = Asset(ip=ip, hostname=hostname, os=os, ports=ports or [], **kw)
         self._upsert_node(
             asset.node_id,
             NodeType.ASSET,
@@ -601,11 +567,11 @@ class KnowledgeGraph:
         )
         return asset
 
-    def add_identity(self, username: str, domain: str = "",
-                     identity_type: str = "local", host: str = "", **kw) -> Identity:
+    def add_identity(
+        self, username: str, domain: str = "", identity_type: str = "local", host: str = "", **kw
+    ) -> Identity:
         """Add or update a user identity."""
-        ident = Identity(username=username, domain=domain,
-                         identity_type=identity_type, host=host, **kw)
+        ident = Identity(username=username, domain=domain, identity_type=identity_type, host=host, **kw)
         self._upsert_node(
             ident.node_id,
             NodeType.IDENTITY,
@@ -614,14 +580,26 @@ class KnowledgeGraph:
         )
         return ident
 
-    def add_credential(self, username: str, secret: str,
-                       source: str = "", service: str = "",
-                       verified: bool = False, host: str = "",
-                       secret_type: str = "password") -> Credential:
+    def add_credential(
+        self,
+        username: str,
+        secret: str,
+        source: str = "",
+        service: str = "",
+        verified: bool = False,
+        host: str = "",
+        secret_type: str = "password",
+    ) -> Credential:
         """Add or update a credential."""
-        cred = Credential(username=username, secret=secret, source=source,
-                          service=service, verified=verified, host=host,
-                          secret_type=secret_type)
+        cred = Credential(
+            username=username,
+            secret=secret,
+            source=source,
+            service=service,
+            verified=verified,
+            host=host,
+            secret_type=secret_type,
+        )
         self._upsert_node(
             cred.node_id,
             NodeType.CREDENTIAL,
@@ -631,18 +609,31 @@ class KnowledgeGraph:
         # Also ensure identity exists
         identity = self.add_identity(username, host=host)
         # Auto-link identity → credential
-        self.link(identity.node_id, cred.node_id,
-                  EdgeType.HAS_CREDENTIAL, source=source)
+        self.link(identity.node_id, cred.node_id, EdgeType.HAS_CREDENTIAL, source=source)
         return cred
 
-    def add_service(self, host: str, port: int,
-                    service_name: str = "", version: str = "",
-                    banner: str = "", state: str = "open",
-                    web_app: str = "", protocol: str = "tcp") -> Service:
+    def add_service(
+        self,
+        host: str,
+        port: int,
+        service_name: str = "",
+        version: str = "",
+        banner: str = "",
+        state: str = "open",
+        web_app: str = "",
+        protocol: str = "tcp",
+    ) -> Service:
         """Add or update a service on a host."""
-        svc = Service(host=host, port=port, service_name=service_name,
-                      version=version, banner=banner, state=state,
-                      web_app=web_app, protocol=protocol)
+        svc = Service(
+            host=host,
+            port=port,
+            service_name=service_name,
+            version=version,
+            banner=banner,
+            state=state,
+            web_app=web_app,
+            protocol=protocol,
+        )
         self._upsert_node(
             svc.node_id,
             NodeType.SERVICE,
@@ -671,11 +662,9 @@ class KnowledgeGraph:
         )
         return endpoint
 
-    def add_session(self, session_id: str, session_type: str = "ssh",
-                    username: str = "", host: str = "") -> Session:
+    def add_session(self, session_id: str, session_type: str = "ssh", username: str = "", host: str = "") -> Session:
         """Add or update a session."""
-        sess = Session(session_id=session_id, session_type=session_type,
-                       username=username, host=host)
+        sess = Session(session_id=session_id, session_type=session_type, username=username, host=host)
         self._upsert_node(
             sess.node_id,
             NodeType.SESSION,
@@ -685,24 +674,34 @@ class KnowledgeGraph:
         # Link identity → session → asset
         if username:
             identity = self.add_identity(username, host=host)
-            self.link(identity.node_id, sess.node_id,
-                      EdgeType.ACTIVE_SESSION)
+            self.link(identity.node_id, sess.node_id, EdgeType.ACTIVE_SESSION)
         if host:
             asset = self.add_asset(host)
             self.link(sess.node_id, asset.node_id, EdgeType.SESSION_TO)
         return sess
 
-    def add_vulnerability(self, vuln_id: str, name: str = "",
-                          cvss: float = 0.0, severity: str = "medium",
-                          service: str = "", confirmed: bool = False,
-                          exploit_available: bool = False,
-                          description: str = "") -> Vulnerability:
+    def add_vulnerability(
+        self,
+        vuln_id: str,
+        name: str = "",
+        cvss: float = 0.0,
+        severity: str = "medium",
+        service: str = "",
+        confirmed: bool = False,
+        exploit_available: bool = False,
+        description: str = "",
+    ) -> Vulnerability:
         """Add or update a vulnerability."""
-        vuln = Vulnerability(vuln_id=vuln_id, name=name, cvss=cvss,
-                             severity=severity, service=service,
-                             confirmed=confirmed,
-                             exploit_available=exploit_available,
-                             description=description)
+        vuln = Vulnerability(
+            vuln_id=vuln_id,
+            name=name,
+            cvss=cvss,
+            severity=severity,
+            service=service,
+            confirmed=confirmed,
+            exploit_available=exploit_available,
+            description=description,
+        )
         self._upsert_node(
             vuln.node_id,
             NodeType.VULNERABILITY,
@@ -711,22 +710,19 @@ class KnowledgeGraph:
         )
         return vuln
 
-    def add_campaign(self, name: str, objective: str = "",
-                     targets: list[str] | None = None) -> Campaign:
+    def add_campaign(self, name: str, objective: str = "", targets: list[str] | None = None) -> Campaign:
         """Add or update a campaign."""
-        camp = Campaign(name=name, objective=objective,
-                        targets=targets or [])
+        camp = Campaign(name=name, objective=objective, targets=targets or [])
         self._upsert_node(camp.node_id, NodeType.CAMPAIGN, camp.to_dict())
         # Link targets
-        for target_ip in (targets or []):
+        for target_ip in targets or []:
             asset = self.add_asset(target_ip)
             self.link(asset.node_id, camp.node_id, EdgeType.MEMBER_OF)
         return camp
 
     # EDGE (RELATIONSHIP) API
 
-    def link(self, src_id: str, dst_id: str, edge_type: EdgeType,
-             **properties):
+    def link(self, src_id: str, dst_id: str, edge_type: EdgeType, **properties):
         """Create a typed edge between two nodes. Idempotent."""
         now = time.time()
         properties = redact_data(properties)
@@ -748,14 +744,14 @@ class KnowledgeGraph:
                 merged = self._normalize_assessment_metadata(merged)
                 merged.setdefault("normalization_version", ENTITY_NORMALIZATION_VERSION)
                 conn.execute(
-                    '''
+                    """
                     INSERT INTO edges (
                         src, dst, edge_type, properties, created_at, updated_at
                     ) VALUES (?, ?, ?, ?, ?, ?)
                     ON CONFLICT(src, dst, edge_type) DO UPDATE SET
                         properties = excluded.properties,
                         updated_at = excluded.updated_at
-                    ''',
+                    """,
                     (
                         canonical_src,
                         canonical_dst,
@@ -770,8 +766,7 @@ class KnowledgeGraph:
             logging.debug(f"KnowledgeGraph.link error: {e}")
             return False
 
-    def link_credential_to_asset(self, cred_id: str, asset_id: str,
-                                 method: str = "ssh"):
+    def link_credential_to_asset(self, cred_id: str, asset_id: str, method: str = "ssh"):
         """Link a credential to a target asset (CAN_ACCESS)."""
         self.link(cred_id, asset_id, EdgeType.CAN_ACCESS, method=method)
 
@@ -789,9 +784,7 @@ class KnowledgeGraph:
         """Get a single node by ID. Returns properties + metadata."""
         with self._connect() as conn:
             canonical_id = self._resolve_node_id_in_conn(conn, node_id)
-            row = conn.execute(
-                'SELECT * FROM nodes WHERE id = ?', (canonical_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM nodes WHERE id = ?", (canonical_id,)).fetchone()
         if not row:
             return None
         return {
@@ -806,59 +799,59 @@ class KnowledgeGraph:
     def get_nodes_by_type(self, node_type: NodeType) -> list[dict]:
         """Get all nodes of a specific type."""
         with self._connect() as conn:
-            rows = conn.execute(
-                'SELECT * FROM nodes WHERE type = ? ORDER BY created_at',
-                (node_type.value,)
-            ).fetchall()
-        return [{
-            "id": r["id"],
-            "type": r["type"],
-            "properties": redact_data(json.loads(r["properties"])),
-        } for r in rows]
+            rows = conn.execute("SELECT * FROM nodes WHERE type = ? ORDER BY created_at", (node_type.value,)).fetchall()
+        return [
+            {
+                "id": r["id"],
+                "type": r["type"],
+                "properties": redact_data(json.loads(r["properties"])),
+            }
+            for r in rows
+        ]
 
-    def get_edges_from(self, node_id: str,
-                       edge_type: EdgeType | None = None) -> list[dict]:
+    def get_edges_from(self, node_id: str, edge_type: EdgeType | None = None) -> list[dict]:
         """Get all outgoing edges from a node."""
         with self._connect() as conn:
             canonical_id = self._resolve_node_id_in_conn(conn, node_id)
             if edge_type:
                 rows = conn.execute(
-                    'SELECT * FROM edges WHERE src = ? AND edge_type = ?',
-                    (canonical_id, edge_type.value)
+                    "SELECT * FROM edges WHERE src = ? AND edge_type = ?", (canonical_id, edge_type.value)
                 ).fetchall()
             else:
-                rows = conn.execute(
-                    'SELECT * FROM edges WHERE src = ?', (canonical_id,)
-                ).fetchall()
-        return [{
-            "src": r["src"], "dst": r["dst"],
-            "edge_type": r["edge_type"],
-            "properties": redact_data(json.loads(r["properties"])),
-            "created_at": r["created_at"],
-            "updated_at": r["updated_at"],
-        } for r in rows]
+                rows = conn.execute("SELECT * FROM edges WHERE src = ?", (canonical_id,)).fetchall()
+        return [
+            {
+                "src": r["src"],
+                "dst": r["dst"],
+                "edge_type": r["edge_type"],
+                "properties": redact_data(json.loads(r["properties"])),
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ]
 
-    def get_edges_to(self, node_id: str,
-                     edge_type: EdgeType | None = None) -> list[dict]:
+    def get_edges_to(self, node_id: str, edge_type: EdgeType | None = None) -> list[dict]:
         """Get all incoming edges to a node."""
         with self._connect() as conn:
             canonical_id = self._resolve_node_id_in_conn(conn, node_id)
             if edge_type:
                 rows = conn.execute(
-                    'SELECT * FROM edges WHERE dst = ? AND edge_type = ?',
-                    (canonical_id, edge_type.value)
+                    "SELECT * FROM edges WHERE dst = ? AND edge_type = ?", (canonical_id, edge_type.value)
                 ).fetchall()
             else:
-                rows = conn.execute(
-                    'SELECT * FROM edges WHERE dst = ?', (canonical_id,)
-                ).fetchall()
-        return [{
-            "src": r["src"], "dst": r["dst"],
-            "edge_type": r["edge_type"],
-            "properties": redact_data(json.loads(r["properties"])),
-            "created_at": r["created_at"],
-            "updated_at": r["updated_at"],
-        } for r in rows]
+                rows = conn.execute("SELECT * FROM edges WHERE dst = ?", (canonical_id,)).fetchall()
+        return [
+            {
+                "src": r["src"],
+                "dst": r["dst"],
+                "edge_type": r["edge_type"],
+                "properties": redact_data(json.loads(r["properties"])),
+                "created_at": r["created_at"],
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ]
 
     def get_attack_surface(self, host_ip: str) -> dict:
         """
@@ -888,13 +881,11 @@ class KnowledgeGraph:
                 result["services"].append(svc_node["properties"])
 
                 # Get vulns for this service
-                vuln_edges = self.get_edges_from(
-                    edge["dst"], EdgeType.VULNERABLE_TO)
+                vuln_edges = self.get_edges_from(edge["dst"], EdgeType.VULNERABLE_TO)
                 for ve in vuln_edges:
                     vuln_node = self.get_node(ve["dst"])
                     if vuln_node:
-                        result["vulnerabilities"].append(
-                            vuln_node["properties"])
+                        result["vulnerabilities"].append(vuln_node["properties"])
 
         # Get credentials that CAN_ACCESS this host
         cred_edges = self.get_edges_to(asset_id, EdgeType.CAN_ACCESS)
@@ -907,17 +898,9 @@ class KnowledgeGraph:
         trust_out = self.get_edges_from(asset_id, EdgeType.TRUSTS)
         trust_in = self.get_edges_to(asset_id, EdgeType.TRUSTS)
         for edge in trust_out:
-            result["trusts"].append({
-                "direction": "outbound",
-                "target": edge["dst"],
-                "properties": edge["properties"]
-            })
+            result["trusts"].append({"direction": "outbound", "target": edge["dst"], "properties": edge["properties"]})
         for edge in trust_in:
-            result["trusts"].append({
-                "direction": "inbound",
-                "source": edge["src"],
-                "properties": edge["properties"]
-            })
+            result["trusts"].append({"direction": "inbound", "source": edge["src"], "properties": edge["properties"]})
 
         # Get active sessions
         sess_edges = self.get_edges_to(asset_id, EdgeType.SESSION_TO)
@@ -937,13 +920,11 @@ class KnowledgeGraph:
             cred_node = self.get_node(edge["src"])
             if cred_node:
                 cred_data = cred_node["properties"].copy()
-                cred_data["access_method"] = edge["properties"].get(
-                    "method", "unknown")
+                cred_data["access_method"] = edge["properties"].get("method", "unknown")
                 creds.append(cred_data)
         return creds
 
-    def find_paths(self, src_id: str, dst_id: str,
-                   max_depth: int = 5) -> list[list[str]]:
+    def find_paths(self, src_id: str, dst_id: str, max_depth: int = 5) -> list[list[str]]:
         """
         BFS to find all attack paths from src to dst.
         Returns list of paths, each path is [node, edge_type, node, ...].
@@ -953,7 +934,7 @@ class KnowledgeGraph:
         with self._connect() as conn:
             src_id = self._resolve_node_id_in_conn(conn, src_id)
             dst_id = self._resolve_node_id_in_conn(conn, dst_id)
-            rows = conn.execute('SELECT src, dst, edge_type FROM edges').fetchall()
+            rows = conn.execute("SELECT src, dst, edge_type FROM edges").fetchall()
         for r in rows:
             src = r["src"]
             if src not in adj:
@@ -997,8 +978,7 @@ class KnowledgeGraph:
             candidates = [
                 dict(item)
                 for item in raw_provenance.values()
-                if isinstance(item, dict)
-                and str(item.get("assessment_status") or "observed") in allowed
+                if isinstance(item, dict) and str(item.get("assessment_status") or "observed") in allowed
             ]
         else:
             candidates = []
@@ -1006,58 +986,46 @@ class KnowledgeGraph:
             status = str(properties.get("assessment_status") or "unassessed")
             if status not in allowed:
                 return False, f"assessment_status:{status}", []
-            candidates = [{
-                "assessment_status": status,
-                "assessment_refs": (
-                    properties.get("current_assessment_refs")
-                    or properties.get("assessment_refs")
-                    or []
-                ),
-                "evidence_fact_ids": (
-                    properties.get("current_evidence_fact_ids")
-                    or properties.get("evidence_fact_ids")
-                    or []
-                ),
-                "source_execution_ids": (
-                    properties.get("current_source_execution_ids")
-                    or properties.get("source_execution_ids")
-                    or []
-                ),
-                "confidence": properties.get("confidence", 0),
-            }]
+            candidates = [
+                {
+                    "assessment_status": status,
+                    "assessment_refs": (
+                        properties.get("current_assessment_refs") or properties.get("assessment_refs") or []
+                    ),
+                    "evidence_fact_ids": (
+                        properties.get("current_evidence_fact_ids") or properties.get("evidence_fact_ids") or []
+                    ),
+                    "source_execution_ids": (
+                        properties.get("current_source_execution_ids") or properties.get("source_execution_ids") or []
+                    ),
+                    "confidence": properties.get("confidence", 0),
+                }
+            ]
 
         chain: list[dict[str, Any]] = []
         for item in candidates:
-            assessment_refs = (
-                item.get("current_assessment_refs") or item.get("assessment_refs") or []
-            )
-            evidence_fact_ids = (
-                item.get("current_evidence_fact_ids")
-                or item.get("evidence_fact_ids")
-                or []
-            )
+            assessment_refs = item.get("current_assessment_refs") or item.get("assessment_refs") or []
+            evidence_fact_ids = item.get("current_evidence_fact_ids") or item.get("evidence_fact_ids") or []
             if not isinstance(assessment_refs, list):
                 assessment_refs = [assessment_refs]
             if not isinstance(evidence_fact_ids, list):
                 evidence_fact_ids = [evidence_fact_ids]
             if assessment_refs and evidence_fact_ids:
                 source_execution_ids = (
-                    item.get("current_source_execution_ids")
-                    or item.get("source_execution_ids")
-                    or []
+                    item.get("current_source_execution_ids") or item.get("source_execution_ids") or []
                 )
                 if not isinstance(source_execution_ids, list):
                     source_execution_ids = [source_execution_ids]
-                chain.append({
-                    "fact_id": item.get("fact_id"),
-                    "assessment_id": item.get("assessment_id") or assessment_refs[-1],
-                    "assessment_status": str(
-                        item.get("assessment_status") or "observed"
-                    ),
-                    "confidence": int(item.get("confidence", 0) or 0),
-                    "evidence_fact_ids": list(dict.fromkeys(evidence_fact_ids)),
-                    "source_execution_ids": list(dict.fromkeys(source_execution_ids)),
-                })
+                chain.append(
+                    {
+                        "fact_id": item.get("fact_id"),
+                        "assessment_id": item.get("assessment_id") or assessment_refs[-1],
+                        "assessment_status": str(item.get("assessment_status") or "observed"),
+                        "confidence": int(item.get("confidence", 0) or 0),
+                        "evidence_fact_ids": list(dict.fromkeys(evidence_fact_ids)),
+                        "source_execution_ids": list(dict.fromkeys(source_execution_ids)),
+                    }
+                )
         if not chain:
             return False, "missing_evidence_chain", []
         return True, "", chain
@@ -1072,9 +1040,7 @@ class KnowledgeGraph:
         max_paths: int,
         include_inferred: bool | None,
     ) -> list[list[dict[str, Any]]]:
-        queue: deque[tuple[str, tuple[str, ...], list[dict[str, Any]]]] = deque(
-            [(source, (source,), [])]
-        )
+        queue: deque[tuple[str, tuple[str, ...], list[dict[str, Any]]]] = deque([(source, (source,), [])])
         paths: list[list[dict[str, Any]]] = []
         while queue and len(paths) < max_paths:
             current, seen_nodes, steps = queue.popleft()
@@ -1141,9 +1107,7 @@ class KnowledgeGraph:
             "missing_link": None,
         }
         missing_nodes = [
-            label
-            for label, node_id in (("source", source), ("destination", destination))
-            if node_id not in known_nodes
+            label for label, node_id in (("source", source), ("destination", destination)) if node_id not in known_nodes
         ]
         if missing_nodes:
             result["missing_link"] = {
@@ -1182,17 +1146,17 @@ class KnowledgeGraph:
                     include_inferred=include_inferred,
                 )
                 nodes.append(edge["dst"])
-                steps.append({
-                    "from": edge["src"],
-                    "to": edge["dst"],
-                    "edge_type": edge["edge_type"],
-                    "assessment_status": edge["properties"].get("assessment_status"),
-                    "confidence": edge["properties"].get("confidence", 0),
-                    "contradiction_state": edge["properties"].get(
-                        "contradiction_state", "none"
-                    ),
-                    "evidence_chain": chain,
-                })
+                steps.append(
+                    {
+                        "from": edge["src"],
+                        "to": edge["dst"],
+                        "edge_type": edge["edge_type"],
+                        "assessment_status": edge["properties"].get("assessment_status"),
+                        "confidence": edge["properties"].get("confidence", 0),
+                        "contradiction_state": edge["properties"].get("contradiction_state", "none"),
+                        "evidence_chain": chain,
+                    }
+                )
             result["paths"].append({"nodes": nodes, "steps": steps})
 
         if result["paths"]:
@@ -1221,12 +1185,14 @@ class KnowledgeGraph:
                 include_inferred=include_inferred,
             )
             if not supported:
-                excluded_steps.append({
-                    "from": edge["src"],
-                    "to": edge["dst"],
-                    "edge_type": edge["edge_type"],
-                    "reason": reason,
-                })
+                excluded_steps.append(
+                    {
+                        "from": edge["src"],
+                        "to": edge["dst"],
+                        "edge_type": edge["edge_type"],
+                        "reason": reason,
+                    }
+                )
         result["missing_link"] = {
             "reason": "excluded_edges",
             "structural_nodes": [source, *(edge["dst"] for edge in structural)],
@@ -1271,11 +1237,13 @@ class KnowledgeGraph:
         for edge in trust_edges:
             seen.add(edge["dst"])
             node = self.get_node(edge["dst"])
-            targets.append({
-                "target": edge["dst"],
-                "method": "trust",
-                "details": node["properties"] if node else {},
-            })
+            targets.append(
+                {
+                    "target": edge["dst"],
+                    "method": "trust",
+                    "details": node["properties"] if node else {},
+                }
+            )
 
         # Pivot via shared credentials
         # Get all creds for this host, then find other hosts they can access
@@ -1287,12 +1255,14 @@ class KnowledgeGraph:
                 if oa["dst"] != asset_id and oa["dst"] not in seen:
                     seen.add(oa["dst"])
                     node = self.get_node(oa["dst"])
-                    targets.append({
-                        "target": oa["dst"],
-                        "method": "shared_credential",
-                        "credential": ce["src"],
-                        "details": node["properties"] if node else {},
-                    })
+                    targets.append(
+                        {
+                            "target": oa["dst"],
+                            "method": "shared_credential",
+                            "credential": ce["src"],
+                            "details": node["properties"] if node else {},
+                        }
+                    )
 
         # PIVOTS_TO explicit edges
         pivot_edges = self.get_edges_from(asset_id, EdgeType.PIVOTS_TO)
@@ -1300,11 +1270,13 @@ class KnowledgeGraph:
             if edge["dst"] not in seen:
                 seen.add(edge["dst"])
                 node = self.get_node(edge["dst"])
-                targets.append({
-                    "target": edge["dst"],
-                    "method": "pivot",
-                    "details": node["properties"] if node else {},
-                })
+                targets.append(
+                    {
+                        "target": edge["dst"],
+                        "method": "pivot",
+                        "details": node["properties"] if node else {},
+                    }
+                )
 
         return targets
 
@@ -1473,23 +1445,17 @@ class KnowledgeGraph:
 
         with self._connect() as conn:
             # Node counts
-            rows = conn.execute(
-                'SELECT type, COUNT(*) as cnt FROM nodes GROUP BY type'
-            ).fetchall()
+            rows = conn.execute("SELECT type, COUNT(*) as cnt FROM nodes GROUP BY type").fetchall()
             for r in rows:
                 result["nodes"][r["type"]] = r["cnt"]
                 result["total_nodes"] += r["cnt"]
 
             # Edge counts
-            rows = conn.execute(
-                'SELECT edge_type, COUNT(*) as cnt FROM edges GROUP BY edge_type'
-            ).fetchall()
+            rows = conn.execute("SELECT edge_type, COUNT(*) as cnt FROM edges GROUP BY edge_type").fetchall()
             for r in rows:
                 result["edges"][r["edge_type"]] = r["cnt"]
                 result["total_edges"] += r["cnt"]
-            row = conn.execute(
-                "SELECT COUNT(*) AS cnt FROM graph_fact_projections"
-            ).fetchone()
+            row = conn.execute("SELECT COUNT(*) AS cnt FROM graph_fact_projections").fetchone()
             result["projected_assessments"] = int(row["cnt"] if row else 0)
 
         return result
@@ -1497,7 +1463,7 @@ class KnowledgeGraph:
     def clear(self):
         """Clear all data. Use with caution."""
         with self._connect() as conn:
-            conn.execute('DELETE FROM graph_fact_projections')
-            conn.execute('DELETE FROM edges')
-            conn.execute('DELETE FROM node_aliases')
-            conn.execute('DELETE FROM nodes')
+            conn.execute("DELETE FROM graph_fact_projections")
+            conn.execute("DELETE FROM edges")
+            conn.execute("DELETE FROM node_aliases")
+            conn.execute("DELETE FROM nodes")

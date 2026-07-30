@@ -14,6 +14,7 @@ class TestLoadDefaults:
 
     def test_defaults_have_db_section(self):
         from config import DEFAULTS
+
         assert "db" in DEFAULTS
         assert "host" in DEFAULTS["db"]
         assert "user" in DEFAULTS["db"]
@@ -32,19 +33,19 @@ class TestLoadDefaults:
 
         import config
 
-        checked_in = yaml.safe_load(
-            Path(config.__file__).with_name("config.yaml").read_text(encoding="utf-8")
-        )
+        checked_in = yaml.safe_load(Path(config.__file__).with_name("config.yaml").read_text(encoding="utf-8"))
         assert checked_in["db"]["password"] == ""
 
     def test_defaults_have_ollama_section(self):
         from config import DEFAULTS
+
         assert "ollama" in DEFAULTS
         assert "url" in DEFAULTS["ollama"]
         assert "model" in DEFAULTS["ollama"]
 
     def test_defaults_have_paths_section(self):
         from config import DEFAULTS
+
         assert "paths" in DEFAULTS
 
 
@@ -53,6 +54,7 @@ class TestDeepMerge:
 
     def test_merge_overwrites_scalars(self):
         from config import _deep_merge
+
         base = {"a": 1, "b": 2}
         override = {"b": 3}
         result = _deep_merge(base, override)
@@ -61,6 +63,7 @@ class TestDeepMerge:
 
     def test_merge_nested_dicts(self):
         from config import _deep_merge
+
         base = {"db": {"host": "localhost", "port": 3306}}
         override = {"db": {"host": "remote"}}
         result = _deep_merge(base, override)
@@ -69,6 +72,7 @@ class TestDeepMerge:
 
     def test_merge_rejects_unknown_keys(self):
         from config import ConfigValidationError, _deep_merge
+
         base = {"a": 1}
         override = {"b": 2}
 
@@ -77,6 +81,7 @@ class TestDeepMerge:
 
     def test_merge_does_not_mutate_base(self):
         from config import _deep_merge
+
         base = {"a": {"x": 1, "y": 0}}
         override = {"a": {"y": 2}}
         result = _deep_merge(base, override)
@@ -120,9 +125,12 @@ class TestConfigValidation:
             "db: null\npaths: broken\nwordlists: []\ntools: null\n",
             encoding="utf-8",
         )
-        with patch("config._find_config", return_value=str(path)), pytest.raises(
-            config.ConfigValidationError,
-            match=r"invalid configuration .*db must be a mapping",
+        with (
+            patch("config._find_config", return_value=str(path)),
+            pytest.raises(
+                config.ConfigValidationError,
+                match=r"invalid configuration .*db must be a mapping",
+            ),
         ):
             config.load_config()
 
@@ -131,9 +139,12 @@ class TestConfigValidation:
 
         path = tmp_path / "invalid-leaf.yaml"
         path.write_text("db:\n  host: null\n  user: 42\n", encoding="utf-8")
-        with patch("config._find_config", return_value=str(path)), pytest.raises(
-            config.ConfigValidationError,
-            match=r"db.host must be string; got NoneType",
+        with (
+            patch("config._find_config", return_value=str(path)),
+            pytest.raises(
+                config.ConfigValidationError,
+                match=r"db.host must be string; got NoneType",
+            ),
         ):
             config.load_config()
 
@@ -142,9 +153,12 @@ class TestConfigValidation:
 
         path = tmp_path / "list.yaml"
         path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
-        with patch("config._find_config", return_value=str(path)), pytest.raises(
-            config.ConfigValidationError,
-            match="top-level YAML value must be a mapping",
+        with (
+            patch("config._find_config", return_value=str(path)),
+            pytest.raises(
+                config.ConfigValidationError,
+                match="top-level YAML value must be a mapping",
+            ),
         ):
             config.load_config()
 
@@ -156,10 +170,13 @@ class TestConfigValidation:
             "killchain:\n  stages:\n    data_exfill: false\n",
             encoding="utf-8",
         )
-        with patch("config._find_config", return_value=str(path)), pytest.raises(
-            config.ConfigValidationError,
-            match=r"unknown killchain stage 'killchain\.stages\.data_exfill'",
-        ) as exc_info:
+        with (
+            patch("config._find_config", return_value=str(path)),
+            pytest.raises(
+                config.ConfigValidationError,
+                match=r"unknown killchain stage 'killchain\.stages\.data_exfill'",
+            ) as exc_info,
+        ):
             config.load_config()
 
         assert "data_exfil" in str(exc_info.value)
@@ -173,9 +190,12 @@ class TestConfigValidation:
             'killchain:\n  stages:\n    cleanup: "false"\n',
             encoding="utf-8",
         )
-        with patch("config._find_config", return_value=str(path)), pytest.raises(
-            config.ConfigValidationError,
-            match=r"killchain\.stages\.cleanup must be boolean",
+        with (
+            patch("config._find_config", return_value=str(path)),
+            pytest.raises(
+                config.ConfigValidationError,
+                match=r"killchain\.stages\.cleanup must be boolean",
+            ),
         ):
             config.load_config()
 
@@ -187,9 +207,12 @@ class TestConfigValidation:
             "strategy:\n  parallel_tools: 0\n",
             encoding="utf-8",
         )
-        with patch("config._find_config", return_value=str(path)), pytest.raises(
-            config.ConfigValidationError,
-            match=r"strategy\.parallel_tools must be >= 1",
+        with (
+            patch("config._find_config", return_value=str(path)),
+            pytest.raises(
+                config.ConfigValidationError,
+                match=r"strategy\.parallel_tools must be >= 1",
+            ),
         ):
             config.load_config()
 
@@ -214,9 +237,12 @@ class TestConfigValidation:
             "strategy:\n  plan_enrichment_limit: -1\n",
             encoding="utf-8",
         )
-        with patch("config._find_config", return_value=str(path)), pytest.raises(
-            config.ConfigValidationError,
-            match=r"strategy\.plan_enrichment_limit must be >= 0",
+        with (
+            patch("config._find_config", return_value=str(path)),
+            pytest.raises(
+                config.ConfigValidationError,
+                match=r"strategy\.plan_enrichment_limit must be >= 0",
+            ),
         ):
             config.load_config()
 
@@ -225,9 +251,12 @@ class TestConfigValidation:
 
         path = tmp_path / "non-finite.yaml"
         path.write_text("ollama:\n  top_p: .nan\n", encoding="utf-8")
-        with patch("config._find_config", return_value=str(path)), pytest.raises(
-            config.ConfigValidationError,
-            match=r"ollama\.top_p must be finite",
+        with (
+            patch("config._find_config", return_value=str(path)),
+            pytest.raises(
+                config.ConfigValidationError,
+                match=r"ollama\.top_p must be finite",
+            ),
         ):
             config.load_config()
 
@@ -255,9 +284,7 @@ class TestConfigValidation:
 
         import config
 
-        checked_in = yaml.safe_load(
-            Path(config.__file__).with_name("config.yaml").read_text(encoding="utf-8")
-        )
+        checked_in = yaml.safe_load(Path(config.__file__).with_name("config.yaml").read_text(encoding="utf-8"))
         assert tuple(checked_in["killchain"]["stages"]) == config.KILLCHAIN_STAGE_KEYS
         config._deep_merge(config.DEFAULTS, checked_in)
 
@@ -268,9 +295,7 @@ class TestConfigValidation:
 
         import config
 
-        checked_in = yaml.safe_load(
-            Path(config.__file__).with_name("config.yaml").read_text(encoding="utf-8")
-        )
+        checked_in = yaml.safe_load(Path(config.__file__).with_name("config.yaml").read_text(encoding="utf-8"))
         retired = {"exfil_dir", "auto_crack_after_privesc", "backdoor_password"}
         assert retired.isdisjoint(config.DEFAULTS["killchain"])
         assert retired.isdisjoint(checked_in["killchain"])
@@ -318,14 +343,18 @@ class TestConfigPrecedence:
 class TestEnvVarOverrides:
     """Test that environment variables override config.yaml values."""
 
-    @patch.dict(os.environ, {
-        "OCTOPUS_DB_HOST": "env_host",
-        "OCTOPUS_DB_USER": "env_user",
-        "OCTOPUS_DB_PASS": "env_pass",
-        "OCTOPUS_DB_NAME": "env_db",
-    })
+    @patch.dict(
+        os.environ,
+        {
+            "OCTOPUS_DB_HOST": "env_host",
+            "OCTOPUS_DB_USER": "env_user",
+            "OCTOPUS_DB_PASS": "env_pass",
+            "OCTOPUS_DB_NAME": "env_db",
+        },
+    )
     def test_db_env_overrides(self):
         from config import load_config
+
         cfg = load_config()
         assert cfg["db"]["host"] == "env_host"
         assert cfg["db"]["user"] == "env_user"
@@ -335,12 +364,14 @@ class TestEnvVarOverrides:
     @patch.dict(os.environ, {"OCTOPUS_OLLAMA_MODEL": "custom-model"})
     def test_ollama_env_override(self):
         from config import load_config
+
         cfg = load_config()
         assert cfg["ollama"]["model"] == "custom-model"
 
     @patch.dict(os.environ, {"OCTOBENCH_OLLAMA_CONTEXT_LENGTH": "65536"})
     def test_benchmark_ollama_context_override(self):
         from config import load_config
+
         cfg = load_config()
         assert cfg["ollama"]["num_ctx"] == 65536
 
@@ -361,6 +392,7 @@ class TestEnvVarOverrides:
         for key in ["OCTOPUS_DB_HOST", "OCTOPUS_DB_USER", "OCTOPUS_DB_PASS", "OCTOPUS_DB_NAME"]:
             os.environ.pop(key, None)
         from config import load_config
+
         cfg = load_config()
         # Should have some value (from yaml or defaults)
         assert cfg["db"]["host"]
@@ -372,12 +404,14 @@ class TestGetSecret:
 
     def test_get_secret_with_default(self):
         from config import get_secret
+
         result = get_secret("NONEXISTENT_KEY_12345", default="fallback")
         assert result == "fallback"
 
     @patch.dict(os.environ, {"TEST_SECRET_KEY": "secret_value"})
     def test_get_secret_from_env(self):
         from config import get_secret
+
         result = get_secret("TEST_SECRET_KEY", default="fallback")
         assert result == "secret_value"
 
@@ -387,11 +421,13 @@ class TestFindWordlist:
 
     def test_find_wordlist_returns_string(self):
         from config import find_wordlist
+
         result = find_wordlist("passwords")
         assert isinstance(result, str)
 
     def test_find_all_wordlists_returns_list(self):
         from config import find_all_wordlists
+
         result = find_all_wordlists("passwords")
         assert isinstance(result, list)
 

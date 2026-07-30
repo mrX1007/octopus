@@ -172,9 +172,7 @@ def test_command_executable_availability_paths(tmp_path, monkeypatch) -> None:
 
 
 def test_format_and_placeholder_validation_edges() -> None:
-    assert lab._format_argv(("{system_id}",), {"system_id": "fixture"}) == [
-        "fixture"
-    ]
+    assert lab._format_argv(("{system_id}",), {"system_id": "fixture"}) == ["fixture"]
     with pytest.raises(lab.LabResetError, match="lab_command_placeholder_error"):
         lab._format_argv(("{missing}",), {})
 

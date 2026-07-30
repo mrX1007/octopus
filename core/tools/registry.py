@@ -49,19 +49,20 @@ logger = logging.getLogger("octopus.registry")
 
 # ─── Tool Definition ────────────────────────────────────
 
+
 @dataclass
 class ToolDef:
     """Metadata and callable for a registered tool."""
 
     name: str
     aliases: list[str] = field(default_factory=list)
-    category: str = "recon"        # recon | exploit | post | osint | util
+    category: str = "recon"  # recon | exploit | post | osint | util
     func: Optional[Callable[..., Any]] = None
     description: str = ""
     requires: list[str] = field(default_factory=list)  # system binary deps
     needs_target: bool = True
     enabled: bool = True
-    menu_group: str = ""           # for grouping in interactive menu
+    menu_group: str = ""  # for grouping in interactive menu
 
     def is_available(self) -> bool:
         """Check if all required system binaries are installed."""
@@ -73,6 +74,7 @@ class ToolDef:
             elif dep == "octopus:shardbrowser":
                 try:
                     from core.osint.shardbrowser import ShardBrowser
+
                     status = ShardBrowser().get_status()
                     if not status.get("installed"):
                         return False
@@ -110,6 +112,7 @@ def _dependency_available(dep: str) -> bool:
     if dep == "octopus:shardbrowser":
         try:
             from core.osint.shardbrowser import ShardBrowser
+
             return bool(ShardBrowser().get_status().get("installed"))
         except Exception:
             return False
@@ -146,6 +149,7 @@ def tool(
         ValueError: If the canonical name or an alias is empty, duplicated in
             this declaration, or already owned by another registry entry.
     """
+
     def decorator(func: Callable) -> Callable:
         canonical_name = _registry_key(name)
         normalized_aliases = [_registry_key(alias) for alias in aliases or []]
@@ -154,11 +158,7 @@ def tool(
         if any(not declared_name for declared_name in declared_names):
             raise ValueError("Tool registration names must be non-empty")
 
-        duplicate_names = {
-            declared_name
-            for declared_name in declared_names
-            if declared_names.count(declared_name) > 1
-        }
+        duplicate_names = {declared_name for declared_name in declared_names if declared_names.count(declared_name) > 1}
         if duplicate_names:
             duplicates = ", ".join(sorted(duplicate_names))
             raise ValueError(
@@ -166,14 +166,11 @@ def tool(
             )
 
         registry_collisions = {
-            declared_name: _REGISTRY[declared_name]
-            for declared_name in declared_names
-            if declared_name in _REGISTRY
+            declared_name: _REGISTRY[declared_name] for declared_name in declared_names if declared_name in _REGISTRY
         }
         if registry_collisions:
             collisions = ", ".join(
-                f"{declared_name} -> {tool_def.name}"
-                for declared_name, tool_def in sorted(registry_collisions.items())
+                f"{declared_name} -> {tool_def.name}" for declared_name, tool_def in sorted(registry_collisions.items())
             )
             raise ValueError(f"Tool registration collision: {collisions}")
 
@@ -196,6 +193,7 @@ def tool(
 
 
 # ─── Lookup Functions ────────────────────────────────────
+
 
 def get_tool(name: str) -> Optional[ToolDef]:
     """Look up a tool by name or alias.
@@ -263,6 +261,7 @@ def get_all_names() -> list[str]:
 
 # ─── Plugin Discovery ───────────────────────────────────
 
+
 def discover_plugins(plugin_dir: Optional[str] = None) -> int:
     """Discover class plugins through isolated metadata workers.
 
@@ -277,9 +276,7 @@ def discover_plugins(plugin_dir: Optional[str] = None) -> int:
         Number of plugins successfully loaded.
     """
     if plugin_dir is None:
-        base = os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__)
-        )))
+        base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         plugin_dir = os.path.join(base, "plugins")
 
     if not os.path.isdir(plugin_dir):
@@ -300,6 +297,7 @@ def discover_plugins(plugin_dir: Optional[str] = None) -> int:
 
 # ─── Utility ────────────────────────────────────────────
 
+
 def print_registry_stats() -> None:
     """Print registry statistics for debugging."""
     unique = list_tools()
@@ -308,8 +306,7 @@ def print_registry_stats() -> None:
     for t in unique:
         categories.setdefault(t.category, []).append(t)
 
-    print(f"\n  Tool Registry: {len(unique)} tools registered "
-          f"({len(available)} available)")
+    print(f"\n  Tool Registry: {len(unique)} tools registered ({len(available)} available)")
     for cat, tools in sorted(categories.items()):
         avail = sum(1 for t in tools if t.is_available())
         print(f"    {cat}: {len(tools)} total, {avail} available")

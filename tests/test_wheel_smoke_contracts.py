@@ -349,9 +349,7 @@ def test_main_reports_success_with_and_without_sdist(
     assert capsys.readouterr().out == "wheel smoke passed: 42 files, 10 scenarios\n"
 
     assert wheel_smoke.main(["package.whl", "--sdist", "package.tar.gz"]) == 0
-    assert capsys.readouterr().out == (
-        "wheel smoke passed: 42 files, 10 scenarios, sdist 51 files\n"
-    )
+    assert capsys.readouterr().out == ("wheel smoke passed: 42 files, 10 scenarios, sdist 51 files\n")
 
 
 def test_main_reports_validation_failure(

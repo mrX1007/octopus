@@ -52,18 +52,14 @@ def test_rendering_contract_and_metric_statistics_extraction() -> None:
 
     statistic = {"finding_precision": {"count": 0}}
     aggregate = SimpleNamespace(metric_statistics=statistic)
-    assert visualization.metric_statistics_by_pair(
-        {1: {2: aggregate}, "empty": {}}
-    ) == {("1", "2"): statistic}
+    assert visualization.metric_statistics_by_pair({1: {2: aggregate}, "empty": {}}) == {("1", "2"): statistic}
     assert visualization.metric_statistics_by_pair({}) == {}
 
     with pytest.raises(
         visualization.ComparisonVisualizationError,
         match="invalid_metric_statistics",
     ):
-        visualization.metric_statistics_by_pair(
-            {"system": {"scenario": SimpleNamespace(metric_statistics=[])}}
-        )
+        visualization.metric_statistics_by_pair({"system": {"scenario": SimpleNamespace(metric_statistics=[])}})
 
 
 def test_renderer_preserves_all_outcomes_and_quality_population_semantics() -> None:
@@ -233,7 +229,7 @@ def test_mapping_sequence_rejects_non_mapping_members() -> None:
         visualization.ComparisonVisualizationError,
         match="expected_mapping_sequence",
     ):
-        visualization._mapping_sequence([{} , object()])
+        visualization._mapping_sequence([{}, object()])
 
 
 def test_integer_helpers_reject_boolean_conversion_and_bounds() -> None:

@@ -116,10 +116,7 @@ def _json_safe(value: Any, seen: set[int] | None = None) -> Any:
             return "<recursive>"
         seen.add(identity)
         try:
-            return {
-                _as_text(key): _json_safe(item, seen)
-                for key, item in value.items()
-            }
+            return {_as_text(key): _json_safe(item, seen) for key, item in value.items()}
         finally:
             seen.remove(identity)
     if isinstance(value, (list, tuple, set, frozenset)):
@@ -271,10 +268,7 @@ def _legacy_marker_status(
     text = "\n".join(part for part in (_as_text(stdout), _as_text(stderr), _as_text(error)) if part).lower()
     if any(marker in text for marker in ("[timeout]", "timed out", "killed after")):
         return ExecutionStatus.TIMEOUT, output_present
-    if any(
-        marker in text
-        for marker in ("[!] execution denied:", "[blocked]", "[skipped]")
-    ):
+    if any(marker in text for marker in ("[!] execution denied:", "[blocked]", "[skipped]")):
         return ExecutionStatus.BLOCKED, False
     if any(marker in text for marker in ("[partial output", "output limit reached", "output_limit")):
         return ExecutionStatus.PARTIAL, True
@@ -540,12 +534,7 @@ def adapt_execution_result(
         max_output_bytes,
     )
 
-    partial = (
-        bool(raw.get("partial"))
-        or marker_partial
-        or status is ExecutionStatus.PARTIAL
-        or truncated
-    )
+    partial = bool(raw.get("partial")) or marker_partial or status is ExecutionStatus.PARTIAL or truncated
     if truncated and status is ExecutionStatus.SUCCEEDED:
         status = ExecutionStatus.PARTIAL
 

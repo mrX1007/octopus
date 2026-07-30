@@ -19,11 +19,7 @@ pytestmark = [pytest.mark.contract, pytest.mark.security]
 
 def _query_packet(name: str, qtype: int = 1) -> bytes:
     header = struct.pack("!HHHHHH", 0x1234, 0x0100, 1, 0, 0, 0)
-    labels = b"".join(
-        bytes((len(label),)) + label.encode("ascii")
-        for label in name.split(".")
-        if label
-    )
+    labels = b"".join(bytes((len(label),)) + label.encode("ascii") for label in name.split(".") if label)
     return header + labels + b"\x00" + struct.pack("!HH", qtype, 1)
 
 
@@ -91,9 +87,7 @@ def test_task_queue_server_and_mocked_client_receive_paths(
     monkeypatch.setattr(
         dns_module,
         "_dns_query_txt",
-        lambda _name: (_ for _ in ()).throw(
-            AssertionError("server queue must not query DNS")
-        ),
+        lambda _name: (_ for _ in ()).throw(AssertionError("server queue must not query DNS")),
     )
     assert channel.receive_task("agent") == {
         "task_id": "task-1",
@@ -143,9 +137,7 @@ def test_exfiltration_queries_sleep_completion_and_recursion_are_mocked(
 
     oversized = DNSChannel("d" * 240)
     recursive_calls = []
-    oversized.exfiltrate = lambda data, chunk_size: recursive_calls.append(
-        (data, chunk_size)
-    ) or 17
+    oversized.exfiltrate = lambda data, chunk_size: recursive_calls.append((data, chunk_size)) or 17
     assert DNSChannel.exfiltrate(oversized, b"abc", chunk_size=3) == 17
     assert recursive_calls == [(b"abc", 1)]
 
@@ -313,54 +305,70 @@ def test_query_handler_covers_exfil_task_beacon_and_default_protocol_paths(
     assert channel._handle_query(labels, "x.c2.test", 1, raw, addr) == b"A-RESPONSE"
     assert channel._handle_query(labels, "x.c2.test", 1, raw, addr) == b"A-RESPONSE"
     assert channel._received_data[addr[0]] == {0: b"chunk"}
-    assert channel._handle_query(
-        ["0001", "0002", "!", "exfil"],
-        "x.c2.test",
-        1,
-        raw,
-        addr,
-    ) == b"A-RESPONSE"
+    assert (
+        channel._handle_query(
+            ["0001", "0002", "!", "exfil"],
+            "x.c2.test",
+            1,
+            raw,
+            addr,
+        )
+        == b"A-RESPONSE"
+    )
 
-    channel._pending_tasks["agent"] = [
-        {"task_id": "task", "command": "inert fixture"}
-    ]
-    assert channel._handle_query(
-        ["task", "agent"],
-        "task.agent.c2.test",
-        16,
-        raw,
-        addr,
-    ) == b"TXT-RESPONSE"
-    assert channel._handle_query(
-        ["task", "agent"],
-        "task.agent.c2.test",
-        16,
-        raw,
-        addr,
-    ) == b"A-RESPONSE"
+    channel._pending_tasks["agent"] = [{"task_id": "task", "command": "inert fixture"}]
+    assert (
+        channel._handle_query(
+            ["task", "agent"],
+            "task.agent.c2.test",
+            16,
+            raw,
+            addr,
+        )
+        == b"TXT-RESPONSE"
+    )
+    assert (
+        channel._handle_query(
+            ["task", "agent"],
+            "task.agent.c2.test",
+            16,
+            raw,
+            addr,
+        )
+        == b"A-RESPONSE"
+    )
 
     beacon = dns_module._b32_encode_safe(b"alive")
-    assert channel._handle_query(
-        [beacon, "agent"],
-        "beacon.c2.test",
-        1,
-        raw,
-        addr,
-    ) == b"A-RESPONSE"
-    assert channel._handle_query(
-        ["!", "agent"],
-        "bad.c2.test",
-        1,
-        raw,
-        addr,
-    ) == b"A-RESPONSE"
-    assert channel._handle_query(
-        ["single"],
-        "single.c2.test",
-        1,
-        raw,
-        addr,
-    ) == b"A-RESPONSE"
+    assert (
+        channel._handle_query(
+            [beacon, "agent"],
+            "beacon.c2.test",
+            1,
+            raw,
+            addr,
+        )
+        == b"A-RESPONSE"
+    )
+    assert (
+        channel._handle_query(
+            ["!", "agent"],
+            "bad.c2.test",
+            1,
+            raw,
+            addr,
+        )
+        == b"A-RESPONSE"
+    )
+    assert (
+        channel._handle_query(
+            ["single"],
+            "single.c2.test",
+            1,
+            raw,
+            addr,
+        )
+        == b"A-RESPONSE"
+    )
 
 
 def test_txt_and_a_resolvers_are_fully_mocked(

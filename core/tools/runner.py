@@ -96,109 +96,111 @@ from core.tools.targeting import (
 # TOOLS MENU — used by interactive_tool_run()
 # and run_single_tool()
 TOOLS_MENU = {
-    "1":  ("nmap",               run_nmap),
-    "2":  ("whois",              run_whois),
-    "3":  ("whatweb",            run_whatweb),
-    "4":  ("curl headers",       run_curl_headers),
-    "5":  ("dig DNS",            run_dig),
-    "6":  ("sslscan",            run_sslscan),
-    "7":  ("ffuf",               run_ffuf),
-    "8":  ("enum4linux",         run_enum4linux),
-    "9":  ("smbclient",          run_smbclient),
-    "10": ("wpscan",             run_wpscan),
-    "11": ("sqlmap",             run_sqlmap),
-    "12": ("nikto",              run_nikto),
-    "13": ("scrapling",          lambda t: run_scrapling_fetch(f"http://{t}")),
-    "15": ("ssh_user_enum",      run_ssh_user_enum),
-    "16": ("bruteforce SSH",     lambda t: run_bruteforce("ssh", t)),
-    "17": ("web login brute",    run_web_login_bruteforce),
-    "18": ("ssh_session",        lambda t: _run_ssh_session_interactive(t)),
-    "19": ("vuln assess",        lambda t: _run_killchain_stage("vuln_assess", t)),
-    "20": ("auto exploit",       lambda t: _run_killchain_stage("auto_exploit", t)),
-    "21": ("privesc",            lambda t: _run_killchain_interactive("privesc", t)),
-    "22": ("persistence",        lambda t: _run_killchain_interactive("persist", t)),
-    "23": ("lateral move",       lambda t: _run_killchain_interactive("lateral", t)),
-    "24": ("data exfil",         lambda t: _run_killchain_interactive("exfil", t)),
-    "25": ("FULL KILL CHAIN",    lambda t: _run_killchain_interactive("full", t)),
-    "26": ("WAF detect",         lambda t: _run_waf_detect(t)),
-    "27": ("stealth cleanup",    lambda t: _run_killchain_interactive("cleanup", t)),
-    "28": ("shodan search",      lambda t: _run_shodan_interactive(t)),
-    "29": ("shodan host",        lambda t: _run_shodan_host(t)),
-    "30": ("shodan vulns",       lambda t: _run_shodan_vulns(t)),
-    "31": ("crack hashes",       lambda t: _run_crack_hashes(t)),
-    "32": ("shodan range",       lambda t: _run_shodan_range(t)),
-    "33": ("cpanel exploit",     lambda t: _run_cpanel_exploit(t)),
-    "34": ("shardbrowser",       lambda t: _run_shardbrowser_osint(t)),
+    "1": ("nmap", run_nmap),
+    "2": ("whois", run_whois),
+    "3": ("whatweb", run_whatweb),
+    "4": ("curl headers", run_curl_headers),
+    "5": ("dig DNS", run_dig),
+    "6": ("sslscan", run_sslscan),
+    "7": ("ffuf", run_ffuf),
+    "8": ("enum4linux", run_enum4linux),
+    "9": ("smbclient", run_smbclient),
+    "10": ("wpscan", run_wpscan),
+    "11": ("sqlmap", run_sqlmap),
+    "12": ("nikto", run_nikto),
+    "13": ("scrapling", lambda t: run_scrapling_fetch(f"http://{t}")),
+    "15": ("ssh_user_enum", run_ssh_user_enum),
+    "16": ("bruteforce SSH", lambda t: run_bruteforce("ssh", t)),
+    "17": ("web login brute", run_web_login_bruteforce),
+    "18": ("ssh_session", lambda t: _run_ssh_session_interactive(t)),
+    "19": ("vuln assess", lambda t: _run_killchain_stage("vuln_assess", t)),
+    "20": ("auto exploit", lambda t: _run_killchain_stage("auto_exploit", t)),
+    "21": ("privesc", lambda t: _run_killchain_interactive("privesc", t)),
+    "22": ("persistence", lambda t: _run_killchain_interactive("persist", t)),
+    "23": ("lateral move", lambda t: _run_killchain_interactive("lateral", t)),
+    "24": ("data exfil", lambda t: _run_killchain_interactive("exfil", t)),
+    "25": ("FULL KILL CHAIN", lambda t: _run_killchain_interactive("full", t)),
+    "26": ("WAF detect", lambda t: _run_waf_detect(t)),
+    "27": ("stealth cleanup", lambda t: _run_killchain_interactive("cleanup", t)),
+    "28": ("shodan search", lambda t: _run_shodan_interactive(t)),
+    "29": ("shodan host", lambda t: _run_shodan_host(t)),
+    "30": ("shodan vulns", lambda t: _run_shodan_vulns(t)),
+    "31": ("crack hashes", lambda t: _run_crack_hashes(t)),
+    "32": ("shodan range", lambda t: _run_shodan_range(t)),
+    "33": ("cpanel exploit", lambda t: _run_cpanel_exploit(t)),
+    "34": ("shardbrowser", lambda t: _run_shardbrowser_osint(t)),
     # Active Directory
-    "35": ("AD enumerate",       lambda t: _run_ad_tool("enum", t)),
-    "36": ("AS-REP Roast",       lambda t: _run_ad_tool("asrep", t)),
-    "37": ("Kerberoast",         lambda t: _run_ad_tool("kerberoast", t)),
-    "38": ("DCSync",             lambda t: _run_ad_tool("dcsync", t)),
-    "39": ("Pass-the-Hash",      lambda t: _run_ad_tool("pth", t)),
-    "40": ("PsExec",             lambda t: _run_ad_tool("psexec", t)),
-    "41": ("WMIExec",            lambda t: _run_ad_tool("wmiexec", t)),
+    "35": ("AD enumerate", lambda t: _run_ad_tool("enum", t)),
+    "36": ("AS-REP Roast", lambda t: _run_ad_tool("asrep", t)),
+    "37": ("Kerberoast", lambda t: _run_ad_tool("kerberoast", t)),
+    "38": ("DCSync", lambda t: _run_ad_tool("dcsync", t)),
+    "39": ("Pass-the-Hash", lambda t: _run_ad_tool("pth", t)),
+    "40": ("PsExec", lambda t: _run_ad_tool("psexec", t)),
+    "41": ("WMIExec", lambda t: _run_ad_tool("wmiexec", t)),
     # Pivoting
-    "42": ("SOCKS proxy",        lambda t: _run_pivot_tool("socks", t)),
-    "43": ("port forward",       lambda t: _run_pivot_tool("forward", t)),
-    "44": ("network recon",      lambda t: _run_pivot_tool("netinfo", t)),
+    "42": ("SOCKS proxy", lambda t: _run_pivot_tool("socks", t)),
+    "43": ("port forward", lambda t: _run_pivot_tool("forward", t)),
+    "44": ("network recon", lambda t: _run_pivot_tool("netinfo", t)),
     # C2 implants
-    "45": ("build Go implant",   lambda t: _run_c2_build("go", t)),
-    "46": ("build Py implant",   lambda t: _run_c2_build("python", t)),
-    "47": ("build PS stager",    lambda t: _run_c2_build("powershell", t)),
-    "49": ("FTP anonymous",      run_ftp_anonymous_check),
-    "50": ("SMTP probe",         run_smtp_probe),
+    "45": ("build Go implant", lambda t: _run_c2_build("go", t)),
+    "46": ("build Py implant", lambda t: _run_c2_build("python", t)),
+    "47": ("build PS stager", lambda t: _run_c2_build("powershell", t)),
+    "49": ("FTP anonymous", run_ftp_anonymous_check),
+    "50": ("SMTP probe", run_smtp_probe),
 }
 
-_MENU_TOOL_IDS = MappingProxyType({
-    "1": "nmap",
-    "2": "whois",
-    "3": "whatweb",
-    "4": "curl_headers",
-    "5": "dig",
-    "6": "sslscan",
-    "7": "ffuf",
-    "8": "enum4linux",
-    "9": "smbclient",
-    "10": "wpscan",
-    "11": "sqlmap",
-    "12": "nikto",
-    "13": "scrapling",
-    "15": "ssh_user_enum",
-    "16": "bruteforce",
-    "17": "web_login_brute",
-    "18": "ssh_session",
-    "19": "killchain_vuln_assess",
-    "20": "killchain_exploit",
-    "21": "killchain_privesc",
-    "22": "killchain_persist",
-    "23": "killchain_lateral",
-    "24": "killchain_exfil",
-    "25": "killchain_full",
-    "26": "waf_detect",
-    "27": "killchain_cleanup",
-    "28": "shodan",
-    "29": "shodan",
-    "30": "shodan",
-    "31": "crack_hashes",
-    "32": "shodan",
-    "33": "cpanel_exploit",
-    "34": "shardbrowser_osint",
-    "35": "ad_enum",
-    "36": "asrep_roast",
-    "37": "kerberoast",
-    "38": "dcsync",
-    "39": "pass_the_hash",
-    "40": "psexec",
-    "41": "wmiexec",
-    "42": "socks_proxy",
-    "43": "port_forward",
-    "44": "network_recon",
-    "45": "build_go_implant",
-    "46": "build_python_implant",
-    "47": "build_ps_stager",
-    "49": "ftp_anonymous_check",
-    "50": "smtp_probe",
-})
+_MENU_TOOL_IDS = MappingProxyType(
+    {
+        "1": "nmap",
+        "2": "whois",
+        "3": "whatweb",
+        "4": "curl_headers",
+        "5": "dig",
+        "6": "sslscan",
+        "7": "ffuf",
+        "8": "enum4linux",
+        "9": "smbclient",
+        "10": "wpscan",
+        "11": "sqlmap",
+        "12": "nikto",
+        "13": "scrapling",
+        "15": "ssh_user_enum",
+        "16": "bruteforce",
+        "17": "web_login_brute",
+        "18": "ssh_session",
+        "19": "killchain_vuln_assess",
+        "20": "killchain_exploit",
+        "21": "killchain_privesc",
+        "22": "killchain_persist",
+        "23": "killchain_lateral",
+        "24": "killchain_exfil",
+        "25": "killchain_full",
+        "26": "waf_detect",
+        "27": "killchain_cleanup",
+        "28": "shodan",
+        "29": "shodan",
+        "30": "shodan",
+        "31": "crack_hashes",
+        "32": "shodan",
+        "33": "cpanel_exploit",
+        "34": "shardbrowser_osint",
+        "35": "ad_enum",
+        "36": "asrep_roast",
+        "37": "kerberoast",
+        "38": "dcsync",
+        "39": "pass_the_hash",
+        "40": "psexec",
+        "41": "wmiexec",
+        "42": "socks_proxy",
+        "43": "port_forward",
+        "44": "network_recon",
+        "45": "build_go_implant",
+        "46": "build_python_implant",
+        "47": "build_ps_stager",
+        "49": "ftp_anonymous_check",
+        "50": "smtp_probe",
+    }
+)
 
 _DEFAULT_RECON_TOOL_NAMES = (
     "nmap",
@@ -251,8 +253,9 @@ def _invoke_bound_provider(func, target: str, context: ExecutionContext):
         return func(target)
 
 
-def _run_registered_extended_tool(results: dict, plan_lines: list[str], tool_name: str,
-                                  target: str, result_key: Optional[str] = None) -> None:
+def _run_registered_extended_tool(
+    results: dict, plan_lines: list[str], tool_name: str, target: str, result_key: Optional[str] = None
+) -> None:
     label = result_key or tool_name
     tool_def, catalog_error = _catalog_tool_definition(tool_name)
     if tool_def is None:
@@ -290,9 +293,9 @@ def _run_registered_extended_tool(results: dict, plan_lines: list[str], tool_nam
         )
 
 
-def _run_registered_extended_tools_concurrent(results: dict, plan_lines: list[str],
-                                              jobs: list[tuple[str, str, str]],
-                                              max_workers: int = 6) -> None:
+def _run_registered_extended_tools_concurrent(
+    results: dict, plan_lines: list[str], jobs: list[tuple[str, str, str]], max_workers: int = 6
+) -> None:
     """Run independent registry tools concurrently while preserving result keys."""
     prepared = []
     for tool_name, target, result_key in jobs:
@@ -405,8 +408,24 @@ def _legacy_menu_arguments(
     if tool_key == "33":
         return [target, "scan"], ""
     if tool_key in {
-        "18", "20", "21", "22", "23", "24", "25", "27",
-        "31", "36", "37", "38", "39", "40", "41", "42", "43", "44",
+        "18",
+        "20",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "27",
+        "31",
+        "36",
+        "37",
+        "38",
+        "39",
+        "40",
+        "41",
+        "42",
+        "43",
+        "44",
     }:
         return [], "legacy_menu_explicit_parameters_required"
     if tool_key in {"29", "30", "32"}:
@@ -482,8 +501,12 @@ def _web_endpoint_alive(results: dict, url: str) -> bool:
     if not text.strip():
         return False
     negative = (
-        "connection refused", "failed to connect", "could not resolve",
-        "operation timed out", "timed out", "ssl: wrong_version_number",
+        "connection refused",
+        "failed to connect",
+        "could not resolve",
+        "operation timed out",
+        "timed out",
+        "ssl: wrong_version_number",
     )
     if any(marker in low for marker in negative):
         return False
@@ -587,9 +610,7 @@ def _plan_contextual_web_jobs(web_urls: list[str], results: dict, plan_lines: li
             plan_lines.append(f"skip wpscan_{suffix}: not_applicable:no_wordpress_signal")
 
         if _web_has_input_surface(results, url):
-            plan_lines.append(
-                f"gated sqlmap_{suffix}: requires explicit tool selection/approval"
-            )
+            plan_lines.append(f"gated sqlmap_{suffix}: requires explicit tool selection/approval")
         else:
             plan_lines.append(f"skip sqlmap_{suffix}: not_applicable:no_input_surface")
 
@@ -633,21 +654,30 @@ def _run_exhaustive_applicable_coverage(target: str, results: dict) -> dict:
         for url in web_urls:
             suffix = _web_result_suffix(url)
             for tool_name in (
-                "whatweb", "curl_headers", "security_headers_check", "cors_check",
-                "scrapling", "scrapling_crawl", "browser_surface_analysis",
+                "whatweb",
+                "curl_headers",
+                "security_headers_check",
+                "cors_check",
+                "scrapling",
+                "scrapling_crawl",
+                "browser_surface_analysis",
                 "katana_crawl",
             ):
                 web_light_jobs.append((tool_name, url, f"{tool_name}_{suffix}"))
             for spec_path in ("/openapi.json", "/swagger.json", "/api-docs"):
-                web_light_jobs.append((
-                    "openapi_import",
-                    url.rstrip("/") + spec_path,
-                    f"openapi_import_{suffix}{spec_path.replace('/', '_')}",
-                ))
-            web_light_jobs.extend((
-                ("graphql_check", url.rstrip("/") + "/graphql", f"graphql_check_{suffix}"),
-                ("api_auth_check", url.rstrip("/") + "/api", f"api_auth_check_{suffix}"),
-            ))
+                web_light_jobs.append(
+                    (
+                        "openapi_import",
+                        url.rstrip("/") + spec_path,
+                        f"openapi_import_{suffix}{spec_path.replace('/', '_')}",
+                    )
+                )
+            web_light_jobs.extend(
+                (
+                    ("graphql_check", url.rstrip("/") + "/graphql", f"graphql_check_{suffix}"),
+                    ("api_auth_check", url.rstrip("/") + "/api", f"api_auth_check_{suffix}"),
+                )
+            )
         _run_registered_extended_tools_concurrent(results, plan_lines, web_light_jobs, max_workers=8)
 
         contextual_jobs = _plan_contextual_web_jobs(web_urls, results, plan_lines)
@@ -677,9 +707,17 @@ def _run_exhaustive_applicable_coverage(target: str, results: dict) -> dict:
         plan_lines.append("ad_security_review: not_applicable:no_ad_surface_ports")
 
     for gated in (
-        "bruteforce", "web_login_brute", "msf_run", "killchain_privesc",
-        "killchain_persist", "killchain_lateral", "killchain_exfil",
-        "killchain_cleanup", "pass_the_hash", "psexec", "wmiexec",
+        "bruteforce",
+        "web_login_brute",
+        "msf_run",
+        "killchain_privesc",
+        "killchain_persist",
+        "killchain_lateral",
+        "killchain_exfil",
+        "killchain_cleanup",
+        "pass_the_hash",
+        "psexec",
+        "wmiexec",
     ):
         plan_lines.append(f"gated {gated}: requires explicit state/scope/credentials")
 
@@ -687,8 +725,8 @@ def _run_exhaustive_applicable_coverage(target: str, results: dict) -> dict:
     results["x_mode_plan"] = "\n".join(plan_lines)
     return results
 
-# INDIVIDUAL TOOLS
 
+# INDIVIDUAL TOOLS
 
 
 def run_single_tool(
@@ -717,9 +755,9 @@ def format_recon_for_llm(results: dict) -> str:
     """
     output = ""
     for tool, data in results.items():
-        output += f"\n{'='*50}\n"
+        output += f"\n{'=' * 50}\n"
         output += f"[ {tool.upper()} OUTPUT ]\n"
-        output += f"{'='*50}\n"
+        output += f"{'=' * 50}\n"
         output += str(data).strip() + "\n"
     return output
 
@@ -763,7 +801,7 @@ def _truncate_output_text(value: str, max_output_bytes: int) -> str:
         return value
     marker = f"\n[OUTPUT LIMIT] truncated at {max_output_bytes} bytes"
     marker_bytes = marker.encode("utf-8")
-    kept = raw[:max(0, max_output_bytes - len(marker_bytes))]
+    kept = raw[: max(0, max_output_bytes - len(marker_bytes))]
     return kept.decode("utf-8", "ignore") + marker
 
 
@@ -789,7 +827,6 @@ def _bound_network_targets(func, positional_args: list, kwargs: dict) -> tuple[s
     return tuple(values)
 
 
-
 # ── PYTHON REPL (Dynamic Script Execution) ──
 def run_python_repl(
     code: str,
@@ -809,7 +846,6 @@ def run_python_repl(
         display_command="python -I -c [APPROVED CODE]",
     )
     return str(result)
-
 
 
 def run_tool_by_command(
@@ -968,8 +1004,14 @@ def run_tool_by_command(
 
         if t_def.name == "curl_headers" and args:
             value_flags = {
-                "-A", "--user-agent", "-H", "--header", "--max-time",
-                "--connect-timeout", "--proxy", "-x",
+                "-A",
+                "--user-agent",
+                "-H",
+                "--header",
+                "--max-time",
+                "--connect-timeout",
+                "--proxy",
+                "-x",
             }
             target = None
             skip_next = False
@@ -1014,9 +1056,20 @@ def run_tool_by_command(
 
         if t_def.name == "nuclei_safe" and args:
             value_flags = {
-                "-severity", "-exclude-tags", "-tags", "-t", "-templates",
-                "-timeout", "-retries", "-rl", "-rate-limit", "-c", "-bs",
-                "-headless-bulk-size", "-page-timeout", "-proxy",
+                "-severity",
+                "-exclude-tags",
+                "-tags",
+                "-t",
+                "-templates",
+                "-timeout",
+                "-retries",
+                "-rl",
+                "-rate-limit",
+                "-c",
+                "-bs",
+                "-headless-bulk-size",
+                "-page-timeout",
+                "-proxy",
             }
             target_flags = {"-u", "-url", "-target"}
             target = None
@@ -1107,7 +1160,7 @@ def run_tool_by_command(
             return [target or args[0]], {}
 
         for parameter in params:
-            if parameter.name in ['target', 'target_ip', 'host', 'url', 'filepath']:
+            if parameter.name in ["target", "target_ip", "host", "url", "filepath"]:
                 if args:
                     raw_arg = args.pop(0)
                     if parameter.name == "url" or t_def.name in url_preserving_tools:
@@ -1116,19 +1169,19 @@ def run_tool_by_command(
                         positional_args.append(_extract_ip(raw_arg))
                 elif parameter.default != inspect.Parameter.empty:
                     kwargs[parameter.name] = parameter.default
-            elif parameter.name in ['query', 'recon_data', 'cmd', 'command', 'action', 'options', 'options_str']:
+            elif parameter.name in ["query", "recon_data", "cmd", "command", "action", "options", "options_str"]:
                 if args:
-                    positional_args.append(' '.join(args))
+                    positional_args.append(" ".join(args))
                     args = []
                 elif parameter.default != inspect.Parameter.empty:
                     kwargs[parameter.name] = parameter.default
-            elif parameter.name in ['extra_flags', 'opts']:
+            elif parameter.name in ["extra_flags", "opts"]:
                 if args:
                     positional_args.append(args)
                     args = []
                 elif parameter.default != inspect.Parameter.empty:
                     kwargs[parameter.name] = parameter.default
-            elif parameter.name in ['user', 'pwd', 'password']:
+            elif parameter.name in ["user", "pwd", "password"]:
                 if args:
                     positional_args.append(args.pop(0))
                 elif parameter.default != inspect.Parameter.empty:
@@ -1180,8 +1233,8 @@ def run_tool_by_command(
         )
 
 
-
 # INTERACTIVE TOOL SELECTOR (called from CLI)
+
 
 def interactive_tool_run(target: str) -> str:
     """
@@ -1243,11 +1296,13 @@ def _interactive_tool_choice(
         web_ports_detected = _detect_web_ports_from_nmap(nmap_output)
 
         # Improved web detection: check nmap + curl + whatweb
-        has_web = (len(web_ports_detected) > 0
-                   or "HTTP/" in curl_output
-                   or "nginx" in all_recon.lower()
-                   or "apache" in all_recon.lower()
-                   or "Server:" in curl_output)
+        has_web = (
+            len(web_ports_detected) > 0
+            or "HTTP/" in curl_output
+            or "nginx" in all_recon.lower()
+            or "apache" in all_recon.lower()
+            or "Server:" in curl_output
+        )
         has_ssh = "22/tcp" in nmap_output and "open" in nmap_output
         has_ftp = "21/tcp" in nmap_output and "open" in nmap_output
 
@@ -1260,35 +1315,32 @@ def _interactive_tool_choice(
         if has_web:
             print(f"\n  [*] Web ports detected {web_ports_detected} — running extended web tools...")
             n_mode_plan.append(f"web_surface: present ports={','.join(web_ports_detected)}")
-            phase1_jobs.extend(
-                (tool_name, target, tool_name)
-                for tool_name in ("wpscan", "nikto")
-            )
+            phase1_jobs.extend((tool_name, target, tool_name) for tool_name in ("wpscan", "nikto"))
             for index, scrape_url in enumerate(web_urls):
                 phase1_jobs.append(("scrapling", scrape_url, f"scrapling_port{web_ports_detected[index]}"))
                 print(f"    [*] Scrapling: {scrape_url}")
-            n_mode_plan.append(
-                "gated web_login_brute: requires explicit credential-testing selection"
-            )
-            n_mode_plan.append(
-                "gated sqlmap: requires explicit tool selection/approval"
-            )
+            n_mode_plan.append("gated web_login_brute: requires explicit credential-testing selection")
+            n_mode_plan.append("gated sqlmap: requires explicit tool selection/approval")
         else:
             print("\n  [*] No web ports open — skipping wpscan, sqlmap, nikto")
             n_mode_plan.append("web_surface: not_detected")
 
         if has_ssh:
-            n_mode_plan.extend((
-                "ssh_surface: present",
-                "gated ssh_user_enum: requires explicit account-enumeration selection",
-                "gated ssh_bruteforce: requires explicit credential-testing selection",
-            ))
+            n_mode_plan.extend(
+                (
+                    "ssh_surface: present",
+                    "gated ssh_user_enum: requires explicit account-enumeration selection",
+                    "gated ssh_bruteforce: requires explicit credential-testing selection",
+                )
+            )
 
         if has_ftp:
-            n_mode_plan.extend((
-                "ftp_surface: present",
-                "gated ftp_bruteforce: requires explicit credential-testing selection",
-            ))
+            n_mode_plan.extend(
+                (
+                    "ftp_surface: present",
+                    "gated ftp_bruteforce: requires explicit credential-testing selection",
+                )
+            )
 
         if phase1_jobs:
             _run_registered_extended_tools_concurrent(
@@ -1316,16 +1368,25 @@ def _interactive_tool_choice(
                 suffix = re.sub(r"[^a-zA-Z0-9]+", "_", url).strip("_").lower()
                 for tool_name in ("security_headers_check", "cors_check", "nuclei_safe", "katana_crawl"):
                     _run_registered_extended_tool(
-                        results, n_mode_plan, tool_name, url,
+                        results,
+                        n_mode_plan,
+                        tool_name,
+                        url,
                         result_key=f"{tool_name}_{suffix}",
                     )
                 for spec_path in ("/openapi.json", "/swagger.json", "/api-docs"):
                     _run_registered_extended_tool(
-                        results, n_mode_plan, "openapi_import", url.rstrip("/") + spec_path,
+                        results,
+                        n_mode_plan,
+                        "openapi_import",
+                        url.rstrip("/") + spec_path,
                         result_key=f"openapi_import_{suffix}{spec_path.replace('/', '_')}",
                     )
                 _run_registered_extended_tool(
-                    results, n_mode_plan, "graphql_check", url.rstrip("/") + "/graphql",
+                    results,
+                    n_mode_plan,
+                    "graphql_check",
+                    url.rstrip("/") + "/graphql",
                     result_key=f"graphql_check_{suffix}",
                 )
         else:
@@ -1364,6 +1425,7 @@ def _interactive_tool_choice(
 
 
 # TYPED COMMAND RUNNER + EXPLICIT MANAGED SHELL
+
 
 def _terminate_process_group(
     proc: subprocess.Popen,
@@ -1449,9 +1511,7 @@ def _execute_process(
                         output_chunks.append(chunk[:remaining])
                         output_bytes += remaining
                     output_limited = True
-                    status_lines.append(
-                        f"[OUTPUT LIMIT] process killed at {context.max_output_bytes} bytes"
-                    )
+                    status_lines.append(f"[OUTPUT LIMIT] process killed at {context.max_output_bytes} bytes")
                     _terminate_process_group(proc)
                     break
                 output_bytes += len(chunk)
@@ -1464,10 +1524,21 @@ def _execute_process(
                             elapsed = int(time.monotonic() - start_time)
                             print(f"      [{elapsed}s] {rendered[:160]}")
                     continue
-                if any(keyword in rendered_chunk.lower() for keyword in (
-                    "host:", "found", "valid", "success", "open",
-                    "vuln", "error", "complete", "[+]", "session",
-                )):
+                if any(
+                    keyword in rendered_chunk.lower()
+                    for keyword in (
+                        "host:",
+                        "found",
+                        "valid",
+                        "success",
+                        "open",
+                        "vuln",
+                        "error",
+                        "complete",
+                        "[+]",
+                        "session",
+                    )
+                ):
                     elapsed = int(time.monotonic() - start_time)
                     preview = _redact_command(rendered_chunk.replace("\n", " "))[:140]
                     print(f"      [{elapsed}s] {preview}")
@@ -1492,10 +1563,7 @@ def _execute_process(
                 status_lines.append(f"[TIMEOUT] {tool} killed after {_fmt_elapsed(timeout)}")
                 break
             if reader.is_alive() and elapsed and elapsed % heartbeat_interval == 0:
-                print(
-                    f"      [♻ {tool} running... {_fmt_elapsed(elapsed)} / "
-                    f"{_fmt_elapsed(timeout)} max]"
-                )
+                print(f"      [♻ {tool} running... {_fmt_elapsed(elapsed)} / {_fmt_elapsed(timeout)} max]")
 
         try:
             proc.wait(timeout=5)
@@ -1665,6 +1733,7 @@ def _credential_dict_for_execution(
 def _run_ad_tool(action: str, target: str) -> str:
     """Dispatch Active Directory attack tools."""
     import logging
+
     logger = logging.getLogger("octopus.runner.ad")
 
     try:
@@ -1674,26 +1743,31 @@ def _run_ad_tool(action: str, target: str) -> str:
 
         if action == "enum":
             from core.killchain.ad.enumeration import run_ad_enum
+
             with _credential_dict_for_execution(credential) as creds:
                 return run_ad_enum(target, creds=creds)
         elif action == "asrep":
             from core.killchain.ad.kerberos import asrep_roast
+
             with _credential_dict_for_execution(credential) as creds:
                 return asrep_roast(target, creds=creds)
         elif action == "kerberoast":
             from core.killchain.ad.kerberos import kerberoast
+
             if credential is None:
                 return "[!] Kerberoasting requires valid domain credentials. Run bruteforce or find creds first."
             with _credential_dict_for_execution(credential) as creds:
                 return kerberoast(target, creds)
         elif action == "dcsync":
             from core.killchain.ad.credential import dcsync
+
             if credential is None:
                 return "[!] DCSync requires domain admin credentials."
             with _credential_dict_for_execution(credential) as creds:
                 return dcsync(target, creds)
         elif action == "pth":
             from core.killchain.ad.credential import pass_the_hash
+
             nthash = input("\033[36m  NT Hash: \033[0m").strip()
             if not nthash:
                 return "[!] Pass-the-Hash requires an NT hash."
@@ -1701,12 +1775,14 @@ def _run_ad_tool(action: str, target: str) -> str:
             return pass_the_hash(target, user, nthash, domain=domain)
         elif action == "psexec":
             from core.killchain.ad.lateral import psexec
+
             if credential is None:
                 return "[!] PsExec requires valid credentials."
             with _credential_dict_for_execution(credential) as creds:
                 return psexec(target, creds)
         elif action == "wmiexec":
             from core.killchain.ad.lateral import wmiexec
+
             if credential is None:
                 return "[!] WMIExec requires valid credentials."
             with _credential_dict_for_execution(credential) as creds:
@@ -1722,9 +1798,11 @@ def _run_ad_tool(action: str, target: str) -> str:
 
 # PIVOT TOOL HANDLERS
 
+
 def _run_pivot_tool(action: str, target: str) -> str:
     """Dispatch pivoting tools."""
     import logging
+
     logger = logging.getLogger("octopus.runner.pivot")
 
     try:
@@ -1751,16 +1829,19 @@ def _run_pivot_tool(action: str, target: str) -> str:
 
         if action == "socks":
             from core.killchain.pivot import setup_socks_proxy
+
             local_port = int(input("\033[36m  Local SOCKS port [1080]: \033[0m").strip() or "1080")
             return setup_socks_proxy(ssh, local_port=local_port)
         elif action == "forward":
             from core.killchain.pivot import setup_local_forward
+
             local_port = int(input("\033[36m  Local port: \033[0m").strip() or "8080")
             remote_host = input("\033[36m  Remote host [127.0.0.1]: \033[0m").strip() or "127.0.0.1"
             remote_port = int(input("\033[36m  Remote port: \033[0m").strip() or "80")
             return setup_local_forward(ssh, local_port, remote_host, remote_port)
         elif action == "netinfo":
             from core.killchain.pivot import get_network_info
+
             return get_network_info(ssh)
         else:
             ssh.close()
@@ -1772,9 +1853,11 @@ def _run_pivot_tool(action: str, target: str) -> str:
 
 # C2 BUILD HANDLERS
 
+
 def _run_c2_build(build_type: str, target: str) -> str:
     """Dispatch C2 implant build tools."""
     import logging
+
     logger = logging.getLogger("octopus.runner.c2")
 
     try:
@@ -1783,17 +1866,20 @@ def _run_c2_build(build_type: str, target: str) -> str:
         if build_type == "go":
             # Existing garble builder
             from core.c2.builder import build_implant
+
             goos = input("\033[36m  Target OS [linux]: \033[0m").strip() or "linux"
             goarch = input("\033[36m  Target Arch [amd64]: \033[0m").strip() or "amd64"
-            return build_implant(
-                c2_urls=[c2_url], os_target=goos, arch_target=goarch
-            )
+            return build_implant(c2_urls=[c2_url], os_target=goos, arch_target=goarch)
 
         elif build_type == "python":
             from core.c2.implants.python_implant import generate_python_implant
+
             code = generate_python_implant(c2_urls=[c2_url], beacon_interval=60)
-            out_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                                    "data", f"implant_python_{target.replace('.', '_')}.py")
+            out_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                "data",
+                f"implant_python_{target.replace('.', '_')}.py",
+            )
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             with open(out_path, "w") as f:
                 f.write(code)
@@ -1801,10 +1887,14 @@ def _run_c2_build(build_type: str, target: str) -> str:
 
         elif build_type == "powershell":
             from core.c2.implants.powershell_stager import generate_ps_encoded, generate_ps_stager
+
             method = input("\033[36m  Method (iex/encoded) [iex]: \033[0m").strip() or "iex"
             code = generate_ps_encoded(c2_url) if method == "encoded" else generate_ps_stager(c2_url, method="iex")
-            out_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                                    "data", f"stager_{target.replace('.', '_')}.ps1")
+            out_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                "data",
+                f"stager_{target.replace('.', '_')}.ps1",
+            )
             os.makedirs(os.path.dirname(out_path), exist_ok=True)
             with open(out_path, "w") as f:
                 f.write(code)
@@ -1812,6 +1902,7 @@ def _run_c2_build(build_type: str, target: str) -> str:
 
         elif build_type == "dns":
             from core.c2.channels.dns import DNSChannel
+
             domain = input("\033[36m  DNS C2 domain: \033[0m").strip()
             if not domain:
                 return "[!] DNS C2 requires a domain name."

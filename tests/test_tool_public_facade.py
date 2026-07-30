@@ -23,14 +23,15 @@ def test_public_dispatch_requires_context_and_forwards_to_registered_runner(
     monkeypatch.setattr(
         public,
         "run_tool_by_command",
-        lambda command, supplied_context: calls.append(
-            (command, supplied_context),
-        ) or "fixture result",
+        lambda command, supplied_context: (
+            calls.append(
+                (command, supplied_context),
+            )
+            or "fixture result"
+        ),
     )
 
-    assert public.dispatch_registered_tool("fixture fixture.invalid", context) == (
-        "fixture result"
-    )
+    assert public.dispatch_registered_tool("fixture fixture.invalid", context) == ("fixture result")
     assert calls == [("fixture fixture.invalid", context)]
 
     with pytest.raises(TypeError, match="must be an ExecutionContext"):
@@ -56,16 +57,8 @@ def test_package_and_legacy_module_advertise_one_canonical_dispatch() -> None:
     assert set(package.DEPRECATED_TOOL_EXPORTS.values()) == {
         "Use core.tools.dispatch_registered_tool with an ExecutionContext",
     }
-    execution_like_exports = {
-        name
-        for name in package.__all__
-        if name.startswith(("run_", "_run_"))
-    }
-    assert execution_like_exports == {
-        name
-        for name in compatibility_names
-        if name.startswith(("run_", "_run_"))
-    }
+    execution_like_exports = {name for name in package.__all__ if name.startswith(("run_", "_run_"))}
+    assert execution_like_exports == {name for name in compatibility_names if name.startswith(("run_", "_run_"))}
 
 
 def test_pipeline_compatibility_name_uses_safe_facade_and_bound_context(
@@ -78,9 +71,12 @@ def test_pipeline_compatibility_name_uses_safe_facade_and_bound_context(
     monkeypatch.setattr(
         pipeline,
         "dispatch_registered_tool",
-        lambda command, supplied_context: calls.append(
-            (command, supplied_context),
-        ) or "fixture result",
+        lambda command, supplied_context: (
+            calls.append(
+                (command, supplied_context),
+            )
+            or "fixture result"
+        ),
     )
 
     with bind_execution_context(context):
@@ -101,12 +97,8 @@ def test_production_does_not_import_top_level_tools_compatibility_module() -> No
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
-            imports_tools = (
-                isinstance(node, ast.ImportFrom)
-                and node.module == "tools"
-            ) or (
-                isinstance(node, ast.Import)
-                and any(alias.name == "tools" for alias in node.names)
+            imports_tools = (isinstance(node, ast.ImportFrom) and node.module == "tools") or (
+                isinstance(node, ast.Import) and any(alias.name == "tools" for alias in node.names)
             )
             if imports_tools:
                 callers.append(str(path.relative_to(root)))

@@ -55,9 +55,7 @@ def test_boolean_config_and_normalization_helpers(monkeypatch):
 
     with pytest.raises(TypeError, match="dictionary"):
         export._normalize_session_report([])
-    normalized = export._normalize_session_report(
-        {"history": (1,), "vulnerabilities": [(1,)], "fixes": None}
-    )
+    normalized = export._normalize_session_report({"history": (1,), "vulnerabilities": [(1,)], "fixes": None})
     assert normalized["vulns"] == [(1,)]
     assert normalized["fixes"] == []
 
@@ -235,7 +233,13 @@ def test_json_handles_short_rows_and_empty_scores(monkeypatch, tmp_path):
     report["history"] = (7, "target", None)
     report["vulns"] = [(1,)]
     report["fixes"] = [(1,), (2, 7, 8), (3, 7, 8, "fix")]
-    report["exploits"] = [(1,), (2, 7, "name"), (3, 7, "name", "tool"), (4, 7, "name", "tool", "payload"), (5, 7, "name", "tool", "payload", "ok")]
+    report["exploits"] = [
+        (1,),
+        (2, 7, "name"),
+        (3, 7, "name", "tool"),
+        (4, 7, "name", "tool", "payload"),
+        (5, 7, "name", "tool", "payload", "ok"),
+    ]
     monkeypatch.setattr(export, "CFG", {"reporting": {"cvss_scoring": False}})
 
     payload = json.loads(Path(export.export_json(report, str(tmp_path))).read_text())

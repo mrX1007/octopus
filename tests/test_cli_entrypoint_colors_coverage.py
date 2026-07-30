@@ -199,9 +199,7 @@ def test_start_supervisor_handles_clean_state_running_instance_and_missing_modul
     missing_app = cli_main.OctopusCLIApplication(missing_workflows)
     assert missing_app._start_supervisor() is True
     assert missing_workflows._supervisor is None
-    missing_workflows.warn.assert_called_once_with(
-        "Supervisor not available (core/supervisor.py missing)"
-    )
+    missing_workflows.warn.assert_called_once_with("Supervisor not available (core/supervisor.py missing)")
 
 
 def test_extension_discovery_reports_loaded_counts_and_failures(
@@ -223,8 +221,7 @@ def test_extension_discovery_reports_loaded_counts_and_failures(
     app._discover_extensions()
     assert paths == ["/fixture/project/plugins", "/fixture/project/modules"]
     workflows.info.assert_called_once_with(
-        "Discovered metadata for 0 plugins and 2 modules; execution remains "
-        "behind the registered plugin gateway."
+        "Discovered metadata for 0 plugins and 2 modules; execution remains behind the registered plugin gateway."
     )
     registry.print_registry_stats.assert_called_once_with()  # type: ignore[attr-defined]
 
@@ -288,9 +285,7 @@ def test_main_dispatches_compatibility_trace_supervisor_and_interactive_paths(
     traces: list[tuple[str, str, str]] = []
     app = SimpleNamespace(
         workflows=SimpleNamespace(
-            _print_trace_report_cli=lambda scan_id, target, fmt: traces.append(
-                (scan_id, target, fmt)
-            )
+            _print_trace_report_cli=lambda scan_id, target, fmt: traces.append((scan_id, target, fmt))
         ),
         run=MagicMock(return_value=12),
     )

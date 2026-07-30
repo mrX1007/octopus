@@ -110,9 +110,7 @@ def test_auto_shodan_context_handles_every_boundary(monkeypatch: pytest.MonkeyPa
     provider.assert_not_called()
 
     monkeypatch.setattr(app, "CFG", {"shodan": {"auto_scan": True}})
-    assert app._append_auto_shodan_context("host", "[SHODAN host]\nscan") == (
-        "[SHODAN host]\nscan"
-    )
+    assert app._append_auto_shodan_context("host", "[SHODAN host]\nscan") == ("[SHODAN host]\nscan")
     provider.side_effect = RuntimeError("offline")
     assert app._append_auto_shodan_context("host", "scan") == "scan"
     app.warn.assert_called_with("Automatic Shodan lookup unavailable: offline")
@@ -124,9 +122,7 @@ def test_auto_shodan_context_handles_every_boundary(monkeypatch: pytest.MonkeyPa
     app.warn.assert_called_with("[!] unavailable")
 
     provider.return_value = " [SHODAN host]\nPorts: 443 "
-    assert app._append_auto_shodan_context("host", " scan ") == (
-        "scan\n\n[SHODAN host]\nPorts: 443\n"
-    )
+    assert app._append_auto_shodan_context("host", " scan ") == ("scan\n\n[SHODAN host]\nPorts: 443\n")
     assert app._append_auto_shodan_context("host", "") == "[SHODAN host]\nPorts: 443\n"
     app.info.assert_called_with("Shodan context added automatically.")
 
@@ -228,9 +224,7 @@ def test_trace_report_cli_supports_context_failure_and_both_formats(monkeypatch,
     )
     monkeypatch.setattr(app, "FactStore", lambda: object())
     monkeypatch.setattr(app, "TraceReporter", lambda _store: reporter)
-    pipeline = SimpleNamespace(
-        context_builder=SimpleNamespace(build_context=lambda *_args: {"context": True})
-    )
+    pipeline = SimpleNamespace(context_builder=SimpleNamespace(build_context=lambda *_args: {"context": True}))
     monkeypatch.setattr(app, "AIPipeline", lambda: pipeline)
     app._print_trace_report_cli("scan", "host", "json")
     assert '{"report":true}' in capsys.readouterr().out
@@ -311,14 +305,16 @@ def test_shodan_worker_count_context_and_recon_results(monkeypatch: pytest.Monke
     assert app._clamp_shodan_workers(object(), 3, default=2, maximum=0) == 1
     assert app._clamp_shodan_workers("99", 20, maximum=8) == 8
 
-    context = app._build_shodan_context({
-        "ip": "192.0.2.1",
-        "ports": [80, 443],
-        "org": "Example",
-        "os": "Linux",
-        "vulns": ["CVE-1"],
-        "services": ["invalid", {"port": 443, "name": "https", "version": "1.2"}],
-    })
+    context = app._build_shodan_context(
+        {
+            "ip": "192.0.2.1",
+            "ports": [80, 443],
+            "org": "Example",
+            "os": "Linux",
+            "vulns": ["CVE-1"],
+            "services": ["invalid", {"port": 443, "name": "https", "version": "1.2"}],
+        }
+    )
     assert "Known CVEs: CVE-1" in context
     assert "443/https 1.2" in context
     minimal = app._build_shodan_context({})
@@ -500,9 +496,7 @@ def test_resume_scan_fresh_and_database_paths(monkeypatch, tmp_path):
     _patch_resume_success(monkeypatch)
 
     fresh = tmp_path / "octopus_checkpoint_fresh.json"
-    fresh.write_text(
-        json.dumps({"sl_no": 8, "target": "fresh-host", "loop": 2, "facts": ["port 80"]})
-    )
+    fresh.write_text(json.dumps({"sl_no": 8, "target": "fresh-host", "loop": 2, "facts": ["port 80"]}))
     monkeypatch.setattr(app, "prompt", lambda _text: "1")
     monkeypatch.setattr(app, "confirm", lambda _text: True)
     monkeypatch.setattr(app, "interactive_tool_run", lambda _target: "")

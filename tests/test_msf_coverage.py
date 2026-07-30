@@ -86,9 +86,7 @@ def configure(monkeypatch, proc: Proc, *, selected_context=None, scripts=None):
 
 def test_option_parser_and_case_insensitive_defaults() -> None:
     assert msf._parse_msf_options("") == {}
-    assert msf._parse_msf_options(
-        " RHOSTS = 10.0.0.5, RPORT=22 | USER_FILE=/tmp/users, "
-    ) == {
+    assert msf._parse_msf_options(" RHOSTS = 10.0.0.5, RPORT=22 | USER_FILE=/tmp/users, ") == {
         "RHOSTS": "10.0.0.5",
         "RPORT": "22",
         "USER_FILE": "/tmp/users",

@@ -94,9 +94,7 @@ def _configure_scan(
             "llm_status": "ok",
         }
     )
-    pipeline.discovery_agent = SimpleNamespace(
-        execute_task=task_commands or (lambda _task, _target: ["probe target"])
-    )
+    pipeline.discovery_agent = SimpleNamespace(execute_task=task_commands or (lambda _task, _target: ["probe target"]))
     pipeline._seed_known_credentials = lambda _scan_id, _target: 0
     pipeline._run_fact_driven_actions = lambda _scan_id, _target, _facts: {
         "commands": [],
@@ -161,12 +159,7 @@ def test_pipeline_runtime_owns_mission_store_in_the_fact_database(tmp_path):
     assert pipeline.runtime.missions.db_path == pipeline.fact_store.db_path == str(db_path)
 
     with sqlite3.connect(db_path) as conn:
-        tables = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            ).fetchall()
-        }
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
     assert {"facts", "missions", "mission_tasks", "mission_task_attempts"} <= tables
 
 
@@ -182,12 +175,8 @@ def test_scan_lifecycle_persists_completed_outcome_and_provenance(tmp_path):
     snapshot = pipeline.mission_store.snapshot(pipeline.mission_id)
     task = _only(snapshot.tasks)
     attempt = _only(snapshot.attempts)
-    fact_ids = {
-        fact["id"] for fact in pipeline.fact_store.get_facts("scan-completed", TARGET)
-    }
-    command_result = _only(
-        pipeline.fact_store.get_command_results("scan-completed", TARGET)
-    )
+    fact_ids = {fact["id"] for fact in pipeline.fact_store.get_facts("scan-completed", TARGET)}
+    command_result = _only(pipeline.fact_store.get_command_results("scan-completed", TARGET))
 
     assert snapshot.mission.status == "completed"
     assert snapshot.mission.reason == "director_concluded"
@@ -250,9 +239,7 @@ def test_max_iterations_and_tool_budget_interrupt_missions(tmp_path):
     _install_fake_execution(iteration_limited, "exec-iteration-limit")
     iteration_limited.run_scan("scan-iteration-limit", TARGET, max_iterations=1)
 
-    iteration_snapshot = iteration_limited.mission_store.snapshot(
-        iteration_limited.mission_id
-    )
+    iteration_snapshot = iteration_limited.mission_store.snapshot(iteration_limited.mission_id)
     assert iteration_snapshot.mission.status == "interrupted"
     assert iteration_snapshot.mission.reason == "max_iterations_reached"
 
@@ -324,12 +311,15 @@ def test_material_state_change_gets_only_the_configured_extra_planner_pass(
     assert enabled_snapshot.mission.status == "completed"
     assert enabled_snapshot.mission.reason == "director_concluded"
     assert enabled._state_replan_count == 1
-    assert len(
-        enabled.decision_trace.list_events(
-            scan_id="scan-state-replan-enabled",
-            event_type="state_replan_requested",
+    assert (
+        len(
+            enabled.decision_trace.list_events(
+                scan_id="scan-state-replan-enabled",
+                event_type="state_replan_requested",
+            )
         )
-    ) == 1
+        == 1
+    )
 
     disabled = configured("state-replan-disabled", 0)
     disabled.run_scan("scan-state-replan-disabled", TARGET, max_iterations=1)
@@ -338,12 +328,15 @@ def test_material_state_change_gets_only_the_configured_extra_planner_pass(
     assert disabled_snapshot.mission.status == "interrupted"
     assert disabled_snapshot.mission.reason == "max_iterations_reached"
     assert disabled._state_replan_count == 0
-    assert len(
-        disabled.decision_trace.list_events(
-            scan_id="scan-state-replan-disabled",
-            event_type="state_replan_rejected",
+    assert (
+        len(
+            disabled.decision_trace.list_events(
+                scan_id="scan-state-replan-disabled",
+                event_type="state_replan_rejected",
+            )
         )
-    ) == 1
+        == 1
+    )
 
 
 def test_director_conclude_completes_mission(tmp_path):
@@ -368,9 +361,7 @@ def test_analysis_attempt_links_verified_claim_fact_id(tmp_path):
     )
     pipeline.planner = SimpleNamespace(
         create_plan=lambda _goal, _context, _history: {
-            "plan": [
-                {"agent": "AnalysisAgent", "task": "analyze_vulnerabilities"}
-            ],
+            "plan": [{"agent": "AnalysisAgent", "task": "analyze_vulnerabilities"}],
             "llm_status": "ok",
         }
     )
@@ -442,25 +433,19 @@ def test_analysis_empty_success_is_distinct_from_response_failure(
     )
     pipeline.planner = SimpleNamespace(
         create_plan=lambda _goal, _context, _history: {
-            "plan": [
-                {"agent": "AnalysisAgent", "task": "analyze_vulnerabilities"}
-            ],
+            "plan": [{"agent": "AnalysisAgent", "task": "analyze_vulnerabilities"}],
             "llm_status": "ok",
         }
     )
-    pipeline.analysis_agent = SimpleNamespace(
-        analyze=lambda _scan_id, _target: dict(analysis_result)
-    )
+    pipeline.analysis_agent = SimpleNamespace(analyze=lambda _scan_id, _target: dict(analysis_result))
     pipeline.verification_agent = SimpleNamespace(
         verify_hypothesis=lambda *_args: (_ for _ in ()).throw(
             AssertionError("empty or failed analysis must not be verified")
         )
     )
     health_events = []
-    pipeline._record_llm_health = (
-        lambda _scan_id, _target, role, result, _loop: health_events.append(
-            (role, dict(result))
-        )
+    pipeline._record_llm_health = lambda _scan_id, _target, role, result, _loop: health_events.append(
+        (role, dict(result))
     )
 
     pipeline.run_scan(
@@ -471,9 +456,7 @@ def test_analysis_empty_success_is_distinct_from_response_failure(
 
     snapshot = pipeline.mission_store.snapshot(pipeline.mission_id)
     attempt = _only(snapshot.attempts)
-    analysis_health = _only(
-        result for role, result in health_events if role == "analysis"
-    )
+    analysis_health = _only(result for role, result in health_events if role == "analysis")
     assert attempt.status == expected_status
     assert attempt.outcome is not None
     assert attempt.outcome.status == expected_status
@@ -514,9 +497,7 @@ def test_hard_unavailable_plan_rejection_is_a_durable_blocked_outcome(tmp_path):
     attempt = _only(snapshot.attempts)
     assert attempt.status == "blocked"
     assert attempt.outcome is not None
-    assert attempt.outcome.reason == (
-        "capability_unavailable:provider:no_provider"
-    )
+    assert attempt.outcome.reason == ("capability_unavailable:provider:no_provider")
     pipeline._complete_mission("planner_empty")
 
 
@@ -545,9 +526,6 @@ def test_mid_task_tool_budget_leaves_attempt_resumable(tmp_path):
     assert attempt.outcome is None
     assert attempt.execution_ids == ("exec-before-budget",)
     resume_plan = pipeline._resumable_mission_plan()
-    assert [
-        {"agent": step["agent"], "task": step["task"]}
-        for step in resume_plan
-    ] == [dict(TASK)]
+    assert [{"agent": step["agent"], "task": step["task"]} for step in resume_plan] == [dict(TASK)]
     assert resume_plan[0]["task_id"] == task.task_id
     assert resume_plan[0]["task_scope"] == task.task_scope

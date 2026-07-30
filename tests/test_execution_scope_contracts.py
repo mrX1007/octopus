@@ -5,13 +5,16 @@ import pytest
 
 pytestmark = [pytest.mark.contract, pytest.mark.security]
 
+
 def test_tooldef_python_dependency_gate():
     from core.tools.registry import ToolDef
 
     assert ToolDef(name="ok", requires=["python:sys"]).is_available()
     assert not ToolDef(name="missing", requires=["python:octopus_missing_module"]).is_available()
     assert ToolDef(name="any-ok", requires=["any:python:octopus_missing_module,python:sys"]).is_available()
-    assert not ToolDef(name="any-missing", requires=["any:python:octopus_missing_a,python:octopus_missing_b"]).is_available()
+    assert not ToolDef(
+        name="any-missing", requires=["any:python:octopus_missing_a,python:octopus_missing_b"]
+    ).is_available()
 
 
 def test_pipeline_runtime_zero_means_unlimited():
@@ -77,6 +80,7 @@ def test_x_mode_runs_exhaustive_applicable_coverage_without_real_tools():
         def _run(target, *args, **kwargs):
             calls.append((name, target))
             return f"{name} ok {target}"
+
         return _run
 
     try:
@@ -87,11 +91,24 @@ def test_x_mode_runs_exhaustive_applicable_coverage_without_real_tools():
         sys.modules["core.killchain"] = fake_killchain
 
         for tool_name in (
-            "httpx_probe", "naabu", "tlsx", "whatweb", "curl_headers",
-            "security_headers_check", "cors_check", "scrapling",
-            "scrapling_crawl", "browser_surface_analysis", "nuclei_safe",
-            "katana_crawl", "wpscan", "sqlmap", "nikto", "openapi_import",
-            "graphql_check", "api_auth_check",
+            "httpx_probe",
+            "naabu",
+            "tlsx",
+            "whatweb",
+            "curl_headers",
+            "security_headers_check",
+            "cors_check",
+            "scrapling",
+            "scrapling_crawl",
+            "browser_surface_analysis",
+            "nuclei_safe",
+            "katana_crawl",
+            "wpscan",
+            "sqlmap",
+            "nikto",
+            "openapi_import",
+            "graphql_check",
+            "api_auth_check",
         ):
             tool_def = get_tool(tool_name)
             patched_tools[tool_name] = (tool_def.func, list(tool_def.requires))
@@ -116,7 +133,9 @@ def test_x_mode_runs_exhaustive_applicable_coverage_without_real_tools():
     assert "[X MODE PLAN]" in output
     assert "gated killchain_exfil" in output
     assert "vuln_assess ok 10.0.0.5" in output
-    assert {"httpx_probe", "naabu", "tlsx", "nuclei_safe", "katana_crawl", "nikto", "api_auth_check"}.issubset(called_tools)
+    assert {"httpx_probe", "naabu", "tlsx", "nuclei_safe", "katana_crawl", "nikto", "api_auth_check"}.issubset(
+        called_tools
+    )
     assert "wpscan" not in called_tools
     assert "sqlmap" not in called_tools
     assert "skip wpscan_http_10_0_0_5: not_applicable:no_wordpress_signal" in output
@@ -143,11 +162,7 @@ def test_x_mode_dedupes_default_heavy_web_scanners_without_dropping_distinct_por
 
     def fake_default_recon(_target):
         return {
-            "nmap": (
-                "80/tcp open http nginx\n"
-                "443/tcp open ssl/http nginx\n"
-                "9001/tcp open http Cowboy httpd\n"
-            ),
+            "nmap": ("80/tcp open http nginx\n443/tcp open ssl/http nginx\n9001/tcp open http Cowboy httpd\n"),
             "curl_headers": "HTTP/1.1 200 OK\nServer: nginx\n",
             "whatweb": "nginx",
         }
@@ -162,6 +177,7 @@ def test_x_mode_dedupes_default_heavy_web_scanners_without_dropping_distinct_por
                 server = "Cowboy" if str(target).endswith(":9001") else "nginx"
                 return f"{target} [200 OK] HTTPServer[{server}]"
             return f"{name} ok {target}"
+
         return _run
 
     try:
@@ -172,11 +188,24 @@ def test_x_mode_dedupes_default_heavy_web_scanners_without_dropping_distinct_por
         sys.modules["core.killchain"] = fake_killchain
 
         for tool_name in (
-            "httpx_probe", "naabu", "tlsx", "whatweb", "curl_headers",
-            "security_headers_check", "cors_check", "scrapling",
-            "scrapling_crawl", "browser_surface_analysis", "nuclei_safe",
-            "katana_crawl", "wpscan", "sqlmap", "nikto", "openapi_import",
-            "graphql_check", "api_auth_check",
+            "httpx_probe",
+            "naabu",
+            "tlsx",
+            "whatweb",
+            "curl_headers",
+            "security_headers_check",
+            "cors_check",
+            "scrapling",
+            "scrapling_crawl",
+            "browser_surface_analysis",
+            "nuclei_safe",
+            "katana_crawl",
+            "wpscan",
+            "sqlmap",
+            "nikto",
+            "openapi_import",
+            "graphql_check",
+            "api_auth_check",
         ):
             tool_def = get_tool(tool_name)
             patched_tools[tool_name] = (tool_def.func, list(tool_def.requires))
@@ -246,13 +275,16 @@ def test_pipeline_stores_offscope_browser_urls_as_external_not_web_endpoint():
         target,
         {
             "type": "web_endpoint",
-            "value": json.dumps({
-                "url": "http://nginx.org/",
-                "scheme": "http",
-                "host": "nginx.org",
-                "port": "80",
-                "path": "/",
-            }, sort_keys=True),
+            "value": json.dumps(
+                {
+                    "url": "http://nginx.org/",
+                    "scheme": "http",
+                    "host": "nginx.org",
+                    "port": "80",
+                    "path": "/",
+                },
+                sort_keys=True,
+            ),
             "confidence": 90,
         },
         "browser_surface_analysis",
@@ -262,13 +294,16 @@ def test_pipeline_stores_offscope_browser_urls_as_external_not_web_endpoint():
         target,
         {
             "type": "web_endpoint",
-            "value": json.dumps({
-                "url": "http://83.166.242.55/",
-                "scheme": "http",
-                "host": "83.166.242.55",
-                "port": "80",
-                "path": "/",
-            }, sort_keys=True),
+            "value": json.dumps(
+                {
+                    "url": "http://83.166.242.55/",
+                    "scheme": "http",
+                    "host": "83.166.242.55",
+                    "port": "80",
+                    "path": "/",
+                },
+                sort_keys=True,
+            ),
             "confidence": 90,
         },
         "browser_surface_analysis",
@@ -292,8 +327,20 @@ def test_domain_target_allows_subdomain_but_not_external_endpoint_followups():
     scan_id = "scan-scope-domain"
     target = "example.com"
     for endpoint in (
-        {"url": "https://app.example.com/admin", "scheme": "https", "host": "app.example.com", "port": "443", "path": "/admin"},
-        {"url": "https://cdn.other.net/app.js", "scheme": "https", "host": "cdn.other.net", "port": "443", "path": "/app.js"},
+        {
+            "url": "https://app.example.com/admin",
+            "scheme": "https",
+            "host": "app.example.com",
+            "port": "443",
+            "path": "/admin",
+        },
+        {
+            "url": "https://cdn.other.net/app.js",
+            "scheme": "https",
+            "host": "cdn.other.net",
+            "port": "443",
+            "path": "/app.js",
+        },
     ):
         pipeline.fact_store.add_fact(scan_id, target, "web_endpoint", json.dumps(endpoint, sort_keys=True), "test")
 

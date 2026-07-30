@@ -408,9 +408,7 @@ def test_distinct_and_contextual_web_plans_cover_duplicates_and_applicability() 
     assert any(tool == "wpscan" for tool, _target, _key in jobs)
     assert not any(tool == "sqlmap" for tool, _target, _key in jobs)
     assert any(
-        line.startswith("gated sqlmap_")
-        and "requires explicit tool selection/approval" in line
-        for line in plan
+        line.startswith("gated sqlmap_") and "requires explicit tool selection/approval" in line for line in plan
     )
     assert any("not_applicable:no_wordpress_signal" in line for line in plan)
     assert any("not_applicable:no_input_surface" in line for line in plan)
@@ -560,9 +558,7 @@ def test_single_tool_and_basic_dispatch_helpers(
     assert "Unknown tool key" in runner.run_single_tool("missing", "target", context)
 
     assert "FIXTURE OUTPUT" in runner.format_recon_for_llm({"fixture": " value "})
-    assert "structured" in runner.format_recon_for_llm(
-        {"fixture": ToolResult(stdout=" structured ")}
-    )
+    assert "structured" in runner.format_recon_for_llm({"fixture": ToolResult(stdout=" structured ")})
     assert runner.format_recon_for_llm({}) == ""
     assert runner._execution_context_or_current(context) is context
     monkeypatch.setattr(runner, "current_execution_context", lambda: context)
@@ -670,10 +666,7 @@ def test_registered_provider_exception_is_redacted_and_output_bounded(
 
     def provider(_target, extra_flags=None):
         del extra_flags
-        raise RuntimeError(
-            "password=octopus-secret-value --token octopus-token-value "
-            + "x" * 4096
-        )
+        raise RuntimeError("password=octopus-secret-value --token octopus-token-value " + "x" * 4096)
 
     monkeypatch.setattr(tool_def, "func", provider)
     context = ExecutionContext.operator(
@@ -885,13 +878,9 @@ def test_tool_command_nmap_rustscan_and_searchsploit_parser_branches(
     assert calls[-1][1] == ("10.0.0.1", ["--", "-sV"])
     assert runner.run_tool_by_command("rustscan --addresses=10.0.0.2") == "rustscan-ok"
     assert calls[-1][1] == ("10.0.0.2", None)
-    assert runner.run_tool_by_command(
-        "rustscan -a 10.0.0.1 --addresses 10.0.0.2"
-    ) == "rustscan-ok"
+    assert runner.run_tool_by_command("rustscan -a 10.0.0.1 --addresses 10.0.0.2") == "rustscan-ok"
     assert calls[-1][1] == ("10.0.0.1", None)
-    assert runner.run_tool_by_command(
-        "rustscan -a 10.0.0.1 --addresses=10.0.0.2"
-    ) == "rustscan-ok"
+    assert runner.run_tool_by_command("rustscan -a 10.0.0.1 --addresses=10.0.0.2") == "rustscan-ok"
     assert calls[-1][1] == ("10.0.0.1", None)
     assert runner.run_tool_by_command("rustscan 10.0.0.3") == "rustscan-ok"
     assert calls[-1][1] == ("10.0.0.3", None)
@@ -1261,12 +1250,11 @@ def test_interactive_n_mode_unreliable_errors_and_default_web_port(
     monkeypatch.setattr(runner, "_web_urls_from_ports", lambda target, ports: [f"http://{target}:{ports[0]}"])
     monkeypatch.setattr(runner, "_target_looks_domain", lambda _target: False)
     monkeypatch.setattr(runner, "_nmap_has_any_open_port", lambda *_args: False)
+
     def fake_concurrent(results, _plan, jobs, max_workers=6):
         del max_workers
         for tool_name, _job_target, result_key in jobs:
-            results[result_key] = (
-                "[!] wpscan boom" if tool_name == "wpscan" else tool_name
-            )
+            results[result_key] = "[!] wpscan boom" if tool_name == "wpscan" else tool_name
 
     monkeypatch.setattr(
         runner,

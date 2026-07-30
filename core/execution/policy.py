@@ -181,11 +181,7 @@ def _scope_matches(target: str, scope: str) -> bool:
     wildcard = raw_scope.startswith("*.")
     if wildcard:
         suffix = _clean_host(raw_scope[2:])
-        return (
-            target_kind == "host"
-            and target_value.endswith(f".{suffix}")
-            and target_value != suffix
-        )
+        return target_kind == "host" and target_value.endswith(f".{suffix}") and target_value != suffix
 
     scope_kind, scope_value, scope_port = _split_target(raw_scope)
     if scope_kind == "network":
@@ -286,10 +282,7 @@ class ExecutionPolicy:
         return decision
 
     def _limits_valid(self, context: ExecutionContext) -> bool:
-        return (
-            1 <= int(context.max_runtime_seconds) <= 86_400
-            and 1_024 <= int(context.max_output_bytes) <= 100_000_000
-        )
+        return 1 <= int(context.max_runtime_seconds) <= 86_400 and 1_024 <= int(context.max_output_bytes) <= 100_000_000
 
     def _targets_allowed(
         self,
@@ -325,11 +318,7 @@ class ExecutionPolicy:
 
         name = invocation.registered_name or invocation.executable
         policy_names = tuple(
-            dict.fromkeys(
-                candidate
-                for candidate in (invocation.registered_name, invocation.executable)
-                if candidate
-            )
+            dict.fromkeys(candidate for candidate in (invocation.registered_name, invocation.executable) if candidate)
         )
         canonical_killchain_name = None
         from core.killchain.policy import (
@@ -346,10 +335,7 @@ class ExecutionPolicy:
                     context,
                     invocation,
                 )
-            canonical_killchain_name = (
-                canonical_killchain_name
-                or canonical_killchain_tool(policy_name)
-            )
+            canonical_killchain_name = canonical_killchain_name or canonical_killchain_tool(policy_name)
 
         # ``registered_name`` is caller-supplied metadata at this boundary. It
         # must resolve to the same canonical ToolDef as the executable/alias in
@@ -375,9 +361,7 @@ class ExecutionPolicy:
             )
         command_tool = get_tool(invocation.executable)
         if command_tool is None and len(invocation.argv) >= 2:
-            command_tool = get_tool(
-                f"{invocation.argv[0]} {invocation.argv[1]}"
-            )
+            command_tool = get_tool(f"{invocation.argv[0]} {invocation.argv[1]}")
         if command_tool is None or command_tool.name != registered_tool.name:
             return self._decision(
                 False,
@@ -391,11 +375,7 @@ class ExecutionPolicy:
             canonical_killchain_name or name,
             invocation.argv,
         )
-        if requires_approval and (
-            not context.has(CAP_ACTIVE_TOOL)
-            or not context.approved
-            or not context.approval_id
-        ):
+        if requires_approval and (not context.has(CAP_ACTIVE_TOOL) or not context.approved or not context.approval_id):
             return self._decision(False, "active_tool_requires_approval", context, invocation)
 
         targets = () if name in _NON_NETWORK_TARGET_TOOLS else invocation.targets

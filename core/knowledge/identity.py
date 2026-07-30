@@ -17,9 +17,7 @@ from core.secrets import is_secret_ref
 
 ENTITY_NORMALIZATION_VERSION = "1.0"
 _ID_VERSION_TOKEN = "v1"
-_UNRESERVED = frozenset(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"
-)
+_UNRESERVED = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 _PERCENT_ESCAPE = re.compile(r"%([0-9a-fA-F]{2})")
 _CANONICAL_ENTITY_ID = re.compile(
     r"^(?P<kind>asset|credential|endpoint|identity|service|session|vulnerability):"
@@ -106,15 +104,7 @@ def canonicalize_scope_values(values: str | tuple[str, ...] | list[str]) -> tupl
     """Return sorted, de-duplicated canonical read-model scopes."""
 
     items = (values,) if isinstance(values, str) else tuple(values)
-    return tuple(
-        sorted(
-            {
-                canonicalize_scope_value(item)
-                for item in items
-                if str(item or "").strip()
-            }
-        )
-    )
+    return tuple(sorted({canonicalize_scope_value(item) for item in items if str(item or "").strip()}))
 
 
 def normalize_host(value: str) -> tuple[str, str]:
@@ -420,9 +410,7 @@ def canonical_from_legacy(
                 username=str(properties.get("username") or ""),
             )
         if kind == EntityKind.VULNERABILITY.value:
-            return canonical_vulnerability(
-                str(properties.get("vuln_id") or properties.get("name") or "")
-            )
+            return canonical_vulnerability(str(properties.get("vuln_id") or properties.get("name") or ""))
     except (TypeError, ValueError):
         return None
     return None

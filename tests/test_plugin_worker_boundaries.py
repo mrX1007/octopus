@@ -96,9 +96,7 @@ def test_fd_capture_truncation_empty_exit_and_flush_failures(monkeypatch: pytest
         monkeypatch.setattr(worker, "_CAPTURE_LIMIT", 4)
         assert worker._FDCapture._read_capture(handle) == "abcd\n[... truncated 2 bytes ...]"
 
-    with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(
-        mode="w+b"
-    ) as stderr_file:
+    with tempfile.TemporaryFile(mode="w+b") as stdout_file, tempfile.TemporaryFile(mode="w+b") as stderr_file:
         capture = worker._FDCapture()
         capture._stdout_file = stdout_file
         capture._stderr_file = stderr_file

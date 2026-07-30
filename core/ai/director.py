@@ -28,6 +28,7 @@ KILL_CHAIN = [
     "conclude",
 ]
 
+
 class DirectorLLM:
     def __init__(self):
         self.policy = DeterministicPolicy()
@@ -62,7 +63,7 @@ RULES:
 {json.dumps(llm_context, ensure_ascii=False, separators=(",", ":"))}
 
 Recent Goal History:
-{json.dumps(goal_history[-max(1, int(CONTEXT_WINDOW)):], ensure_ascii=False, separators=(",", ":"))}
+{json.dumps(goal_history[-max(1, int(CONTEXT_WINDOW)) :], ensure_ascii=False, separators=(",", ":"))}
 
 Based on the context, output the next goal in JSON format. Keep thought under 180 characters."""
 
@@ -81,7 +82,9 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
             # Validate goal against context to prevent nonsensical LLM output
             policy_decision = self.policy.validate_goal(goal, context, goal_history)
             if policy_decision["goal"] != goal:
-                result["thought"] = f"LLM suggested '{goal}' but policy forced '{policy_decision['goal']}' ({policy_decision['reason']})"
+                result["thought"] = (
+                    f"LLM suggested '{goal}' but policy forced '{policy_decision['goal']}' ({policy_decision['reason']})"
+                )
                 result["goal"] = policy_decision["goal"]
                 result["llm_status"] = "ok"
                 return result
@@ -105,10 +108,12 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
         state = context.get("state", "initial_recon")
         required = context.get("next_required_capability", "conclude")
 
-        if required and required != "conclude" and (
-            self._goal_allowed_for_state(required, state)
-            and self._goal_allowed_by_policy(required, context)
-        ) and goal != required:
+        if (
+            required
+            and required != "conclude"
+            and (self._goal_allowed_for_state(required, state) and self._goal_allowed_by_policy(required, context))
+            and goal != required
+        ):
             return required
 
         if not self._goal_allowed_for_state(goal, state):
@@ -143,24 +148,48 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
             "vulnerabilities_found": {"service_discovery", "vulnerability_assessment"},
             "credentials_found": {"service_discovery", "vulnerability_assessment", "credential_harvesting"},
             "root_access_confirmed": {
-                "service_discovery", "vulnerability_assessment",
-                "credential_harvesting", "privilege_escalation",
+                "service_discovery",
+                "vulnerability_assessment",
+                "credential_harvesting",
+                "privilege_escalation",
             },
             "persistence_established": {
-                "service_discovery", "vulnerability_assessment", "credential_harvesting",
-                "privilege_escalation", "post_access_inventory", "persistence",
+                "service_discovery",
+                "vulnerability_assessment",
+                "credential_harvesting",
+                "privilege_escalation",
+                "post_access_inventory",
+                "persistence",
             },
             "internal_recon_completed": {
-                "service_discovery", "vulnerability_assessment", "credential_harvesting",
-                "privilege_escalation", "post_access_inventory", "persistence", "internal_reconnaissance",
+                "service_discovery",
+                "vulnerability_assessment",
+                "credential_harvesting",
+                "privilege_escalation",
+                "post_access_inventory",
+                "persistence",
+                "internal_reconnaissance",
             },
             "exfiltration_completed": {
-                "service_discovery", "vulnerability_assessment", "credential_harvesting",
-                "privilege_escalation", "post_access_inventory", "persistence", "internal_reconnaissance", "data_exfiltration",
+                "service_discovery",
+                "vulnerability_assessment",
+                "credential_harvesting",
+                "privilege_escalation",
+                "post_access_inventory",
+                "persistence",
+                "internal_reconnaissance",
+                "data_exfiltration",
             },
             "cleanup_completed": {
-                "service_discovery", "vulnerability_assessment", "credential_harvesting",
-                "privilege_escalation", "post_access_inventory", "persistence", "internal_reconnaissance", "data_exfiltration", "cleanup",
+                "service_discovery",
+                "vulnerability_assessment",
+                "credential_harvesting",
+                "privilege_escalation",
+                "post_access_inventory",
+                "persistence",
+                "internal_reconnaissance",
+                "data_exfiltration",
+                "cleanup",
             },
         }
         if goal in completed_by_state.get(state, set()):
@@ -198,35 +227,55 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
         allowed = {
             "initial_recon": {"service_discovery", "conclude"},
             "recon_completed": {
-                "vulnerability_assessment", "credential_harvesting",
-                "service_discovery", "conclude",
+                "vulnerability_assessment",
+                "credential_harvesting",
+                "service_discovery",
+                "conclude",
             },
             "vulnerabilities_found": {
                 "service_discovery",
                 "credential_harvesting",
-                "vulnerability_assessment", "conclude",
+                "vulnerability_assessment",
+                "conclude",
             },
             "credentials_found": {
-                "service_discovery", "vulnerability_assessment",
-                "credential_harvesting", "privilege_escalation",
+                "service_discovery",
+                "vulnerability_assessment",
+                "credential_harvesting",
+                "privilege_escalation",
                 "conclude",
             },
             "root_access_confirmed": {
-                "post_access_inventory", "vulnerability_assessment",
-                "persistence", "internal_reconnaissance", "data_exfiltration",
-                "cleanup", "conclude",
+                "post_access_inventory",
+                "vulnerability_assessment",
+                "persistence",
+                "internal_reconnaissance",
+                "data_exfiltration",
+                "cleanup",
+                "conclude",
             },
             "persistence_established": {
-                "post_access_inventory", "vulnerability_assessment",
-                "internal_reconnaissance", "data_exfiltration", "cleanup", "conclude",
+                "post_access_inventory",
+                "vulnerability_assessment",
+                "internal_reconnaissance",
+                "data_exfiltration",
+                "cleanup",
+                "conclude",
             },
             "internal_recon_completed": {
-                "post_access_inventory", "vulnerability_assessment",
-                "internal_reconnaissance", "data_exfiltration", "cleanup", "conclude",
+                "post_access_inventory",
+                "vulnerability_assessment",
+                "internal_reconnaissance",
+                "data_exfiltration",
+                "cleanup",
+                "conclude",
             },
             "exfiltration_completed": {
-                "post_access_inventory", "vulnerability_assessment",
-                "internal_reconnaissance", "cleanup", "conclude",
+                "post_access_inventory",
+                "vulnerability_assessment",
+                "internal_reconnaissance",
+                "cleanup",
+                "conclude",
             },
             "cleanup_completed": {"conclude"},
         }
@@ -238,7 +287,7 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
             return "conclude"
 
         idx = KILL_CHAIN.index(current_goal)
-        for next_goal in KILL_CHAIN[idx + 1:]:
+        for next_goal in KILL_CHAIN[idx + 1 :]:
             if next_goal not in goal_history:
                 return next_goal
         return "conclude"
@@ -285,37 +334,67 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
 
         if state == "credentials_found":
             if "service_discovery_needed" in open_questions:
-                return self._pick("service_discovery", goal_history, "credentials exist but service recon is incomplete")
+                return self._pick(
+                    "service_discovery", goal_history, "credentials exist but service recon is incomplete"
+                )
             if any("vulnerabilit" in q or "cpanel" in q for q in open_questions):
-                return self._pick("vulnerability_assessment", goal_history, "application credentials need scoped verification")
+                return self._pick(
+                    "vulnerability_assessment", goal_history, "application credentials need scoped verification"
+                )
             if "privilege_escalation" in goal_history:
-                return {"thought": "fallback: privilege escalation already tried without confirmed root", "goal": "conclude"}
+                return {
+                    "thought": "fallback: privilege escalation already tried without confirmed root",
+                    "goal": "conclude",
+                }
             if "privilege_escalation_path_unknown" in open_questions:
                 return self._pick("privilege_escalation", goal_history, "SSH creds found, escalating")
             return self._pick("vulnerability_assessment", goal_history, "credentials found, verifying scope")
 
         if state == "root_access_confirmed":
             if "post_access_inventory_needed" in open_questions:
-                return self._pick("post_access_inventory", goal_history, "root confirmed, collecting controlled post-access inventory")
+                return self._pick(
+                    "post_access_inventory", goal_history, "root confirmed, collecting controlled post-access inventory"
+                )
             if "persistence_needed" in open_questions:
                 return self._pick("persistence", goal_history, "root confirmed and persistence automation is enabled")
             if "internal_network_recon_pending" in open_questions:
                 return self._pick("internal_reconnaissance", goal_history, "root confirmed, mapping internal network")
-            return {"thought": "fallback: root confirmed and required controlled inventory is complete", "goal": "conclude"}
+            return {
+                "thought": "fallback: root confirmed and required controlled inventory is complete",
+                "goal": "conclude",
+            }
 
         if state == "persistence_established":
             if "internal_network_recon_pending" in open_questions:
-                return self._pick("internal_reconnaissance", goal_history, "persistence established, mapping internal network")
+                return self._pick(
+                    "internal_reconnaissance", goal_history, "persistence established, mapping internal network"
+                )
             if "data_exfiltration_pending" in open_questions:
-                return self._pick("data_exfiltration", goal_history, "persistence established and data collection automation is enabled")
-            return {"thought": "fallback: persistence established, no further automated stage enabled", "goal": "conclude"}
+                return self._pick(
+                    "data_exfiltration",
+                    goal_history,
+                    "persistence established and data collection automation is enabled",
+                )
+            return {
+                "thought": "fallback: persistence established, no further automated stage enabled",
+                "goal": "conclude",
+            }
 
         if state == "internal_recon_completed":
             if "data_exfiltration_pending" in open_questions:
-                return self._pick("data_exfiltration", goal_history, "internal network mapped and data collection automation is enabled")
+                return self._pick(
+                    "data_exfiltration",
+                    goal_history,
+                    "internal network mapped and data collection automation is enabled",
+                )
             if "persistence_needed" in open_questions:
-                return self._pick("persistence", goal_history, "internal network mapped and persistence automation is enabled")
-            return {"thought": "fallback: internal inventory complete, no further automated stage enabled", "goal": "conclude"}
+                return self._pick(
+                    "persistence", goal_history, "internal network mapped and persistence automation is enabled"
+                )
+            return {
+                "thought": "fallback: internal inventory complete, no further automated stage enabled",
+                "goal": "conclude",
+            }
 
         if state == "exfiltration_completed":
             if "cleanup_needed" in open_questions:

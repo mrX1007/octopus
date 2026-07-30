@@ -17,7 +17,6 @@ class ToolRegistry:
             "enumerate_services": "service_discovery",
             "recon": "service_discovery",
             "initial_recon": "service_discovery",
-
             "vuln_scan": "vulnerability_assessment",
             "vulnerability_scan": "vulnerability_assessment",
             "vuln_assess": "vulnerability_assessment",
@@ -152,7 +151,6 @@ class ToolRegistry:
             "identify_cves": "analyze_vulnerabilities",
             "analyze_services": "analyze_vulnerabilities",
             "analysis": "analyze_vulnerabilities",
-
             "credential_discovery": "credential_harvesting",
             "credential_scan": "credential_harvesting",
             "web_credentials": "web_credential_testing",
@@ -209,12 +207,10 @@ class ToolRegistry:
             "bruteforce": "test_credentials",
             "bruteforce_ssh": "test_credentials",
             "verify_credentials": "test_credentials",
-
             "privesc": "find_privesc_vectors",
             "privilege_escalation_scan": "find_privesc_vectors",
             "find_privilege_escalation": "find_privesc_vectors",
             "verify_exploit": "vulnerability_assessment",
-
             "persist": "establish_persistence",
             "persistence": "establish_persistence",
             "plugin": "plugin_assessment",
@@ -278,7 +274,12 @@ class ToolRegistry:
             "service_discovery": {"cost": 2, "time": "medium", "risk": "safe", "preconditions": []},
             "vulnerability_assessment": {"cost": 5, "time": "long", "risk": "active", "preconditions": ["services"]},
             "exploit_selection": {"cost": 1, "time": "short", "risk": "passive", "preconditions": ["services"]},
-            "metasploit_verification": {"cost": 4, "time": "medium", "risk": "check_only", "preconditions": ["services"]},
+            "metasploit_verification": {
+                "cost": 4,
+                "time": "medium",
+                "risk": "check_only",
+                "preconditions": ["services"],
+            },
             "web_application_mapping": {"cost": 1, "time": "short", "risk": "passive", "preconditions": ["web"]},
             "browser_surface_analysis": {"cost": 2, "time": "short", "risk": "passive", "preconditions": ["web"]},
             "web_app_deep_testing": {"cost": 2, "time": "short", "risk": "safe", "preconditions": ["web"]},
@@ -292,7 +293,12 @@ class ToolRegistry:
             "transport_security_assessment": {"cost": 2, "time": "short", "risk": "passive", "preconditions": ["tls"]},
             "ftp_assessment": {"cost": 2, "time": "short", "risk": "active", "preconditions": ["services"]},
             "mail_service_assessment": {"cost": 1, "time": "short", "risk": "safe", "preconditions": ["services"]},
-            "database_inventory": {"cost": 3, "time": "medium", "risk": "post_access_read", "preconditions": ["services", "access"]},
+            "database_inventory": {
+                "cost": 3,
+                "time": "medium",
+                "risk": "post_access_read",
+                "preconditions": ["services", "access"],
+            },
             "firewall_detection": {"cost": 2, "time": "short", "risk": "safe", "preconditions": ["web"]},
             "external_intelligence": {"cost": 1, "time": "short", "risk": "passive", "preconditions": []},
             "browser_osint": {"cost": 2, "time": "medium", "risk": "passive", "preconditions": []},
@@ -301,32 +307,112 @@ class ToolRegistry:
             "asm_dns_resolution": {"cost": 1, "time": "short", "risk": "safe", "preconditions": ["domain"]},
             "asm_port_discovery": {"cost": 3, "time": "medium", "risk": "active", "preconditions": ["domain"]},
             "asm_url_discovery": {"cost": 1, "time": "short", "risk": "passive", "preconditions": ["domain"]},
-            "active_directory_enumeration": {"cost": 3, "time": "medium", "risk": "safe", "preconditions": ["ad_surface"]},
+            "active_directory_enumeration": {
+                "cost": 3,
+                "time": "medium",
+                "risk": "safe",
+                "preconditions": ["ad_surface"],
+            },
             "ad_security_review": {"cost": 4, "time": "medium", "risk": "safe", "preconditions": ["ad_surface"]},
-            "bloodhound_ingest": {"cost": 4, "time": "long", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
-            "password_policy_review": {"cost": 2, "time": "short", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
-            "delegation_analysis": {"cost": 4, "time": "long", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
-            "gpo_review": {"cost": 3, "time": "medium", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
-            "adcs_review": {"cost": 3, "time": "medium", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
-            "local_admin_paths": {"cost": 4, "time": "long", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
-            "acl_review": {"cost": 4, "time": "long", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
+            "bloodhound_ingest": {
+                "cost": 4,
+                "time": "long",
+                "risk": "post_access_read",
+                "preconditions": ["ad_surface", "access"],
+            },
+            "password_policy_review": {
+                "cost": 2,
+                "time": "short",
+                "risk": "post_access_read",
+                "preconditions": ["ad_surface", "access"],
+            },
+            "delegation_analysis": {
+                "cost": 4,
+                "time": "long",
+                "risk": "post_access_read",
+                "preconditions": ["ad_surface", "access"],
+            },
+            "gpo_review": {
+                "cost": 3,
+                "time": "medium",
+                "risk": "post_access_read",
+                "preconditions": ["ad_surface", "access"],
+            },
+            "adcs_review": {
+                "cost": 3,
+                "time": "medium",
+                "risk": "post_access_read",
+                "preconditions": ["ad_surface", "access"],
+            },
+            "local_admin_paths": {
+                "cost": 4,
+                "time": "long",
+                "risk": "post_access_read",
+                "preconditions": ["ad_surface", "access"],
+            },
+            "acl_review": {
+                "cost": 4,
+                "time": "long",
+                "risk": "post_access_read",
+                "preconditions": ["ad_surface", "access"],
+            },
             "windows_enumeration": {"cost": 3, "time": "medium", "risk": "safe", "preconditions": ["smb"]},
             "kerberos_assessment": {"cost": 3, "time": "medium", "risk": "safe", "preconditions": ["ad_surface"]},
-            "domain_credential_extraction": {"cost": 6, "time": "long", "risk": "active", "preconditions": ["ad_surface", "access", "stage:credentials"]},
-            "ad_remote_execution": {"cost": 6, "time": "long", "risk": "post_access_change", "preconditions": ["ad_surface", "access", "internal_services", "stage:root"]},
+            "domain_credential_extraction": {
+                "cost": 6,
+                "time": "long",
+                "risk": "active",
+                "preconditions": ["ad_surface", "access", "stage:credentials"],
+            },
+            "ad_remote_execution": {
+                "cost": 6,
+                "time": "long",
+                "risk": "post_access_change",
+                "preconditions": ["ad_surface", "access", "internal_services", "stage:root"],
+            },
             "hash_cracking": {"cost": 5, "time": "long", "risk": "active", "preconditions": ["access"]},
             "test_credentials": {"cost": 5, "time": "long", "risk": "active", "preconditions": ["services", "ssh"]},
             "ssh_user_enumeration": {"cost": 2, "time": "short", "risk": "safe", "preconditions": ["ssh"]},
             "credential_harvesting": {"cost": 4, "time": "medium", "risk": "active", "preconditions": ["services"]},
             "web_credential_testing": {"cost": 4, "time": "medium", "risk": "active", "preconditions": ["web"]},
-            "post_access_inventory": {"cost": 2, "time": "short", "risk": "post_access_read", "preconditions": ["access"]},
-            "find_privesc_vectors": {"cost": 3, "time": "medium", "risk": "post_access_read", "preconditions": ["access"]},
-            "exploit_privesc": {"cost": 6, "time": "long", "risk": "post_access_change", "preconditions": ["access", "stage:credentials", "killchain:privesc"]},
-            "internal_network_recon": {"cost": 2, "time": "short", "risk": "post_access_read", "preconditions": ["access"]},
-            "internal_service_discovery": {"cost": 2, "time": "short", "risk": "post_access_read", "preconditions": ["internal_hosts"]},
+            "post_access_inventory": {
+                "cost": 2,
+                "time": "short",
+                "risk": "post_access_read",
+                "preconditions": ["access"],
+            },
+            "find_privesc_vectors": {
+                "cost": 3,
+                "time": "medium",
+                "risk": "post_access_read",
+                "preconditions": ["access"],
+            },
+            "exploit_privesc": {
+                "cost": 6,
+                "time": "long",
+                "risk": "post_access_change",
+                "preconditions": ["access", "stage:credentials", "killchain:privesc"],
+            },
+            "internal_network_recon": {
+                "cost": 2,
+                "time": "short",
+                "risk": "post_access_read",
+                "preconditions": ["access"],
+            },
+            "internal_service_discovery": {
+                "cost": 2,
+                "time": "short",
+                "risk": "post_access_read",
+                "preconditions": ["internal_hosts"],
+            },
             "pivot_setup": {"cost": 4, "time": "medium", "risk": "post_access_change", "preconditions": ["access"]},
             "payload_generation": {"cost": 2, "time": "short", "risk": "local_build", "preconditions": []},
-            "establish_persistence": {"cost": 6, "time": "medium", "risk": "post_access_change", "preconditions": ["access"]},
+            "establish_persistence": {
+                "cost": 6,
+                "time": "medium",
+                "risk": "post_access_change",
+                "preconditions": ["access"],
+            },
             "lateral_movement": {"cost": 6, "time": "long", "risk": "active", "preconditions": ["internal_services"]},
             "exfiltrate_data": {"cost": 6, "time": "long", "risk": "post_access_read", "preconditions": ["access"]},
             "stealth_cleanup": {"cost": 5, "time": "medium", "risk": "post_access_change", "preconditions": ["access"]},
@@ -340,7 +426,10 @@ class ToolRegistry:
         self.task_map = {
             "service_discovery": [
                 ("nmap -Pn -sV --top-ports 1000 {target}", "nmap"),
-                ("nmap -Pn -sV -p 2082,2083,2086,2087,2095,2096,8443,8080,3000,3030,9000,5432,465,587,993,995,110,143,21 {target}", "nmap"),
+                (
+                    "nmap -Pn -sV -p 2082,2083,2086,2087,2095,2096,8443,8080,3000,3030,9000,5432,465,587,993,995,110,143,21 {target}",
+                    "nmap",
+                ),
                 ("rustscan -a {target} -- -sV", "rustscan"),
             ],
             "vulnerability_assessment": [
@@ -578,10 +667,12 @@ class ToolRegistry:
     def task_profile(self, task: str) -> dict[str, Any]:
         """Return scheduling metadata for a canonical task."""
         task = self.canonical_task(task)
-        return dict(self.task_profiles.get(
-            task,
-            {"cost": 5, "time": "medium", "risk": "unknown", "preconditions": []},
-        ))
+        return dict(
+            self.task_profiles.get(
+                task,
+                {"cost": 5, "time": "medium", "risk": "unknown", "preconditions": []},
+            )
+        )
 
     def _is_tool_available(self, binary_name: str) -> bool:
         """Check if a CLI tool is installed and available in PATH or internally."""
@@ -590,6 +681,7 @@ class ToolRegistry:
 
         try:
             from core.tools.registry import get_tool
+
             tool_def = get_tool(binary_name)
             if tool_def is not None:
                 # If it's a registered tool, check its internal availability (which checks 'requires')
@@ -605,7 +697,9 @@ class ToolRegistry:
                 for _cmd_template, entry_binary in self.task_map[binary_name]
                 if entry_binary != binary_name
             ]
-            available = bool(child_binaries) and any(self._is_tool_available(entry_binary) for entry_binary in child_binaries)
+            available = bool(child_binaries) and any(
+                self._is_tool_available(entry_binary) for entry_binary in child_binaries
+            )
             self._available_cache[binary_name] = available
             return available
 
@@ -629,8 +723,9 @@ class ToolRegistry:
                 names.append(binary_name)
         return list(dict.fromkeys(names))
 
-    def get_commands_for_task(self, task: str, target: str, user: str = "root",
-                              password: str = "", _seen: Optional[set[str]] = None) -> list[str]:
+    def get_commands_for_task(
+        self, task: str, target: str, user: str = "root", password: str = "", _seen: Optional[set[str]] = None
+    ) -> list[str]:
         """
         Translate a conceptual task into concrete CLI commands.
         Only returns commands whose binary is actually installed.
@@ -643,37 +738,31 @@ class ToolRegistry:
         entries = self.task_map.get(task, [])
         formatted_cmds = []
         skipped = []
-        
+
         for cmd_template, binary_name in entries:
             if binary_name in self.task_map and binary_name != task:
-                nested_cmds = self.get_commands_for_task(
-                    binary_name, target, user=user, password=password, _seen=_seen
-                )
+                nested_cmds = self.get_commands_for_task(binary_name, target, user=user, password=password, _seen=_seen)
                 formatted_cmds.extend(nested_cmds)
                 if not nested_cmds:
                     skipped.append(binary_name)
             else:
                 if self._is_tool_available(binary_name):
-                    formatted_cmds.append(cmd_template.format(
-                        target=target,
-                        user=user,
-                        password=password
-                    ))
+                    formatted_cmds.append(cmd_template.format(target=target, user=user, password=password))
                 else:
                     skipped.append(binary_name)
-        
+
         if skipped:
             print(f"     [!] Skipped unavailable tools: {', '.join(skipped)}")
-        
+
         if not formatted_cmds and entries:
             print(f"     [!] WARNING: No tools available for task '{task}'")
-            
+
         return formatted_cmds
-    
+
     def has_task(self, task: str) -> bool:
         """Check if a task is registered."""
         return self.canonical_task(task) in self.task_map
-    
+
     def get_available_tools_summary(self) -> dict[str, list[str]]:
         """Return a summary of which tools are available for which tasks."""
         summary = {}
@@ -716,16 +805,16 @@ class ToolRegistry:
         statuses: list[dict[str, Any]] = []
         for command_template, provider in self.task_map.get(task, []):
             if provider in self.task_map and provider != task:
-                statuses.extend(
-                    self._provider_statuses_for_task(provider, seen, requested_task)
-                )
+                statuses.extend(self._provider_statuses_for_task(provider, seen, requested_task))
             else:
-                statuses.append({
-                    "task": requested_task,
-                    "provider": provider,
-                    "command_template": command_template,
-                    "available": self._is_tool_available(provider),
-                })
+                statuses.append(
+                    {
+                        "task": requested_task,
+                        "provider": provider,
+                        "command_template": command_template,
+                        "available": self._is_tool_available(provider),
+                    }
+                )
 
         deduplicated: list[dict[str, Any]] = []
         seen_records: set[tuple[str, str, str]] = set()
@@ -784,30 +873,19 @@ class ToolRegistry:
 
         registered = set(registered_tools)
         canonical_names = {
-            name: tool_def.name if (tool_def := get_tool(name)) is not None else name
-            for name in registered
+            name: tool_def.name if (tool_def := get_tool(name)) is not None else name for name in registered
         }
         auto_providers = set()
         for task in self.task_map:
             auto_providers.update(self._tool_names_for_task(task))
 
-        followup_tools = {
-            name for name in registered
-            if self.tool_execution_profile(name) == "followup"
-        }
-        manual_gated = {
-            name for name in registered
-            if self.tool_execution_profile(name) == "manual_gated"
-        }
+        followup_tools = {name for name in registered if self.tool_execution_profile(name) == "followup"}
+        manual_gated = {name for name in registered if self.tool_execution_profile(name) == "manual_gated"}
         legacy_wrappers = {
-            name for name in registered
-            if self.tool_execution_profile(name) in {"legacy_wrapper", "alias_wrapper"}
+            name for name in registered if self.tool_execution_profile(name) in {"legacy_wrapper", "alias_wrapper"}
         }
         explicitly_classified = followup_tools | manual_gated | legacy_wrappers
-        auto_tools = {
-            name for name in registered - explicitly_classified
-            if canonical_names[name] in auto_providers
-        }
+        auto_tools = {name for name in registered - explicitly_classified if canonical_names[name] in auto_providers}
         covered = auto_tools | followup_tools | manual_gated | legacy_wrappers
 
         return {
@@ -827,6 +905,7 @@ class ToolRegistry:
 
         try:
             from core.plugins.loader import PluginManager
+
             manager = PluginManager("modules/")
             self._plugin_summary_cache = manager.list_plugins()
         except Exception:

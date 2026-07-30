@@ -168,8 +168,7 @@ def test_legacy_migration_merges_duplicate_nodes_edges_and_filters_bad_aliases(t
         ]
         conn.executemany("INSERT INTO nodes VALUES (?, ?, ?, ?, ?)", rows)
         conn.executemany(
-            "INSERT INTO edges(src, dst, edge_type, properties, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO edges(src, dst, edge_type, properties, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
             [
                 ("asset:Example.COM", "campaign:legacy", "trusts", '{"sources":["one"]}', 4, 0),
                 ("asset:example.com", "campaign:legacy", "trusts", '{"sources":"two"}', 5, 7),
@@ -232,9 +231,7 @@ def test_property_loading_merging_metadata_and_alias_helpers() -> None:
     assert merged["items"] == [1, 2]
     assert "ignored" not in merged
 
-    contradicted = KnowledgeGraph._normalize_assessment_metadata(
-        {"assessment_status": "contradicted"}
-    )
+    contradicted = KnowledgeGraph._normalize_assessment_metadata({"assessment_status": "contradicted"})
     assert contradicted["contradiction_state"] == "contradicted"
     verified = KnowledgeGraph._normalize_assessment_metadata({"assessment_status": "verified"})
     assert verified["contradiction_state"] == "none"
@@ -471,22 +468,28 @@ def test_find_paths_edge_support_and_edge_path_boundaries() -> None:
     cycle_edge = {"dst": "a", "properties": _evidence()}
     observed_edge = {"dst": "c", "properties": {"assessment_status": "observed"}}
     adjacency = {"a": [cycle_edge, verified_edge], "b": [cycle_edge, observed_edge]}
-    assert KnowledgeGraph._edge_paths(
-        adjacency,
-        "a",
-        "c",
-        max_depth=0,
-        max_paths=2,
-        include_inferred=None,
-    ) == []
-    assert KnowledgeGraph._edge_paths(
-        adjacency,
-        "a",
-        "c",
-        max_depth=3,
-        max_paths=2,
-        include_inferred=False,
-    ) == []
+    assert (
+        KnowledgeGraph._edge_paths(
+            adjacency,
+            "a",
+            "c",
+            max_depth=0,
+            max_paths=2,
+            include_inferred=None,
+        )
+        == []
+    )
+    assert (
+        KnowledgeGraph._edge_paths(
+            adjacency,
+            "a",
+            "c",
+            max_depth=3,
+            max_paths=2,
+            include_inferred=False,
+        )
+        == []
+    )
 
 
 def test_evidence_paths_explain_unknown_disconnected_and_partially_supported_routes() -> None:
@@ -508,9 +511,7 @@ def test_evidence_paths_explain_unknown_disconnected_and_partially_supported_rou
     excluded = graph.find_verified_paths("a", "c")
     assert excluded["missing_link"]["reason"] == "excluded_edges"
     assert len(excluded["missing_link"]["excluded_steps"]) == 1
-    assert excluded["missing_link"]["excluded_steps"][0]["reason"] == (
-        "assessment_status:observed"
-    )
+    assert excluded["missing_link"]["excluded_steps"][0]["reason"] == ("assessment_status:observed")
 
 
 def test_pivot_targets_deduplicate_trust_credential_and_explicit_routes() -> None:

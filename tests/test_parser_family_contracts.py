@@ -5,6 +5,7 @@ import pytest
 
 pytestmark = pytest.mark.contract
 
+
 def test_pipeline_derives_normalized_endpoint_and_network_graph_facts():
     import json
     import uuid
@@ -94,9 +95,7 @@ def test_exploit_selector_parses_compact_state_context():
 
     assert {"port": "22", "service": "ssh", "version": "OpenSSH 7.4"} in services
     assert any(
-        service.get("host") == "172.24.108.2"
-        and service.get("port") == "53"
-        and service.get("scope") == "internal"
+        service.get("host") == "172.24.108.2" and service.get("port") == "53" and service.get("scope") == "internal"
         for service in services
     )
 
@@ -158,15 +157,21 @@ def test_asm_parser_normalizes_dns_records_services_and_graph_edges():
     pipeline = AIPipeline(f"/tmp/octopus_asm_graph_{uuid.uuid4().hex}.db")
     scan_id = "scan-asm-graph"
     target = "example.com"
-    result = pipeline.replay_outputs(scan_id, target, [{
-        "tool": "httpx_probe dnsx tlsx naabu",
-        "output": """
+    result = pipeline.replay_outputs(
+        scan_id,
+        target,
+        [
+            {
+                "tool": "httpx_probe dnsx tlsx naabu",
+                "output": """
 https://app.example.com [200] [Admin] [nginx,React]
 app.example.com CNAME edge.example.net
 app.example.com:443
 SAN app.example.com api.example.com
 """,
-    }])
+            }
+        ],
+    )
 
     model = result["context"]["target_model"]
     graph = result["context"]["asset_graph"]

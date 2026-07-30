@@ -162,9 +162,7 @@ class CredentialStore:
 
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT target_ip, service, username, password FROM credentials"
-            )
+            cursor.execute("SELECT target_ip, service, username, password FROM credentials")
             for target, service, username, persisted in cursor.fetchall():
                 persisted_value = str(persisted or "")
                 if persisted_value in {KEY_AUTH_MARKER, SSH_KEY_AUTH_REF}:
@@ -393,15 +391,9 @@ class CredentialStore:
     def all_refs(self, target: str) -> dict[str, tuple[CredentialRef, ...]]:
         target = str(target or "").strip()
         with self._cache_lock:
-            services = sorted(
-                service
-                for service, candidate_target in self._cache
-                if candidate_target == target
-            )
+            services = sorted(service for service, candidate_target in self._cache if candidate_target == target)
             return {
-                service: tuple(self._cache[(service, target)])
-                for service in services
-                if self._cache[(service, target)]
+                service: tuple(self._cache[(service, target)]) for service in services if self._cache[(service, target)]
             }
 
     def get_all_refs(self, target: str) -> dict[str, tuple[CredentialRef, ...]]:
@@ -439,11 +431,7 @@ class CredentialStore:
             candidates = [item for item in candidates if item.username == username]
         if port is not None:
             normalized_port = max(0, int(port or 0))
-            candidates = [
-                item
-                for item in candidates
-                if item.port in {0, normalized_port}
-            ]
+            candidates = [item for item in candidates if item.port in {0, normalized_port}]
 
         def rank(item: CredentialRef) -> tuple[int, str, str]:
             is_root = item.username.casefold() == "root"
@@ -476,9 +464,7 @@ class CredentialStore:
         result: dict[str, list[dict[str, object]]] = {}
         with self._cache_lock:
             for (service, target), credentials in sorted(self._cache.items()):
-                result[f"{service}@{target}"] = [
-                    credential.audit_dict() for credential in credentials
-                ]
+                result[f"{service}@{target}"] = [credential.audit_dict() for credential in credentials]
         return result
 
     @contextmanager

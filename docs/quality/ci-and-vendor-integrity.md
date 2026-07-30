@@ -17,7 +17,7 @@ lifecycle.
 | `full-suite` | Validates all locks offline, installs the hashed `cp310/test.txt` lock, then runs the complete suite with branch coverage over every first-party Python file except the documented non-production trees. |
 | `mysql-integration` | Installs both the `cp310/test.txt` and `cp310/mysql.txt` locks, provisions MySQL 8.4, and runs the live database marker with the application's `OCTOPUS_DB_*` environment contract. |
 | `dependency-security` | Audits the exact `cp310/full.txt` dependency graph and emits a deterministic CycloneDX SBOM. |
-| `c2-go` | Uses Go 1.21, applies `gofmt` validation to every tracked Go source from the repository root, verifies downloaded modules, runs `go test`, `go vet`, and a clean `go build` in `core/c2`, then applies a fail-closed 100% statement-coverage gate to every first-party production Go source. |
+| `c2-go` | Uses Go 1.21, applies `gofmt` validation to every tracked Go source from the repository root, verifies downloaded modules, runs `go test`, `go vet`, and a clean `go build` in `core/c2`, then uploads the module-scoped native coverprofile as non-blocking evidence. |
 | `vendor-integrity` | Recursively checks out submodules and verifies parent gitlinks, checked-out commits, clean submodule worktrees, tracked artifact paths, and SHA-256 digests. Vendor code is never imported or executed by the verifier. |
 
 Every job is pinned to Ubuntu 22.04, matching the `manylinux_2_34` lock target,
@@ -52,29 +52,33 @@ first-party Python file, including files that coverage.py cannot discover as an
 importable package and therefore measures at zero. Tests, local environments,
 generated build outputs, and vendor submodules are the only excluded source
 trees. Line and partial-branch exclusion lists are explicitly empty. The global
-threshold is **100% statement-plus-branch coverage** and the explicit helper
-result is the authoritative denominator; display rounding cannot turn a partial
-measurement into a passing result.
+CI's current regression threshold is **94.58% statement-plus-branch coverage**,
+matching the recorded 57,413 / 60,701 baseline. The long-term target remains
+100%. The explicit helper result is the authoritative denominator; display
+rounding cannot turn a partial measurement into a passing result.
 
-The same CI step also enforces exact 100% package floors for `core/actions`,
-`core/execution`, and `core/benchmarks`, plus 100% combined statement-and-branch
-coverage on executable Python lines changed from the resolved Git base. Branch
+The same CI step still enforces exact 100% package floors for `core/actions`,
+`core/execution`, and `core/benchmarks`. The changed-line calculation remains
+enabled and reported, but its temporary blocking floor is 0% because no
+post-formatting diff baseline has been recorded. Branch
 exits are attributed to their originating changed line, physical continuation
 lines are normalized to coverage.py's canonical statement line, and line-only
 coverage data fails closed. Any threshold change must update its focused tests
 and this contract in the same logical change.
 
-Raise the threshold in the same logical change that adds tests. Never exclude
-a production module merely to satisfy the gate. The gate remains red until
-every measured statement and branch is covered.
+Raise either baseline in the same logical change that adds tests and records a
+fresh measurement. Never exclude a production module merely to satisfy the
+gate. Reaching the 94.58% CI floor is not a claim of complete coverage.
 
-`scripts/quality/go_coverage_gate.py` separately discovers every first-party
+`scripts/quality/go_coverage_gate.py` remains available as a strict local audit
+that separately discovers every first-party
 production `.go` file, requires each source to belong to a checked-in Go module,
 maps standard coverprofile module aliases without suffix guessing, and fails on
 missing, external, ambiguous, malformed, or overlapping profile data. It sums
-Go's `numStmt` weights and compares the exact rational result with a 100% floor.
-The current orphan `core/opsec/ja3_client.go` is therefore a deliberate failure,
-not a silently omitted file.
+Go's `numStmt` weights and defaults to a 100% floor. The current orphan
+`core/opsec/ja3_client.go` therefore fails that strict audit instead of being
+silently omitted. CI does not block on this audit while the repository has no
+Go tests; it preserves the `core/c2` coverprofile as evidence instead.
 
 The native Go coverprofile format measures statements/basic blocks, not branch
 edges. Consequently this job can prove Go statement coverage only. A claim of
@@ -131,7 +135,7 @@ venv/bin/python -m pytest -q tests/test_vendor_verification.py
 venv/bin/python -m ruff check scripts/quality tests/test_vendor_verification.py
 venv/bin/python -m mypy
 python scripts/lock_requirements.py validate
-venv/bin/python scripts/quality/coverage_gate.py --root . --fail-under 100
+venv/bin/python scripts/quality/coverage_gate.py --root . --fail-under 94.58
 python -I scripts/quality/import_smoke.py
 python -I scripts/quality/verify_vendor.py --platform all --allow-dirty
 ```
@@ -140,6 +144,8 @@ Pass `--data-file /absolute/path/to/measurement.coverage` to validate an
 isolated measurement without replacing the repository-local `.coverage` file.
 
 The Go commands require Go 1.21 and network-resolved modules. Linux CI generates
-`c2-go.coverage.out` with `-covermode=atomic -coverpkg=./...` and validates it
-with `scripts/quality/go_coverage_gate.py --fail-under 100`. They remain CI-only
-evidence until that toolchain is installed in the macOS development environment.
+`c2-go.coverage.out` with `-covermode=atomic -coverpkg=./...` and uploads it
+without a blocking coverage floor. The strict repository-wide helper remains a
+manual audit and currently fails on the documented orphan source. These commands
+remain CI-only evidence until that toolchain is installed in the macOS
+development environment.

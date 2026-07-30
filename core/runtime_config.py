@@ -24,11 +24,7 @@ def effective_runtime_limit(requested: Any = None, configured: Any = None) -> in
     value.
     """
 
-    limits = [
-        value
-        for value in (_positive_int(requested), _positive_int(configured))
-        if value is not None
-    ]
+    limits = [value for value in (_positive_int(requested), _positive_int(configured)) if value is not None]
     return min(limits) if limits else None
 
 

@@ -138,9 +138,7 @@ def test_snapshot_coverage_policy_and_clock_outcomes(monkeypatch):
     ],
 )
 def test_payload_validation_rejects_each_invalid_shape(mutation, message):
-    payload = EvaluatedFactSnapshot.build(
-        "scan", "host", [{"id": 1}], evaluated_at=12
-    ).to_payload()
+    payload = EvaluatedFactSnapshot.build("scan", "host", [{"id": 1}], evaluated_at=12).to_payload()
     invalid = mutation(copy.deepcopy(payload))
 
     with pytest.raises(ValueError, match=message):

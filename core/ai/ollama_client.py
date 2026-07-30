@@ -20,12 +20,12 @@ from core.execution import CancellationContext
 # CONFIG CONSTANTS
 # ─────────────────────────────────────────────
 
-OLLAMA_URL     = "http://localhost:11434/api/generate"
-MODEL_NAME     = "octopus-qwen"
-MAX_TOKENS     = 4096
+OLLAMA_URL = "http://localhost:11434/api/generate"
+MODEL_NAME = "octopus-qwen"
+MAX_TOKENS = 4096
 MAX_TOOL_LOOPS = 20
-OLLAMA_TIMEOUT = 180        # 
-OLLAMA_RETRIES = 2          # 
+OLLAMA_TIMEOUT = 180  #
+OLLAMA_RETRIES = 2  #
 CONTEXT_WINDOW = 6
 SUMMARIZE_THRESHOLD = 8000
 CONCURRENT_TOOLS = 8
@@ -56,10 +56,11 @@ def _config_bool(value, default: bool) -> bool:
 # Load from config.yaml if available
 try:
     from config import CFG
+
     _oc = CFG.get("ollama", {})
-    OLLAMA_URL     = _oc.get("url", OLLAMA_URL)
-    MODEL_NAME     = _oc.get("model", MODEL_NAME)
-    MAX_TOKENS     = _oc.get("max_tokens", MAX_TOKENS)
+    OLLAMA_URL = _oc.get("url", OLLAMA_URL)
+    MODEL_NAME = _oc.get("model", MODEL_NAME)
+    MAX_TOKENS = _oc.get("max_tokens", MAX_TOKENS)
     MAX_TOOL_LOOPS = _oc.get("max_tool_loops", MAX_TOOL_LOOPS)
     OLLAMA_TIMEOUT = _oc.get("timeout", OLLAMA_TIMEOUT)
     OLLAMA_RETRIES = _oc.get("retries", OLLAMA_RETRIES)
@@ -82,13 +83,13 @@ except ImportError:
     pass
 
 # ANSI Colors
-C_GREY   = "\033[90m"
-C_RESET  = "\033[0m"
-C_CYAN   = "\033[96m"
-C_GREEN  = "\033[92m"
+C_GREY = "\033[90m"
+C_RESET = "\033[0m"
+C_CYAN = "\033[96m"
+C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
-C_RED    = "\033[91m"
-C_BLUE   = "\033[94m"
+C_RED = "\033[91m"
+C_BLUE = "\033[94m"
 C_MAGENTA = "\033[95m"
 
 logger = logging.getLogger("octopus.ollama")
@@ -199,6 +200,7 @@ def _bound_response_deadline(response) -> Iterator[None]:
 # OLLAMA QUERY WITH RETRY
 # ─────────────────────────────────────────────
 
+
 def ask_ollama(prompt: str, json_mode: bool = False) -> str:
     """Send prompt to Ollama. Streams output token by token.
 
@@ -267,7 +269,9 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
                         sys.stdout.write(chunk)
                         in_thought = True
                     elif "</thought>" in chunk or "</think>" in chunk:
-                        chunk = chunk.replace("</thought>", f"</thought>{C_RESET}").replace("</think>", f"</think>{C_RESET}")
+                        chunk = chunk.replace("</thought>", f"</thought>{C_RESET}").replace(
+                            "</think>", f"</think>{C_RESET}"
+                        )
                         sys.stdout.write(chunk)
                         in_thought = False
                     else:
@@ -294,7 +298,7 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
             logger.debug(f"RAW response: {full_response!r}")
 
         # ── Strip <thought> and <think> tags (even if unclosed) ──
-        clean = re.sub(r'<(?:thought|think)>[\s\S]*?(?:</(?:thought|think)>|$)', '', full_response).strip()
+        clean = re.sub(r"<(?:thought|think)>[\s\S]*?(?:</(?:thought|think)>|$)", "", full_response).strip()
 
         logger.debug(f"CLEAN response length={len(clean)}")
         if len(clean) < 500:
@@ -325,7 +329,7 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
         if cancellation_error:
             return cancellation_error
 
-        use_minimal = (attempt > 1)
+        use_minimal = attempt > 1
         options = _build_options(minimal=use_minimal)
 
         effective_prompt = prompt
@@ -333,16 +337,10 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
             effective_prompt = (
                 "Machine JSON mode. Output the final JSON immediately. "
                 "Do not reason out loud. Do not use markdown, prose, comments, "
-                "<think>, or <thought> tags. Return exactly one valid JSON object or array.\n\n"
-                + prompt
+                "<think>, or <thought> tags. Return exactly one valid JSON object or array.\n\n" + prompt
             )
 
-        payload = {
-            "model": MODEL_NAME,
-            "prompt": effective_prompt,
-            "stream": True,
-            "options": options
-        }
+        payload = {"model": MODEL_NAME, "prompt": effective_prompt, "stream": True, "options": options}
 
         if json_mode:
             payload["think"] = bool(JSON_THINK)
@@ -361,7 +359,9 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
                     error_text = resp.text[:500]
                 except Exception as _exc:
                     logging.debug(f"Suppressed in ollama_client.py: {_exc}")
-                print(f"\n{C_YELLOW}[!] Ollama rejected strict JSON controls; retrying relaxed JSON extraction.{C_RESET}")
+                print(
+                    f"\n{C_YELLOW}[!] Ollama rejected strict JSON controls; retrying relaxed JSON extraction.{C_RESET}"
+                )
                 if error_text:
                     print(f"  {C_GREY}Detail: {error_text}{C_RESET}")
                 relaxed_payload = dict(payload)
@@ -410,7 +410,9 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
             if cancellation_error:
                 return cancellation_error
             if attempt < OLLAMA_RETRIES:
-                print(f"\n{C_YELLOW}[!] Ollama timed out (attempt {attempt}/{OLLAMA_RETRIES}). Retrying in 5s...{C_RESET}")
+                print(
+                    f"\n{C_YELLOW}[!] Ollama timed out (attempt {attempt}/{OLLAMA_RETRIES}). Retrying in 5s...{C_RESET}"
+                )
                 if _wait_before_retry(5):
                     return _cancellation_error()
             else:
@@ -461,7 +463,7 @@ def _extract_json(text: str) -> str:
     # markdown/prose prefixes and partial reasoning-model output.
     start_idx = -1
     for i, c in enumerate(s):
-        if c in ('{', '['):
+        if c in ("{", "["):
             start_idx = i
             break
 
@@ -471,7 +473,7 @@ def _extract_json(text: str) -> str:
 
     # Match brackets to find the correct end
     open_char = s[start_idx]
-    close_char = '}' if open_char == '{' else ']'
+    close_char = "}" if open_char == "{" else "]"
     depth = 0
     in_string = False
     escape = False
@@ -482,7 +484,7 @@ def _extract_json(text: str) -> str:
         if escape:
             escape = False
             continue
-        if c == '\\':
+        if c == "\\":
             escape = True
             continue
         if c == '"':
@@ -509,7 +511,7 @@ def _extract_json(text: str) -> str:
         logger.warning(f"No JSON end found. start_idx={start_idx}, text={s[:200]!r}")
         return "[!] Incomplete JSON in LLM response"
 
-    result = s[start_idx:end_idx + 1]
+    result = s[start_idx : end_idx + 1]
     logger.debug(f"Extracted JSON ({len(result)} chars)")
     return result
 
@@ -543,7 +545,7 @@ def _extract_first_valid_json(text: str) -> str:
                     break
                 stack.pop()
                 if not stack:
-                    candidate = s[start_idx:idx + 1]
+                    candidate = s[start_idx : idx + 1]
                     try:
                         json.loads(candidate)
                     except json.JSONDecodeError:
@@ -555,6 +557,7 @@ def _extract_first_valid_json(text: str) -> str:
 # ─────────────────────────────────────────────
 # STRUCTURED JSON MODE (v9.0)
 # ─────────────────────────────────────────────
+
 
 def ask_ollama_structured(prompt: str, schema: dict, max_retries: int = 2) -> dict:
     """Ask Ollama and validate response against a JSON schema.
@@ -610,8 +613,7 @@ def ask_ollama_structured(prompt: str, schema: dict, max_retries: int = 2) -> di
             logger.warning(f"JSON parse error attempt {attempt}: {e}")
             if attempt < max_retries:
                 continue
-            return {"error": f"Invalid JSON after {max_retries} retries: {e}",
-                    "raw_response": response[:500]}
+            return {"error": f"Invalid JSON after {max_retries} retries: {e}", "raw_response": response[:500]}
 
     return {"error": "Structured query exhausted all retries"}
 

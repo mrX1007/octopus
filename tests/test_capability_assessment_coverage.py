@@ -52,9 +52,7 @@ def _resolver(*, registry=None, policy=None):
 
 
 def _context():
-    return ExecutionContext.automatic(
-        ("example.test",), actor="coverage", origin="tests"
-    )
+    return ExecutionContext.automatic(("example.test",), actor="coverage", origin="tests")
 
 
 @pytest.mark.parametrize(
@@ -105,9 +103,7 @@ def test_requirement_met_all_kinds(requirement, context, expected):
 def test_missing_requirements_handles_empty_and_mixed_inputs():
     resolver = _resolver()
     assert resolver.missing_requirements(None, {}) == []
-    assert resolver.missing_requirements(
-        ["services", "ssh", "unknown"], {"services": ["ssh"]}
-    ) == ["unknown"]
+    assert resolver.missing_requirements(["services", "ssh", "unknown"], {"services": ["ssh"]}) == ["unknown"]
 
 
 def test_capability_normalization_task_expansion_and_requirement_deduplication():
@@ -142,9 +138,7 @@ def test_provider_grouping_merges_availability_and_unique_templates():
         "task", ("task",), "example.test", _context(), "DiscoveryAgent"
     )
 
-    assert providers == (
-        ProviderAssessment("task", "p", "available", "allowed", "allowed"),
-    )
+    assert providers == (ProviderAssessment("task", "p", "available", "allowed", "allowed"),)
     assert len(policy.commands) == 1
 
 
@@ -187,9 +181,7 @@ def test_provider_and_authorization_aggregate_fallbacks():
         "unknown",
         "execution_context_not_supplied",
     )
-    assert CapabilityResolver._blocking_reasons(
-        "available", "allowed", "ok", ("x", "x")
-    ) == ("requirement:missing:x",)
+    assert CapabilityResolver._blocking_reasons("available", "allowed", "ok", ("x", "x")) == ("requirement:missing:x",)
 
 
 def test_requested_and_supporting_fact_selection_paths():
@@ -221,7 +213,11 @@ def test_requested_and_supporting_fact_selection_paths():
         ("stage:root", {"type": "exploit_success", "value": "pwnkit root shell"}, True),
         ("stage:root", {"type": "exploit_success", "value": "wordpress root shell"}, False),
         ("stage:root", {"type": "note", "value": "nothing"}, False),
-        ("stage:post_access_inventory", {"type": "post_exploit_stage", "value": "post_access_inventory_completed"}, True),
+        (
+            "stage:post_access_inventory",
+            {"type": "post_exploit_stage", "value": "post_access_inventory_completed"},
+            True,
+        ),
         ("stage:post_access_inventory", {"type": "post_exploit_stage", "value": "other"}, False),
         ("stage:post_access_inventory", {"type": "note", "value": "post_access_inventory_completed"}, False),
         ("stage:persistence", {"type": "persistence_status"}, True),
@@ -323,30 +319,28 @@ def test_freshness_confidence_handles_bad_samples_and_all_state_outcomes():
     assert degraded.oldest_observed_at == 5
     assert degraded.confidence_average == 0.5
 
-    stale = resolver._freshness_confidence(
-        [{"freshness_status": "stale", "timestamp": None, "confidence": None}]
-    )
+    stale = resolver._freshness_confidence([{"freshness_status": "stale", "timestamp": None, "confidence": None}])
     assert stale.freshness == "stale"
     assert stale.confidence_average is None
-    assert resolver._freshness_confidence(
-        [{"freshness_status": "fresh", "timestamp": 1, "confidence": 1}]
-    ).freshness == "fresh"
-    assert resolver._freshness_confidence(
-        [{"freshness_status": "unexpected"}]
-    ).freshness == "unknown"
+    assert (
+        resolver._freshness_confidence([{"freshness_status": "fresh", "timestamp": 1, "confidence": 1}]).freshness
+        == "fresh"
+    )
+    assert resolver._freshness_confidence([{"freshness_status": "unexpected"}]).freshness == "unknown"
     assert resolver._freshness_confidence([]).freshness == "not_assessed"
 
 
 def test_evidence_state_covers_confirmed_absence_and_other_outcomes():
     resolver = _resolver()
-    assert resolver._evidence_state(
-        {"target_model": {"surface_states": {"web": "confirmed_absent"}}},
-        ("web",),
-        ("web",),
-        [],
-    ) == "confirmed_absent"
-    assert resolver._evidence_state(
-        {"surface_states": {"web": "unknown"}}, ("web",), ("web",), []
-    ) == "unknown"
+    assert (
+        resolver._evidence_state(
+            {"target_model": {"surface_states": {"web": "confirmed_absent"}}},
+            ("web",),
+            ("web",),
+            [],
+        )
+        == "confirmed_absent"
+    )
+    assert resolver._evidence_state({"surface_states": {"web": "unknown"}}, ("web",), ("web",), []) == "unknown"
     assert resolver._evidence_state({}, ("web",), (), [{"id": 1}]) == "confirmed_present"
     assert resolver._evidence_state({}, (), (), []) == "unknown"

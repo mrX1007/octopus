@@ -323,7 +323,10 @@ def test_schedule_validation_rejects_each_mismatch():
         (_schedule_runs(**{"1": {"track_id": "other"}}), "run_track_differs"),
         (_schedule_runs(**{"1": {"environment": {}}}), "run_missing_analysis_plan_attestation"),
         (_schedule_runs(**{"1": {"fixture_variant_digest": "different"}}), "matched_seed_fixture_variant_mismatch"),
-        (_schedule_runs(**{"0": {"fixture_variant_digest": ""}, "1": {"fixture_variant_digest": ""}}), "matched_seed_fixture_variant_mismatch"),
+        (
+            _schedule_runs(**{"0": {"fixture_variant_digest": ""}, "1": {"fixture_variant_digest": ""}}),
+            "matched_seed_fixture_variant_mismatch",
+        ),
     ]
     for runs, message in invalid_cases:
         with pytest.raises(BenchmarkV3SchemaError, match=message):
@@ -338,9 +341,7 @@ def test_schedule_validation_rejects_each_mismatch():
 def test_full_schedule_requires_attested_batch_and_host_counts():
     runs = _schedule_runs()
     with pytest.raises(BenchmarkV3SchemaError, match="insufficient_attested_batches"):
-        analysis_module._validate_schedule(
-            _schedule_plan(publication_tier="full", batches=3, hosts=1), runs
-        )
+        analysis_module._validate_schedule(_schedule_plan(publication_tier="full", batches=3, hosts=1), runs)
     same_host = _schedule_runs(
         **{
             "0": {"environment": {**runs[0].environment, "host_id": "same"}},
@@ -348,12 +349,8 @@ def test_full_schedule_requires_attested_batch_and_host_counts():
         }
     )
     with pytest.raises(BenchmarkV3SchemaError, match="insufficient_attested_hosts"):
-        analysis_module._validate_schedule(
-            _schedule_plan(publication_tier="full", batches=2, hosts=2), same_host
-        )
-    analysis_module._validate_schedule(
-        _schedule_plan(publication_tier="full", batches=2, hosts=2), runs
-    )
+        analysis_module._validate_schedule(_schedule_plan(publication_tier="full", batches=2, hosts=2), same_host)
+    analysis_module._validate_schedule(_schedule_plan(publication_tier="full", batches=2, hosts=2), runs)
 
 
 def test_sequence_deadline_round_and_stable_helpers():

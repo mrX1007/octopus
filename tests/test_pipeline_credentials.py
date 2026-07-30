@@ -56,9 +56,7 @@ def test_runtime_credential_lookup_normalizes_target_and_degrades_to_empty():
         "root",
         auth_kind="ssh_key",
     )
-    sync = RuntimeCredentialSynchronizer(
-        lookup=lambda host: seen.append(host) or {"ssh": [credential]}
-    )
+    sync = RuntimeCredentialSynchronizer(lookup=lambda host: seen.append(host) or {"ssh": [credential]})
     assert sync.known_for_target("https://example.test:443/a") == {"ssh": [credential]}
     assert seen == ["example.test"]
 

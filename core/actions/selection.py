@@ -58,9 +58,7 @@ class ProviderDecision:
             "active_risk": self.active_risk,
             "active_risk_class": self.active_risk_class.value,
             "circuit_state": self.circuit_state,
-            "policy_denial": (
-                self.policy_denial.to_dict() if self.policy_denial else None
-            ),
+            "policy_denial": (self.policy_denial.to_dict() if self.policy_denial else None),
         }
 
 
@@ -203,9 +201,7 @@ class ProviderSelector:
                 active_risk_class = adapter.active_risk_class(request, "execute")
             except Exception:
                 active_risk_class = (
-                    ActiveRiskClass.ACTIVE
-                    if descriptor.requirements.active
-                    else ActiveRiskClass.READ_ONLY
+                    ActiveRiskClass.ACTIVE if descriptor.requirements.active else ActiveRiskClass.READ_ONLY
                 )
             active_risk = active_risk_class.score
             try:
@@ -221,10 +217,7 @@ class ProviderSelector:
             if applicability_error:
                 reasons.append(applicability_error)
             if applicability is not None and not applicability.applicable:
-                reasons.extend(
-                    f"not_applicable:{item}"
-                    for item in applicability.missing_requirements
-                )
+                reasons.extend(f"not_applicable:{item}" for item in applicability.missing_requirements)
 
             scope_compatible = False
             policy_denial = None
@@ -241,11 +234,7 @@ class ProviderSelector:
                 except Exception as exc:
                     reasons.append(f"authorization_error:{type(exc).__name__}")
 
-            hard_rejected = (
-                not dependency_available
-                or not scope_compatible
-                or not circuit.allowed
-            )
+            hard_rejected = not dependency_available or not scope_compatible or not circuit.allowed
             score, score_reasons = self._score(summary, active_risk)
             if circuit.state == "half_open":
                 score -= 25.0
@@ -339,10 +328,7 @@ class ProviderSelector:
     @staticmethod
     def _label(value: str) -> str:
         compact = "_".join(str(value or "").strip().split())
-        normalized = "".join(
-            char if char.isalnum() or char in "_.:/-" else "_"
-            for char in compact
-        )[:256]
+        normalized = "".join(char if char.isalnum() or char in "_.:/-" else "_" for char in compact)[:256]
         if not normalized:
             raise ValueError("Provider capability/name must not be empty")
         return normalized
@@ -397,13 +383,15 @@ class IngestionOutcome:
 
 
 class RetryClassifier:
-    RETRYABLE_ERROR_CLASSES: ClassVar[frozenset[str]] = frozenset({
-        "ConnectionError",
-        "ConnectionResetError",
-        "ProviderBusy",
-        "TemporaryError",
-        "TransientProviderError",
-    })
+    RETRYABLE_ERROR_CLASSES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "ConnectionError",
+            "ConnectionResetError",
+            "ProviderBusy",
+            "TemporaryError",
+            "TransientProviderError",
+        }
+    )
 
     @classmethod
     def is_retryable(cls, result: ExecutionResult | None) -> bool:
@@ -481,9 +469,7 @@ class ProviderRunResult:
             "attempts": [item.to_dict() for item in self.attempts],
             "final_report": self.final_report.to_dict() if self.final_report else None,
             "status": self.status.value,
-            "policy_denial": (
-                self.policy_denial.to_dict() if self.policy_denial else None
-            ),
+            "policy_denial": (self.policy_denial.to_dict() if self.policy_denial else None),
             "trace": dict(self.trace),
         }
 
@@ -531,18 +517,11 @@ class ProviderFallbackExecutor:
                 **dict(action_options or {}),
             )
             final_report = report
-            effective = (
-                None
-                if report.policy_denials
-                else report.execution_result or report.check_result
-            )
+            effective = None if report.policy_denials else report.execution_result or report.check_result
             retryable = RetryClassifier.is_retryable(effective)
             has_more = index + 1 < len(ranked)
             output_requires_ingest = bool(
-                effective
-                and retryable
-                and has_more
-                and (effective.stdout or effective.stderr)
+                effective and retryable and has_more and (effective.stdout or effective.stderr)
             )
             partial_callback_used = bool(output_requires_ingest and partial_ingest)
             if partial_callback_used:
@@ -561,11 +540,7 @@ class ProviderFallbackExecutor:
                 and (partial_callback_used or ingest is not None)
             )
             ingest_blocked = bool(
-                output_requires_ingest
-                and (
-                    ingestion.error
-                    or (partial_ingest is None and ingest is None)
-                )
+                output_requires_ingest and (ingestion.error or (partial_ingest is None and ingest is None))
             )
             fallback_taken = bool(retryable and has_more and not ingest_blocked)
             if fallback_taken:
@@ -585,14 +560,16 @@ class ProviderFallbackExecutor:
                 stop_reason=stop_reason,
             )
             attempts.append(attempt)
-            trace_attempts.append({
-                "action_id": decision.action_id,
-                "status": effective.status.value if effective else "not_attempted",
-                "partial_output_ingested": partial_output_ingested,
-                "retryable": retryable,
-                "fallback_taken": fallback_taken,
-                "reason": stop_reason,
-            })
+            trace_attempts.append(
+                {
+                    "action_id": decision.action_id,
+                    "status": effective.status.value if effective else "not_attempted",
+                    "partial_output_ingested": partial_output_ingested,
+                    "retryable": retryable,
+                    "fallback_taken": fallback_taken,
+                    "reason": stop_reason,
+                }
+            )
             self._record_telemetry(
                 capability,
                 selection.target_class,
@@ -611,9 +588,7 @@ class ProviderFallbackExecutor:
             "capability": selection.capability,
             "target_class": selection.target_class,
             "chosen_action_id": selection.chosen_action_id,
-            "candidate_decisions": [
-                item.to_dict() for item in (*selection.ranked, *selection.rejected)
-            ][:64],
+            "candidate_decisions": [item.to_dict() for item in (*selection.ranked, *selection.rejected)][:64],
             "attempts": trace_attempts,
         }
         return ProviderRunResult(

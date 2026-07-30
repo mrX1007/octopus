@@ -40,8 +40,7 @@ def _validate_analysis_payload(payload: Any) -> list[dict[str, Any]]:
         if not isinstance(claim, str) or not claim.strip():
             raise _AnalysisResponseError("claim_not_nonempty_string")
         if not isinstance(required_evidence, list) or any(
-            not isinstance(item, str) or not item.strip()
-            for item in required_evidence
+            not isinstance(item, str) or not item.strip() for item in required_evidence
         ):
             raise _AnalysisResponseError("required_evidence_not_string_list")
 

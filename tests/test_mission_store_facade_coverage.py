@@ -13,9 +13,7 @@ pytestmark = pytest.mark.contract
 def test_default_facts_path_uses_default_secret_store(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     secret_path = tmp_path / "default-secrets.db"
-    monkeypatch.setattr(
-        mission_store_module, "default_secret_store_path", lambda: str(secret_path)
-    )
+    monkeypatch.setattr(mission_store_module, "default_secret_store_path", lambda: str(secret_path))
     store = MissionStore("data/facts.db")
     assert store._owned_secret_store is not None
     assert secret_path.exists()

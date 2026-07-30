@@ -20,38 +20,36 @@ def build_evidence_index(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         observations = fact.get("observations") or []
         sources = fact.get("sources") or ([fact.get("source")] if fact.get("source") else [])
         assessment = fact.get("assessment") or {}
-        evidence.append({
-            "evidence_id": f"E-{idx:03d}",
-            "evidence_ref": (
-                f"evidence://fact/{fact.get('id')}"
-                if fact.get("id") is not None
-                else f"evidence://index/{idx}"
-            ),
-            "fact_id": fact.get("id"),
-            "fact_type": fact.get("type"),
-            "fact_value": fact.get("value"),
-            "tool": sources[0] if sources else "",
-            "command": sources[0] if sources else "",
-            "raw_output_ref": f"evidence_hash:{str(fact.get('evidence_hash', ''))[:16]}",
-            "parsed_by": _parser_name_for_fact(fact),
-            "confidence": fact.get("confidence", 100),
-            "observations": len(observations) or 1,
-            "assessment_ref": assessment.get("assessment_id") or fact.get("assessment_id"),
-            "assessment_status": assessment.get("status") or fact.get("assessment_status", "observed"),
-            "assessment_reason": assessment.get("reason", ""),
-            "assessment_confidence": assessment.get("confidence", fact.get("confidence", 100)),
-            "evidence_fact_ids": list(assessment.get("evidence_fact_ids") or []),
-            "source_execution_ids": list(assessment.get("source_execution_ids") or []),
-        })
+        evidence.append(
+            {
+                "evidence_id": f"E-{idx:03d}",
+                "evidence_ref": (
+                    f"evidence://fact/{fact.get('id')}" if fact.get("id") is not None else f"evidence://index/{idx}"
+                ),
+                "fact_id": fact.get("id"),
+                "fact_type": fact.get("type"),
+                "fact_value": fact.get("value"),
+                "tool": sources[0] if sources else "",
+                "command": sources[0] if sources else "",
+                "raw_output_ref": f"evidence_hash:{str(fact.get('evidence_hash', ''))[:16]}",
+                "parsed_by": _parser_name_for_fact(fact),
+                "confidence": fact.get("confidence", 100),
+                "observations": len(observations) or 1,
+                "assessment_ref": assessment.get("assessment_id") or fact.get("assessment_id"),
+                "assessment_status": assessment.get("status") or fact.get("assessment_status", "observed"),
+                "assessment_reason": assessment.get("reason", ""),
+                "assessment_confidence": assessment.get("confidence", fact.get("confidence", 100)),
+                "evidence_fact_ids": list(assessment.get("evidence_fact_ids") or []),
+                "source_execution_ids": list(assessment.get("source_execution_ids") or []),
+            }
+        )
     return evidence
 
 
 def build_finding_groups(facts: list[dict[str, Any]], state: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
     """Group repeated facts into finding records with clear proof state."""
     state = state or {}
-    evidence_by_fact_id = {
-        fact.get("id"): f"E-{idx:03d}" for idx, fact in enumerate(facts, 1)
-    }
+    evidence_by_fact_id = {fact.get("id"): f"E-{idx:03d}" for idx, fact in enumerate(facts, 1)}
     groups: dict[str, dict[str, Any]] = {}
 
     for fact in facts:
@@ -144,37 +142,34 @@ def build_access_findings(facts: list[dict[str, Any]], state: Optional[dict[str,
         supporting_facts = [fact for fact in supporting_facts if _fact_is_verified(fact)]
         if not supporting_facts:
             return findings
-    evidence = [
-        f"{fact.get('type', '')}: {fact.get('value', '')}"
-        for fact in supporting_facts
-    ]
+    evidence = [f"{fact.get('type', '')}: {fact.get('value', '')}" for fact in supporting_facts]
     assessments = [fact.get("assessment") or {} for fact in supporting_facts]
-    findings.append({
-        "severity": "CRITICAL",
-        "name": "Root access confirmed on target",
-        "class": "access_compromise",
-        "service": "host",
-        "verified": True,
-        "impact_confirmed": True,
-        "evidence": list(dict.fromkeys(evidence))[:8],
-        "assessment_refs": list(dict.fromkeys(
-            str(item.get("assessment_id"))
-            for item in assessments
-            if item.get("assessment_id")
-        )),
-        "assessment_reasons": list(dict.fromkeys(
-            str(item.get("reason"))
-            for item in assessments
-            if item.get("reason")
-        )),
-        "source_execution_ids": list(dict.fromkeys(
-            str(execution_id)
-            for item in assessments
-            for execution_id in item.get("source_execution_ids") or []
-            if execution_id
-        )),
-        "detail": "Root-level access was verified independently of CVE-style vulnerability parsing.",
-    })
+    findings.append(
+        {
+            "severity": "CRITICAL",
+            "name": "Root access confirmed on target",
+            "class": "access_compromise",
+            "service": "host",
+            "verified": True,
+            "impact_confirmed": True,
+            "evidence": list(dict.fromkeys(evidence))[:8],
+            "assessment_refs": list(
+                dict.fromkeys(str(item.get("assessment_id")) for item in assessments if item.get("assessment_id"))
+            ),
+            "assessment_reasons": list(
+                dict.fromkeys(str(item.get("reason")) for item in assessments if item.get("reason"))
+            ),
+            "source_execution_ids": list(
+                dict.fromkeys(
+                    str(execution_id)
+                    for item in assessments
+                    for execution_id in item.get("source_execution_ids") or []
+                    if execution_id
+                )
+            ),
+            "detail": "Root-level access was verified independently of CVE-style vulnerability parsing.",
+        }
+    )
     return findings
 
 
@@ -220,35 +215,50 @@ def build_coverage_summary(facts: list[dict[str, Any]]) -> dict[str, Any]:
                 continue
             status = str(check.get("status", "")).lower()
             if status in {"timeout", "partial", "failed"}:
-                add_degraded({
-                    "tool": check.get("tool", "tool"),
-                    "status": status,
-                    "kind": check.get("kind", ""),
-                    "scope": check.get("scope", {}),
-                    "impact": f"{check.get('kind', check.get('tool', 'tool'))} coverage incomplete",
-                    "recommended_rerun": "increase timeout or narrow templates/scope",
-                })
+                add_degraded(
+                    {
+                        "tool": check.get("tool", "tool"),
+                        "status": status,
+                        "kind": check.get("kind", ""),
+                        "scope": check.get("scope", {}),
+                        "impact": f"{check.get('kind', check.get('tool', 'tool'))} coverage incomplete",
+                        "recommended_rerun": "increase timeout or narrow templates/scope",
+                    }
+                )
             elif status in {"skipped", "completed_empty"}:
-                add_checked({
-                    "status": f"{check.get('kind', check.get('tool', 'tool'))}:{status}",
-                    "scope": check.get("scope", {}),
-                    "evidence": fact.get("id"),
-                })
+                add_checked(
+                    {
+                        "status": f"{check.get('kind', check.get('tool', 'tool'))}:{status}",
+                        "scope": check.get("scope", {}),
+                        "evidence": fact.get("id"),
+                    }
+                )
         elif fact.get("type") == "service_status":
             value = str(fact.get("value", ""))
             if value.startswith("tool_timeout:"):
                 tool = value.split(":", 1)[1]
-                add_degraded({
-                    "tool": tool,
-                    "status": "timeout",
-                    "impact": f"{tool} coverage incomplete",
-                    "recommended_rerun": "increase timeout or narrow templates/scope",
-                })
-            elif any(marker in value for marker in (
-                "_failed", "_skipped", "_not_vulnerable", "invalid_options",
-                "no_injection_found", "unreliable_or_patched",
-                "no_host_information", "no_get_parameters_found", "not_confirmed",
-            )):
+                add_degraded(
+                    {
+                        "tool": tool,
+                        "status": "timeout",
+                        "impact": f"{tool} coverage incomplete",
+                        "recommended_rerun": "increase timeout or narrow templates/scope",
+                    }
+                )
+            elif any(
+                marker in value
+                for marker in (
+                    "_failed",
+                    "_skipped",
+                    "_not_vulnerable",
+                    "invalid_options",
+                    "no_injection_found",
+                    "unreliable_or_patched",
+                    "no_host_information",
+                    "no_get_parameters_found",
+                    "not_confirmed",
+                )
+            ):
                 add_checked({"status": value, "evidence": fact.get("id")})
     return {
         "confidence": "partial" if degraded else "normal",
@@ -260,31 +270,42 @@ def build_coverage_summary(facts: list[dict[str, Any]]) -> dict[str, Any]:
 def build_attack_path(facts: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, str]]:
     steps = []
     if any(f.get("type") == "credential" for f in facts):
-        steps.append({"stage": "Initial access", "status": "observed", "detail": "Credential or session material present"})
+        steps.append(
+            {"stage": "Initial access", "status": "observed", "detail": "Credential or session material present"}
+        )
     if any(f.get("type") == "post_exploit_stage" for f in facts):
         steps.append({"stage": "Host inventory", "status": "completed", "detail": "Post-access inventory collected"})
     if any(f.get("type") in {"privesc_vector", "exploit_attempted"} for f in facts):
         status = "confirmed" if state.get("root_access_confirmed") else "tested"
-        steps.append({"stage": "Privilege escalation", "status": status, "detail": "Privilege escalation evidence present"})
+        steps.append(
+            {"stage": "Privilege escalation", "status": status, "detail": "Privilege escalation evidence present"}
+        )
     if state.get("root_access_confirmed"):
         steps.append({"stage": "Root access", "status": "confirmed", "detail": "uid=0/root access confirmed"})
     if state.get("persistence_established"):
         steps.append({"stage": "Persistence", "status": "completed", "detail": "Persistence mechanism recorded"})
     elif any("persistence" in str(f.get("value", "")).lower() for f in facts):
-        steps.append({"stage": "Persistence", "status": "not_confirmed", "detail": "Persistence mentioned but not confirmed"})
-    if state.get("internal_recon_completed") or any(f.get("type") in {"internal_host", "internal_subnet"} for f in facts):
+        steps.append(
+            {"stage": "Persistence", "status": "not_confirmed", "detail": "Persistence mentioned but not confirmed"}
+        )
+    if state.get("internal_recon_completed") or any(
+        f.get("type") in {"internal_host", "internal_subnet"} for f in facts
+    ):
         steps.append({"stage": "Internal recon", "status": "observed", "detail": "Internal hosts/subnets observed"})
-    steps.append({"stage": "Cleanup", "status": "completed" if state.get("cleanup_completed") else "not_performed", "detail": "Cleanup stage gate"})
+    steps.append(
+        {
+            "stage": "Cleanup",
+            "status": "completed" if state.get("cleanup_completed") else "not_performed",
+            "detail": "Cleanup stage gate",
+        }
+    )
     return steps
 
 
 def build_risk_explanation(result: dict[str, Any], access_findings: list[dict[str, Any]]) -> str:
     risk = str(result.get("risk_level", "UNKNOWN")).upper()
     if access_findings and risk == "CRITICAL":
-        return (
-            "Risk is CRITICAL because root-level access was verified, "
-            "even if no CVE-style vulnerability was parsed."
-        )
+        return "Risk is CRITICAL because root-level access was verified, even if no CVE-style vulnerability was parsed."
     if access_findings:
         return "Risk includes verified access compromise evidence."
     return ""
@@ -297,11 +318,13 @@ def build_remediations(
 ) -> list[dict[str, str]]:
     remediations = []
     if access_findings:
-        remediations.append({
-            "finding": "root_access_confirmed",
-            "service": "host",
-            "recommendation": "Treat host as compromised: rotate credentials, review SSH/session material, patch the entry path, and perform forensic review.",
-        })
+        remediations.append(
+            {
+                "finding": "root_access_confirmed",
+                "service": "host",
+                "recommendation": "Treat host as compromised: rotate credentials, review SSH/session material, patch the entry path, and perform forensic review.",
+            }
+        )
     for group in finding_groups:
         service = (group.get("service") or "").lower()
         module = group.get("module") or group.get("class") or "finding"
@@ -317,11 +340,13 @@ def build_remediations(
             fix = "Validate exposure, patch or disable the affected service, and restrict network access to trusted sources."
         remediations.append({"finding": module, "service": service or "unknown", "recommendation": fix})
     if any(f.get("type") == "service_status" and str(f.get("value", "")).startswith("tool_timeout:") for f in facts):
-        remediations.append({
-            "finding": "coverage_degraded",
-            "service": "scan_coverage",
-            "recommendation": "Rerun timed-out tools with a longer timeout or a narrower target/template scope.",
-        })
+        remediations.append(
+            {
+                "finding": "coverage_degraded",
+                "service": "scan_coverage",
+                "recommendation": "Rerun timed-out tools with a longer timeout or a narrower target/template scope.",
+            }
+        )
     return remediations
 
 
@@ -408,14 +433,9 @@ def _assessment_summary(facts: list[dict[str, Any]]) -> dict[str, Any]:
     statuses = ("observed", "inferred", "verified", "contradicted")
     return {
         "schema_version": "1.0",
-        "counts": {
-            status: sum(1 for fact in facts if _assessment_status(fact) == status)
-            for status in statuses
-        },
+        "counts": {status: sum(1 for fact in facts if _assessment_status(fact) == status) for status in statuses},
         "verified_fact_ids": [
-            int(fact["id"])
-            for fact in facts
-            if fact.get("id") is not None and _assessment_status(fact) == "verified"
+            int(fact["id"]) for fact in facts if fact.get("id") is not None and _assessment_status(fact) == "verified"
         ],
         "contradicted_fact_ids": [
             int(fact["id"])
@@ -457,7 +477,9 @@ def _new_group(module: str, service: str) -> dict[str, Any]:
     }
 
 
-def _group_for_module(groups: dict[str, dict[str, Any]], module: str, service: str, facts: list[dict[str, Any]]) -> dict[str, Any]:
+def _group_for_module(
+    groups: dict[str, dict[str, Any]], module: str, service: str, facts: list[dict[str, Any]]
+) -> dict[str, Any]:
     module = module or "unknown"
     service = service or _service_for_module(module, facts)
     key = f"{module}:{service}"

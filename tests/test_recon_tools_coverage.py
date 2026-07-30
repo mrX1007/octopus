@@ -138,9 +138,7 @@ def test_nmap_cache_regular_many_ports_and_write_failure(monkeypatch: pytest.Mon
         "run_tool",
         lambda command, timeout: calls.append((command, timeout)) or next(outputs),
     )
-    assert "Deep Scan" in recon_tools.run_nmap(
-        "host", extra_flags=["-p-", "-Pn", "-sT"]
-    )
+    assert "Deep Scan" in recon_tools.run_nmap("host", extra_flags=["-p-", "-Pn", "-sT"])
 
 
 def test_command_wrappers_are_process_free(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -231,9 +229,11 @@ def test_curl_nuclei_nikto_and_graphql_completion_branches(
     monkeypatch.setattr(
         recon_tools,
         "get_tool_config",
-        lambda name: {"flags": ["-sI", "--insecure"], "timeout": 0}
-        if name == "curl"
-        else {"timeout": 0, "request_timeout": 0, "retries": -1},
+        lambda name: (
+            {"flags": ["-sI", "--insecure"], "timeout": 0}
+            if name == "curl"
+            else {"timeout": 0, "request_timeout": 0, "retries": -1}
+        ),
     )
     monkeypatch.setattr(
         recon_tools,
@@ -258,9 +258,7 @@ def test_curl_nuclei_nikto_and_graphql_completion_branches(
     assert "graphql-existing" in recon_tools.run_graphql_check("api")
 
 
-def test_openapi_local_yaml_remote_and_failure_paths(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_openapi_local_yaml_remote_and_failure_paths(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert "missing source" in recon_tools.run_openapi_import("")
     data = {
         "info": {"title": "API"},
@@ -290,9 +288,7 @@ def test_openapi_local_yaml_remote_and_failure_paths(
     assert "import failed" in recon_tools.run_openapi_import("https://spec.test")
 
 
-def test_session_authenticated_crawl_and_api_auth_paths(
-    tmp_path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_session_authenticated_crawl_and_api_auth_paths(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     profile = tmp_path / "profile.json"
     profile.write_text('{"headers":{"Authorization":"Bearer x"},"cookies":{"sid":"v"}}')
     imported = recon_tools.run_session_profile_import(str(profile))
@@ -332,13 +328,9 @@ def test_session_authenticated_crawl_and_api_auth_paths(
     status = iter([SimpleNamespace(status_code=401), SimpleNamespace(status_code=200)])
     monkeypatch.setattr("requests.get", lambda *_args, **_kwargs: next(status))
     assert "auth_required" in recon_tools.run_api_auth_check("api.test", str(profile))
-    monkeypatch.setattr(
-        "requests.get", lambda *_args, **_kwargs: SimpleNamespace(status_code=200)
-    )
+    monkeypatch.setattr("requests.get", lambda *_args, **_kwargs: SimpleNamespace(status_code=200))
     assert "anonymous_accessible" in recon_tools.run_api_auth_check("api.test")
-    monkeypatch.setattr(
-        "requests.get", lambda *_args, **_kwargs: SimpleNamespace(status_code=500)
-    )
+    monkeypatch.setattr("requests.get", lambda *_args, **_kwargs: SimpleNamespace(status_code=500))
     assert "NOTE" not in recon_tools.run_api_auth_check("api.test")
     monkeypatch.setattr("requests.get", MagicMock(side_effect=RuntimeError("offline")))
     assert "failed" in recon_tools.run_api_auth_check("api.test")
@@ -469,7 +461,9 @@ def test_content_discovery_failure_boundaries(monkeypatch: pytest.MonkeyPatch) -
 
 def test_jwt_burp_and_zap_import_boundaries(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert "no JWT" in recon_tools.run_jwt_analyze("not-a-token")
-    token = f"{_b64({'alg': 'HS256', 'typ': 'JWT', 'kid': 'k'})}.{_b64({'sub': 'a', 'iss': 'i', 'aud': 'a', 'exp': 1})}.sig"
+    token = (
+        f"{_b64({'alg': 'HS256', 'typ': 'JWT', 'kid': 'k'})}.{_b64({'sub': 'a', 'iss': 'i', 'aud': 'a', 'exp': 1})}.sig"
+    )
     token_path = tmp_path / "token.txt"
     token_path.write_text(token)
     assert "alg: HS256" in recon_tools.run_jwt_analyze(str(token_path))
@@ -482,15 +476,11 @@ def test_jwt_burp_and_zap_import_boundaries(tmp_path, monkeypatch: pytest.Monkey
     assert "file not found" in recon_tools.run_zap_import(str(tmp_path / "missing"))
     burp = tmp_path / "burp.xml"
     burp.write_text(
-        '<url><![CDATA[https://x]]></url><url><![CDATA[]]></url>'
-        '<name><![CDATA[Issue]]></name><name><![CDATA[]]></name>'
+        "<url><![CDATA[https://x]]></url><url><![CDATA[]]></url><name><![CDATA[Issue]]></name><name><![CDATA[]]></name>"
     )
     assert "URL https://x" in recon_tools.run_burp_import(str(burp))
     zap = tmp_path / "zap.xml"
-    zap.write_text(
-        '<uri>https://x</uri><uri></uri><alert>Issue</alert><alert></alert>'
-        '<riskdesc>High</riskdesc>'
-    )
+    zap.write_text("<uri>https://x</uri><uri></uri><alert>Issue</alert><alert></alert><riskdesc>High</riskdesc>")
     imported = recon_tools.run_zap_import(str(zap))
     assert "ALERT High Issue" in imported
 
@@ -653,7 +643,9 @@ def test_scrapling_fetch_page_html_status_and_alt_ports(monkeypatch: pytest.Monk
     monkeypatch.setattr("requests.Session", Session)
     monkeypatch.setitem(sys.modules, "bs4", SimpleNamespace(BeautifulSoup=Soup))
     monkeypatch.setattr(recon_tools, "_SCRAPLING_OK", False)
-    Session.responses = [Response("<title>T</title><a href='/a'>A</a><form><input name='x'></form><meta name='d' content='c'>", 200)]
+    Session.responses = [
+        Response("<title>T</title><a href='/a'>A</a><form><input name='x'></form><meta name='d' content='c'>", 200)
+    ]
     assert "REQUESTS+BS4 RESULT" in recon_tools.run_scrapling_fetch("site.test")
     Session.responses = [Response("plain text", 200)]
     assert "plain text" in recon_tools.run_scrapling_fetch("site.test")

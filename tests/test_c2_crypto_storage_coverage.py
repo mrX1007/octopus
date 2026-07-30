@@ -101,9 +101,7 @@ def test_database_migrates_legacy_task_delivery_columns(tmp_path: Path) -> None:
     C2Database(str(db_path))
 
     with sqlite3.connect(db_path) as connection:
-        columns = {
-            row[1]: row[2:] for row in connection.execute("PRAGMA table_info(tasks)")
-        }
+        columns = {row[1]: row[2:] for row in connection.execute("PRAGMA table_info(tasks)")}
     assert {"sent_at", "acknowledged_at", "delivery_attempts"} <= set(columns)
 
 
@@ -124,14 +122,17 @@ def test_database_agent_state_tasks_rollback_and_empty_acknowledgement(
         raise RuntimeError("rollback")
     assert database.get_agent_crypto("rolled-back") is None
 
-    assert database.register_agent(
-        "agent-1",
-        "host-a",
-        "linux",
-        "alice",
-        "127.0.0.1",
-        {"epoch": 1},
-    ) is True
+    assert (
+        database.register_agent(
+            "agent-1",
+            "host-a",
+            "linux",
+            "alice",
+            "127.0.0.1",
+            {"epoch": 1},
+        )
+        is True
+    )
     assert database.get_agent_crypto("agent-1") == {"epoch": 1}
 
     database.update_agent(
@@ -153,22 +154,28 @@ def test_database_agent_state_tasks_rollback_and_empty_acknowledgement(
     )
     assert database.get_agent_crypto("agent-2") == "sealed-state"
 
-    assert database.update_agent_seen(
-        "agent-1",
-        "host-new",
-        "linux",
-        "alice",
-        "127.0.0.4",
-        {"epoch": 3},
-    ) is True
-    assert database.update_agent_seen(
-        "missing",
-        "host",
-        "linux",
-        "nobody",
-        "127.0.0.5",
-        "sealed",
-    ) is False
+    assert (
+        database.update_agent_seen(
+            "agent-1",
+            "host-new",
+            "linux",
+            "alice",
+            "127.0.0.4",
+            {"epoch": 3},
+        )
+        is True
+    )
+    assert (
+        database.update_agent_seen(
+            "missing",
+            "host",
+            "linux",
+            "nobody",
+            "127.0.0.5",
+            "sealed",
+        )
+        is False
+    )
     assert database.update_agent_crypto("agent-1", {"epoch": 4}) is True
     assert database.update_agent_crypto("missing", None) is False
     assert database.get_agent_crypto("agent-1") == {"epoch": 4}
@@ -178,12 +185,15 @@ def test_database_agent_state_tasks_rollback_and_empty_acknowledgement(
 
     database.queue_task("task-error", "agent-1", "status")
     assert database.get_pending_tasks("agent-1")[0]["task_id"] == "task-error"
-    assert database.update_task_result(
-        "task-error",
-        "agent-1",
-        "partial output",
-        error="command failed",
-    ) is True
+    assert (
+        database.update_task_result(
+            "task-error",
+            "agent-1",
+            "partial output",
+            error="command failed",
+        )
+        is True
+    )
     assert database.get_results("agent-1") == [
         {
             "task_id": "task-error",

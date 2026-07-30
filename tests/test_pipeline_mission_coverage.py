@@ -137,11 +137,7 @@ class CapturePlanStore:
                     existing.task_id if existing is not None else f"new-{position}",
                     definition.task,
                     agent=definition.agent,
-                    status=(
-                        "blocked"
-                        if block_all or position in blocked_positions
-                        else "pending"
-                    ),
+                    status=("blocked" if block_all or position in blocked_positions else "pending"),
                     scope=(
                         definition.scope
                         if isinstance(definition.scope, TaskScope)
@@ -234,9 +230,7 @@ def test_register_plan_guards_invalid_ids_missing_steps_and_duplicates() -> None
     existing = _record("known", "task")
     explicit = _registration_harness(CapturePlanStore([existing]))
     with pytest.raises(ValueError, match="ordered mission plan"):
-        explicit._register_mission_plan(
-            [{"agent": "Wrong", "task": "task", "task_id": "known"}]
-        )
+        explicit._register_mission_plan([{"agent": "Wrong", "task": "task", "task_id": "known"}])
 
     invalid = _registration_harness(CapturePlanStore([existing]))
     with pytest.raises(ValueError, match="mission plan contains"):
@@ -366,14 +360,10 @@ def test_scope_backoff_and_config_validation_paths(
     pipeline = MissionHarness()
     entity_id = canonical_asset("10.0.0.5").entity_id
 
-    direct = pipeline._mission_task_scope(
-        {"entity_ids": entity_id, "scope": {"kind": "host"}}
-    )
+    direct = pipeline._mission_task_scope({"entity_ids": entity_id, "scope": {"kind": "host"}})
     assert direct.entity_ids == (entity_id,)
     assert direct.legacy_scope == '{"kind":"host"}'
-    assert pipeline._mission_task_scope(
-        {"canonical_entity_ids": [entity_id]}
-    ).entity_ids == (entity_id,)
+    assert pipeline._mission_task_scope({"canonical_entity_ids": [entity_id]}).entity_ids == (entity_id,)
 
     monkeypatch.setattr(
         mission_module,
@@ -443,17 +433,13 @@ def test_state_replan_handles_memory_budget_request_and_durable_duplicate() -> N
     current = {"state": "new"}
 
     exhausted = MissionHarness(mission_id="")
-    exhausted.context_builder = SimpleNamespace(
-        build_context=lambda *_args: current
-    )
+    exhausted.context_builder = SimpleNamespace(build_context=lambda *_args: current)
     exhausted._max_state_replans = lambda: 0
     assert exhausted._evaluate_state_change_replan(previous, "scan", "target") is False
     assert exhausted.decision_trace.items[-1]["event_type"] == "state_replan_rejected"
 
     requested = MissionHarness(mission_id="")
-    requested.context_builder = SimpleNamespace(
-        build_context=lambda *_args: current
-    )
+    requested.context_builder = SimpleNamespace(build_context=lambda *_args: current)
     requested._max_state_replans = lambda: 1
     assert requested._evaluate_state_change_replan(previous, "scan", "target") is True
     assert requested._state_replan_count == 1
@@ -491,22 +477,14 @@ def test_ordered_plan_supports_name_selection_edges_and_cycle_detection(
         depends_on=("p1", "p2"),
     )
     pipeline = MissionHarness(
-        SimpleNamespace(
-            snapshot=lambda _mission_id: SimpleNamespace(
-                tasks=(parent_one, parent_two, child)
-            )
-        )
+        SimpleNamespace(snapshot=lambda _mission_id: SimpleNamespace(tasks=(parent_one, parent_two, child)))
     )
-    ordered = pipeline._ordered_mission_plan(
-        task_names=["parent-one", "parent-two", "child"]
-    )
+    ordered = pipeline._ordered_mission_plan(task_names=["parent-one", "parent-two", "child"])
     assert [item["task_id"] for item in ordered] == ["p1", "p2", "child"]
 
     first = _record("a", "cycle-a", status="completed", depends_on=("b",))
     second = _record("b", "cycle-b", status="completed", depends_on=("a",))
-    pipeline.mission_store = SimpleNamespace(
-        snapshot=lambda _mission_id: SimpleNamespace(tasks=(first, second))
-    )
+    pipeline.mission_store = SimpleNamespace(snapshot=lambda _mission_id: SimpleNamespace(tasks=(first, second)))
     with pytest.raises(RuntimeError, match="dependency cycle"):
         pipeline._ordered_mission_plan(task_names=["cycle-a", "cycle-b"])
 
@@ -519,30 +497,18 @@ def test_deferred_exhaustion_blocking_and_plan_rejection_fallbacks() -> None:
     assert no_mission._block_registered_task("Agent", "task", "reason") is None
     no_mission._persist_plan_rejection("Agent", "task", "reason")
 
-    missing = MissionHarness(
-        SimpleNamespace(
-            snapshot=lambda _mission_id: SimpleNamespace(tasks=(), attempts=())
-        )
-    )
+    missing = MissionHarness(SimpleNamespace(snapshot=lambda _mission_id: SimpleNamespace(tasks=(), attempts=())))
     missing.exhausted_tasks.add("fallback")
-    assert missing._mission_plan_step_exhausted(
-        {"task": "fallback", "task_id": "missing"}
-    ) is True
+    assert missing._mission_plan_step_exhausted({"task": "fallback", "task_id": "missing"}) is True
 
-    block_store = SimpleNamespace(
-        block_task=lambda *_args, **_kwargs: SimpleNamespace(outcome=None)
-    )
+    block_store = SimpleNamespace(block_task=lambda *_args, **_kwargs: SimpleNamespace(outcome=None))
     blocked = MissionHarness(block_store)
     attempt = blocked._block_registered_task("Agent", "task", "reason")
     assert attempt.outcome is None
 
     terminal_blocked = _record("blocked", "blocked-task", status="blocked")
     existing = MissionHarness(
-        SimpleNamespace(
-            snapshot=lambda _mission_id: SimpleNamespace(
-                tasks=(terminal_blocked,), attempts=()
-            )
-        )
+        SimpleNamespace(snapshot=lambda _mission_id: SimpleNamespace(tasks=(terminal_blocked,), attempts=()))
     )
     existing._persist_plan_rejection("Agent", "blocked-task", "reason")
     assert existing.blocked_tasks == {"blocked-task"}
@@ -589,14 +555,10 @@ def test_compatibility_terminalization_covers_ambiguity_block_and_skip_paths() -
             _reason: str,
             **_kwargs,
         ) -> SimpleNamespace:
-            return SimpleNamespace(
-                outcome=outcome if task == "skip-outcome" else None
-            )
+            return SimpleNamespace(outcome=outcome if task == "skip-outcome" else None)
 
     pipeline = MissionHarness(TerminalStore())
-    pipeline.exhausted_tasks.update(
-        {"duplicate", "blocked", "skip-none", "skip-outcome", "terminal", "missing"}
-    )
+    pipeline.exhausted_tasks.update({"duplicate", "blocked", "skip-none", "skip-outcome", "terminal", "missing"})
     pipeline.blocked_tasks.add("blocked")
     pipeline._terminalize_compatibility_exhausted_tasks(
         [
@@ -621,9 +583,7 @@ def test_begin_attempt_transient_dependencies_and_inactive_mission_cleanup() -> 
         active._begin_task_attempt("Agent", "task")
 
     def incomplete(*_args, **_kwargs):
-        raise TaskDependenciesIncomplete(
-            (("parent-one", "pending"), ("parent-two", "running"))
-        )
+        raise TaskDependenciesIncomplete((("parent-one", "pending"), ("parent-two", "running")))
 
     transient = MissionHarness(SimpleNamespace(begin_attempt=incomplete))
     transient._active_retry_command_keys.add("old")

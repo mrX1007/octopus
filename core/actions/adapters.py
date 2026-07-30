@@ -46,20 +46,14 @@ def canonical_assessment_applicability(
     facade while that facade remains a production compatibility path.
     """
 
-    normalized_aliases = {
-        str(alias or "").strip().casefold()
-        for alias in aliases
-        if str(alias or "").strip()
-    }
+    normalized_aliases = {str(alias or "").strip().casefold() for alias in aliases if str(alias or "").strip()}
     relevant: list[dict[str, Any]] = []
     for fact in facts or ():
         fact_type = str(fact.get("type") or "").strip().casefold()
         if fact_type not in _ASSESSMENT_FACT_TYPES:
             continue
         value = str(fact.get("value") or "").casefold()
-        if normalized_aliases and not any(
-            alias in value for alias in normalized_aliases
-        ):
+        if normalized_aliases and not any(alias in value for alias in normalized_aliases):
             continue
         relevant.append(dict(fact))
     if not relevant:
@@ -68,35 +62,22 @@ def canonical_assessment_applicability(
     usable = [
         fact
         for fact in relevant
-        if str(fact.get("assessment_status") or "observed").casefold()
-        != "contradicted"
+        if str(fact.get("assessment_status") or "observed").casefold() != "contradicted"
         and str(fact.get("freshness_status") or "unknown").casefold() != "stale"
         and str(fact.get("coverage_status") or "unknown").casefold() != "degraded"
     ]
     if usable:
         status_order = {"verified": 0, "inferred": 1, "observed": 2}
-        statuses = {
-            str(fact.get("assessment_status") or "observed").casefold()
-            for fact in usable
-        }
+        statuses = {str(fact.get("assessment_status") or "observed").casefold() for fact in usable}
         best = min(statuses, key=lambda status: status_order.get(status, 99))
         return (f"canonical_assessment:{best}",), ()
 
     missing: list[str] = []
-    if any(
-        str(fact.get("assessment_status") or "").casefold() == "contradicted"
-        for fact in relevant
-    ):
+    if any(str(fact.get("assessment_status") or "").casefold() == "contradicted" for fact in relevant):
         missing.append("assessment:contradicted")
-    if any(
-        str(fact.get("freshness_status") or "").casefold() == "stale"
-        for fact in relevant
-    ):
+    if any(str(fact.get("freshness_status") or "").casefold() == "stale" for fact in relevant):
         missing.append("assessment:stale")
-    if any(
-        str(fact.get("coverage_status") or "").casefold() == "degraded"
-        for fact in relevant
-    ):
+    if any(str(fact.get("coverage_status") or "").casefold() == "degraded" for fact in relevant):
         missing.append("assessment:degraded_coverage")
     return (), tuple(missing or ("assessment:no_usable_evidence",))
 
@@ -119,9 +100,7 @@ class RegisteredToolAdapter(ActionAdapter):
             description=str(getattr(tool_def, "description", "")),
             aliases=tuple(str(item) for item in getattr(tool_def, "aliases", ()) or ()),
             requirements=ActionRequirements(
-                system_dependencies=tuple(
-                    str(item) for item in getattr(tool_def, "requires", ()) or ()
-                ),
+                system_dependencies=tuple(str(item) for item in getattr(tool_def, "requires", ()) or ()),
                 target_required=bool(getattr(tool_def, "needs_target", True)),
                 active=active,
             ),
@@ -134,10 +113,7 @@ class RegisteredToolAdapter(ActionAdapter):
         if not bool(getattr(self.tool_def, "enabled", True)):
             missing.append("provider_disabled")
         if not self.tool_def.is_available():
-            missing.extend(
-                f"dependency:{item}"
-                for item in self.descriptor.requirements.system_dependencies
-            )
+            missing.extend(f"dependency:{item}" for item in self.descriptor.requirements.system_dependencies)
             if not self.descriptor.requirements.system_dependencies:
                 missing.append("provider_unavailable")
         return ApplicabilityResult(
@@ -163,10 +139,7 @@ class RegisteredToolAdapter(ActionAdapter):
                 for name in allowed_names
                 if str(name).strip()
             }
-            if not parts or not any(
-                normalized_parts[: len(prefix)] == prefix
-                for prefix in allowed_prefixes
-            ):
+            if not parts or not any(normalized_parts[: len(prefix)] == prefix for prefix in allowed_prefixes):
                 raise ValueError("action_command_does_not_match_descriptor")
             return command
         parts = [self.descriptor.name]
@@ -239,23 +212,14 @@ class ExploitBaseAdapter(ActionAdapter):
         if request.handle is None:
             missing.append("provider_handle")
         target_os = str(request.parameters.get("target_os") or "").lower()
-        supported = [
-            str(item).lower()
-            for item in getattr(self.exploit, "supported_os", ()) or ()
-        ]
+        supported = [str(item).lower() for item in getattr(self.exploit, "supported_os", ()) or ()]
         if target_os and supported and target_os not in supported:
             missing.append(f"supported_os:{','.join(supported)}")
-        assessment_reasons, assessment_missing = self._assessment_applicability(
-            request.facts
-        )
+        assessment_reasons, assessment_missing = self._assessment_applicability(request.facts)
         missing.extend(assessment_missing)
         return ApplicabilityResult(
             applicable=not missing,
-            reasons=(
-                ("exploit_contract_applicable", *assessment_reasons)
-                if not missing
-                else ()
-            ),
+            reasons=(("exploit_contract_applicable", *assessment_reasons) if not missing else ()),
             missing_requirements=tuple(dict.fromkeys(missing)),
         )
 
@@ -281,9 +245,7 @@ class ExploitBaseAdapter(ActionAdapter):
         return self.registered_invocation(command, policy_name)
 
     def check(self, request: ActionRequest) -> ActionCheckResult:
-        normalized = self.exploit.normalize_check_result(
-            self.exploit.check_vulnerable(request.handle)
-        )
+        normalized = self.exploit.normalize_check_result(self.exploit.check_vulnerable(request.handle))
         return ActionCheckResult(
             result=normalized,
             applicable=bool(normalized.success),
@@ -332,11 +294,7 @@ class MetasploitActionAdapter(ActionAdapter):
 
     def applicability(self, request: ActionRequest) -> ApplicabilityResult:
         base = super().applicability(request)
-        missing = [
-            item
-            for item in base.missing_requirements
-            if item != "binary:msfconsole"
-        ]
+        missing = [item for item in base.missing_requirements if item != "binary:msfconsole"]
         if not self.dependency_check("msfconsole"):
             missing.append("binary:msfconsole")
         assessment_reasons, assessment_missing = canonical_assessment_applicability(
@@ -346,11 +304,7 @@ class MetasploitActionAdapter(ActionAdapter):
         missing.extend(assessment_missing)
         return ApplicabilityResult(
             applicable=not missing,
-            reasons=(
-                ("metasploit_available", *assessment_reasons)
-                if not missing
-                else ()
-            ),
+            reasons=(("metasploit_available", *assessment_reasons) if not missing else ()),
             missing_requirements=tuple(dict.fromkeys(missing)),
         )
 
@@ -450,9 +404,7 @@ class PluginActionAdapter(ActionAdapter):
         return str(request.parameters.get("action") or default).lower()
 
     def invocation(self, request: ActionRequest, phase: str):
-        command = shlex.join(
-            ("plugin", self.plugin_name, request.target, self._action(request, phase))
-        )
+        command = shlex.join(("plugin", self.plugin_name, request.target, self._action(request, phase)))
         return self.registered_invocation(command, "plugin")
 
     def check(self, request: ActionRequest) -> ActionCheckResult:

@@ -90,10 +90,7 @@ def test_cached_provider_helpers_and_path_special_cases() -> None:
     assert PipelineRuntime._knowledge_graph_path("data/facts.db") == "data/knowledge.db"
     assert PipelineRuntime._knowledge_graph_path("facts") == "facts.knowledge.db"
     assert PipelineRuntime._provider_telemetry_path(":memory:") == ":memory:"
-    assert (
-        PipelineRuntime._provider_telemetry_path("data/facts.db")
-        == "data/provider-telemetry.db"
-    )
+    assert PipelineRuntime._provider_telemetry_path("data/facts.db") == "data/provider-telemetry.db"
     assert PipelineRuntime._provider_telemetry_path("facts") == "facts.provider-telemetry.db"
     assert PipelineRuntime._decision_trace_path(":memory:") == ":memory:"
     assert PipelineRuntime._decision_trace_path("data/facts.db") == "data/decision-trace.db"
@@ -176,9 +173,7 @@ def test_authorized_invocation_without_final_typed_invocation_uses_legacy_runner
 
 def test_typed_execution_cancellation_is_normalized() -> None:
     instance = bare_runtime()
-    instance._dispatch_runner = MagicMock(
-        side_effect=ExecutionCancelled("operator_cancelled", stdout="partial")
-    )
+    instance._dispatch_runner = MagicMock(side_effect=ExecutionCancelled("operator_cancelled", stdout="partial"))
 
     result = instance.execute(
         CommandDecision("fixture", "key", "execute", "allowed"),
@@ -309,9 +304,7 @@ def test_registered_candidates_filter_invalid_duplicate_and_active_alternatives(
         "safe example.com": invocation("safe"),
     }
     policy = SimpleNamespace(
-        authorize_command=lambda command, _context: SimpleNamespace(
-            invocation=alternative_names[command]
-        )
+        authorize_command=lambda command, _context: SimpleNamespace(invocation=alternative_names[command])
     )
     instance = bare_runtime()
     instance.scheduler = SimpleNamespace(execution_policy=policy)
@@ -509,9 +502,7 @@ def test_completion_replay_records_optional_attempt_progress() -> None:
     )
     instance = completion_runtime(claim)
     instance.facts.get_command_result_by_id = MagicMock(return_value=persisted_result())
-    instance.facts.get_facts_by_ids = MagicMock(
-        return_value=[{"type": "port_open", "value": "443/tcp"}]
-    )
+    instance.facts.get_facts_by_ids = MagicMock(return_value=[{"type": "port_open", "value": "443/tcp"}])
 
     replayed = complete(instance, attempt_id="attempt")
     assert replayed["new_facts"] == 0

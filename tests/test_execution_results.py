@@ -300,9 +300,7 @@ def test_adapter_bounds_metadata_and_artifact_references() -> None:
     )
     payload = result.to_dict()
     metadata_bytes = len(json.dumps(payload["metadata"], ensure_ascii=False).encode("utf-8"))
-    artifact_bytes = len(
-        json.dumps(result.artifact_refs, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    )
+    artifact_bytes = len(json.dumps(result.artifact_refs, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
 
     assert len(result.artifact_refs) <= MAX_ARTIFACT_REFS
     assert artifact_bytes <= MAX_ARTIFACT_BYTES

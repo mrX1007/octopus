@@ -34,11 +34,7 @@ class ScanLifecycle:
         cancellation: CancellationContext | None = None,
     ):
         current = pipeline.mission_store.get_mission_by_scan_id(scan_id)
-        if (
-            current is not None
-            and current.status == "completed"
-            and current.mission_id == pipeline.mission_id
-        ):
+        if current is not None and current.status == "completed" and current.mission_id == pipeline.mission_id:
             pipeline.mission_store.open_mission(scan_id, target)
             return pipeline.state_resolver.resolve_state(scan_id, target)
         pipeline._reset_runtime_state()
@@ -126,17 +122,11 @@ class ScanLifecycle:
             print(f"[*] Seeded {credential_seeded} known credential fact(s) from credential store.")
 
         avail = pipeline.tool_registry.get_available_tools_summary()
-        avail_list = [
-            f"{task}: {', '.join(tools) if tools else 'NONE'}"
-            for task, tools in avail.items()
-            if tools
-        ]
+        avail_list = [f"{task}: {', '.join(tools) if tools else 'NONE'}" for task, tools in avail.items() if tools]
         print(f"[*] Available tools: {'; '.join(avail_list)}")
         unavailable = pipeline.tool_registry.get_unavailable_tools_summary()
         blocked_capabilities = [
-            f"{task}({', '.join(tools)})"
-            for task, tools in unavailable.items()
-            if tools and not avail.get(task)
+            f"{task}({', '.join(tools)})" for task, tools in unavailable.items() if tools and not avail.get(task)
         ]
         if blocked_capabilities:
             print(f"[*] Blocked capabilities: {'; '.join(blocked_capabilities[:8])}")
@@ -157,9 +147,7 @@ class ScanLifecycle:
         pipeline.scan_start_time = time.time()
         if max_tools is not None and pipeline.tools_run_count >= max_tools:
             pipeline._mission_stop_reason = "max_tools_reached"
-            print(
-                f"[!] BUDGET EXCEEDED: Max tools run ({max_tools}). Terminating."
-            )
+            print(f"[!] BUDGET EXCEEDED: Max tools run ({max_tools}). Terminating.")
             return pipeline.state_resolver.resolve_state(scan_id, target)
         startup_actions = pipeline._run_fact_driven_actions(
             scan_id, target, pipeline.fact_store.get_facts(scan_id, target)
@@ -177,17 +165,11 @@ class ScanLifecycle:
             elapsed_minutes = (time.time() - pipeline.scan_start_time) / 60
             if max_time_minutes is not None and elapsed_minutes >= max_time_minutes:
                 pipeline._mission_stop_reason = "max_time_reached"
-                print(
-                    f"[!] BUDGET EXCEEDED: Max time reached "
-                    f"({max_time_minutes} mins). Terminating."
-                )
+                print(f"[!] BUDGET EXCEEDED: Max time reached ({max_time_minutes} mins). Terminating.")
                 break
             if max_tools is not None and pipeline.tools_run_count >= max_tools:
                 pipeline._mission_stop_reason = "max_tools_reached"
-                print(
-                    f"[!] BUDGET EXCEEDED: Max tools run "
-                    f"({max_tools}). Terminating."
-                )
+                print(f"[!] BUDGET EXCEEDED: Max tools run ({max_tools}). Terminating.")
                 break
 
             llm_fallback_only = pipeline._llm_fallback_only()
@@ -207,11 +189,7 @@ class ScanLifecycle:
                 "build_evaluated_fact_snapshot",
                 None,
             )
-            evaluated_fact_snapshot = (
-                snapshot_builder(scan_id, target)
-                if callable(snapshot_builder)
-                else None
-            )
+            evaluated_fact_snapshot = snapshot_builder(scan_id, target) if callable(snapshot_builder) else None
             context = (
                 pipeline.context_builder.build_context(
                     scan_id,
@@ -228,16 +206,11 @@ class ScanLifecycle:
             pipeline._print_stage_gates(context)
 
             resume_plan = pipeline._resumable_mission_plan()
-            deferred_until = (
-                pipeline._next_deferred_mission_time()
-                if not resume_plan
-                else None
-            )
+            deferred_until = pipeline._next_deferred_mission_time() if not resume_plan else None
             if deferred_until is not None:
                 pipeline._mission_stop_reason = "tasks_deferred"
                 print(
-                    "[*] Durable mission work is deferred until "
-                    f"{deferred_until:.6f}; leaving the mission resumable."
+                    f"[*] Durable mission work is deferred until {deferred_until:.6f}; leaving the mission resumable."
                 )
                 break
             durable_resuming = bool(resume_plan)
@@ -297,8 +270,7 @@ class ScanLifecycle:
                 pipeline.fact_history_counts.append(current_fact_count)
                 if (
                     len(pipeline.fact_history_counts) >= 4
-                    and pipeline.fact_history_counts[-1]
-                    == pipeline.fact_history_counts[-4]
+                    and pipeline.fact_history_counts[-1] == pipeline.fact_history_counts[-4]
                 ):
                     pipeline._mission_stop_reason = "anti_loop_no_new_facts"
                     print("[!] ANTI-LOOP: No new facts for 3 loops. Terminating scan.")
@@ -335,15 +307,10 @@ class ScanLifecycle:
             plan = pipeline._register_mission_plan(plan)
             if not plan and pipeline._next_deferred_mission_time() is not None:
                 pipeline._mission_stop_reason = "tasks_deferred"
-                print(
-                    "[*] Registered mission work is deferred; leaving the "
-                    "mission resumable."
-                )
+                print("[*] Registered mission work is deferred; leaving the mission resumable.")
                 break
             pipeline._terminalize_compatibility_exhausted_tasks(plan)
-            all_skipped = all(
-                pipeline._mission_plan_step_exhausted(step) for step in plan
-            )
+            all_skipped = all(pipeline._mission_plan_step_exhausted(step) for step in plan)
             if all_skipped:
                 print(f"[!] All tasks in plan already completed/blocked. Goal '{goal}' exhausted.")
                 loop += 1
@@ -369,16 +336,10 @@ class ScanLifecycle:
                     scope=step.get("task_scope"),
                 )
                 if attempt is None:
-                    print(
-                        "     [*] Task deferred until durable prerequisites "
-                        "reach a terminal state."
-                    )
+                    print("     [*] Task deferred until durable prerequisites reach a terminal state.")
                     continue
                 if attempt.status == "blocked":
-                    print(
-                        f"     [!] Task blocked by durable dependency state: "
-                        f"{attempt.reason}"
-                    )
+                    print(f"     [!] Task blocked by durable dependency state: {attempt.reason}")
                     continue
                 task_started = time.time()
 
@@ -399,9 +360,7 @@ class ScanLifecycle:
                         )
                         continue
 
-                    task_result = pipeline._run_task_commands(
-                        scan_id, target, commands, fact_label="Fact"
-                    )
+                    task_result = pipeline._run_task_commands(scan_id, target, commands, fact_label="Fact")
                     new_facts_this_loop += task_result["new_facts"]
                     status = pipeline._classify_task_result(task_result)
                     reason = task_result["reason"]
@@ -457,12 +416,8 @@ class ScanLifecycle:
                         }
 
                     hypotheses = analysis.get("hypotheses", [])
-                    analysis_status = (
-                        str(analysis.get("llm_status") or "ok").strip().lower()
-                    )
-                    analysis_error = str(
-                        analysis.get("llm_error") or "analysis_failed"
-                    )
+                    analysis_status = str(analysis.get("llm_status") or "ok").strip().lower()
+                    analysis_error = str(analysis.get("llm_error") or "analysis_failed")
                     if (
                         analysis_status not in {"ok", "failed"}
                         or not isinstance(hypotheses, list)
@@ -494,10 +449,7 @@ class ScanLifecycle:
                             },
                             loop,
                         )
-                        print(
-                            "     [!] AnalysisAgent failed "
-                            f"(LLM failures: {pipeline.consecutive_llm_failures})"
-                        )
+                        print(f"     [!] AnalysisAgent failed (LLM failures: {pipeline.consecutive_llm_failures})")
                     else:
                         pipeline.consecutive_llm_failures = 0
                         pipeline._record_llm_health(
@@ -524,10 +476,7 @@ class ScanLifecycle:
                         verify_res = pipeline.verification_agent.verify_hypothesis(
                             scan_id, target, claim, required_evidence
                         )
-                        print(
-                            f"         Status: {verify_res.get('status')} - "
-                            f"{verify_res.get('reason')}"
-                        )
+                        print(f"         Status: {verify_res.get('status')} - {verify_res.get('reason')}")
                         if verify_res.get("status") == "accepted":
                             accepted_count += 1
                             if verify_res.get("fact_id"):
@@ -640,10 +589,7 @@ class ScanLifecycle:
             pipeline._mission_stop_reason = "max_iterations_reached"
 
         elapsed = time.time() - pipeline.scan_start_time
-        print(
-            f"\n[*] Pipeline finished for {target}. "
-            f"({pipeline.tools_run_count} tools run, {elapsed:.0f}s elapsed)"
-        )
+        print(f"\n[*] Pipeline finished for {target}. ({pipeline.tools_run_count} tools run, {elapsed:.0f}s elapsed)")
         print(
             f"[*] LLM failures: {pipeline.consecutive_llm_failures} consecutive, "
             f"completed tasks: {sorted(pipeline.completed_tasks)}"
