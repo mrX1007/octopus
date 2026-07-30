@@ -189,7 +189,6 @@ def test_coverage_gate_discovers_every_first_party_python_file(tmp_path: Path):
     (tmp_path / "core" / "worker.py").write_text("value = 2\n", encoding="utf-8")
     for excluded in (
         "build",
-        "data",
         "tests",
         "vendor",
         "venv",
@@ -199,10 +198,13 @@ def test_coverage_gate_discovers_every_first_party_python_file(tmp_path: Path):
         directory = tmp_path / excluded
         directory.mkdir()
         (directory / "ignored.py").write_text("raise AssertionError\n", encoding="utf-8")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "included.py").write_text("value = 3\n", encoding="utf-8")
 
     discovered = coverage_gate.discover_first_party_python(tmp_path)
 
     assert [path.relative_to(tmp_path).as_posix() for path in discovered] == [
         "app.py",
         "core/worker.py",
+        "data/included.py",
     ]

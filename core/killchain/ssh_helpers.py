@@ -31,6 +31,13 @@ C_RESET  = "\033[0m"
 # PARAMIKO SSH HELPERS (shared across stages)
 
 
+def _safe_connection_error(error: object, password: str) -> str:
+    """Return an SSH error without echoing caller-supplied authentication data."""
+
+    message = str(error)
+    return message.replace(password, "[REDACTED]") if password else message
+
+
 def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: int = 15):
     """Connect via paramiko. Returns (client, error_str).
     Supports key-based authentication via the ``__KEY_AUTH__`` marker."""
@@ -95,9 +102,9 @@ def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: i
                     return client2, None
                 except Exception as _exc:
                     logging.debug(f"Suppressed in ssh_helpers.py: {_exc}")
-        return None, f"Auth failed: {user}:{password}@{host}"
+        return None, f"Auth failed: {user}@{host}"
     except Exception as e:
-        return None, str(e)
+        return None, _safe_connection_error(e, password)
 
 
 def _ssh_exec(client, cmd: str, timeout: int = 30) -> str:

@@ -119,12 +119,13 @@ class OctopusCLIApplication:
             from core.tools.registry import discover_plugins, print_registry_stats
 
             root = self.workflows.PROJECT_ROOT
-            loaded_plugins = discover_plugins(os.path.join(root, "plugins"))
-            loaded_modules = discover_plugins(os.path.join(root, "modules"))
-            if loaded_plugins or loaded_modules:
+            discovered_plugins = discover_plugins(os.path.join(root, "plugins"))
+            discovered_modules = discover_plugins(os.path.join(root, "modules"))
+            if discovered_plugins or discovered_modules:
                 self.workflows.info(
-                    f"Dynamically loaded {loaded_plugins} plugins and "
-                    f"{loaded_modules} modules."
+                    f"Discovered metadata for {discovered_plugins} plugins and "
+                    f"{discovered_modules} modules; execution remains behind "
+                    "the registered plugin gateway."
                 )
                 print_registry_stats()
         except Exception as exc:

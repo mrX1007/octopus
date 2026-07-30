@@ -16,6 +16,7 @@ import signal
 import subprocess
 import sys
 from collections.abc import Iterator
+from types import MappingProxyType
 from typing import Any, Optional
 from urllib.parse import urlparse
 
@@ -29,9 +30,11 @@ from core.execution import (
     ExecutionContext,
     ExecutionPolicy,
     ToolInvocation,
+    bind_execution_context,
     current_execution_context,
     redact_sensitive_command,
 )
+from core.runtime_config import effective_parallel_workers
 
 # IMPORTS FROM SHARED BASE (breaks circular deps)
 from core.tools.base import (
@@ -44,7 +47,6 @@ from core.tools.base import (
 # IMPORTS FROM SIBLING MODULES
 from core.tools.exploit_tools import (
     run_bruteforce,
-    run_jmx2rce_scan,
     run_web_login_bruteforce,
 )
 from core.tools.post_tools import (
@@ -59,7 +61,6 @@ from core.tools.post_tools import (
     _run_shodan_vulns,
     _run_ssh_session_interactive,
     _run_waf_detect,
-    run_default_recon,
 )
 from core.tools.recon_tools import (
     run_curl_headers,
@@ -108,7 +109,6 @@ TOOLS_MENU = {
     "11": ("sqlmap",             run_sqlmap),
     "12": ("nikto",              run_nikto),
     "13": ("scrapling",          lambda t: run_scrapling_fetch(f"http://{t}")),
-    "14": ("jmx2rce",            run_jmx2rce_scan),
     "15": ("ssh_user_enum",      run_ssh_user_enum),
     "16": ("bruteforce SSH",     lambda t: run_bruteforce("ssh", t)),
     "17": ("web login brute",    run_web_login_bruteforce),
@@ -145,12 +145,27 @@ TOOLS_MENU = {
     "45": ("build Go implant",   lambda t: _run_c2_build("go", t)),
     "46": ("build Py implant",   lambda t: _run_c2_build("python", t)),
     "47": ("build PS stager",    lambda t: _run_c2_build("powershell", t)),
-    "48": ("DNS C2 listener",    lambda t: _run_c2_build("dns", t)),
     "49": ("FTP anonymous",      run_ftp_anonymous_check),
     "50": ("SMTP probe",         run_smtp_probe),
 }
 
-_MENU_POLICY_NAMES = {
+_MENU_TOOL_IDS = MappingProxyType({
+    "1": "nmap",
+    "2": "whois",
+    "3": "whatweb",
+    "4": "curl_headers",
+    "5": "dig",
+    "6": "sslscan",
+    "7": "ffuf",
+    "8": "enum4linux",
+    "9": "smbclient",
+    "10": "wpscan",
+    "11": "sqlmap",
+    "12": "nikto",
+    "13": "scrapling",
+    "15": "ssh_user_enum",
+    "16": "bruteforce",
+    "17": "web_login_brute",
     "18": "ssh_session",
     "19": "killchain_vuln_assess",
     "20": "killchain_exploit",
@@ -159,8 +174,16 @@ _MENU_POLICY_NAMES = {
     "23": "killchain_lateral",
     "24": "killchain_exfil",
     "25": "killchain_full",
+    "26": "waf_detect",
     "27": "killchain_cleanup",
+    "28": "shodan",
+    "29": "shodan",
+    "30": "shodan",
+    "31": "crack_hashes",
+    "32": "shodan",
     "33": "cpanel_exploit",
+    "34": "shardbrowser_osint",
+    "35": "ad_enum",
     "36": "asrep_roast",
     "37": "kerberoast",
     "38": "dcsync",
@@ -169,21 +192,72 @@ _MENU_POLICY_NAMES = {
     "41": "wmiexec",
     "42": "socks_proxy",
     "43": "port_forward",
+    "44": "network_recon",
     "45": "build_go_implant",
     "46": "build_python_implant",
     "47": "build_ps_stager",
-    "48": "dns_c2_listener",
-}
+    "49": "ftp_anonymous_check",
+    "50": "smtp_probe",
+})
+
+_DEFAULT_RECON_TOOL_NAMES = (
+    "nmap",
+    "whois",
+    "whatweb",
+    "curl_headers",
+    "dig",
+    "sslscan",
+    "ffuf",
+    "enum4linux",
+    "smbclient",
+)
+
+
+def _catalog_tool_definition(tool_name: str):
+    """Resolve one registry identity through the canonical action catalog.
+
+    The interactive CLI is a compatibility facade, but it must not create a
+    second executable namespace.  Building the catalog from the live registry
+    makes registry/catalog drift fail closed before a provider is considered.
+    """
+
+    from core.actions import build_action_catalog
+    from core.tools.registry import get_tool, list_tools
+
+    tool_def = get_tool(tool_name)
+    if tool_def is None:
+        return None, "not_registered"
+    if not getattr(tool_def, "enabled", True):
+        return None, "provider_disabled"
+    try:
+        catalog = build_action_catalog(
+            lambda _command, _context: "unused",
+            tool_defs=list_tools(),
+        )
+        resolved = catalog.resolve(tool_name)
+    except Exception as exc:
+        return None, f"action_catalog_error:{type(exc).__name__}"
+    if resolved is None:
+        return None, "action_catalog_unresolved"
+    if resolved.adapter.descriptor.name != tool_def.name:
+        return None, "action_catalog_identity_mismatch"
+    return tool_def, ""
+
+
+def _invoke_bound_provider(func, target: str, context: ExecutionContext):
+    """Preserve resource limits and cancellation inside worker threads."""
+
+    with bind_execution_context(context):
+        return func(target)
 
 
 def _run_registered_extended_tool(results: dict, plan_lines: list[str], tool_name: str,
                                   target: str, result_key: Optional[str] = None) -> None:
-    from core.tools.registry import get_tool
-    tool_def = get_tool(tool_name)
     label = result_key or tool_name
-    if not tool_def:
-        plan_lines.append(f"skip {label}: not_registered")
-        results[label] = f"[N MODE] {tool_name} skipped: not registered"
+    tool_def, catalog_error = _catalog_tool_definition(tool_name)
+    if tool_def is None:
+        plan_lines.append(f"skip {label}: {catalog_error}")
+        results[label] = f"[N MODE] {tool_name} skipped: {catalog_error}"
         return
     if not tool_def.is_available():
         deps = ",".join(tool_def.requires or []) or "dependency"
@@ -205,25 +279,28 @@ def _run_registered_extended_tool(results: dict, plan_lines: list[str], tool_nam
         return
     try:
         plan_lines.append(f"run {label}: {tool_name} {target}")
-        results[label] = tool_def.func(target)
+        output = _invoke_bound_provider(tool_def.func, target, context)
+        results[label] = _bounded_tool_result(output, context)
     except Exception as exc:
-        plan_lines.append(f"error {label}: {str(exc)[:120]}")
-        results[label] = f"[!] {label} error: {exc}"
+        safe_error = _redact_command(str(exc))
+        plan_lines.append(f"error {label}: {safe_error[:120]}")
+        results[label] = _bounded_tool_result(
+            f"[!] {label} error: {safe_error}",
+            context,
+        )
 
 
 def _run_registered_extended_tools_concurrent(results: dict, plan_lines: list[str],
                                               jobs: list[tuple[str, str, str]],
                                               max_workers: int = 6) -> None:
     """Run independent registry tools concurrently while preserving result keys."""
-    from core.tools.registry import get_tool
-
     prepared = []
     for tool_name, target, result_key in jobs:
-        tool_def = get_tool(tool_name)
         label = result_key or tool_name
-        if not tool_def:
-            plan_lines.append(f"skip {label}: not_registered")
-            results[label] = f"[X MODE] {tool_name} skipped: not registered"
+        tool_def, catalog_error = _catalog_tool_definition(tool_name)
+        if tool_def is None:
+            plan_lines.append(f"skip {label}: {catalog_error}")
+            results[label] = f"[X MODE] {tool_name} skipped: {catalog_error}"
             continue
         if not tool_def.is_available():
             deps = ",".join(tool_def.requires or []) or "dependency"
@@ -244,26 +321,99 @@ def _run_registered_extended_tools_concurrent(results: dict, plan_lines: list[st
             results[label] = _execution_denied(decision.reason, context.request_id)
             continue
         plan_lines.append(f"run {label}: {tool_name} {target}")
-        prepared.append((label, tool_name, target, tool_def.func))
+        prepared.append((label, tool_name, target, tool_def.func, context))
 
     if not prepared:
         return
 
-    workers = max(1, min(max_workers, len(prepared)))
+    workers = effective_parallel_workers(min(max_workers, len(prepared)))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(func, target): (label, tool_name)
-            for label, tool_name, target, func in prepared
+            executor.submit(_invoke_bound_provider, func, target, context): (
+                label,
+                tool_name,
+                context,
+            )
+            for label, tool_name, target, func, context in prepared
         }
         for future in concurrent.futures.as_completed(futures):
-            label, tool_name = futures[future]
+            label, tool_name, context = futures[future]
             try:
                 output = future.result()
-                results[label] = output
+                results[label] = _bounded_tool_result(output, context)
                 plan_lines.append(f"{_tool_result_status(output)} {label}: {tool_name}")
+            except ExecutionCancelled:
+                for pending in futures:
+                    if pending is not future:
+                        pending.cancel()
+                raise
             except Exception as exc:
-                plan_lines.append(f"error {label}: {str(exc)[:120]}")
-                results[label] = f"[!] {label} error: {exc}"
+                safe_error = _redact_command(str(exc))
+                plan_lines.append(f"error {label}: {safe_error[:120]}")
+                results[label] = _bounded_tool_result(
+                    f"[!] {label} error: {safe_error}",
+                    context,
+                )
+
+
+def _run_registered_default_recon(target: str) -> dict:
+    """Run the standard profile through registry, catalog, and policy gates."""
+
+    context = current_execution_context()
+    results: dict = {}
+    plan_lines = ["[DEFAULT RECON PLAN]"]
+    jobs = [(tool_name, target, tool_name) for tool_name in _DEFAULT_RECON_TOOL_NAMES]
+    _run_registered_extended_tools_concurrent(
+        results,
+        plan_lines,
+        jobs,
+        max_workers=len(jobs),
+    )
+    results["default_recon_plan"] = _bounded_tool_result(
+        "\n".join(plan_lines),
+        context,
+    )
+    return results
+
+
+def _run_catalog_command(
+    tool_name: str,
+    arguments: list[str],
+    context: Optional[ExecutionContext] = None,
+) -> str:
+    """Dispatch a compatibility command only after catalog resolution."""
+
+    execution_context = _execution_context_or_current(context)
+    tool_def, catalog_error = _catalog_tool_definition(tool_name)
+    if tool_def is None:
+        return _execution_denied(catalog_error, execution_context.request_id)
+    command = shlex.join([tool_def.name, *arguments])
+    return run_tool_by_command(command, execution_context)
+
+
+def _legacy_menu_arguments(
+    tool_key: str,
+    target: str,
+) -> tuple[list[str], str]:
+    """Translate stable menu keys without trusting their legacy callables."""
+
+    if tool_key == "13":
+        url = target if target.startswith(("http://", "https://")) else f"http://{target}"
+        return [url], ""
+    if tool_key == "16":
+        return ["ssh", target], ""
+    if tool_key == "33":
+        return [target, "scan"], ""
+    if tool_key in {
+        "18", "20", "21", "22", "23", "24", "25", "27",
+        "31", "36", "37", "38", "39", "40", "41", "42", "43", "44",
+    }:
+        return [], "legacy_menu_explicit_parameters_required"
+    if tool_key in {"29", "30", "32"}:
+        return [], "legacy_menu_explicit_shodan_action_required"
+    if tool_key in {"45", "46", "47"}:
+        return [], "legacy_menu_explicit_c2_parameters_required"
+    return [target], ""
 
 
 def _tool_result_status(output: str) -> str:
@@ -437,7 +587,9 @@ def _plan_contextual_web_jobs(web_urls: list[str], results: dict, plan_lines: li
             plan_lines.append(f"skip wpscan_{suffix}: not_applicable:no_wordpress_signal")
 
         if _web_has_input_surface(results, url):
-            jobs.append(("sqlmap", url, f"sqlmap_{suffix}"))
+            plan_lines.append(
+                f"gated sqlmap_{suffix}: requires explicit tool selection/approval"
+            )
         else:
             plan_lines.append(f"skip sqlmap_{suffix}: not_applicable:no_input_surface")
 
@@ -448,7 +600,7 @@ def _plan_contextual_web_jobs(web_urls: list[str], results: dict, plan_lines: li
 
 def _run_exhaustive_applicable_coverage(target: str, results: dict) -> dict:
     """Run all available safe/applicable discovery and verification layers."""
-    plan_lines = ["[X MODE PLAN]", "base: run_default_recon"]
+    plan_lines = ["[X MODE PLAN]", "base: registered_default_recon"]
     nmap_output = results.get("nmap", "")
     curl_output = results.get("curl_headers", "")
     whatweb_output = results.get("whatweb", "")
@@ -545,21 +697,16 @@ def run_single_tool(
     execution_context: Optional[ExecutionContext] = None,
 ) -> str:
     """Run one tool by its menu key. Used by AI tool dispatch."""
-    if tool_key in TOOLS_MENU:
-        name, func = TOOLS_MENU[tool_key]
+    if tool_key in _MENU_TOOL_IDS:
         context = _execution_context_or_current(execution_context)
-        policy_name = _MENU_POLICY_NAMES.get(tool_key, name.replace(" ", "_"))
-        invocation = ToolInvocation(
-            executable=f"menu:{tool_key}",
-            argv=(f"menu:{tool_key}", target),
-            raw_command=f"menu:{tool_key} {target}",
-            registered_name=policy_name,
-            targets=(target,),
-        )
-        decision = _EXECUTION_POLICY.authorize_registered(invocation, context)
-        if not decision.allowed:
-            return _execution_denied(decision.reason, context.request_id)
-        return _bounded_tool_result(func(target), context)
+        policy_name = _MENU_TOOL_IDS[tool_key]
+        tool_def, catalog_error = _catalog_tool_definition(policy_name)
+        if tool_def is None:
+            return _execution_denied(catalog_error, context.request_id)
+        arguments, argument_error = _legacy_menu_arguments(tool_key, target)
+        if argument_error:
+            return _execution_denied(argument_error, context.request_id)
+        return _run_catalog_command(tool_def.name, arguments, context)
     return f"[!] Unknown tool key: {tool_key}"
 
 
@@ -573,7 +720,7 @@ def format_recon_for_llm(results: dict) -> str:
         output += f"\n{'='*50}\n"
         output += f"[ {tool.upper()} OUTPUT ]\n"
         output += f"{'='*50}\n"
-        output += data.strip() + "\n"
+        output += str(data).strip() + "\n"
     return output
 
 
@@ -589,6 +736,21 @@ def _execution_context_or_current(
 
 def _execution_denied(reason: str, request_id: str) -> str:
     return f"[!] Execution denied: {reason} (request_id={request_id})"
+
+
+def _configured_killchain_denial(tool_name: str) -> str:
+    """Apply config-owned kill-chain gates at the final dispatch boundary."""
+
+    from core.killchain.policy import (
+        TOOL_STAGE_MAP,
+        master_gate_message,
+        stage_gate_message,
+    )
+
+    if tool_name == "killchain_full":
+        return master_gate_message()
+    stage = TOOL_STAGE_MAP.get(tool_name)
+    return stage_gate_message(stage) if stage else ""
 
 
 def _redact_command(command: str) -> str:
@@ -702,11 +864,6 @@ def run_tool_by_command(
         "smb_enum": "Use [CMD: enum4linux -a IP]",
         "msfconsole": "Use [MSF: module/path | RHOSTS=IP] instead of calling msfconsole directly",
     }
-    if cmd_lower in _FAKE_TOOLS:
-        hint = _FAKE_TOOLS[cmd_lower]
-        target_hint = _extract_ip(parts[1]) if len(parts) > 1 else "TARGET"
-        return f"[!] '{parts[0]}' is NOT a real tool. AI: Use correct syntax: {hint.replace('IP', target_hint)}"
-
     from core.tools.registry import get_tool
 
     alias_token_count = 1
@@ -717,6 +874,15 @@ def run_tool_by_command(
         if tool_def:
             cmd_lower = two_word_name
             alias_token_count = 2
+
+    if tool_def is not None and not getattr(tool_def, "enabled", True):
+        return _execution_denied("provider_disabled", context.request_id)
+
+    # Historical hints must never shadow a canonical registry name or alias.
+    if not tool_def and cmd_lower in _FAKE_TOOLS:
+        hint = _FAKE_TOOLS[cmd_lower]
+        target_hint = _extract_ip(parts[1]) if len(parts) > 1 else "TARGET"
+        return f"[!] '{parts[0]}' is NOT a real tool. AI: Use correct syntax: {hint.replace('IP', target_hint)}"
 
     if not tool_def:
         decision = _EXECUTION_POLICY.authorize_command(command_str, context)
@@ -755,6 +921,34 @@ def run_tool_by_command(
             target_ip = args[-1]
             extra_flags = args[:-1]
             return [target_ip], {"extra_flags": extra_flags if extra_flags else None}
+
+        if t_def.name == "rustscan" and args:
+            target = None
+            flags = []
+            index = 0
+            while index < len(args):
+                arg = args[index]
+                if arg in {"-a", "--addresses"} and index + 1 < len(args):
+                    if target is None:
+                        target = args[index + 1]
+                    index += 2
+                    continue
+                if arg.startswith("--addresses="):
+                    if target is None:
+                        target = arg.split("=", 1)[1]
+                    index += 1
+                    continue
+                flags.append(arg)
+                index += 1
+            if target is None:
+                target_index = next(
+                    (idx for idx in range(len(flags) - 1, -1, -1) if not flags[idx].startswith("-")),
+                    None,
+                )
+                if target_index is None:
+                    return [], {}
+                target = flags.pop(target_index)
+            return [target], {"extra_flags": flags if flags else None}
 
         # Searchsploit specific stripping logic
         if t_def.name == "searchsploit" and args:
@@ -805,6 +999,8 @@ def run_tool_by_command(
             "security_headers_check",
             "cors_check",
             "ffuf",
+            "gobuster",
+            "dirb",
             "nikto",
             "sqlmap",
             "wpscan",
@@ -958,6 +1154,9 @@ def run_tool_by_command(
         decision = _EXECUTION_POLICY.authorize_registered(invocation, context)
         if not decision.allowed:
             return _execution_denied(decision.reason, context.request_id)
+        configured_denial = _configured_killchain_denial(tool_def.name)
+        if configured_denial:
+            return configured_denial
         print(f"  [94m[*] Dispatching registered tool: {tool_def.name}[0m")
         logging.info(
             "registered_tool_dispatch tool=%s request_id=%s argument_count=%d",
@@ -965,7 +1164,8 @@ def run_tool_by_command(
             context.request_id,
             max(0, len(parts) - alias_token_count),
         )
-        result = tool_def.func(*p_args, **p_kwargs)
+        with bind_execution_context(context):
+            result = tool_def.func(*p_args, **p_kwargs)
         return _bounded_tool_result(result, context)
     except Exception as e:
         logging.exception(
@@ -973,7 +1173,11 @@ def run_tool_by_command(
             tool_def.name,
             context.request_id,
         )
-        return f"[!] Error executing tool '{tool_def.name}': {e}"
+        safe_error = _redact_command(str(e))
+        return _bounded_tool_result(
+            f"[!] Error executing tool '{tool_def.name}': {safe_error}",
+            context,
+        )
 
 
 
@@ -998,28 +1202,36 @@ def interactive_tool_run(target: str) -> str:
         target_scope=(target,),
         allow_active_tools=True,
     )
+    with bind_execution_context(interactive_context):
+        return _interactive_tool_choice(target, choice, interactive_context)
+
+
+def _interactive_tool_choice(
+    target: str,
+    choice: str,
+    interactive_context: ExecutionContext,
+) -> str:
+    """Execute one already-authorized interactive menu selection."""
 
     if choice == "a":
-        results = run_default_recon(target)
+        results = _run_registered_default_recon(target)
         return format_recon_for_llm(results)
 
     if choice == "x":
-        results = run_default_recon(target)
+        results = _run_registered_default_recon(target)
         results = _run_exhaustive_applicable_coverage(target, results)
         print("\n  [*] Phase 3: Kill chain vulnerability assessment...")
-        try:
-            from core.killchain import vuln_assess
-            recon_blob = format_recon_for_llm(results)
-            results["vuln_assess"] = vuln_assess(target, recon_blob)
-        except ImportError:
-            results["vuln_assess"] = "[!] core.killchain package not found — skipping vuln assessment"
-        except Exception as exc:
-            results["vuln_assess"] = f"[!] vuln_assess error: {exc}"
+        recon_blob = format_recon_for_llm(results)
+        results["vuln_assess"] = _run_catalog_command(
+            "killchain_vuln_assess",
+            [target, recon_blob],
+            interactive_context,
+        )
         return format_recon_for_llm(results)
 
     if choice == "n":
-        results = run_default_recon(target)
-        n_mode_plan = ["[N MODE PLAN]", "base: run_default_recon"]
+        results = _run_registered_default_recon(target)
+        n_mode_plan = ["[N MODE PLAN]", "base: registered_default_recon"]
 
         # ── PORT-AWARE EXTENDED TOOLS ──────────────────────────
         nmap_output = results.get("nmap", "")
@@ -1043,69 +1255,50 @@ def interactive_tool_run(target: str) -> str:
             web_ports_detected = ["80"]  # default
         web_urls = _web_urls_from_ports(target, web_ports_detected) if has_web else []
 
-        # ── PHASE 1: Run web tools and SSH user enum in parallel ──
-        phase1_futures = {}
-        enum_users = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-            if has_web:
-                print(f"\n  [*] Web ports detected {web_ports_detected} — running extended web tools...")
-                n_mode_plan.append(f"web_surface: present ports={','.join(web_ports_detected)}")
-                phase1_futures[executor.submit(run_wpscan, target)] = "wpscan"
-                phase1_futures[executor.submit(run_sqlmap, target)] = "sqlmap"
-                phase1_futures[executor.submit(run_nikto, target)] = "nikto"
-                phase1_futures[executor.submit(run_web_login_bruteforce, target)] = "web_login_brute"
+        # ── PHASE 1: Registry/catalog/policy-gated discovery ──
+        phase1_jobs: list[tuple[str, str, str]] = []
+        if has_web:
+            print(f"\n  [*] Web ports detected {web_ports_detected} — running extended web tools...")
+            n_mode_plan.append(f"web_surface: present ports={','.join(web_ports_detected)}")
+            phase1_jobs.extend(
+                (tool_name, target, tool_name)
+                for tool_name in ("wpscan", "nikto")
+            )
+            for index, scrape_url in enumerate(web_urls):
+                phase1_jobs.append(("scrapling", scrape_url, f"scrapling_port{web_ports_detected[index]}"))
+                print(f"    [*] Scrapling: {scrape_url}")
+            n_mode_plan.append(
+                "gated web_login_brute: requires explicit credential-testing selection"
+            )
+            n_mode_plan.append(
+                "gated sqlmap: requires explicit tool selection/approval"
+            )
+        else:
+            print("\n  [*] No web ports open — skipping wpscan, sqlmap, nikto")
+            n_mode_plan.append("web_surface: not_detected")
 
-                # Scrape each web port independently.
-                for wp in web_ports_detected:
-                    proto = "https" if wp in ("443", "8443", "1443") else "http"
-                    scrape_url = f"{proto}://{target}:{wp}" if wp not in ("80", "443") else f"{proto}://{target}"
-                    phase1_futures[executor.submit(run_scrapling_fetch, scrape_url)] = f"scrapling_port{wp}"
-                    print(f"    [*] Scrapling: {scrape_url}")
-
-                # Run Nikto only on the primary port to avoid duplicate instances.
-                # was blocking the agent for 15+ minutes with timeouts
-                # Non-standard ports are covered by scrapling + nmap scripts
-            else:
-                print("\n  [*] No web ports open — skipping wpscan, sqlmap, nikto")
-                n_mode_plan.append("web_surface: not_detected")
-
-            if has_ssh:
-                print("  [*] SSH detected — running user enumeration first...")
-                n_mode_plan.append("ssh_surface: present")
-                phase1_futures[executor.submit(run_ssh_user_enum, target)] = "ssh_user_enum"
-
-            if has_ftp:
-                print("  [*] FTP detected — running bruteforce...")
-                n_mode_plan.append("ftp_surface: present")
-                phase1_futures[executor.submit(run_bruteforce, "ftp", target)] = "ftp_bruteforce"
-
-            if not phase1_futures:
-                print("  [*] No exploitable services found for extended tools.")
-
-            for future in concurrent.futures.as_completed(phase1_futures):
-                tool_name = phase1_futures[future]
-                try:
-                    result = future.result()
-                    results[tool_name] = result
-                    if tool_name == "ssh_user_enum":
-                        result_str = str(result)
-                        if "UNRELIABLE" in result_str:
-                            print("  [!] SSH user enum results UNRELIABLE (server patched) — using defaults")
-                        elif "VALID USER" in result_str:
-                            import re as _re
-                            for m in _re.finditer(r'[✓]\s+(\S+)', result_str):
-                                enum_users.append(m.group(1))
-                            print(f"  [+] SSH enum found {len(enum_users)} valid users: {enum_users}")
-                except Exception as exc:
-                    results[tool_name] = f"[!] {tool_name} error: {exc}"
-
-        # ── PHASE 2: SSH bruteforce with discovered users ──
         if has_ssh:
-            print(f"\n  [*] Phase 2: SSH bruteforce with {len(enum_users) if enum_users else 'default'} users...")
-            try:
-                results["ssh_bruteforce"] = run_bruteforce("ssh", target, extra_users=enum_users or None)
-            except Exception as exc:
-                results["ssh_bruteforce"] = f"[!] ssh_bruteforce error: {exc}"
+            n_mode_plan.extend((
+                "ssh_surface: present",
+                "gated ssh_user_enum: requires explicit account-enumeration selection",
+                "gated ssh_bruteforce: requires explicit credential-testing selection",
+            ))
+
+        if has_ftp:
+            n_mode_plan.extend((
+                "ftp_surface: present",
+                "gated ftp_bruteforce: requires explicit credential-testing selection",
+            ))
+
+        if phase1_jobs:
+            _run_registered_extended_tools_concurrent(
+                results,
+                n_mode_plan,
+                phase1_jobs,
+                max_workers=8,
+            )
+        else:
+            print("  [*] No applicable policy-gated extended tools found.")
 
         # ── PHASE 2.5: Registry-aware safe/deep coverage ─────────
         print("\n  [*] Phase 2.5: Registry-aware safe/deep coverage...")
@@ -1149,14 +1342,12 @@ def interactive_tool_run(target: str) -> str:
 
         # Phase 3: vulnerability assessment
         print("\n  [*] Phase 3: Kill chain vulnerability assessment...")
-        try:
-            from core.killchain import vuln_assess
-            recon_blob = format_recon_for_llm(results)
-            results["vuln_assess"] = vuln_assess(target, recon_blob)
-        except ImportError:
-            results["vuln_assess"] = "[!] core.killchain package not found — skipping vuln assessment"
-        except Exception as exc:
-            results["vuln_assess"] = f"[!] vuln_assess error: {exc}"
+        recon_blob = format_recon_for_llm(results)
+        results["vuln_assess"] = _run_catalog_command(
+            "killchain_vuln_assess",
+            [target, recon_blob],
+            interactive_context,
+        )
 
         return format_recon_for_llm(results)
 
@@ -1409,8 +1600,7 @@ def run_arbitrary_cmd(
 
     This name is retained for compatibility. Automatic callers no longer get
     arbitrary process execution: registered tools are invoked through their
-    typed Python functions, one compatibility binary is argv-only allowlisted,
-    and every unknown command fails closed.
+    typed Python functions and every unknown command fails closed.
     """
     context = _execution_context_or_current(execution_context)
     decision = _EXECUTION_POLICY.authorize_command(cmd_str, context)
@@ -1423,13 +1613,9 @@ def run_arbitrary_cmd(
         return run_managed_shell(cmd_str, context)
     if invocation.registered_name:
         return run_tool_by_command(cmd_str, context)
-    return _execute_process(
-        list(invocation.argv),
-        context=context,
-        tool=invocation.executable,
-        timeout=_tool_timeout(invocation.executable, context),
-        shell=False,
-        display_command=shlex.join(invocation.argv),
+    return _execution_denied(
+        "unregistered_direct_execution_disabled",
+        context.request_id,
     )
 
 
@@ -1645,5 +1831,12 @@ def _run_c2_build(build_type: str, target: str) -> str:
 
 if __name__ == "__main__":
     target = input("Enter test target (IP or domain): ").strip()
-    results = run_default_recon(target)
+    main_context = ExecutionContext.operator(
+        actor="runner_main",
+        approval_id="runner-main-default-recon",
+        target_scope=(target,),
+        allow_active_tools=False,
+    )
+    with bind_execution_context(main_context):
+        results = _run_registered_default_recon(target)
     print(format_recon_for_llm(results))

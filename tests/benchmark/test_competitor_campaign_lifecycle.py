@@ -55,6 +55,11 @@ PUBLISHED_COMPETITOR_RESULTS = Path(__file__).parents[2] / "benchmarks" / "compe
 SECRET_VALUE = "campaign-secret-canary-9d831c"
 
 
+@pytest.fixture(autouse=True)
+def _stub_repository_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(campaign_module, "_repository_revision", lambda: "0" * 40)
+
+
 def test_schedule_rotation_balances_every_position_and_reverses_carryover() -> None:
     systems = ("alpha", "beta", "gamma")
     orders = [_counterbalanced_order(systems, repetition) for repetition in range(1, 7)]

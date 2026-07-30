@@ -58,7 +58,8 @@ class ActionCatalog:
             adapter=self._adapters[action_id],
             canonical_id=action_id,
             requested_name=str(name),
-            alias_used=requested != action_id,
+            alias_used=requested
+            not in {action_id, self._key(self._adapters[action_id].descriptor.name)},
         )
 
     def require(self, name: str) -> ResolvedAction:
@@ -96,8 +97,13 @@ class ActionCatalog:
 
         names = plugin_names if plugin_names is not None else sorted(manager.plugins)
         adapters = tuple(PluginActionAdapter(manager, name) for name in names)
+        staged = ActionCatalog()
+        staged._adapters = dict(self._adapters)
+        staged._names = dict(self._names)
         for adapter in adapters:
-            self.register(adapter)
+            staged.register(adapter)
+        self._adapters = staged._adapters
+        self._names = staged._names
         return adapters
 
     def candidates(

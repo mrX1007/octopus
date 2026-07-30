@@ -8,8 +8,9 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from coverage import Coverage
 
-from scripts.quality import coverage_gate, docs_gate, format_gate, sbom
+from scripts.quality import coverage_gate, docs_gate, format_gate, go_coverage_gate, sbom
 
 pytestmark = pytest.mark.contract
 
@@ -21,10 +22,25 @@ def test_global_coverage_floor_is_raised_and_synchronized() -> None:
     config.read(ROOT / "quality" / "coverage-ci.ini", encoding="utf-8")
     floor = config.getfloat("report", "fail_under")
 
-    assert floor >= 58.0
+    assert floor == 100.0
     assert coverage_gate._argument_parser().parse_args([]).fail_under == floor
+    assert coverage_gate._argument_parser().parse_args([]).diff_fail_under == 100.0
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert f"--fail-under {floor:.2f}" in workflow
+    assert "--diff-fail-under 100" in workflow
+    for package in ("core/actions", "core/execution", "core/benchmarks"):
+        assert f"--package-fail-under {package}=100" in workflow
+    assert "octopus.py octopus_c2.py search.py" in workflow
+
+    measured = Coverage(config_file=str(ROOT / "quality" / "coverage-ci.ini"))
+    assert measured.get_exclude_list() == []
+    assert measured.get_exclude_list("partial") == []
+    assert set(config.get("run", "omit").split()) == {
+        "build/*",
+        "tests/*",
+        "vendor/*",
+        "venv/*",
+    }
 
     isolated = coverage_gate._argument_parser().parse_args(["--data-file", "isolated.coverage"])
     assert isolated.data_file == Path("isolated.coverage")
@@ -43,6 +59,28 @@ def test_mysql_ci_uses_application_environment_contract() -> None:
     assert "          DB_PASSWORD:" not in workflow
     assert "requirements/locks/linux-x86_64/cp310/test.txt \\" in workflow
     assert "requirements/locks/linux-x86_64/cp310/mysql.txt" in workflow
+
+
+def test_go_coverage_gate_is_fail_closed_at_one_hundred_percent() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    parser = go_coverage_gate._argument_parser()
+
+    args = parser.parse_args(["--profile", "coverage.out"])
+    assert args.fail_under == 100.0
+    assert "go test\n          -mod=readonly" in workflow
+    assert "-covermode=atomic" in workflow
+    assert "-coverpkg=./..." in workflow
+    assert '-coverprofile="${RUNNER_TEMP}/c2-go.coverage.out"' in workflow
+    assert "scripts/quality/go_coverage_gate.py" in workflow
+    assert '--profile "${RUNNER_TEMP}/c2-go.coverage.out"' in workflow
+    assert "--fail-under 100" in workflow
+    assert "name: coverage-go" in workflow
+    assert "go vet -mod=readonly ./..." in workflow
+    assert "go build -mod=readonly -trimpath" in workflow
+    assert "git diff --exit-code -- go.mod go.sum" in workflow
+    assert "working-directory: ${{ github.workspace }}" in workflow
+    assert "git ls-files -z -- ':(top,glob)**/*.go'" in workflow
+    assert 'gofmt -l "${go_files[@]}"' in workflow
 
 
 def test_nightly_external_tool_smoke_is_fail_closed() -> None:

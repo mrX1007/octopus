@@ -17,8 +17,6 @@ except ImportError:
     def find_all_wordlists(cat): return []
 
 import logging
-import secrets
-import string
 
 from core.killchain.exploitation import _EXPLOITABLE_SUIDS, _LINPEAS_URL, _PRIVESC_CHECKS, _SUID_SKIP
 from core.killchain.exploits import get_privesc_exploits
@@ -41,15 +39,6 @@ except ImportError:
 
 logger = logging.getLogger("octopus.killchain.privesc")
 
-# ── Configurable backdoor password (generated per-run for OPSEC) ──
-# This is the password SET on targets during exploits like DirtyCow,
-# writable /etc/shadow, etc. Randomized to avoid static IOCs.
-def _gen_backdoor_pass() -> str:
-    """Generate a random 12-char backdoor password."""
-    alphabet = string.ascii_letters + string.digits + "!@#$"
-    return "".join(secrets.choice(alphabet) for _ in range(12))
-
-BACKDOOR_PASSWORD = CFG.get("killchain", {}).get("backdoor_password", _gen_backdoor_pass())
 BACKDOOR_USER = "firefart"  # DirtyCow default username
 BACKDOOR_SALT = "octopus"
 

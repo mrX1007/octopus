@@ -204,18 +204,49 @@ def test_registered_policy_covers_limits_capabilities_special_actions_and_local_
         "plugin",
         argv=("plugin", "demo", "10.0.0.5", "exploit"),
     )
+    sqlmap = _invocation("sqlmap")
     automatic = _context(CAP_REGISTERED_TOOL, scope=("10.0.0.5",))
 
     assert policy.authorize_registered(cpanel_scan, automatic).allowed
     assert policy.authorize_registered(cpanel_cmd, automatic).reason == "active_tool_requires_approval"
     assert policy.authorize_registered(plugin_scan, automatic).allowed
     assert policy.authorize_registered(plugin_exploit, automatic).reason == "active_tool_requires_approval"
+    assert policy.authorize_registered(sqlmap, automatic).reason == "active_tool_requires_approval"
+    assert policy.authorize_registered(
+        sqlmap,
+        _context(
+            CAP_REGISTERED_TOOL,
+            CAP_ACTIVE_TOOL,
+            scope=("10.0.0.5",),
+            approved=True,
+        ),
+    ).allowed
     assert policy.authorize_registered(
         _invocation("prowler_scan", targets=("not a network target",)), automatic
     ).allowed
 
 
-def test_direct_policy_is_allowlisted_scoped_and_capability_gated():
+def test_registered_policy_rejects_forged_and_mismatched_registry_identity():
+    policy = ExecutionPolicy()
+    context = _context(CAP_REGISTERED_TOOL)
+    unknown = _invocation("totally_fake_registered_tool", targets=())
+    mismatched = ToolInvocation(
+        executable="nmap",
+        argv=("nmap", "10.0.0.5"),
+        raw_command="nmap 10.0.0.5",
+        registered_name="whois",
+        targets=("10.0.0.5",),
+    )
+
+    assert policy.authorize_registered(unknown, context).reason == (
+        "unknown_registered_tool:totally_fake_registered_tool"
+    )
+    assert policy.authorize_registered(mismatched, context).reason == (
+        "registered_tool_mismatch"
+    )
+
+
+def test_direct_policy_is_disabled_and_capability_gated():
     policy = ExecutionPolicy()
     invocation = ToolInvocation(
         executable="rustscan",
@@ -229,11 +260,8 @@ def test_direct_policy_is_allowlisted_scoped_and_capability_gated():
     ).reason == "invalid_resource_limits"
     assert policy.authorize_direct(invocation, _context()).reason == "missing_capability:direct_binary"
     assert policy.authorize_direct(
-        invocation, _context(CAP_DIRECT_BINARY, scope=("10.0.0.6",))
-    ).reason.startswith("target_out_of_scope:")
-    assert policy.authorize_direct(
         invocation, _context(CAP_DIRECT_BINARY, scope=("10.0.0.5",))
-    ).allowed
+    ).reason == "unknown_tool:rustscan"
     unknown = ToolInvocation("unknown", ("unknown",), "unknown")
     assert policy.authorize_direct(
         unknown, _context(CAP_DIRECT_BINARY)
@@ -314,6 +342,10 @@ def test_command_policy_routes_registered_direct_shell_and_parse_failures():
     assert policy.authorize_command("echo 'unterminated", automatic).reason == "invalid_quoting"
     assert policy.authorize_command("nmap 10.0.0.5", automatic).allowed
     assert policy.authorize_command("rustscan -a 10.0.0.5", automatic).allowed
+    assert policy.authorize_command(
+        "rustscan -a 10.0.0.5",
+        _context(CAP_REGISTERED_TOOL, scope=("10.0.0.5",)),
+    ).allowed
     assert policy.authorize_command("unknown", automatic).reason == "unknown_tool:unknown"
     assert policy.authorize_command(
         "unknown | next", automatic

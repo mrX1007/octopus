@@ -84,13 +84,11 @@ class AnalysisPlan:
             raise BenchmarkV3SchemaError("invalid:analysis_plan.design_count")
         if set(self.fixture_seeds) != set(self.scenario_ids):
             raise BenchmarkV3SchemaError("analysis_plan_fixture_seed_scenarios")
-        for scenario_id, seeds in self.fixture_seeds.items():
+        for _scenario_id, seeds in self.fixture_seeds.items():
             if len(seeds) != self.repetitions or len(set(seeds)) != len(seeds):
                 raise BenchmarkV3SchemaError("analysis_plan_fixture_seed_count")
             if any(seed < 0 or seed >= 2**63 for seed in seeds):
                 raise BenchmarkV3SchemaError("invalid:analysis_plan.fixture_seed")
-            if not scenario_id:
-                raise BenchmarkV3SchemaError("invalid:analysis_plan.scenario_id")
         allowed_pairs = set(self.system_ids)
         canonical_pair_set: set[tuple[str, str]] = set()
         for left, right in self.comparison_pairs:

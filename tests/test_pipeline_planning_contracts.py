@@ -322,6 +322,45 @@ def test_vulnerability_plan_enriches_safe_categories_from_surface_state():
     assert "ad_security_review" in tasks
 
 
+def test_plan_enrichment_limit_counts_only_new_noncritical_tasks(
+    monkeypatch,
+    tmp_path,
+):
+    import config
+    from core.ai.pipeline import AIPipeline
+
+    monkeypatch.setitem(config.CFG["strategy"], "plan_enrichment_limit", 1)
+    pipeline = AIPipeline(str(tmp_path / "plan-enrichment-limit.db"))
+    pipeline.tool_registry.task_has_available_tools = lambda _task: True
+    pipeline._rank_candidate_tasks = (
+        lambda candidates, _context, _critical: list(dict.fromkeys(candidates))
+    )
+    base_plan = [
+        {"agent": "DiscoveryAgent", "task": "vulnerability_assessment"},
+        {"agent": "AnalysisAgent", "task": "analyze_vulnerabilities"},
+    ]
+
+    optimized = pipeline._optimize_plan(
+        base_plan,
+        "vulnerability_assessment",
+        {
+            "host": "app.example.com",
+            "state": "recon_completed",
+            "services": ["http", "https"],
+            "open_questions": ["web_vulnerabilities_unknown"],
+            "surface_states": {"web": "confirmed_present", "api": "unknown"},
+            "target_model": {
+                "surface_states": {"web": "confirmed_present", "api": "unknown"},
+                "assets": {"domains": ["app.example.com"]},
+            },
+        },
+    )
+
+    original_tasks = {step["task"] for step in base_plan}
+    added = [step["task"] for step in optimized if step["task"] not in original_tasks]
+    assert len(added) == 1
+
+
 def test_llm_context_compaction_keeps_state_but_drops_raw_fact_noise():
     from core.ai.llm_context import compact_context_for_llm
 
@@ -408,13 +447,14 @@ def test_ollama_json_mode_disables_thinking_and_uses_structured_json(monkeypatch
     monkeypatch.setattr(ollama, "OLLAMA_RETRIES", 1)
     monkeypatch.setattr(ollama, "JSON_FORMAT", True)
     monkeypatch.setattr(ollama, "JSON_THINK", False)
+    monkeypatch.setattr(ollama, "JSON_TEMPERATURE", 0.27)
 
     result = ollama.ask_ollama("Return JSON", json_mode=True)
 
     assert result == '{"goal":"conclude"}'
     assert calls[0]["think"] is False
     assert calls[0]["format"] == "json"
-    assert calls[0]["options"]["temperature"] == 0
+    assert calls[0]["options"]["temperature"] == 0.27
     assert calls[0]["prompt"].startswith("Machine JSON mode.")
 
 

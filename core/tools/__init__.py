@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Tool package with backward-compatible public re-exports."""
+"""Tool package with a safe dispatch facade and compatibility re-exports.
+
+``dispatch_registered_tool`` is the application-facing execution boundary.
+The raw provider/process names are retained for existing integrations and are
+enumerated in ``DEPRECATED_TOOL_EXPORTS`` for machine-readable migration.
+"""
+
+from types import MappingProxyType
 
 from core.credentials import register_credential
 from core.tools.base import (
@@ -44,14 +51,18 @@ from core.tools.post_tools import (
     _run_waf_detect,
     run_default_recon,
 )
+from core.tools.public import dispatch_registered_tool
 from core.tools.recon_tools import (
     run_curl_headers,
     run_dig,
+    run_dirb,
     run_enum4linux,
     run_ffuf,
     run_ftp_anonymous_check,
+    run_gobuster,
     run_nikto,
     run_nmap,
+    run_rustscan,
     run_scrapling_crawl,
     run_scrapling_fetch,
     run_smbclient,
@@ -63,6 +74,7 @@ from core.tools.recon_tools import (
     run_whois,
     run_wpscan,
 )
+from core.tools.registry import get_all_names as _get_all_tool_names
 from core.tools.runner import (
     TOOLS_MENU,
     format_recon_for_llm,
@@ -74,7 +86,73 @@ from core.tools.runner import (
     run_tool_by_command,
 )
 
+# Immutable process-start snapshot used by runtime-contract checks. Dynamic
+# plugin/test registrations remain available through the live registry without
+# changing what this release advertises as its built-in tool set.
+BUILTIN_TOOL_NAMES = tuple(_get_all_tool_names())
+
+# Compatibility metadata is deliberately explicit.  It prevents documentation
+# and integration checks from treating a raw provider or process helper as the
+# preferred public execution boundary while preserving every historical import.
+LOW_LEVEL_EXECUTION_EXPORTS = (
+    "TOOLS_MENU",
+    "interactive_tool_run",
+    "run_arbitrary_cmd",
+    "run_managed_shell",
+    "run_python_repl",
+    "run_single_tool",
+    "run_tool",
+    "run_tool_by_command",
+)
+DIRECT_PROVIDER_EXPORTS = (
+    "_run_cpanel_exploit",
+    "_run_crack_hashes",
+    "_run_killchain_interactive",
+    "_run_killchain_stage",
+    "_run_shardbrowser_osint",
+    "_run_shodan_host",
+    "_run_shodan_interactive",
+    "_run_shodan_range",
+    "_run_shodan_vulns",
+    "_run_ssh_session_interactive",
+    "_run_waf_detect",
+    "run_bruteforce",
+    "run_curl_headers",
+    "run_default_recon",
+    "run_dig",
+    "run_dirb",
+    "run_enum4linux",
+    "run_ffuf",
+    "run_ftp_anonymous_check",
+    "run_gobuster",
+    "run_jmx2rce_cleanup",
+    "run_jmx2rce_rce",
+    "run_jmx2rce_read",
+    "run_jmx2rce_scan",
+    "run_nikto",
+    "run_nmap",
+    "run_rustscan",
+    "run_scrapling_crawl",
+    "run_scrapling_fetch",
+    "run_smbclient",
+    "run_smtp_probe",
+    "run_sqlmap",
+    "run_ssh_user_enum",
+    "run_sslscan",
+    "run_web_login_bruteforce",
+    "run_whatweb",
+    "run_whois",
+    "run_wpscan",
+)
+DEPRECATED_TOOL_EXPORTS = MappingProxyType(
+    dict.fromkeys(
+        (*LOW_LEVEL_EXECUTION_EXPORTS, *DIRECT_PROVIDER_EXPORTS),
+        "Use core.tools.dispatch_registered_tool with an ExecutionContext",
+    ),
+)
+
 __all__ = [
+    "BUILTIN_TOOL_NAMES",
     "C_BLUE",
     "C_CYAN",
     "C_GREEN",
@@ -83,6 +161,9 @@ __all__ = [
     "C_RED",
     "C_RESET",
     "C_YELLOW",
+    "DEPRECATED_TOOL_EXPORTS",
+    "DIRECT_PROVIDER_EXPORTS",
+    "LOW_LEVEL_EXECUTION_EXPORTS",
     "TOOLS_MENU",
     "ToolResult",
     "_fmt_elapsed",
@@ -99,6 +180,7 @@ __all__ = [
     "_run_shodan_vulns",
     "_run_ssh_session_interactive",
     "_run_waf_detect",
+    "dispatch_registered_tool",
     "format_recon_for_llm",
     "get_all_known_creds_for_target",
     "get_best_creds_for_target",
@@ -112,9 +194,11 @@ __all__ = [
     "run_curl_headers",
     "run_default_recon",
     "run_dig",
+    "run_dirb",
     "run_enum4linux",
     "run_ffuf",
     "run_ftp_anonymous_check",
+    "run_gobuster",
     "run_jmx2rce_cleanup",
     "run_jmx2rce_rce",
     "run_jmx2rce_read",
@@ -123,6 +207,7 @@ __all__ = [
     "run_nikto",
     "run_nmap",
     "run_python_repl",
+    "run_rustscan",
     "run_scrapling_crawl",
     "run_scrapling_fetch",
     "run_single_tool",

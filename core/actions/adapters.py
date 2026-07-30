@@ -147,10 +147,7 @@ class RegisteredToolAdapter(ActionAdapter):
         )
 
     def _command(self, request: ActionRequest) -> str:
-        allowed_names = {
-            self.descriptor.name.casefold(),
-            *(alias.casefold() for alias in self.descriptor.aliases),
-        }
+        allowed_names = (self.descriptor.name, *self.descriptor.aliases)
         provider_command = request.provider_command_for(self.descriptor.action_id)
         if not provider_command:
             provider_command = request.provider_command_for(self.descriptor.name)
@@ -160,7 +157,16 @@ class RegisteredToolAdapter(ActionAdapter):
                 parts = shlex.split(command, posix=True)
             except ValueError as exc:
                 raise ValueError("invalid_action_command_quoting") from exc
-            if not parts or parts[0].casefold() not in allowed_names:
+            normalized_parts = tuple(part.casefold() for part in parts)
+            allowed_prefixes = {
+                tuple(part.casefold() for part in shlex.split(name, posix=True))
+                for name in allowed_names
+                if str(name).strip()
+            }
+            if not parts or not any(
+                normalized_parts[: len(prefix)] == prefix
+                for prefix in allowed_prefixes
+            ):
                 raise ValueError("action_command_does_not_match_descriptor")
             return command
         parts = [self.descriptor.name]

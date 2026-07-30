@@ -8,8 +8,9 @@ from typing import Any, Optional
 from core.ai.llm_context import compact_context_for_llm
 from core.ai.policy import DeterministicPolicy
 
+CONTEXT_WINDOW = 5
 with contextlib.suppress(ImportError):
-    from core.ai.ollama_client import ask_ollama
+    from core.ai.ollama_client import CONTEXT_WINDOW, ask_ollama
 
 logger = logging.getLogger("octopus.director")
 
@@ -61,7 +62,7 @@ RULES:
 {json.dumps(llm_context, ensure_ascii=False, separators=(",", ":"))}
 
 Recent Goal History:
-{json.dumps(goal_history[-5:], ensure_ascii=False, separators=(",", ":"))}
+{json.dumps(goal_history[-max(1, int(CONTEXT_WINDOW)):], ensure_ascii=False, separators=(",", ":"))}
 
 Based on the context, output the next goal in JSON format. Keep thought under 180 characters."""
 
@@ -174,6 +175,14 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
 
     def _goal_allowed_by_policy(self, goal: str, context: dict[str, Any]) -> bool:
         policy = context.get("automation_policy") or {}
+        from core.killchain.policy import GOAL_STAGE_MAP
+
+        killchain_stage = GOAL_STAGE_MAP.get(goal)
+        configured = context.get("killchain_policy") or {}
+        if killchain_stage and configured:
+            automated = configured.get("automated_stages") or {}
+            if not bool(automated.get(killchain_stage, True)):
+                return False
         if goal == "persistence":
             return bool(policy.get("auto_persistence", False))
         if goal == "internal_reconnaissance":

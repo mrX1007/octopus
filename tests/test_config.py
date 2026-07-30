@@ -67,26 +67,30 @@ class TestDeepMerge:
         assert result["db"]["host"] == "remote"
         assert result["db"]["port"] == 3306
 
-    def test_merge_adds_new_keys(self):
-        from config import _deep_merge
+    def test_merge_rejects_unknown_keys(self):
+        from config import ConfigValidationError, _deep_merge
         base = {"a": 1}
         override = {"b": 2}
-        result = _deep_merge(base, override)
-        assert result["a"] == 1
-        assert result["b"] == 2
+
+        with pytest.raises(ConfigValidationError, match="unknown configuration key 'b'"):
+            _deep_merge(base, override)
 
     def test_merge_does_not_mutate_base(self):
         from config import _deep_merge
-        base = {"a": {"x": 1}}
+        base = {"a": {"x": 1, "y": 0}}
         override = {"a": {"y": 2}}
-        _deep_merge(base, override)
+        result = _deep_merge(base, override)
         # Base should not be mutated
-        assert "y" not in base["a"]
+        assert base["a"]["y"] == 0
+        assert result["a"]["y"] == 2
 
     def test_merge_detaches_untouched_nested_values_and_override(self):
         from config import _deep_merge
 
-        base = {"nested": {"items": ["base"]}}
+        base = {
+            "nested": {"items": ["base"]},
+            "extension": {"items": ["default"]},
+        }
         override = {"extension": {"items": ["override"]}}
         result = _deep_merge(base, override)
 
@@ -108,7 +112,7 @@ class TestDeepMerge:
 
 
 class TestConfigValidation:
-    def test_invalid_nested_sections_keep_defaults(self, tmp_path):
+    def test_invalid_nested_sections_fail_closed(self, tmp_path):
         import config
 
         path = tmp_path / "invalid.yaml"
@@ -116,37 +120,199 @@ class TestConfigValidation:
             "db: null\npaths: broken\nwordlists: []\ntools: null\n",
             encoding="utf-8",
         )
-        with patch("config._find_config", return_value=str(path)):
-            cfg = config.load_config()
+        with patch("config._find_config", return_value=str(path)), pytest.raises(
+            config.ConfigValidationError,
+            match=r"invalid configuration .*db must be a mapping",
+        ):
+            config.load_config()
 
-        assert cfg["db"] == config.DEFAULTS["db"]
-        assert cfg["paths"] == {
-            key: os.path.expanduser(value)
-            for key, value in config.DEFAULTS["paths"].items()
-        }
-        assert cfg["wordlists"] == config.DEFAULTS["wordlists"]
-        assert cfg["tools"] == config.DEFAULTS["tools"]
-
-    def test_invalid_known_leaf_keeps_default(self, tmp_path):
+    def test_invalid_known_leaf_fails_closed(self, tmp_path):
         import config
 
         path = tmp_path / "invalid-leaf.yaml"
         path.write_text("db:\n  host: null\n  user: 42\n", encoding="utf-8")
-        with patch("config._find_config", return_value=str(path)):
-            cfg = config.load_config()
+        with patch("config._find_config", return_value=str(path)), pytest.raises(
+            config.ConfigValidationError,
+            match=r"db.host must be string; got NoneType",
+        ):
+            config.load_config()
 
-        assert cfg["db"]["host"] == config.DEFAULTS["db"]["host"]
-        assert cfg["db"]["user"] == config.DEFAULTS["db"]["user"]
-
-    def test_non_mapping_yaml_falls_back_safely(self, tmp_path):
+    def test_non_mapping_yaml_fails_closed(self, tmp_path):
         import config
 
         path = tmp_path / "list.yaml"
         path.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
-        with patch("config._find_config", return_value=str(path)):
-            cfg = config.load_config()
+        with patch("config._find_config", return_value=str(path)), pytest.raises(
+            config.ConfigValidationError,
+            match="top-level YAML value must be a mapping",
+        ):
+            config.load_config()
 
-        assert cfg["db"] == config.DEFAULTS["db"]
+    def test_unknown_killchain_stage_names_fail_closed(self, tmp_path):
+        import config
+
+        path = tmp_path / "misspelled-stage.yaml"
+        path.write_text(
+            "killchain:\n  stages:\n    data_exfill: false\n",
+            encoding="utf-8",
+        )
+        with patch("config._find_config", return_value=str(path)), pytest.raises(
+            config.ConfigValidationError,
+            match=r"unknown killchain stage 'killchain\.stages\.data_exfill'",
+        ) as exc_info:
+            config.load_config()
+
+        assert "data_exfil" in str(exc_info.value)
+        assert "cleanup" in str(exc_info.value)
+
+    def test_known_killchain_stage_requires_a_boolean(self, tmp_path):
+        import config
+
+        path = tmp_path / "invalid-stage-type.yaml"
+        path.write_text(
+            'killchain:\n  stages:\n    cleanup: "false"\n',
+            encoding="utf-8",
+        )
+        with patch("config._find_config", return_value=str(path)), pytest.raises(
+            config.ConfigValidationError,
+            match=r"killchain\.stages\.cleanup must be boolean",
+        ):
+            config.load_config()
+
+    def test_out_of_range_numeric_values_fail_closed(self, tmp_path):
+        import config
+
+        path = tmp_path / "invalid-range.yaml"
+        path.write_text(
+            "strategy:\n  parallel_tools: 0\n",
+            encoding="utf-8",
+        )
+        with patch("config._find_config", return_value=str(path)), pytest.raises(
+            config.ConfigValidationError,
+            match=r"strategy\.parallel_tools must be >= 1",
+        ):
+            config.load_config()
+
+    def test_plan_enrichment_limit_zero_is_an_explicit_disable(self, tmp_path):
+        import config
+
+        path = tmp_path / "disable-enrichment.yaml"
+        path.write_text(
+            "strategy:\n  plan_enrichment_limit: 0\n",
+            encoding="utf-8",
+        )
+        with patch("config._find_config", return_value=str(path)):
+            loaded = config.load_config()
+
+        assert loaded["strategy"]["plan_enrichment_limit"] == 0
+
+    def test_negative_plan_enrichment_limit_fails_closed(self, tmp_path):
+        import config
+
+        path = tmp_path / "negative-enrichment.yaml"
+        path.write_text(
+            "strategy:\n  plan_enrichment_limit: -1\n",
+            encoding="utf-8",
+        )
+        with patch("config._find_config", return_value=str(path)), pytest.raises(
+            config.ConfigValidationError,
+            match=r"strategy\.plan_enrichment_limit must be >= 0",
+        ):
+            config.load_config()
+
+    def test_non_finite_numeric_values_fail_closed(self, tmp_path):
+        import config
+
+        path = tmp_path / "non-finite.yaml"
+        path.write_text("ollama:\n  top_p: .nan\n", encoding="utf-8")
+        with patch("config._find_config", return_value=str(path)), pytest.raises(
+            config.ConfigValidationError,
+            match=r"ollama\.top_p must be finite",
+        ):
+            config.load_config()
+
+    def test_malformed_explicit_yaml_never_falls_back_to_defaults(
+        self,
+        monkeypatch,
+        tmp_path,
+    ):
+        import config
+
+        path = tmp_path / "explicit.yaml"
+        path.write_text("killchain: [not, a, mapping]\n", encoding="utf-8")
+        monkeypatch.setenv("OCTOPUS_CONFIG", str(path))
+
+        with pytest.raises(
+            config.ConfigValidationError,
+            match=r"killchain must be a mapping",
+        ):
+            config.load_config()
+
+    def test_checked_in_config_has_exact_killchain_stage_contract(self):
+        from pathlib import Path
+
+        import yaml
+
+        import config
+
+        checked_in = yaml.safe_load(
+            Path(config.__file__).with_name("config.yaml").read_text(encoding="utf-8")
+        )
+        assert tuple(checked_in["killchain"]["stages"]) == config.KILLCHAIN_STAGE_KEYS
+        config._deep_merge(config.DEFAULTS, checked_in)
+
+    def test_dead_sensitive_killchain_keys_are_not_public_configuration(self):
+        from pathlib import Path
+
+        import yaml
+
+        import config
+
+        checked_in = yaml.safe_load(
+            Path(config.__file__).with_name("config.yaml").read_text(encoding="utf-8")
+        )
+        retired = {"exfil_dir", "auto_crack_after_privesc", "backdoor_password"}
+        assert retired.isdisjoint(config.DEFAULTS["killchain"])
+        assert retired.isdisjoint(checked_in["killchain"])
+
+
+class TestConfigPrecedence:
+    def test_explicit_then_user_then_system_then_bundled(self, monkeypatch):
+        import config
+
+        explicit = "/virtual/explicit.yaml"
+        user = "/virtual/user.yaml"
+        system = "/virtual/system.yaml"
+        bundled = "/virtual/bundled.yaml"
+        existing = {explicit, user, system, bundled}
+        monkeypatch.setattr(config, "_USER_CONFIG_PATH", user)
+        monkeypatch.setattr(config, "_SYSTEM_CONFIG_PATH", system)
+        monkeypatch.setattr(config, "_BUNDLED_CONFIG_PATH", bundled)
+        monkeypatch.setattr(config.os.path, "isfile", lambda path: path in existing)
+        monkeypatch.setenv("OCTOPUS_CONFIG", explicit)
+
+        assert config._find_config() == explicit
+
+        monkeypatch.delenv("OCTOPUS_CONFIG")
+        assert config._find_config() == user
+
+        existing.remove(user)
+        assert config._find_config() == system
+
+        existing.remove(system)
+        assert config._find_config() == bundled
+
+    def test_missing_explicit_path_does_not_fall_through(self, monkeypatch):
+        import config
+
+        monkeypatch.setenv("OCTOPUS_CONFIG", "/virtual/missing.yaml")
+        monkeypatch.setattr(config.os.path, "isfile", lambda _path: False)
+
+        with pytest.raises(
+            config.ConfigValidationError,
+            match="OCTOPUS_CONFIG does not reference a readable file",
+        ):
+            config._find_config()
 
 
 class TestEnvVarOverrides:
@@ -177,6 +343,16 @@ class TestEnvVarOverrides:
         from config import load_config
         cfg = load_config()
         assert cfg["ollama"]["num_ctx"] == 65536
+
+    @patch.dict(os.environ, {"OCTOBENCH_OLLAMA_CONTEXT_LENGTH": "not-an-int"})
+    def test_malformed_benchmark_context_override_fails_closed(self):
+        from config import ConfigValidationError, load_config
+
+        with pytest.raises(
+            ConfigValidationError,
+            match=r"OCTOBENCH_OLLAMA_CONTEXT_LENGTH must be an integer",
+        ):
+            load_config()
 
     @patch.dict(os.environ, {}, clear=False)
     def test_no_env_uses_yaml_defaults(self):

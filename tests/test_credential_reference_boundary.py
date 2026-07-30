@@ -39,10 +39,11 @@ def test_store_and_public_lookup_are_reference_only(credential_store):
 
     assert isinstance(credential, CredentialRef)
     assert credential.handle.startswith("credential://")
-    assert credential.secret_ref.startswith("secret://")
+    assert not hasattr(credential, "secret_ref")
     assert CANARY not in repr(credential_store._cache)
     assert CANARY not in repr(credential)
-    assert credential.secret_ref not in repr(credential.audit_dict())
+    assert "secret://" not in repr(credential.audit_dict())
+    assert "secret://" not in repr(credential_store.to_dict())
     assert not hasattr(credential_store, "_kg_available")
 
 
@@ -63,6 +64,267 @@ def test_plaintext_exists_only_inside_explicit_execution_context(credential_stor
     ) as compatibility_material:
         assert compatibility_material.password == CANARY
     assert compatibility_material.password == ""
+
+
+def test_port_is_part_of_handle_identity_and_execution_scope(credential_store):
+    secret_ref = credential_store.secret_store.store(
+        CANARY,
+        kind="credential:ssh",
+    )
+    port_22, created_22 = credential_store.register(
+        "ssh",
+        HOST,
+        "support",
+        secret_ref,
+        port=22,
+        quiet=True,
+    )
+    port_2222, created_2222 = credential_store.register(
+        "ssh",
+        HOST,
+        "support",
+        secret_ref,
+        port=2222,
+        quiet=True,
+    )
+
+    assert created_22 is True
+    assert created_2222 is True
+    assert port_22.handle != port_2222.handle
+    assert port_22.port == 22
+    assert port_2222.port == 2222
+    assert not hasattr(port_22, "secret_ref")
+
+
+def test_full_orchestrator_reveals_only_to_each_provider_and_sanitizes_results(
+    credential_store,
+    monkeypatch,
+):
+    from core.killchain import orchestrator
+
+    secret_ref = credential_store.secret_store.store(
+        CANARY,
+        kind="credential:ssh",
+    )
+    credential, _created = credential_store.register(
+        "ssh",
+        HOST,
+        "support",
+        secret_ref,
+        port=2222,
+        quiet=True,
+    )
+    calls = []
+
+    def provider(name):
+        def run(target, username, password, port):
+            calls.append((name, target, username, password, port))
+            return f"{name}:provider-result:{password}:{secret_ref}"
+
+        return run
+
+    monkeypatch.setattr(orchestrator, "master_gate_message", lambda: "")
+    monkeypatch.setattr(orchestrator, "stage_gate_message", lambda _stage: "")
+    monkeypatch.setattr(orchestrator, "run_privesc", provider("privesc"))
+    monkeypatch.setattr(orchestrator, "plant_persistence", provider("persistence"))
+    monkeypatch.setattr(orchestrator, "lateral_move", provider("lateral_movement"))
+    monkeypatch.setattr(orchestrator, "data_exfil", provider("data_exfil"))
+    monkeypatch.setattr(orchestrator, "stealth_cleanup", provider("cleanup"))
+    monkeypatch.setattr(orchestrator.os, "makedirs", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(orchestrator, "_generate_target_report", lambda *_args: None)
+
+    output = orchestrator.run_full_killchain(
+        HOST,
+        credential=credential.handle,
+        port=2222,
+    )
+
+    assert [call[0] for call in calls] == [
+        "privesc",
+        "persistence",
+        "lateral_movement",
+        "data_exfil",
+        "cleanup",
+    ]
+    assert all(call[1:] == (HOST, "support", CANARY, 2222) for call in calls)
+    assert CANARY not in output
+    assert secret_ref not in output
+    assert output.count("[REDACTED]") >= len(calls) * 2
+
+
+@pytest.mark.parametrize(
+    (
+        "service",
+        "registered_target",
+        "registered_port",
+        "call_target",
+        "call_user",
+        "call_port",
+        "expected_error",
+    ),
+    [
+        ("ldap", HOST, 2222, HOST, None, 2222, "scope mismatch"),
+        ("ssh", "198.51.100.74", 2222, HOST, None, 2222, "scope mismatch"),
+        ("ssh", HOST, 2222, HOST, "root", 2222, "username mismatch"),
+        ("ssh", HOST, 2222, HOST, None, 22, "port mismatch"),
+    ],
+)
+def test_full_orchestrator_rejects_mismatched_credential_scope_before_provider(
+    credential_store,
+    monkeypatch,
+    service,
+    registered_target,
+    registered_port,
+    call_target,
+    call_user,
+    call_port,
+    expected_error,
+):
+    from core.killchain import orchestrator
+
+    secret_ref = credential_store.secret_store.store(
+        CANARY,
+        kind=f"credential:{service}",
+    )
+    credential, _created = credential_store.register(
+        service,
+        registered_target,
+        "support",
+        secret_ref,
+        port=registered_port,
+        quiet=True,
+    )
+    calls = []
+    monkeypatch.setattr(orchestrator, "master_gate_message", lambda: "")
+    monkeypatch.setattr(
+        orchestrator,
+        "run_privesc",
+        lambda *_args: calls.append(_args) or "unexpected",
+    )
+
+    output = orchestrator.run_full_killchain(
+        call_target,
+        user=call_user,
+        credential=credential,
+        port=call_port,
+    )
+
+    assert expected_error in output
+    assert calls == []
+    assert CANARY not in output
+    assert secret_ref not in output
+
+
+def test_registered_killchain_wrapper_sanitizes_provider_error(
+    credential_store,
+    monkeypatch,
+):
+    import core.killchain
+    from core.killchain import policy
+    from core.tools import post_tools
+
+    secret_ref = credential_store.secret_store.store(
+        CANARY,
+        kind="credential:ssh",
+    )
+    credential, _created = credential_store.register(
+        "ssh",
+        HOST,
+        "support",
+        secret_ref,
+        port=22,
+        quiet=True,
+    )
+    seen = []
+
+    def failing_provider(target, username, password):
+        seen.append((target, username, password))
+        raise RuntimeError(f"provider rejected {password} from {secret_ref}")
+
+    monkeypatch.setattr(policy, "stage_gate_message", lambda _stage: "")
+    monkeypatch.setattr(core.killchain, "run_privesc", failing_provider)
+
+    output = post_tools.ai_privesc(
+        HOST,
+        user="support",
+        pwd=credential.handle,
+    )
+
+    assert seen == [(HOST, "support", CANARY)]
+    assert "RuntimeError" in output
+    assert CANARY not in output
+    assert secret_ref not in output
+    assert output.count("[REDACTED]") == 2
+
+
+def test_full_wrapper_passes_only_reference_and_sanitizes_provider_result(
+    credential_store,
+    monkeypatch,
+):
+    import core.killchain
+    from core.killchain import policy
+    from core.tools import post_tools
+
+    secret_ref = credential_store.secret_store.store(
+        CANARY,
+        kind="credential:ssh",
+    )
+    credential, _created = credential_store.register(
+        "ssh",
+        HOST,
+        "support",
+        secret_ref,
+        port=22,
+        quiet=True,
+    )
+    seen = []
+
+    def fake_orchestrator(target, *, credential):
+        seen.append((target, credential))
+        return f"provider-result:{CANARY}:{secret_ref}"
+
+    monkeypatch.setattr(policy, "master_gate_message", lambda: "")
+    monkeypatch.setattr(core.killchain, "run_full_killchain", fake_orchestrator)
+
+    output = post_tools.ai_full_killchain(
+        HOST,
+        user="support",
+        pwd=credential.handle,
+    )
+
+    assert seen == [(HOST, credential)]
+    assert isinstance(seen[0][1], CredentialRef)
+    assert not hasattr(seen[0][1], "secret_ref")
+    assert CANARY not in output
+    assert secret_ref not in output
+    assert output == "provider-result:[REDACTED]:[REDACTED]"
+
+
+def test_ssh_authentication_error_never_echoes_password(monkeypatch):
+    from core.killchain import ssh_helpers
+
+    class AuthenticationError(Exception):
+        pass
+
+    class Client:
+        def set_missing_host_key_policy(self, _policy):
+            pass
+
+        def connect(self, **_kwargs):
+            raise AuthenticationError(CANARY)
+
+    fake_paramiko = SimpleNamespace(
+        AuthenticationException=AuthenticationError,
+        AutoAddPolicy=lambda: object(),
+        SSHClient=Client,
+    )
+    monkeypatch.setattr(ssh_helpers, "paramiko", fake_paramiko)
+
+    client, error = ssh_helpers._ssh_connect(HOST, "support", CANARY)
+
+    assert client is None
+    assert error == f"Auth failed: support@{HOST}"
+    assert CANARY not in error
 
 
 def test_bruteforce_skip_never_prints_or_returns_secret(credential_store, capsys):

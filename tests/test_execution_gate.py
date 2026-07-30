@@ -314,7 +314,7 @@ def test_ai_cannot_bypass_active_gate_through_numeric_menu():
     finally:
         runner.TOOLS_MENU["20"] = old_entry
 
-    assert "active_tool_requires_approval" in denied
+    assert "legacy_menu_explicit_parameters_required" in denied
     assert calls == []
 
 

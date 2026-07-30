@@ -37,16 +37,13 @@ _DESTRUCTIVE_SHELL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Automatic execution has one direct binary compatibility exception. All
-# normal tools must be represented by the decorator registry.
-_AUTOMATIC_DIRECT_BINARIES = {"rustscan"}
-
 _MANUAL_APPROVAL_TOOLS = {
     "asrep_roast",
     "bruteforce",
     "build_go_implant",
     "build_ps_stager",
     "build_python_implant",
+    "crack_hashes",
     "dcsync",
     "deploy_c2_beacon",
     "dns_c2_listener",
@@ -68,6 +65,7 @@ _MANUAL_APPROVAL_TOOLS = {
     "socks_proxy",
     "ssh_exec",
     "ssh_session",
+    "sqlmap",
     "web_login_brute",
     "wmiexec",
 }
@@ -110,6 +108,7 @@ def registered_tool_requires_approval(
         action = arguments[3].casefold() if len(arguments) > 3 else "scan"
         requires_approval = action not in {"list", "ls", "scan", "check", "summary"}
     return requires_approval
+
 
 class InvalidInvocation(ValueError):
     """Raised when a command cannot be represented as a typed invocation."""
@@ -325,8 +324,71 @@ class ExecutionPolicy:
             return self._decision(False, "missing_capability:registered_tool", context, invocation)
 
         name = invocation.registered_name or invocation.executable
+        policy_names = tuple(
+            dict.fromkeys(
+                candidate
+                for candidate in (invocation.registered_name, invocation.executable)
+                if candidate
+            )
+        )
+        canonical_killchain_name = None
+        from core.killchain.policy import (
+            canonical_killchain_tool,
+            registered_tool_gate_reason,
+        )
+
+        for policy_name in policy_names:
+            configured_denial = registered_tool_gate_reason(policy_name)
+            if configured_denial:
+                return self._decision(
+                    False,
+                    configured_denial,
+                    context,
+                    invocation,
+                )
+            canonical_killchain_name = (
+                canonical_killchain_name
+                or canonical_killchain_tool(policy_name)
+            )
+
+        # ``registered_name`` is caller-supplied metadata at this boundary. It
+        # must resolve to the same canonical ToolDef as the executable/alias in
+        # argv before it can influence approval or dispatch classification.
+        try:
+            import core.tools  # noqa: F401
+            from core.tools.registry import get_tool
+        except ImportError:
+            return self._decision(
+                False,
+                "registered_tool_registry_unavailable",
+                context,
+                invocation,
+            )
+
+        registered_tool = get_tool(name)
+        if registered_tool is None:
+            return self._decision(
+                False,
+                f"unknown_registered_tool:{str(name)[:120]}",
+                context,
+                invocation,
+            )
+        command_tool = get_tool(invocation.executable)
+        if command_tool is None and len(invocation.argv) >= 2:
+            command_tool = get_tool(
+                f"{invocation.argv[0]} {invocation.argv[1]}"
+            )
+        if command_tool is None or command_tool.name != registered_tool.name:
+            return self._decision(
+                False,
+                "registered_tool_mismatch",
+                context,
+                invocation,
+            )
+        name = registered_tool.name
+
         requires_approval = registered_tool_requires_approval(
-            name,
+            canonical_killchain_name or name,
             invocation.argv,
         )
         if requires_approval and (
@@ -353,12 +415,12 @@ class ExecutionPolicy:
             return self._decision(False, "invalid_resource_limits", context, invocation)
         if not context.has(CAP_DIRECT_BINARY):
             return self._decision(False, "missing_capability:direct_binary", context, invocation)
-        if invocation.executable not in _AUTOMATIC_DIRECT_BINARIES:
-            return self._decision(False, f"unknown_tool:{invocation.executable}", context, invocation)
-        allowed, reason = self._targets_allowed(invocation.targets, context)
-        if not allowed:
-            return self._decision(False, reason, context, invocation)
-        return self._decision(True, "allowlisted_binary_authorized", context, invocation)
+        return self._decision(
+            False,
+            f"unknown_tool:{invocation.executable}",
+            context,
+            invocation,
+        )
 
     def authorize_shell(
         self,

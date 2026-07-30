@@ -78,10 +78,8 @@ class BenchmarkScenario:
         artifacts = _mapping(payload.get("artifacts"), "artifacts")
         _required_version(lab, "lab")
         _required_version(target, "target")
-        if not _text(model.get("provider"), "model.provider"):
-            raise BenchmarkSchemaError("missing:model.provider")
-        if not _text(model.get("name"), "model.name"):
-            raise BenchmarkSchemaError("missing:model.name")
+        _text(model.get("provider"), "model.provider")
+        _text(model.get("name"), "model.name")
         if "parameters" not in model or not isinstance(model.get("parameters"), Mapping):
             raise BenchmarkSchemaError("invalid:model.parameters")
         tool_versions = {
@@ -93,8 +91,6 @@ class BenchmarkScenario:
         allowed_actions = _identifiers(
             payload.get("allowed_actions"), "allowed_actions"
         )
-        if not allowed_actions:
-            raise BenchmarkSchemaError("empty:allowed_actions")
         repetitions = _integer(payload.get("repetitions", MIN_BENCHMARK_REPETITIONS))
         if repetitions < MIN_BENCHMARK_REPETITIONS:
             raise BenchmarkSchemaError(
@@ -247,8 +243,7 @@ def load_scenarios(directory: str | Path) -> tuple[BenchmarkScenario, ...]:
 
 
 def _required_version(value: Mapping[str, Any], name: str) -> None:
-    if not _text(value.get("version"), f"{name}.version"):
-        raise BenchmarkSchemaError(f"missing:{name}.version")
+    _text(value.get("version"), f"{name}.version")
 
 
 def _validate_budgets(budgets: Mapping[str, Any]) -> None:

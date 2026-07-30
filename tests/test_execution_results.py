@@ -139,6 +139,12 @@ def test_both_duck_typed_tool_results_preserve_execution_fields(result_type) -> 
         ("", "[!] Tool not found: scanner", ExecutionStatus.UNAVAILABLE, False),
         ("", "missing dependency: scanner", ExecutionStatus.UNAVAILABLE, False),
         ("", "scanner: no such file or directory", ExecutionStatus.UNAVAILABLE, False),
+        ("[!] scanner is not installed", "", ExecutionStatus.UNAVAILABLE, False),
+        ("[!] 'scanner' is NOT a real tool", "", ExecutionStatus.UNAVAILABLE, False),
+        ("[!] Execution denied: policy", "", ExecutionStatus.BLOCKED, False),
+        ("[BLOCKED] provider disabled", "", ExecutionStatus.BLOCKED, False),
+        ("[SKIPPED] stage disabled", "", ExecutionStatus.BLOCKED, False),
+        ("[!] Error executing tool 'scanner': boom", "", ExecutionStatus.FAILED, False),
     ],
 )
 def test_duck_tool_result_uses_bounded_legacy_failure_markers_without_explicit_status(

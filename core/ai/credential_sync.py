@@ -82,13 +82,12 @@ class RuntimeCredentialSynchronizer:
                 user, credential_host = key_match.groups()
                 if credential_host == host:
                     register("ssh", host, user, KEY_AUTH_MARKER)
-                continue
-
-            cached_match = re.match(r"([^:\s]+):([^\s]+)\s+\(cached\)", value)
-            if cached_match and not value.startswith(("whm_session:", "cpanel_session:")):
-                user, legacy_secret_ref = cached_match.groups()
-                if is_secret_ref(legacy_secret_ref):
-                    register("ssh", host, user, legacy_secret_ref)
+            else:
+                cached_match = re.match(r"([^:\s]+):([^\s]+)\s+\(cached\)", value)
+                if cached_match and not value.startswith(("whm_session:", "cpanel_session:")):
+                    user, legacy_secret_ref = cached_match.groups()
+                    if is_secret_ref(legacy_secret_ref):
+                        register("ssh", host, user, legacy_secret_ref)
 
     def known_for_target(self, target: str) -> dict[str, list[CredentialRef]]:
         """Return grouped opaque references for a normalized target."""
@@ -99,10 +98,7 @@ class RuntimeCredentialSynchronizer:
         except Exception as exc:  # Existing optional compatibility boundary.
             self._logger.debug("Could not read known credentials: %s", exc)
             return {}
-        return {
-            str(service): list(credentials)
-            for service, credentials in grouped.items()
-        }
+        return {str(service): list(credentials) for service, credentials in grouped.items()}
 
     def seed_known_credentials(
         self,
@@ -120,9 +116,7 @@ class RuntimeCredentialSynchronizer:
         for service, credential_list in grouped.items():
             for credential in credential_list:
                 if not isinstance(credential, CredentialRef):
-                    self._logger.warning(
-                        "Ignoring non-reference credential projection for %s", service
-                    )
+                    self._logger.warning("Ignoring non-reference credential projection for %s", service)
                     continue
                 user = credential.username
                 if not user:

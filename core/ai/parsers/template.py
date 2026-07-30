@@ -29,9 +29,9 @@ class TemplateParser(BaseParser):
                 facts.append(fact("nuclei_finding", f"{severity}:{template}:{matched}:{name}", 90, session_id))
                 if matched:
                     facts.append(fact("asset_url", str(matched).rstrip("/"), 85, session_id))
-                continue
-            match = re.match(r"\[([^\]]+)\]\s+\[([^\]]+)\]\s+\[([^\]]+)\]\s+(\S+)", line)
-            if match:
-                template, _proto, severity, matched = match.groups()
-                facts.append(fact("nuclei_finding", f"{severity.lower()}:{template}:{matched}", 85, session_id))
+            else:
+                match = re.match(r"\[([^\]]+)\]\s+\[([^\]]+)\]\s+\[([^\]]+)\]\s+(\S+)", line)
+                if match:
+                    template, _proto, severity, matched = match.groups()
+                    facts.append(fact("nuclei_finding", f"{severity.lower()}:{template}:{matched}", 85, session_id))
         return facts

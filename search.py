@@ -357,26 +357,31 @@ def handle_search_dispatch(query: str) -> str:
 
 # QUICK TEST
 
-if __name__ == "__main__":
-    print("[ search.py test ]\n")
-    print("[1] General search")
-    print("[2] CVE lookup")
-    print("[3] Fetch a URL")
-    print("[4] Fetch with scrapling")
-    choice = input("Choice: ").strip()
+def _quick_test(input_fn, output_fn) -> None:
+    """Run the small manual smoke menu with injectable console boundaries."""
+    output_fn("[ search.py test ]\n")
+    output_fn("[1] General search")
+    output_fn("[2] CVE lookup")
+    output_fn("[3] Fetch a URL")
+    output_fn("[4] Fetch with scrapling")
+    choice = input_fn("Choice: ").strip()
 
     if choice == "1":
-        q = input("Query: ").strip()
-        print(web_search(q))
+        q = input_fn("Query: ").strip()
+        output_fn(web_search(q))
 
     elif choice == "2":
-        cve = input("CVE ID (e.g. CVE-2021-44228): ").strip()
-        print(search_cve(cve))
+        cve = input_fn("CVE ID (e.g. CVE-2021-44228): ").strip()
+        output_fn(search_cve(cve))
 
     elif choice == "3":
-        url = input("URL: ").strip()
-        print(fetch_page(url))
+        url = input_fn("URL: ").strip()
+        output_fn(fetch_page(url))
 
     elif choice == "4":
-        url = input("URL: ").strip()
-        print(fetch_page(url, use_scrapling=True))
+        url = input_fn("URL: ").strip()
+        output_fn(fetch_page(url, use_scrapling=True))
+
+
+if __name__ == "__main__":
+    _quick_test(input, print)

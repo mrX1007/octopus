@@ -135,7 +135,7 @@ class SecretStore:
     def _connect(self) -> sqlite3.Connection:
         if self._memory_conn is not None:
             return self._memory_conn
-        last_error: sqlite3.OperationalError | None = None
+        last_error: sqlite3.OperationalError
         for attempt in range(12):
             conn = sqlite3.connect(self.db_path, timeout=30)
             try:
@@ -149,9 +149,7 @@ class SecretStore:
                     raise
                 last_error = exc
                 time.sleep(min(0.01 * (2**attempt), 0.25))
-        if last_error is not None:
-            raise last_error
-        raise SecretStoreError("secret-store connection failed without an SQLite error")
+        raise last_error
 
     def _close(self, conn: sqlite3.Connection) -> None:
         if conn is not self._memory_conn:

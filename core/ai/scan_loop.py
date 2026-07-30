@@ -99,8 +99,8 @@ class ScanLifecycle:
     ):
         print(f"\n[*] Starting AI Pipeline for target: {target} (Scan ID: {scan_id})")
         pipeline.cancellation.checkpoint()
-        max_iterations = pipeline._runtime_limit(max_iterations)
-        max_tools = pipeline._runtime_limit(max_tools)
+        max_iterations = pipeline._iteration_limit(max_iterations)
+        max_tools = pipeline._tool_limit(max_tools)
         max_time_minutes = pipeline._runtime_limit(max_time_minutes)
         pipeline._max_tools_budget = max_tools
 
@@ -449,12 +449,39 @@ class ScanLifecycle:
                         continue
 
                     analysis = pipeline.analysis_agent.analyze(scan_id, target)
+                    if not isinstance(analysis, dict):
+                        analysis = {
+                            "hypotheses": [],
+                            "llm_status": "failed",
+                            "llm_error": "invalid_agent_result",
+                        }
+
                     hypotheses = analysis.get("hypotheses", [])
+                    analysis_status = (
+                        str(analysis.get("llm_status") or "ok").strip().lower()
+                    )
+                    analysis_error = str(
+                        analysis.get("llm_error") or "analysis_failed"
+                    )
+                    if (
+                        analysis_status not in {"ok", "failed"}
+                        or not isinstance(hypotheses, list)
+                        or any(not isinstance(item, dict) for item in hypotheses)
+                    ):
+                        hypotheses = []
+                        analysis_status = "failed"
+                        analysis_error = "invalid_agent_result"
+                    elif analysis_status == "failed":
+                        # A failed response must never leak partially parsed
+                        # hypotheses into persistence or verification.
+                        hypotheses = []
+
+                    analysis_failed = analysis_status == "failed"
                     accepted_count = 0
                     accepted_fact_ids = []
                     task_new_facts = 0
 
-                    if not hypotheses:
+                    if analysis_failed:
                         pipeline.consecutive_llm_failures += 1
                         pipeline._record_llm_health(
                             scan_id,
@@ -462,13 +489,13 @@ class ScanLifecycle:
                             "analysis",
                             {
                                 "llm_status": "failed",
-                                "llm_error": "returned_no_hypotheses",
+                                "llm_error": analysis_error,
                                 "fallback": False,
                             },
                             loop,
                         )
                         print(
-                            "     [!] AnalysisAgent returned 0 hypotheses "
+                            "     [!] AnalysisAgent failed "
                             f"(LLM failures: {pipeline.consecutive_llm_failures})"
                         )
                     else:
@@ -480,6 +507,8 @@ class ScanLifecycle:
                             {"llm_status": "ok", "hypotheses": len(hypotheses)},
                             loop,
                         )
+                        if not hypotheses:
+                            print("     [i] AnalysisAgent found no useful hypotheses")
 
                     for hypothesis in hypotheses:
                         claim = hypothesis.get("claim")
@@ -508,8 +537,11 @@ class ScanLifecycle:
                                 new_facts_this_loop += 1
 
                     pipeline.completed_tasks.add(task)
-                    if not hypotheses:
+                    if analysis_failed:
                         status = "failed"
+                        reason = "analysis_failed"
+                    elif not hypotheses:
+                        status = "no_new_facts"
                         reason = "analysis_returned_no_hypotheses"
                     elif accepted_count:
                         status = "completed"

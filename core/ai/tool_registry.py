@@ -286,18 +286,42 @@ class ToolRegistry:
             "template_verification": {"cost": 5, "time": "long", "risk": "safe", "preconditions": ["web"]},
             "web_vulnerability_testing": {"cost": 6, "time": "long", "risk": "active", "preconditions": ["web"]},
             "api_security_testing": {"cost": 3, "time": "medium", "risk": "safe", "preconditions": ["web"]},
+            "secrets_scanning": {"cost": 3, "time": "medium", "risk": "safe", "preconditions": []},
+            "code_security_assessment": {"cost": 4, "time": "long", "risk": "safe", "preconditions": []},
+            "cloud_security_assessment": {"cost": 5, "time": "long", "risk": "post_access_read", "preconditions": []},
             "transport_security_assessment": {"cost": 2, "time": "short", "risk": "passive", "preconditions": ["tls"]},
+            "ftp_assessment": {"cost": 2, "time": "short", "risk": "active", "preconditions": ["services"]},
+            "mail_service_assessment": {"cost": 1, "time": "short", "risk": "safe", "preconditions": ["services"]},
+            "database_inventory": {"cost": 3, "time": "medium", "risk": "post_access_read", "preconditions": ["services", "access"]},
+            "firewall_detection": {"cost": 2, "time": "short", "risk": "safe", "preconditions": ["web"]},
             "external_intelligence": {"cost": 1, "time": "short", "risk": "passive", "preconditions": []},
+            "browser_osint": {"cost": 2, "time": "medium", "risk": "passive", "preconditions": []},
             "asm_discovery": {"cost": 3, "time": "medium", "risk": "passive", "preconditions": ["domain"]},
+            "asm_http_probe": {"cost": 2, "time": "short", "risk": "active", "preconditions": ["domain"]},
+            "asm_dns_resolution": {"cost": 1, "time": "short", "risk": "safe", "preconditions": ["domain"]},
+            "asm_port_discovery": {"cost": 3, "time": "medium", "risk": "active", "preconditions": ["domain"]},
+            "asm_url_discovery": {"cost": 1, "time": "short", "risk": "passive", "preconditions": ["domain"]},
             "active_directory_enumeration": {"cost": 3, "time": "medium", "risk": "safe", "preconditions": ["ad_surface"]},
             "ad_security_review": {"cost": 4, "time": "medium", "risk": "safe", "preconditions": ["ad_surface"]},
+            "bloodhound_ingest": {"cost": 4, "time": "long", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
+            "password_policy_review": {"cost": 2, "time": "short", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
+            "delegation_analysis": {"cost": 4, "time": "long", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
+            "gpo_review": {"cost": 3, "time": "medium", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
+            "adcs_review": {"cost": 3, "time": "medium", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
+            "local_admin_paths": {"cost": 4, "time": "long", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
+            "acl_review": {"cost": 4, "time": "long", "risk": "post_access_read", "preconditions": ["ad_surface", "access"]},
             "windows_enumeration": {"cost": 3, "time": "medium", "risk": "safe", "preconditions": ["smb"]},
             "kerberos_assessment": {"cost": 3, "time": "medium", "risk": "safe", "preconditions": ["ad_surface"]},
+            "domain_credential_extraction": {"cost": 6, "time": "long", "risk": "active", "preconditions": ["ad_surface", "access", "stage:credentials"]},
+            "ad_remote_execution": {"cost": 6, "time": "long", "risk": "post_access_change", "preconditions": ["ad_surface", "access", "internal_services", "stage:root"]},
+            "hash_cracking": {"cost": 5, "time": "long", "risk": "active", "preconditions": ["access"]},
+            "test_credentials": {"cost": 5, "time": "long", "risk": "active", "preconditions": ["services", "ssh"]},
             "ssh_user_enumeration": {"cost": 2, "time": "short", "risk": "safe", "preconditions": ["ssh"]},
             "credential_harvesting": {"cost": 4, "time": "medium", "risk": "active", "preconditions": ["services"]},
             "web_credential_testing": {"cost": 4, "time": "medium", "risk": "active", "preconditions": ["web"]},
             "post_access_inventory": {"cost": 2, "time": "short", "risk": "post_access_read", "preconditions": ["access"]},
             "find_privesc_vectors": {"cost": 3, "time": "medium", "risk": "post_access_read", "preconditions": ["access"]},
+            "exploit_privesc": {"cost": 6, "time": "long", "risk": "post_access_change", "preconditions": ["access", "stage:credentials", "killchain:privesc"]},
             "internal_network_recon": {"cost": 2, "time": "short", "risk": "post_access_read", "preconditions": ["access"]},
             "internal_service_discovery": {"cost": 2, "time": "short", "risk": "post_access_read", "preconditions": ["internal_hosts"]},
             "pivot_setup": {"cost": 4, "time": "medium", "risk": "post_access_change", "preconditions": ["access"]},
@@ -308,6 +332,7 @@ class ToolRegistry:
             "stealth_cleanup": {"cost": 5, "time": "medium", "risk": "post_access_change", "preconditions": ["access"]},
             "cpanel_assessment": {"cost": 2, "time": "short", "risk": "safe", "preconditions": ["web"]},
             "plugin_assessment": {"cost": 1, "time": "short", "risk": "passive", "preconditions": []},
+            "analyze_vulnerabilities": {"cost": 1, "time": "short", "risk": "passive", "preconditions": ["services"]},
         }
 
         # Map high-level tasks to a list of potential CLI commands
@@ -359,6 +384,8 @@ class ToolRegistry:
             ],
             "web_content_discovery": [
                 ("ffuf {target}", "ffuf"),
+                ("gobuster {target}", "gobuster"),
+                ("dirb {target}", "dirb"),
                 ("scrapling_crawl {target}", "scrapling_crawl"),
             ],
             "transport_security_assessment": [
@@ -625,15 +652,15 @@ class ToolRegistry:
                 formatted_cmds.extend(nested_cmds)
                 if not nested_cmds:
                     skipped.append(binary_name)
-                continue
-            if self._is_tool_available(binary_name):
-                formatted_cmds.append(cmd_template.format(
-                    target=target,
-                    user=user,
-                    password=password
-                ))
             else:
-                skipped.append(binary_name)
+                if self._is_tool_available(binary_name):
+                    formatted_cmds.append(cmd_template.format(
+                        target=target,
+                        user=user,
+                        password=password
+                    ))
+                else:
+                    skipped.append(binary_name)
         
         if skipped:
             print(f"     [!] Skipped unavailable tools: {', '.join(skipped)}")
@@ -692,13 +719,13 @@ class ToolRegistry:
                 statuses.extend(
                     self._provider_statuses_for_task(provider, seen, requested_task)
                 )
-                continue
-            statuses.append({
-                "task": requested_task,
-                "provider": provider,
-                "command_template": command_template,
-                "available": self._is_tool_available(provider),
-            })
+            else:
+                statuses.append({
+                    "task": requested_task,
+                    "provider": provider,
+                    "command_template": command_template,
+                    "available": self._is_tool_available(provider),
+                })
 
         deduplicated: list[dict[str, Any]] = []
         seen_records: set[tuple[str, str, str]] = set()
@@ -731,7 +758,12 @@ class ToolRegistry:
 
     def tool_execution_profile(self, tool_name: str) -> str:
         """Return how a registered tool is allowed to participate in pipeline flow."""
-        return self.tool_execution_profiles.get(tool_name, "auto")
+        from core.tools.registry import get_tool
+
+        tool_def = get_tool(tool_name)
+        if tool_def is None:
+            return "unknown"
+        return self.tool_execution_profiles.get(tool_def.name, "auto")
 
     def get_coverage_report(self, registered_tools: Optional[list[str]] = None) -> dict[str, Any]:
         """Classify registry coverage without treating gated/manual tools as bugs."""
@@ -748,11 +780,16 @@ class ToolRegistry:
             except Exception:
                 registered_tools = []
 
+        from core.tools.registry import get_tool
+
         registered = set(registered_tools)
-        auto_tools = set()
+        canonical_names = {
+            name: tool_def.name if (tool_def := get_tool(name)) is not None else name
+            for name in registered
+        }
+        auto_providers = set()
         for task in self.task_map:
-            auto_tools.update(self._tool_names_for_task(task))
-        auto_tools &= registered
+            auto_providers.update(self._tool_names_for_task(task))
 
         followup_tools = {
             name for name in registered
@@ -765,6 +802,11 @@ class ToolRegistry:
         legacy_wrappers = {
             name for name in registered
             if self.tool_execution_profile(name) in {"legacy_wrapper", "alias_wrapper"}
+        }
+        explicitly_classified = followup_tools | manual_gated | legacy_wrappers
+        auto_tools = {
+            name for name in registered - explicitly_classified
+            if canonical_names[name] in auto_providers
         }
         covered = auto_tools | followup_tools | manual_gated | legacy_wrappers
 

@@ -49,21 +49,21 @@ class PipelineWebLinksMixin(PipelineMixinBase):
                 commands.append(f"js_route_extract {url}")
                 if limit is not None and len(commands) >= limit:
                     break
-                continue
-            commands.append(f"curl_headers {url}")
-            if limit is not None and len(commands) >= limit:
-                break
-            commands.append(f"scrapling {url}")
-            if limit is not None and len(commands) >= limit:
-                break
-            if self._url_looks_openapi_spec(url):
-                commands.append(f"openapi_import {url}")
+            else:
+                commands.append(f"curl_headers {url}")
                 if limit is not None and len(commands) >= limit:
                     break
-            if self._url_looks_graphql_endpoint(url):
-                commands.append(f"graphql_check {url}")
+                commands.append(f"scrapling {url}")
                 if limit is not None and len(commands) >= limit:
                     break
+                if self._url_looks_openapi_spec(url):
+                    commands.append(f"openapi_import {url}")
+                    if limit is not None and len(commands) >= limit:
+                        break
+                if self._url_looks_graphql_endpoint(url):
+                    commands.append(f"graphql_check {url}")
+                    if limit is not None and len(commands) >= limit:
+                        break
         return commands
 
     def _normalized_web_link_urls(self, scan_id: str, target: str, facts: list[dict[str, Any]]) -> list[str]:

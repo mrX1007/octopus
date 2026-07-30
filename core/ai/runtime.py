@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -47,7 +48,7 @@ from core.execution import (
 from core.execution.normalization import command_failed, output_text
 from core.knowledge import GraphProjectionService, KnowledgeGraph
 
-Runner = Callable[[str], Any]
+Runner = Callable[..., Any]
 EXECUTION_RESULT_SCHEMA_VERSION = "1.0"
 logger = logging.getLogger("octopus.runtime")
 
@@ -113,10 +114,24 @@ class PipelineRuntime:
     @property
     def action_catalog(self) -> ActionCatalog:
         if self._action_catalog is None:
-            self._action_catalog = build_action_catalog(
-                lambda command, _context: self._runner(command)
-            )
+            self._action_catalog = build_action_catalog(self._dispatch_runner)
         return self._action_catalog
+
+    def _dispatch_runner(self, command: str, context: ExecutionContext) -> Any:
+        """Call old one-argument and new context-aware runners through one seam.
+
+        Signature binding selects the compatible form before the call, so a
+        ``TypeError`` raised *inside* a provider is never mistaken for an old
+        runner signature.  The context variable remains bound for legacy
+        providers and for nested execution helpers.
+        """
+
+        with bind_execution_context(context):
+            try:
+                inspect.signature(self._runner).bind(command, context)
+            except (TypeError, ValueError):
+                return self._runner(command)
+            return self._runner(command, context)
 
     @property
     def action_executor(self) -> ActionExecutor:
@@ -472,8 +487,7 @@ class PipelineRuntime:
 
         started = time.monotonic()
         try:
-            with bind_execution_context(context):
-                output = self._runner(decision.command)
+            output = self._dispatch_runner(decision.command, context)
         except asyncio.CancelledError as exc:
             return self._exception_result(
                 exc,

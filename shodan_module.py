@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import contextlib
+import functools
 import json
 import os
 import re
@@ -52,6 +53,41 @@ def _safe_file_component(value, fallback: str = "results") -> str:
     component = re.sub(r"_+", "_", component).strip("._-")
     return component[:100] or fallback
 
+
+def _as_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off", ""}:
+        return False
+    return default
+
+
+def _positive_timeout(value, default: float = 30.0) -> float:
+    try:
+        timeout = float(value)
+    except (TypeError, ValueError):
+        return default
+    return timeout if timeout > 0 else default
+
+
+def _configure_http_timeout(client, timeout: float) -> bool:
+    """Apply a default timeout to the requests session used by shodan-python."""
+    session = getattr(client, "_session", None)
+    if session is None:
+        return False
+    request = getattr(session, "request", None)
+    if not callable(request):
+        return False
+    session.request = functools.partial(request, timeout=timeout)
+    return True
+
 # SHODAN RECON CLASS
 
 class ShodanRecon:
@@ -64,7 +100,8 @@ class ShodanRecon:
         self.api = None
         self.cfg = CFG.get("shodan", {})
         self.max_results = self.cfg.get("max_results", 100)
-        self.timeout = self.cfg.get("timeout", 30)
+        self.timeout = _positive_timeout(self.cfg.get("timeout", 30))
+        self.save_results = _as_bool(self.cfg.get("save_results"), True)
         self.results_dir = self.cfg.get("results_dir", "/tmp/octopus_shodan")
         self._last_results: list[dict[str, Any]] = []
         self._db_conn: Any = None
@@ -79,6 +116,7 @@ class ShodanRecon:
 
         try:
             self.api = shodan.Shodan(self.api_key)
+            _configure_http_timeout(self.api, self.timeout)
             info = self.api.info()
             print(f"  {C_GREEN}[✓] Shodan API connected — credits: {info.get('query_credits', '?')}, "
                   f"scan credits: {info.get('scan_credits', '?')}{C_RESET}")
@@ -194,9 +232,9 @@ class ShodanRecon:
 
             self._last_results = structured["matches"]
 
-            # Save to DB + JSON
-            self.save_to_db(structured)
-            self._save_json(structured, f"search_{query[:30].replace(' ','_')}")
+            if self.save_results:
+                self.save_to_db(structured)
+                self._save_json(structured, f"search_{query[:30].replace(' ','_')}")
 
             return structured
 
@@ -226,6 +264,7 @@ class ShodanRecon:
                 "org": host.get("org", "Unknown"),
                 "isp": host.get("isp", ""),
                 "country": host.get("country_name", ""),
+                "country_code": host.get("country_code", ""),
                 "city": host.get("city", ""),
                 "hostnames": host.get("hostnames", []),
                 "domains": host.get("domains", []),
@@ -249,7 +288,28 @@ class ShodanRecon:
             print(f"  {C_GREEN}[+] {ip}: {len(info['ports'])} ports, "
                   f"{len(info['vulns'])} vulns, OS: {info['os']}{C_RESET}")
 
-            self._save_json(info, f"host_{ip.replace('.','_')}")
+            if self.save_results:
+                stored = {
+                    "query": f"host:{ip}",
+                    "matches": [
+                        {
+                            "ip": info["ip"],
+                            "port": svc.get("port", 0),
+                            "transport": svc.get("transport", "tcp"),
+                            "service": svc.get("product", ""),
+                            "version": svc.get("version", ""),
+                            "banner": svc.get("banner", ""),
+                            "vulns": svc.get("vulns", []),
+                            "os": info.get("os", ""),
+                            "country": info.get("country_code", ""),
+                            "org": info.get("org", ""),
+                            "hostnames": info.get("hostnames", []),
+                        }
+                        for svc in info["services"]
+                    ],
+                }
+                self.save_to_db(stored)
+                self._save_json(info, f"host_{ip.replace('.','_')}")
             return info
 
         except shodan.APIError as e:
@@ -291,6 +351,8 @@ class ShodanRecon:
 
     def save_to_db(self, results: dict):
         """Save search results to MariaDB shodan_results table."""
+        if not getattr(self, "save_results", True):
+            return
         conn = self._get_db()
         if not conn:
             return
@@ -340,6 +402,8 @@ class ShodanRecon:
 
     def _save_json(self, data: dict, prefix: str = "results"):
         """Save results to JSON file as backup."""
+        if not getattr(self, "save_results", True):
+            return ""
         root = self._ensure_dir()
         ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         clean_prefix = _safe_file_component(prefix)
@@ -455,7 +519,10 @@ class ShodanRecon:
         output += "\n[PIPELINE SUMMARY]\n"
         output += f"  Total hosts: {len(targets)}\n"
         output += f"  Hosts with known CVEs: {vuln_hosts}\n"
-        output += f"  Results saved to DB + {self.results_dir}\n"
+        if self.save_results:
+            output += f"  Results saved to DB + {self.results_dir}\n"
+        else:
+            output += "  Result persistence disabled by shodan.save_results\n"
 
         if self.cfg.get("auto_pipeline", True) and targets:
             output += f"\nAI: {vuln_hosts} hosts have known vulnerabilities. "

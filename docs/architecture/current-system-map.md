@@ -1,6 +1,6 @@
 # OCTOPUS current system map
 
-Baseline date: 2026-07-15
+Baseline date: 2026-07-29
 
 Reference revision: working tree after Waves 4–6 completion
 
@@ -72,10 +72,11 @@ pipeline no longer parses or persists a completed execution independently.
 Initial reconnaissance, the visible pre-run state, and explicit manual seed
 compatibility remain separate ingestion paths, as detailed next.
 
-The 2,956-line baseline facade has been decomposed to 2,369 physical lines in
-the 2026-07-23 working tree, 31 lines below the 2,400-line acceptance ceiling
-enforced by `tests/test_pipeline_remaining_acceptance.py`. `run_scan()` remains
-public; `ScanLifecycle` owns the loop, and mission, planning, replay,
+The historical 2,956-line facade has been decomposed below the 2,400-line
+acceptance ceiling enforced by
+`tests/test_pipeline_remaining_acceptance.py`. The test, rather than this
+document, is the authority for the current physical-line limit. `run_scan()`
+remains public; `ScanLifecycle` owns the loop, and mission, planning, replay,
 observability, and follow-up behavior is composed from the bounded pipeline
 modules. See
 `docs/architecture/pipeline-decomposition.md` for the ownership and
@@ -274,13 +275,12 @@ creates a legacy automatic context (`core/ai/command_scheduler.py:44-47`).
 
 `ExecutionPolicy` validates network targets and scope
 (`core/execution/policy.py:93-212`), authorizes registered tools
-(`core/execution/policy.py:290-319`), fails unknown direct execution closed
-except for the explicit `rustscan` direct path
-(`core/execution/policy.py:321-335`), and permits managed shell only with the
+(`core/execution/policy.py:313-404`), denies every unregistered direct-binary
+invocation (`core/execution/policy.py:406-422`), and permits managed shell only with the
 required interactive origin, capability, approval, scope, and destructive
-capability checks (`core/execution/policy.py:337-373`). Command lookup imports
+capability checks (`core/execution/policy.py:424-462`). Command lookup imports
 the tool registry lazily and returns a typed dispatch classification
-(`core/execution/policy.py:395-439`).
+(`core/execution/policy.py:486-532`).
 
 The runtime now also exposes the versioned `core.actions` adapter boundary.
 It lazily wraps the existing decorator registry and can register concrete
@@ -335,32 +335,42 @@ its lookup functions (`core/tools/registry.py:101-217`). Its registered
 into the main registry (`core/tools/registry.py:246-278`). Importing
 `core.tools` registers the decorated functions by import side effect; the
 package then re-exports legacy names (`core/tools/__init__.py:4-75`,
-`core/tools/__init__.py:77-140`). Top-level `tools.py` is a wildcard
-compatibility facade (`tools.py:1-4`).
+`core/tools/__init__.py:77-140`). The canonical application entry is
+`core.tools.dispatch_registered_tool()`: it requires an `ExecutionContext` and
+can reach only the registered, policy-authorized runner. Top-level `tools.py`
+is a deprecated wildcard compatibility facade, and
+`DEPRECATED_TOOL_EXPORTS` identifies its raw process, shell/REPL, menu and
+direct-provider migration surfaces without removing them.
 
 The runner resolves a registered definition, binds/validates arguments, derives
 network targets, authorizes the call, and invokes `tool_def.func()`
-(`core/tools/runner.py:719-962`). `run_single_tool()` is another policy wrapper
-for menu-driven execution (`core/tools/runner.py:536-557`).
+(`core.tools.runner.run_tool_by_command`). `run_single_tool()` is another policy
+wrapper for menu-driven execution (`core.tools.runner.run_single_tool`).
 
 Managed process execution creates a process group, applies time/output limits,
-and uses `subprocess.Popen` (`core/tools/runner.py:1171-1308`). Intentional shell
-mode is isolated to the managed-shell path (`core/tools/runner.py:1323-1343`).
-Despite its compatibility name, `run_arbitrary_cmd()` performs policy-authorized
-typed dispatch, fails unknown commands closed, and uses direct argv execution
-for the narrow direct-command case (`core/tools/runner.py:1346-1375`).
+and uses `subprocess.Popen` (`core.tools.runner._execute_process`). Intentional
+shell mode is isolated to `core.tools.runner.run_managed_shell`. Despite its
+compatibility name, `run_arbitrary_cmd()` performs policy-authorized typed
+dispatch and fails unknown commands closed; it remains available for approved
+shell compatibility. New application callers use the registered-only
+`dispatch_registered_tool()` facade instead. `AIPipeline` imports that facade
+directly and retains a local `run_arbitrary_cmd` name only as a patch-compatible
+adapter.
 
 `core/tools/base.py` is a second, lower-level argv process helper
-(`core/tools/base.py:103-214`). It does not itself call `ExecutionPolicy`; safety
+(`core.tools.base.run_tool`). It does not itself call `ExecutionPolicy`; safety
 therefore depends on callers entering through the registered runner. Direct
-imports can bypass that outer boundary. Two current `ToolResult` definitions
-also coexist (`core/tools/base.py:35-76` and
-`core/tools/exploit_tools.py:120-175`).
+imports can bypass that outer boundary. `core.tools.base.ToolResult` is the sole
+implementation (`core/tools/base.py:40-105`);
+`core.tools.exploit_tools.ToolResult` is an import-compatibility alias
+(`core/tools/exploit_tools.py:30-32`) covered by
+`tests/test_release_cleanup.py`.
 
-Tool availability uses a mutable module cache (`core/tools/base.py:24-32`). A
-legacy in-memory credential cache also remains in exploit tooling
-(`core/tools/exploit_tools.py:28-58`), alongside the unified credential lookup
-path (`core/tools/exploit_tools.py:60-117`).
+Tool availability uses a mutable module cache (`core/tools/base.py:29-37`).
+Exploit-tool credential helpers delegate to the canonical reference-only
+credential facade. Their old ambiguous names remain as warning compatibility
+aliases, but return `CredentialRef` objects and never maintain or reveal a
+separate plaintext cache (`core/tools/exploit_tools.py:36-90`).
 
 ## Plugins
 
@@ -416,7 +426,7 @@ identity normalization.
 | Graph | Source/caller | Reads | Writes | Persistence |
 |---|---|---|---|---|
 | `core.ai.AssetGraph` | `ContextBuilder` and `TargetModel` | current facts | in-memory nodes/edges | none |
-| `core.knowledge.KnowledgeGraph` | `PipelineRuntime.graph_projector`, credential compatibility, explicit graph APIs | committed facts/assessments and compatibility inputs | versioned nodes/edges/projection ledger | `data/knowledge.db` |
+| `core.knowledge.KnowledgeGraph` | `PipelineRuntime.graph_projector`, explicit graph APIs | committed facts/assessments and explicit compatibility inputs | versioned nodes/edges/projection ledger | `data/knowledge.db` |
 
 `AssetGraph` is rebuilt deterministically from facts
 (`core/ai/asset_graph.py:10-85`) and is attached by `ContextBuilder` and
@@ -432,10 +442,14 @@ chains or missing-link explanations; inferred paths require an explicit option.
 `KnowledgeEnricher` remains an uncalled public compatibility adapter and is not
 an evidence authority.
 
-`CredentialStore` itself fans a credential write out to `SecretStore`, optional
-MariaDB, `KnowledgeGraph`, and a legacy cache (`core/credentials.py:97-191`).
-Reads explicitly reveal stored secrets when returning usable credentials
-(`core/credentials.py:195-225`).
+`CredentialStore` is the sole in-process credential reference index. A write
+seals plaintext in `SecretStore`, caches an immutable `CredentialRef`, and may
+persist only its `secret_ref` through the optional MariaDB compatibility layer
+(`core/credentials.py:215-331`). Public and legacy getters return references.
+Plaintext is revealed only inside the lexical `material_for_execution()`
+context and the application-owned reference is cleared on exit
+(`core/credentials.py:424-473`). The former direct `KnowledgeGraph` fan-out and
+`_KNOWN_CREDS` plaintext cache no longer exist.
 
 ## Reporting and export
 
@@ -495,10 +509,13 @@ launches it as a detached subprocess and sends output to
 Unix-domain socket through `core.cli.application._send_to_daemon()`.
 
 Daemon configuration owns its data directory, keys directory, SQLite database,
-operator socket, and request/task/result limits (`core/c2/daemon.py:29-48`).
-Importing the daemon module constructs `KeyStore`, crypto, `C2Database`,
-`EventStore`, `OperatorManager`, and `EnrollmentAuthority`
-(`core/c2/daemon.py:77-94`), so imports have schema/key filesystem side effects.
+operator socket, and request/task/result limits (`core/c2/daemon.py:32-45`).
+Importing the daemon creates only the FastAPI application and handler
+definitions. Persistent components are initialized exactly once by
+`_initialize_components()` when the ASGI lifespan, `create_app()`, or `main()`
+enters the executable lifecycle (`core/c2/daemon.py:74-148`). Import-smoke
+contracts verify that imports leave both a read-only working directory and the
+configured C2 data path untouched (`tests/test_import_smoke.py:14-46`).
 
 `KeyStore` persists the Ed25519 identity in a strictly bounded, versioned
 AES-GCM envelope whose authenticated header records the mandatory Scrypt KDF
@@ -514,10 +531,10 @@ legacy PEM for compatibility but never creates one implicitly.
 
 Enrollment consumes a signed single-use token, performs X25519 key agreement,
 assigns the server-generated immutable agent ID, and appends/projects an agent
-event (`core/c2/daemon.py:184-239`). Beacon handling authenticates/decrypts the
+event (`core/c2/daemon.py:227-280`). Beacon handling authenticates/decrypts the
 agent request, validates task ownership for ACK/results, enforces bounds,
 updates task state, leases pending work, and encrypts the response
-(`core/c2/daemon.py:242-333`).
+(`core/c2/daemon.py:285-376`).
 
 The SQLite backend enables WAL per connection and owns agents, tasks, key
 epochs, and consumed enrollment tokens (`core/c2/db_backend.py:9-89`). Agent
@@ -528,8 +545,8 @@ owner-scoped result transitions are implemented at
 ### Operator and event protocol
 
 The operator socket enforces operator authentication/role checks and appends
-task events (`core/c2/daemon.py:338-446`); its filesystem permissions are set at
-startup (`core/c2/daemon.py:449-474`). `OperatorManager` persists operators in
+task events (`core/c2/daemon.py:381-490`); its filesystem permissions are set at
+startup (`core/c2/daemon.py:496-521`). `OperatorManager` persists operators in
 the same C2 database and creates a first-run admin key file
 (`core/c2/operators.py:37-104`). Enrollment signing keys and token consumption
 are owned by `EnrollmentAuthority` (`core/c2/enrollment.py:25-110`).
@@ -537,7 +554,7 @@ are owned by `EnrollmentAuthority` (`core/c2/enrollment.py:25-110`).
 `EventStore` persists append-only events, invokes in-process projection
 handlers, and tracks replay offsets (`core/c2/event_store.py:59-150`,
 `core/c2/event_store.py:179-211`). Projection handlers translate agent/task
-events into `C2Database` mutations (`core/c2/daemon.py:103-124`). A handler
+events into `C2Database` mutations (`core/c2/daemon.py:153-168`). A handler
 failure is logged after the event append and is not part of the same SQLite
 transaction (`core/c2/event_store.py:213-221`), so event persistence and the
 read-model projection are not atomic. Operator result retrieval deletes the
@@ -575,11 +592,15 @@ secret references (`memory.py:30-55`, `memory.py:57-147`).
 
 MariaDB connection pooling, transaction, and cursor helpers are in
 `db.py:58-134`; schemas cover session history, findings, summaries, tool
-results, C2 compatibility rows, and credentials (`db.py:137-387`). The module
-runs `init_db()` during import and suppresses initialization failures after
-logging (`db.py:388-406`). This is a separate lifecycle from the SQLite stores.
+results, C2 compatibility rows, and credentials (`db.py:143-407`). `db.py`
+defines idempotent `init_db()` but does not execute it at import. Interactive
+startup invokes it explicitly during the non-critical MariaDB preflight
+(`core/cli/application.py:229-239`), and direct script execution invokes it
+before its connection probe. Import safety is covered by
+`tests/test_db.py:21-65`. This remains a separate lifecycle from the SQLite
+stores.
 
-## Import-time state and coupling seams
+## Import-time state and lifecycle coupling seams
 
 The current system deliberately uses lazy imports in several places, so the
 important coupling is not always visible as a static import cycle:
@@ -588,22 +609,25 @@ important coupling is not always visible as a static import cycle:
   (`core/execution/policy.py:395-439`).
 - importing `core.tools` populates the global decorator registry
   (`core/tools/__init__.py:4-75`, `core/tools/registry.py:101-168`);
-- `CredentialStore` and exploit credential compatibility use lazy references to
-  synchronize their caches (`core/credentials.py:181-191`,
-  `core/tools/exploit_tools.py:28-58`);
+- `CredentialStore` is a reference-only singleton that lazily resolves its
+  optional MariaDB compatibility backend; exploit-tool helpers depend on it in
+  one direction (`core/credentials.py:92-118`,
+  `core/tools/exploit_tools.py:36-90`);
 - default `SecretStore`/redactor singletons are module state
   (`core/secrets.py:466-502`);
-- C2 daemon imports construct database/key-owning components
-  (`core/c2/daemon.py:77-94`);
-- MariaDB migration still runs at direct `db` import (`db.py:388-406`), but
-  importing the CLI no longer imports `db`; workflow calls resolve it lazily.
+- C2 component names remain module-level compatibility attributes, but receive
+  values only after explicit lifecycle initialization
+  (`core/c2/daemon.py:74-148`);
+- MariaDB keeps a lazy process-global connection pool, while schema migration is
+  an explicit startup or script operation (`db.py:58-92`, `db.py:143-412`).
 
 Other mutable globals include the executable tool registry, tool-availability
-cache, legacy credential cache, credential-store singleton, secret-store
-singletons, C2 daemon components, and compatibility application
-supervisor/session state in `core.cli.application`. The lifecycle owner is now
-explicit, although the legacy workflow globals remain process-wide. Tests and
-later decomposition work must account for those lifetimes.
+cache, credential-store singleton, secret-store singletons, the lazy MariaDB
+pool, explicitly initialized C2 daemon components, and compatibility
+application supervisor/session state in `core.cli.application`. The lifecycle
+owner is now explicit, although these compatibility globals remain
+process-wide. Tests and later decomposition work must account for those
+lifetimes.
 
 ## Broad exception boundaries in critical paths
 
@@ -615,10 +639,10 @@ treated as one category:
 | Fact/MariaDB transaction helpers | roll back and re-raise | `core/ai/fact_store.py:30-40`, `db.py:95-134` |
 | Director and planner LLM calls | convert any provider/parsing exception into deterministic fallback output | `core/ai/director.py:80-100`, `core/ai/planner.py:41-74` |
 | Evidence parsing | several optional extractor failures are contained so later parsers can continue | `core/ai/evidence.py:1229-1402`, `core/ai/evidence.py:1769-1770` |
-| Registered tool invocation | logs the exception and converts it to a legacy error string | `core/tools/runner.py:943-970` |
-| C2 HTTP register/beacon | preserves `HTTPException`; maps other failures to generic client errors | `core/c2/daemon.py:184-239`, `core/c2/daemon.py:242-333` |
+| Registered tool invocation | logs the exception and converts it to a legacy error string | `core.tools.runner.run_tool_by_command` |
+| C2 HTTP register/beacon | preserves `HTTPException`; maps other failures to generic client errors | `core/c2/daemon.py:227-280`, `core/c2/daemon.py:285-376` |
 | C2 event projection | logs handler failure and continues after the event has been committed | `core/c2/event_store.py:213-221` |
-| MariaDB import migration | logs and suppresses initialization failure | `db.py:388-406` |
+| MariaDB explicit preflight migration | `init_db()` logs and contains migration failure; preflight then probes availability and reports a warning for a failed dependent backend | `db.py:143-407`, `core/cli/application.py:229-239` |
 | Application startup plugin discovery | logs discovery failure and continues into the menu | `core/cli/main.py:OctopusCLIApplication._discover_extensions` |
 
 The transaction handlers preserve failure, while fallback/containment handlers
@@ -652,8 +676,9 @@ architecture proposal.
    can still be imported and called directly.
 9. Legacy kill-chain paths remain callable and can persist output outside the
    canonical facts/evidence path.
-10. Importing DB/C2/tool packages can mutate schemas, keys, or registries before
-    the application lifecycle explicitly starts them.
+10. Importing `core.tools` still populates the decorator registry. MariaDB and
+    C2 persistent initialization is explicit, although their lazy pool and
+    initialized component references remain process-global compatibility state.
 11. Machine reports and decision metrics are versioned projections, while
     MariaDB/export presentation schemas remain compatibility consumers.
 

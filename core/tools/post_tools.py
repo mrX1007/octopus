@@ -17,13 +17,17 @@ import shutil
 
 from core.credentials import (
     CredentialRef,
+    call_credential_provider,
     credential_material_for_execution,
     get_all_credential_refs_for_target,
     get_best_credential_ref,
     is_credential_handle,
     register_credential,
     resolve_credential_handle,
+    sanitize_credential_result,
+    sanitize_credential_text,
 )
+from core.runtime_config import effective_parallel_workers
 from core.tools.base import (
     run_tool,
 )
@@ -207,28 +211,50 @@ def _is_controlled_ssh_command(command: str) -> bool:
 def _run_ssh_session_interactive(target: str) -> str:
     """Interactive SSH session — prompts for creds if not already known."""
     # Check if we already have creds for this target
-    known = get_best_credential_ref(target, "ssh")
+    known = get_best_credential_ref(target, "ssh", port=22)
     if known is not None:
         print(f"  \033[92m[+] Using cached credential: {known.username}@{target}\033[0m")
         use_cached = input(f"  Use cached credential {known.username}@{target}? [Y/n]: ").strip().lower()
         if use_cached != 'n':
-            with credential_material_for_execution(known) as material:
-                return _ssh_analyze(target, material.username, material.password)
+            return call_credential_provider(
+                known,
+                lambda material: _ssh_analyze(
+                    target,
+                    material.username,
+                    material.password,
+                ),
+            )
     user = input(f"  SSH Username for {target}: ").strip() or "root"
     pwd  = input(f"  SSH Password for {target}: ").strip()
     if not pwd:
         return "[!] No password provided."
     # Register creds for reuse
-    register_credential("ssh", target, user, pwd)
-    credential = get_best_credential_ref(target, "ssh", username=user)
+    register_credential("ssh", target, user, pwd, port=22)
+    credential = get_best_credential_ref(
+        target,
+        "ssh",
+        username=user,
+        port=22,
+    )
     if credential is None:
         return "[!] Credential registration failed."
-    with credential_material_for_execution(credential) as material:
-        return _ssh_analyze(target, material.username, material.password)
+    return call_credential_provider(
+        credential,
+        lambda material: _ssh_analyze(
+            target,
+            material.username,
+            material.password,
+        ),
+    )
 
 
 def _run_killchain_stage(stage: str, target: str) -> str:
     """Run a kill chain stage that doesn't need credentials."""
+    from core.killchain.policy import stage_gate_message
+
+    denial = stage_gate_message(stage)
+    if denial:
+        return denial
     try:
         from core.killchain import auto_exploit, vuln_assess
         if stage == "vuln_assess":
@@ -242,6 +268,22 @@ def _run_killchain_stage(stage: str, target: str) -> str:
 
 def _run_killchain_interactive(stage: str, target: str) -> str:
     """Run a kill chain stage that needs SSH credentials."""
+    from core.killchain.policy import master_gate_message, stage_gate_message
+
+    stage_names = {
+        "privesc": "privesc",
+        "persist": "persistence",
+        "lateral": "lateral_movement",
+        "exfil": "data_exfil",
+        "cleanup": "cleanup",
+    }
+    denial = (
+        master_gate_message()
+        if stage == "full"
+        else stage_gate_message(stage_names.get(stage, stage))
+    )
+    if denial:
+        return denial
     try:
         from core.killchain import (
             data_exfil,
@@ -255,7 +297,7 @@ def _run_killchain_interactive(stage: str, target: str) -> str:
         return "[!] core.killchain package not found."
 
     # Check if we already have creds for this target
-    known = get_best_credential_ref(target, "ssh")
+    known = get_best_credential_ref(target, "ssh", port=22)
     credential = None
     if known is not None:
         print(f"  \033[92m[+] Using cached credential: {known.username}@{target}\033[0m")
@@ -267,33 +309,50 @@ def _run_killchain_interactive(stage: str, target: str) -> str:
             pwd  = input(f"  SSH Password for {target}: ").strip()
             if not pwd:
                 return "[!] No password provided."
-            register_credential("ssh", target, user, pwd)
-            credential = get_best_credential_ref(target, "ssh", username=user)
+            register_credential("ssh", target, user, pwd, port=22)
+            credential = get_best_credential_ref(
+                target,
+                "ssh",
+                username=user,
+                port=22,
+            )
     else:
         user = input(f"  SSH Username for {target}: ").strip() or "root"
         pwd  = input(f"  SSH Password for {target}: ").strip()
         if not pwd:
             return "[!] No password provided."
         # Register creds for reuse by AI and other stages
-        register_credential("ssh", target, user, pwd)
-        credential = get_best_credential_ref(target, "ssh", username=user)
+        register_credential("ssh", target, user, pwd, port=22)
+        credential = get_best_credential_ref(
+            target,
+            "ssh",
+            username=user,
+            port=22,
+        )
 
     if credential is None:
         return "[!] Credential registration failed."
-    with credential_material_for_execution(credential) as material:
-        if stage == "privesc":
-            return run_privesc(target, material.username, material.password)
-        elif stage == "persist":
-            return plant_persistence(target, material.username, material.password)
-        elif stage == "lateral":
-            return lateral_move(target, material.username, material.password)
-        elif stage == "exfil":
-            return data_exfil(target, material.username, material.password)
-        elif stage == "full":
-            return run_full_killchain(target, material.username, material.password)
-        elif stage == "cleanup":
-            return stealth_cleanup(target, material.username, material.password)
-    return "[!] Unknown kill chain stage."
+    if stage == "full":
+        return run_full_killchain(target, credential=credential)
+
+    providers = {
+        "privesc": run_privesc,
+        "persist": plant_persistence,
+        "lateral": lateral_move,
+        "exfil": data_exfil,
+        "cleanup": stealth_cleanup,
+    }
+    provider = providers.get(stage)
+    if provider is None:
+        return "[!] Unknown kill chain stage."
+    return call_credential_provider(
+        credential,
+        lambda material: provider(
+            target,
+            material.username,
+            material.password,
+        ),
+    )
 
 
 def _run_waf_detect(target: str) -> str:
@@ -414,7 +473,9 @@ def run_default_recon(target: str) -> dict:
     }
 
     results = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(default_tools)) as executor:
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=effective_parallel_workers(len(default_tools))
+    ) as executor:
         future_to_name = {executor.submit(func, target): key for key, func in default_tools.items()}
         for future in concurrent.futures.as_completed(future_to_name):
             tool_name = future_to_name[future]
@@ -858,6 +919,7 @@ def _resolve_credential_ref(
     *,
     service: str = "ssh",
     prefer_privileged: bool = False,
+    port: int | None = None,
 ) -> tuple[CredentialRef | None, str]:
     """Resolve a control-plane handle without exposing credential material."""
 
@@ -877,6 +939,8 @@ def _resolve_credential_ref(
             return None, "[!] Credential handle scope mismatch."
         if user and credential.username != user:
             return None, "[!] Credential handle username mismatch."
+        if port is not None and credential.port and credential.port != int(port):
+            return None, "[!] Credential handle port mismatch."
         return credential, ""
 
     credential = get_best_credential_ref(
@@ -884,6 +948,7 @@ def _resolve_credential_ref(
         service,
         username=user or "",
         prefer_privileged=prefer_privileged,
+        port=port,
     )
     if credential is None:
         return None, f"[!] Credentials required for {service}://{host}."
@@ -895,6 +960,8 @@ def _resolve_ai_creds(
     user: str | None = None,
     pwd: CredentialRef | str | None = None,
     prefer_privileged: bool = False,
+    *,
+    port: int | None = 22,
 ) -> tuple[CredentialRef | None, str]:
     """Compatibility parser: ``pwd`` may contain only a credential handle."""
 
@@ -904,6 +971,7 @@ def _resolve_ai_creds(
         pwd,
         service="ssh",
         prefer_privileged=prefer_privileged,
+        port=port,
     )
 
 
@@ -1011,25 +1079,49 @@ def _ad_creds_for_execution(
             provider_creds["password"] = ""
 
 
+def _call_ad_provider(creds: dict | None, provider) -> str:
+    """Return an AD provider result without exposing its revealed password."""
+
+    plaintext = str((creds or {}).get("password") or "")
+    try:
+        result = provider()
+    except Exception as exc:
+        message = sanitize_credential_text(exc, plaintext)
+        return f"[!] Credential provider failed ({type(exc).__name__}): {message}"
+    return sanitize_credential_text(result, plaintext)
+
+
 def _connect_ssh_for_tool(host: str, user: str | None = None, pwd: str | None = None,
                           port: int = 22, prefer_privileged: bool = False):
     explicit_handle = bool(pwd)
     candidates: list[CredentialRef] = []
     if explicit_handle:
-        credential, error = _resolve_ai_creds(host, user, pwd, prefer_privileged)
+        credential, error = _resolve_ai_creds(
+            host,
+            user,
+            pwd,
+            prefer_privileged,
+            port=port,
+        )
         if credential is None:
             return None, user, None, error
         candidates.append(credential)
     elif prefer_privileged:
         candidates.extend(
-            sorted(
+            credential
+            for credential in sorted(
                 get_all_credential_refs_for_target(host).get("ssh", ()),
                 key=lambda item: 0 if item.username == "root" else 1,
             )
+            if credential.port in {0, int(port)}
         )
     if not candidates:
         credential, _error = _resolve_ai_creds(
-            host, user, None, prefer_privileged=prefer_privileged
+            host,
+            user,
+            None,
+            prefer_privileged=prefer_privileged,
+            port=port,
         )
         if credential is not None:
             candidates.append(credential)
@@ -1043,13 +1135,22 @@ def _connect_ssh_for_tool(host: str, user: str | None = None, pwd: str | None = 
     last_err = ""
     for candidate in candidates:
         with credential_material_for_execution(candidate) as material:
-            client, err = _ssh_connect(
-                host,
-                material.username,
-                material.password,
-                port=port,
-                timeout=15,
-            )
+            try:
+                client, err = _ssh_connect(
+                    host,
+                    material.username,
+                    material.password,
+                    port=port,
+                    timeout=15,
+                )
+            except Exception as exc:
+                client = None
+                err = (
+                    f"{type(exc).__name__}: "
+                    f"{sanitize_credential_text(exc, material.password)}"
+                )
+            else:
+                err = sanitize_credential_text(err or "", material.password)
         if not err and client is not None:
             return client, candidate.username, candidate.handle, ""
         last_err = err or "unknown error"
@@ -1281,11 +1382,21 @@ def _active_msf_allowed_for_target(target: str) -> bool:
 
 @tool(name="killchain_vuln_assess", aliases=["killchain_vuln", "vuln_assess"], category="post", description="Killchain Vulnerability Assessment")
 def ai_vuln_assess(target_ip: str, recon_data: str = "") -> str:
+    from core.killchain.policy import stage_gate_message
+
+    denial = stage_gate_message("vuln_assess")
+    if denial:
+        return denial
     from core.killchain import vuln_assess
     return vuln_assess(target_ip, recon_data)
 
 @tool(name="killchain_exploit", aliases=["auto_exploit"], category="post", description="Killchain Auto Exploit")
 def ai_auto_exploit(target_ip: str, recon_data: str = "") -> str:
+    from core.killchain.policy import stage_gate_message
+
+    denial = stage_gate_message("exploitation")
+    if denial:
+        return denial
     from core.killchain import auto_exploit
     return auto_exploit(target_ip, recon_data)
 
@@ -1309,13 +1420,15 @@ def ai_msf_check(target_ip: str, module: str = "", options: str = "") -> str:
     if "RHOSTS=" not in opts.upper():
         opts = f"RHOSTS={target_ip} {opts}".strip()
     if credential is not None:
-        with credential_material_for_execution(credential) as material:
-            return run_msf_module(
+        return call_credential_provider(
+            credential,
+            lambda material: run_msf_module(
                 module,
                 opts,
                 mode="check",
                 credential=material,
-            )
+            ),
+        )
     return run_msf_module(module, opts, mode="check")
 
 
@@ -1400,19 +1513,70 @@ def _run_ssh_credential_provider(
     *,
     missing_message: str,
     prefer_privileged: bool = False,
+    killchain_stage: str | None = None,
 ) -> str:
     """Reveal one SSH credential only for the immediate provider call."""
 
-    credential, _error = _resolve_ai_creds(
+    if killchain_stage:
+        from core.killchain.policy import stage_gate_message
+
+        denial = stage_gate_message(killchain_stage)
+        if denial:
+            return denial
+
+    credential, error = _resolve_ai_creds(
         target,
         user,
         credential_handle,
         prefer_privileged=prefer_privileged,
+        port=22,
     )
     if credential is None:
+        if credential_handle and error:
+            return error
         return missing_message
-    with credential_material_for_execution(credential) as material:
-        return provider(target, material.username, material.password)
+    return call_credential_provider(
+        credential,
+        lambda material: provider(
+            target,
+            material.username,
+            material.password,
+        ),
+    )
+
+
+def _run_full_killchain_credential_provider(
+    target: str,
+    user: str | None,
+    credential_handle: str | None,
+    provider,
+    *,
+    missing_message: str,
+) -> str:
+    """Pass an opaque credential reference through to the full orchestrator."""
+
+    from core.killchain.policy import master_gate_message
+
+    denial = master_gate_message()
+    if denial:
+        return denial
+    credential, error = _resolve_ai_creds(
+        target,
+        user,
+        credential_handle,
+        prefer_privileged=True,
+        port=22,
+    )
+    if credential is None:
+        if credential_handle and error:
+            return error
+        return missing_message
+    try:
+        result = provider(target, credential=credential)
+    except Exception as exc:
+        message = sanitize_credential_result(credential, exc)
+        return f"[!] Credential provider failed ({type(exc).__name__}): {message}"
+    return sanitize_credential_result(credential, result)
 
 @tool(name="msf_run", aliases=["metasploit_run"], category="exploit", description="Run an active Metasploit module when explicitly enabled.", requires=["msfconsole"])
 def ai_msf_run(target_ip: str, module: str = "", options: str = "") -> str:
@@ -1443,6 +1607,7 @@ def ai_privesc(target_ip: str, user: str | None = None, pwd: str | None = None) 
         pwd,
         run_privesc,
         missing_message=f"[!] Privilege escalation requires valid SSH credentials for {target_ip}.",
+        killchain_stage="privesc",
     )
 
 @tool(name="killchain_persist", aliases=["persist", "persistence"], category="post", description="Killchain Persistence", requires=["python:paramiko"])
@@ -1456,6 +1621,7 @@ def ai_persist(target_ip: str, user: str | None = None, pwd: str | None = None) 
         plant_persistence,
         missing_message=f"[!] Persistence requires valid SSH credentials for {target_ip}.",
         prefer_privileged=True,
+        killchain_stage="persistence",
     )
 
 @tool(name="killchain_lateral", aliases=["lateral_move", "lateral"], category="post", description="Killchain Lateral Movement", requires=["python:paramiko"])
@@ -1469,6 +1635,7 @@ def ai_lateral(target_ip: str, user: str | None = None, pwd: str | None = None) 
         lateral_move,
         missing_message=f"[!] Lateral movement requires valid SSH credentials for {target_ip}.",
         prefer_privileged=True,
+        killchain_stage="lateral_movement",
     )
 
 @tool(name="killchain_exfil", aliases=["data_exfil", "exfil"], category="post", description="Killchain Data Exfiltration", requires=["python:paramiko"])
@@ -1482,19 +1649,19 @@ def ai_exfil(target_ip: str, user: str | None = None, pwd: str | None = None) ->
         data_exfil,
         missing_message=f"[!] Data exfiltration requires valid SSH credentials for {target_ip}.",
         prefer_privileged=True,
+        killchain_stage="data_exfil",
     )
 
 @tool(name="killchain_full", aliases=["full_killchain"], category="post", description="Run Full Killchain", requires=["python:paramiko"])
 def ai_full_killchain(target_ip: str, user: str | None = None, pwd: str | None = None) -> str:
     from core.killchain import run_full_killchain
 
-    return _run_ssh_credential_provider(
+    return _run_full_killchain_credential_provider(
         target_ip,
         user,
         pwd,
         run_full_killchain,
         missing_message=f"[!] Full killchain requires valid SSH credentials for {target_ip}.",
-        prefer_privileged=True,
     )
 
 @tool(name="killchain_cleanup", aliases=["cleanup", "stealth_cleanup"], category="post", description="Stealth Cleanup", requires=["python:paramiko"])
@@ -1508,6 +1675,7 @@ def ai_stealth_cleanup(target_ip: str, user: str | None = None, pwd: str | None 
         stealth_cleanup,
         missing_message=f"[!] Cleanup requires valid SSH credentials for {target_ip}.",
         prefer_privileged=True,
+        killchain_stage="cleanup",
     )
 
 @tool(name="deploy_c2_beacon", aliases=["c2_beacon"], category="post", description="Deploy C2 Beacon", requires=["python:paramiko"])
@@ -1643,7 +1811,7 @@ def _db_service_name(service: str, port: int) -> str:
     return value
 
 
-def _db_known_creds(host: str, service: str) -> list[CredentialRef]:
+def _db_known_creds(host: str, service: str, port: int) -> list[CredentialRef]:
     creds_by_service = get_all_credential_refs_for_target(host)
     candidates: list[CredentialRef] = []
     keys = {service}
@@ -1653,7 +1821,7 @@ def _db_known_creds(host: str, service: str) -> list[CredentialRef]:
         keys.add("mariadb")
     for key in keys:
         for cred in creds_by_service.get(key, []):
-            if cred not in candidates:
+            if cred.port in {0, int(port)} and cred not in candidates:
                 candidates.append(cred)
     return candidates
 
@@ -1763,7 +1931,7 @@ def ai_db_inventory(host: str, port: int = 0, service: str = "") -> str:
     if not port:
         return f"[!] DB inventory requires a port for {service} on {host}."
 
-    creds = _db_known_creds(host, service)
+    creds = _db_known_creds(host, service, port)
     if not creds:
         return f"[!] DB inventory requires known {service} credentials for {host}."
 
@@ -1786,6 +1954,17 @@ def ai_db_inventory(host: str, port: int = 0, service: str = "") -> str:
                     material.password,
                     "[REDACTED]",
                 )
+            for field in ("version", "current_user"):
+                if field in result:
+                    result[field] = sanitize_credential_text(
+                        result[field],
+                        material.password,
+                    )
+            if isinstance(result.get("databases"), list):
+                result["databases"] = [
+                    sanitize_credential_text(item, material.password)
+                    for item in result["databases"]
+                ]
         if result.get("error"):
             last_error = result["error"]
             output.append(f"Attempt failed: {last_error}")
@@ -1809,16 +1988,20 @@ def ai_db_inventory(host: str, port: int = 0, service: str = "") -> str:
 
 @tool(name="ssh_session", aliases=["ssh-session", "sshsession"], category="post", description="Post-exploitation SSH Session", requires=["python:paramiko"])
 def ai_ssh_session(host: str, user: str | None = None, pwd: str | None = None, port: int = 22) -> str:
-    credential, _error = _resolve_ai_creds(host, user, pwd)
+    credential, error = _resolve_ai_creds(host, user, pwd, port=port)
     if credential is None:
+        if pwd and error:
+            return error
         return f"[!] No SSH credentials known for {host}. Provide creds: ssh_session IP USER PASSWORD"
-    with credential_material_for_execution(credential) as material:
-        return _ssh_analyze(
+    return call_credential_provider(
+        credential,
+        lambda material: _ssh_analyze(
             host,
             material.username,
             material.password,
             port=port,
-        )
+        ),
+    )
 
 @tool(name="ssh_inventory", aliases=["post_access_inventory", "controlled_ssh_inventory", "ssh_survey"], category="post", description="Controlled SSH post-access inventory", requires=["python:paramiko"])
 def ai_ssh_inventory(host: str, user: str | None = None, pwd: str | None = None, port: int = 22) -> str:
@@ -1827,6 +2010,7 @@ def ai_ssh_inventory(host: str, user: str | None = None, pwd: str | None = None,
         user,
         pwd,
         prefer_privileged=True,
+        port=port,
     )
     if credential is None:
         return f"[!] SSH inventory requires valid SSH credentials for {host}."
@@ -1874,7 +2058,10 @@ def ai_ad_enum(target_ip: str, user: str | None = None, pwd: str | None = None, 
     with _ad_creds_for_execution(target_ip, user, pwd, domain) as (creds, error):
         if error:
             return error
-        return run_ad_enum(target_ip, creds=creds)
+        return _call_ad_provider(
+            creds,
+            lambda: run_ad_enum(target_ip, creds=creds),
+        )
 
 @tool(name="bloodhound_ingest", aliases=["bloodhound", "sharphound_ingest"], category="post", description="Collect BloodHound relationship data with known domain credentials", requires=["any:python:bloodhound,bloodhound-python,bloodhound.py"])
 def ai_bloodhound_ingest(target_ip: str, user: str | None = None, pwd: str | None = None, domain: str = "") -> str:
@@ -1884,7 +2071,10 @@ def ai_bloodhound_ingest(target_ip: str, user: str | None = None, pwd: str | Non
             return error
         if not creds or not creds.get("user") or not creds.get("domain"):
             return "[BLOODHOUND INGEST]\n  [!] BloodHound requires domain credentials (user, password, domain)."
-        return bloodhound_ingest(target_ip, creds)
+        return _call_ad_provider(
+            creds,
+            lambda: bloodhound_ingest(target_ip, creds),
+        )
 
 @tool(name="gpo_review", aliases=["gpo"], category="post", description="Review Group Policy Objects through LDAP with known domain context", requires=["any:python:impacket.ldap,python:ldap3,ldapsearch"])
 def ai_gpo_review(target_ip: str, user: str | None = None, pwd: str | None = None, domain: str = "") -> str:
@@ -1894,7 +2084,10 @@ def ai_gpo_review(target_ip: str, user: str | None = None, pwd: str | None = Non
             return error
         if not creds or not creds.get("domain"):
             return "[AD SECURITY REVIEW]\n  [!] GPO review requires a domain value."
-        return "[AD SECURITY REVIEW]\n" + enumerate_gpo(target_ip, creds)
+        return "[AD SECURITY REVIEW]\n" + _call_ad_provider(
+            creds,
+            lambda: enumerate_gpo(target_ip, creds),
+        )
 
 @tool(name="adcs_review", aliases=["adcs", "certipy_find"], category="post", description="Read-only ADCS template review with Certipy find", requires=["any:certipy,certipy-ad"])
 def ai_adcs_review(target_ip: str, user: str | None = None, pwd: str | None = None, domain: str = "") -> str:
@@ -1915,7 +2108,10 @@ def ai_adcs_review(target_ip: str, user: str | None = None, pwd: str | None = No
             "-stdout",
             "-enabled",
         ]
-        return "[AD SECURITY REVIEW]\n[ADCS REVIEW]\n" + run_tool(cmd, timeout=240)
+        return "[AD SECURITY REVIEW]\n[ADCS REVIEW]\n" + _call_ad_provider(
+            creds,
+            lambda: run_tool(cmd, timeout=240),
+        )
 
 @tool(name="asrep_roast", aliases=["asrep"], category="post", description="AS-REP roasting", requires=["any:python:impacket.examples.GetNPUsers,GetNPUsers.py,impacket-GetNPUsers"])
 def ai_asrep_roast(target_ip: str, user: str | None = None, pwd: str | None = None, domain: str = "") -> str:
@@ -1923,9 +2119,12 @@ def ai_asrep_roast(target_ip: str, user: str | None = None, pwd: str | None = No
     with _ad_creds_for_execution(target_ip, user, pwd, domain) as (creds, error):
         if error:
             return error
-        return asrep_roast(
-            target_ip,
-            creds=creds if creds and creds.get("domain") else None,
+        return _call_ad_provider(
+            creds,
+            lambda: asrep_roast(
+                target_ip,
+                creds=creds if creds and creds.get("domain") else None,
+            ),
         )
 
 @tool(name="kerberoast", aliases=["kerberoasting"], category="post", description="Kerberoasting", requires=["any:python:impacket.examples.GetUserSPNs,GetUserSPNs.py,impacket-GetUserSPNs"])
@@ -1936,7 +2135,10 @@ def ai_kerberoast(target_ip: str, user: str | None = None, pwd: str | None = Non
             return error
         if not creds or not creds.get("user"):
             return "[!] Kerberoasting requires valid domain credentials."
-        return kerberoast(target_ip, creds)
+        return _call_ad_provider(
+            creds,
+            lambda: kerberoast(target_ip, creds),
+        )
 
 @tool(name="dcsync", aliases=["dc_sync"], category="post", description="DCSync with domain credentials", requires=["any:python:impacket.examples.secretsdump,secretsdump.py,impacket-secretsdump"])
 def ai_dcsync(target_ip: str, user: str | None = None, pwd: str | None = None, domain: str = "") -> str:
@@ -1946,7 +2148,10 @@ def ai_dcsync(target_ip: str, user: str | None = None, pwd: str | None = None, d
             return error
         if not creds or not creds.get("user") or not creds.get("domain"):
             return "[!] DCSync requires domain credentials."
-        return dcsync(target_ip, creds)
+        return _call_ad_provider(
+            creds,
+            lambda: dcsync(target_ip, creds),
+        )
 
 @tool(name="pass_the_hash", aliases=["pth"], category="post", description="Pass-the-Hash authentication", requires=["any:python:impacket.smbconnection,smbexec.py,impacket-smbexec,wmiexec.py,impacket-wmiexec"])
 def ai_pass_the_hash(target_ip: str, user: str = "", nthash: str = "", domain: str = "") -> str:
@@ -1964,10 +2169,13 @@ def ai_psexec(target_ip: str, user: str | None = None, pwd: str | None = None,
             return error
         if not creds or not creds.get("user"):
             return "[!] PsExec requires valid credentials."
-        return psexec(
-            target_ip,
+        return _call_ad_provider(
             creds,
-            command=_strip_wrapping_quotes(command),
+            lambda: psexec(
+                target_ip,
+                creds,
+                command=_strip_wrapping_quotes(command),
+            ),
         )
 
 @tool(name="wmiexec", aliases=["wmi_exec"], category="post", description="WMIExec lateral movement", requires=["any:python:impacket.examples.wmiexec,wmiexec.py,impacket-wmiexec"])
@@ -1979,10 +2187,13 @@ def ai_wmiexec(target_ip: str, user: str | None = None, pwd: str | None = None,
             return error
         if not creds or not creds.get("user"):
             return "[!] WMIExec requires valid credentials."
-        return wmiexec(
-            target_ip,
+        return _call_ad_provider(
             creds,
-            command=_strip_wrapping_quotes(command),
+            lambda: wmiexec(
+                target_ip,
+                creds,
+                command=_strip_wrapping_quotes(command),
+            ),
         )
 
 @tool(name="socks_proxy", aliases=["socks"], category="post", description="Start a SOCKS proxy through SSH", requires=["python:paramiko"])

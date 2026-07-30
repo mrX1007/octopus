@@ -13,7 +13,7 @@ from typing import Any
 
 try:  # Linux and macOS; unsupported platforms fail closed when locking.
     import fcntl
-except ImportError:  # pragma: no cover - exercised only on unsupported platforms
+except ImportError:
     fcntl = None  # type: ignore[assignment]
 
 CAMPAIGN_STATE_SCHEMA_VERSION = "1.0"

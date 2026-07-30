@@ -39,6 +39,7 @@ def test_pipeline_derives_normalized_endpoint_and_network_graph_facts():
 def test_runner_parses_web_scanner_target_flags_without_passing_flags_as_targets():
     import core.tools.exploit_tools
     import core.tools.recon_tools  # noqa: F401 - registers web scanner tools
+    from core.execution import ExecutionContext
     from core.tools.registry import get_tool
     from core.tools.runner import run_tool_by_command
 
@@ -50,6 +51,12 @@ def test_runner_parses_web_scanner_target_flags_without_passing_flags_as_targets
     }
     captured = []
     old_funcs = {}
+    context = ExecutionContext.operator(
+        actor="parser-contract",
+        approval_id="parser-contract-active-tools",
+        target_scope=("10.0.0.5",),
+        allow_active_tools=True,
+    )
 
     def fake_url_tool(target, *args, **kwargs):
         captured.append(target)
@@ -60,7 +67,7 @@ def test_runner_parses_web_scanner_target_flags_without_passing_flags_as_targets
             tool_def = get_tool(tool_name)
             old_funcs[tool_name] = tool_def.func
             tool_def.func = fake_url_tool
-            result = run_tool_by_command(command)
+            result = run_tool_by_command(command, context)
             assert result == "ok"
     finally:
         for tool_name, old_func in old_funcs.items():

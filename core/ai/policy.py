@@ -57,6 +57,14 @@ class DeterministicPolicy:
     def _allowed_by_state(self, task: str, context: dict[str, Any]) -> bool:
         state = context.get("state", "initial_recon")
         policy = context.get("automation_policy") or {}
+        killchain_policy = context.get("killchain_policy") or {}
+        from core.killchain.policy import TASK_STAGE_MAP
+
+        killchain_stage = TASK_STAGE_MAP.get(task)
+        if killchain_stage and killchain_policy:
+            automated_stages = killchain_policy.get("automated_stages") or {}
+            if not bool(automated_stages.get(killchain_stage, True)):
+                return False
         if task in {"establish_persistence", "payload_generation"}:
             return state in {"root_access_confirmed", "persistence_established"} and bool(policy.get("auto_persistence", False))
         if task in {"internal_network_recon", "internal_service_discovery"}:

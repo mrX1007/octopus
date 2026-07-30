@@ -70,8 +70,7 @@ class ToolDef:
                 options = [item.strip() for item in dep.split(":", 1)[1].split(",") if item.strip()]
                 if not options or not any(_dependency_available(option) for option in options):
                     return False
-                continue
-            if dep == "octopus:shardbrowser":
+            elif dep == "octopus:shardbrowser":
                 try:
                     from core.osint.shardbrowser import ShardBrowser
                     status = ShardBrowser().get_status()
@@ -79,12 +78,10 @@ class ToolDef:
                         return False
                 except Exception:
                     return False
-                continue
-            if dep.startswith("python:"):
+            elif dep.startswith("python:"):
                 if importlib.util.find_spec(dep.split(":", 1)[1]) is None:
                     return False
-                continue
-            if shutil.which(dep) is None:
+            elif shutil.which(dep) is None:
                 return False
         return True
 
@@ -101,6 +98,11 @@ class ToolDef:
 # ─── Global Registry ────────────────────────────────────
 
 _REGISTRY: dict[str, ToolDef] = {}
+
+
+def _registry_key(value: str) -> str:
+    """Return the case-insensitive, whitespace-trimmed registry key."""
+    return str(value or "").strip().casefold()
 
 
 def _dependency_available(dep: str) -> bool:
@@ -139,11 +141,45 @@ def tool(
 
     Returns:
         The original function, unchanged.
+
+    Raises:
+        ValueError: If the canonical name or an alias is empty, duplicated in
+            this declaration, or already owned by another registry entry.
     """
     def decorator(func: Callable) -> Callable:
+        canonical_name = _registry_key(name)
+        normalized_aliases = [_registry_key(alias) for alias in aliases or []]
+        declared_names = [canonical_name, *normalized_aliases]
+
+        if any(not declared_name for declared_name in declared_names):
+            raise ValueError("Tool registration names must be non-empty")
+
+        duplicate_names = {
+            declared_name
+            for declared_name in declared_names
+            if declared_names.count(declared_name) > 1
+        }
+        if duplicate_names:
+            duplicates = ", ".join(sorted(duplicate_names))
+            raise ValueError(
+                f"Tool registration collision within declaration: {duplicates}",
+            )
+
+        registry_collisions = {
+            declared_name: _REGISTRY[declared_name]
+            for declared_name in declared_names
+            if declared_name in _REGISTRY
+        }
+        if registry_collisions:
+            collisions = ", ".join(
+                f"{declared_name} -> {tool_def.name}"
+                for declared_name, tool_def in sorted(registry_collisions.items())
+            )
+            raise ValueError(f"Tool registration collision: {collisions}")
+
         tool_def = ToolDef(
-            name=name,
-            aliases=aliases or [],
+            name=canonical_name,
+            aliases=normalized_aliases,
             category=category,
             func=func,
             description=description,
@@ -151,18 +187,9 @@ def tool(
             needs_target=needs_target,
             menu_group=menu_group,
         )
-        _REGISTRY[name] = tool_def
+        _REGISTRY.update(dict.fromkeys(declared_names, tool_def))
 
-        # Also register aliases for fast lookup
-        for alias in tool_def.aliases:
-            if alias in _REGISTRY and _REGISTRY[alias].name != name:
-                logger.warning(
-                    f"Tool alias '{alias}' conflicts with existing tool "
-                    f"'{_REGISTRY[alias].name}'. Overwriting."
-                )
-            _REGISTRY[alias] = tool_def
-
-        logger.debug(f"Registered tool: {name} ({category})")
+        logger.debug(f"Registered tool: {canonical_name} ({category})")
         return func
 
     return decorator
@@ -179,16 +206,9 @@ def get_tool(name: str) -> Optional[ToolDef]:
     Returns:
         ToolDef if found, None otherwise.
     """
-    key = name.lower().strip()
+    key = _registry_key(name)
     if key in _REGISTRY:
         return _REGISTRY[key]
-
-    # Fuzzy match: try removing common prefixes/suffixes
-    for prefix in ("run_", "_run_"):
-        stripped = key.removeprefix(prefix)
-        if stripped in _REGISTRY:
-            return _REGISTRY[stripped]
-
     return None
 
 

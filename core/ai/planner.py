@@ -11,8 +11,9 @@ from core.ai.capability_assessment import CapabilityResolver
 from core.ai.llm_context import compact_context_for_llm
 from core.execution import ExecutionContext
 
+CONTEXT_WINDOW = 5
 with contextlib.suppress(ImportError):
-    from core.ai.ollama_client import ask_ollama
+    from core.ai.ollama_client import CONTEXT_WINDOW, ask_ollama
 
 logger = logging.getLogger("octopus.planner")
 
@@ -107,7 +108,7 @@ RULES:
 {json.dumps(llm_context, ensure_ascii=False, separators=(",", ":"))}
 
 Recent Task History (do not repeat failed tasks):
-{json.dumps(task_history[-5:], ensure_ascii=False, separators=(",", ":"))}
+{json.dumps(task_history[-max(1, int(CONTEXT_WINDOW)):], ensure_ascii=False, separators=(",", ":"))}
 
 Director's Goal: {goal}
 

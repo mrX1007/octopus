@@ -1,3 +1,7 @@
+# Runtime source precedence is OCTOPUS_CONFIG > ~/.octopus/config.yaml >
+# /etc/octopus/config.yaml > this bundled file. Core keys are strict: unknown
+# names, wrong types, and out-of-range values stop startup with a validation error.
+
 # ═══════════════════════════════════════════════
 # DATABASE
 # ═══════════════════════════════════════════════
@@ -18,6 +22,7 @@ ollama:
   temperature: 0.4           # v7.0: lowered for deterministic tool selection
   json_temperature: 0.15     # lower variance for strict JSON roles
   top_p: 0.9
+  top_k: 10                 # candidate-token cap for generation
   timeout: 1200              # seconds — max wait for one generation
   retries: 3                 # how many times to retry on timeout
   context_window: 6          # 6 exchanges preserved in agent history
@@ -29,6 +34,8 @@ ollama:
   num_ctx: 16384             # v7.0: doubled from 8192 for better reasoning
   num_batch: 512             # v7.0: batch size for faster inference
   repeat_penalty: 1.15       # v7.0: reduced from 1.2
+  json_format: true          # request Ollama native JSON mode for JSON roles
+  json_think: false          # suppress hidden reasoning for strict JSON roles
 
 # ═══════════════════════════════════════════════
 # SCRAPLING
@@ -63,7 +70,7 @@ hash_cracker:
   max_wordlist_size: 50000000 # max lines to process from wordlist
 
 # ═══════════════════════════════════════════════
-# KILL CHAIN (v7.0 — 9 stages)
+# KILL CHAIN (v7.0 — named stages)
 # ═══════════════════════════════════════════════
 killchain:
   enabled: true
@@ -75,7 +82,6 @@ killchain:
     lateral_movement: true   # Stage 5: ACTIVE — auto-try creds on internal hosts
     data_exfil: true         # Stage 6: dump shadow, keys, configs, DB creds
     cleanup: true            # Stage 9 (v7.0): stealth evidence destruction
-  exfil_dir: "/tmp"          # base dir for exfiltrated files
   quick_privesc_after_root: true  # return once uid=0 is proven; later stages handle post-exploit work
   credential_harvest_timeout: 25
 
@@ -111,6 +117,7 @@ strategy:
   exploit_select_context_facts: 0 # 0/unlimited = attach all recon facts to exploit_select
   parallel_tools: 8          # max concurrent tool executions
   max_director_loops: 10     # max Director AI loops
+  plan_enrichment_limit: 8   # maximum non-critical enrichment tasks per plan
   mission:
     task_retry_budget: 2     # retries after typed transient failures only
     retryable_error_classes:
@@ -1218,6 +1225,8 @@ tools:
     timeout: 120
     match_codes: "200,204,301,302,307,401,403"
     flags: ["-c"]          # colorized output
+    maxtime: 60             # ffuf internal wall-clock limit
+    request_timeout: 5      # ffuf per-request timeout
 
   nikto:
     timeout: 300

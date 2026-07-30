@@ -4,19 +4,17 @@ import pytest
 
 from core.ai.credential_sync import RuntimeCredentialSynchronizer
 from core.credential_ranking import KEY_AUTH_MARKER
-from core.credentials import SSH_KEY_AUTH_REF, CredentialRef
+from core.credentials import CredentialRef
 
 pytestmark = [pytest.mark.contract, pytest.mark.security]
 
 HOST = "10.0.0.5"
 SSH_PASSWORD_REF = "secret://ssh-password-reference"
-MYSQL_PASSWORD_REF = "secret://mysql-password-reference"
 
 
 def _credential_ref(
     service: str,
     username: str,
-    secret_ref: str,
     *,
     auth_kind: str = "password",
 ) -> CredentialRef:
@@ -25,7 +23,6 @@ def _credential_ref(
         service=service,
         target=HOST,
         username=username,
-        secret_ref=secret_ref,
         auth_kind=auth_kind,
     )
 
@@ -57,7 +54,6 @@ def test_runtime_credential_lookup_normalizes_target_and_degrades_to_empty():
     credential = _credential_ref(
         "ssh",
         "root",
-        SSH_KEY_AUTH_REF,
         auth_kind="ssh_key",
     )
     sync = RuntimeCredentialSynchronizer(
@@ -91,12 +87,11 @@ def test_runtime_credential_seed_preserves_projection_shape_and_idempotence():
             _credential_ref(
                 "ssh",
                 "root",
-                SSH_KEY_AUTH_REF,
                 auth_kind="ssh_key",
             ),
-            _credential_ref("ssh", "support", SSH_PASSWORD_REF),
+            _credential_ref("ssh", "support"),
         ],
-        "mysql": [_credential_ref("mysql", "app", MYSQL_PASSWORD_REF)],
+        "mysql": [_credential_ref("mysql", "app")],
     }
 
     first = sync.seed_known_credentials("scan-1", HOST, store, credentials)
@@ -115,5 +110,5 @@ def test_runtime_credential_seed_preserves_projection_shape_and_idempotence():
         f"ssh://support@{HOST}",
         f"mysql://app@{HOST}",
     )
-    assert SSH_PASSWORD_REF not in repr(store.calls)
-    assert MYSQL_PASSWORD_REF not in repr(store.calls)
+    assert "credential://ssh-support" not in repr(store.calls)
+    assert "credential://mysql-app" not in repr(store.calls)

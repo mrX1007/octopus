@@ -122,7 +122,7 @@ jobs:
         run: >-
           python -m compileall -q
           config.py db.py evasion.py export.py hash_cracker.py memory.py msf.py
-          octopus.py search.py shodan_module.py tools.py
+          octopus.py octopus_c2.py search.py shodan_module.py tools.py
           core modules plugins scripts tests
 
   fast-tests:
@@ -207,12 +207,12 @@ jobs:
           python scripts/quality/coverage_gate.py \
             --root . \
             --config quality/coverage-ci.ini \
-            --fail-under 59.50 \
-            --package-fail-under core/actions=70 \
-            --package-fail-under core/execution=65 \
-            --package-fail-under core/benchmarks=45 \
+            --fail-under 100.00 \
+            --package-fail-under core/actions=100 \
+            --package-fail-under core/execution=100 \
+            --package-fail-under core/benchmarks=100 \
             --diff-base "${change_base}" \
-            --diff-fail-under 80 \
+            --diff-fail-under 100 \
             --xml coverage.xml
 
       - name: Upload coverage report
@@ -301,7 +301,7 @@ jobs:
         run: python -m build --no-isolation
 
       - name: Install and smoke-test the built wheel
-        run: python scripts/quality/wheel_smoke.py dist/*.whl
+        run: python scripts/quality/wheel_smoke.py dist/*.whl --sdist dist/*.tar.gz
 
   dependency-security:
     name: Dependency audit and deterministic SBOM
@@ -351,7 +351,7 @@ jobs:
           retention-days: 30
 
   c2-go:
-    name: C2 Go build, test, vet, and format
+    name: Go build, test, vet, format, and coverage
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     defaults:
@@ -372,9 +372,17 @@ jobs:
           cache: false
 
       - name: Check gofmt
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
-          unformatted="$(gofmt -l .)"
+          mapfile -d '' go_files < <(
+            git ls-files -z -- ':(top,glob)**/*.go'
+          )
+          if (( ${#go_files[@]} == 0 )); then
+            echo "No tracked Go files were found."
+            exit 1
+          fi
+          unformatted="$(gofmt -l "${go_files[@]}")"
           if [[ -n "${unformatted}" ]]; then
             echo "The following Go files require gofmt:"
             echo "${unformatted}"
@@ -386,14 +394,40 @@ jobs:
           go mod download
           go mod verify
 
-      - name: Run Go tests
-        run: go test ./...
+      - name: Run Go tests with statement coverage
+        run: >-
+          go test
+          -mod=readonly
+          -count=1
+          -covermode=atomic
+          -coverpkg=./...
+          -coverprofile="${RUNNER_TEMP}/c2-go.coverage.out"
+          ./...
 
       - name: Run Go vet
-        run: go vet ./...
+        run: go vet -mod=readonly ./...
 
       - name: Build C2 implant
-        run: go build -trimpath -o "${RUNNER_TEMP}/octopus-implant" .
+        run: go build -mod=readonly -trimpath -o "${RUNNER_TEMP}/octopus-implant" .
+
+      - name: Verify Go module metadata stayed immutable
+        run: git diff --exit-code -- go.mod go.sum
+
+      - name: Enforce complete first-party Go statement coverage
+        run: >-
+          python3 ../../scripts/quality/go_coverage_gate.py
+          --root ../..
+          --profile "${RUNNER_TEMP}/c2-go.coverage.out"
+          --fail-under 100
+
+      - name: Upload Go coverage evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-go
+          path: ${{ runner.temp }}/c2-go.coverage.out
+          if-no-files-found: warn
+          retention-days: 14
 
   vendor-integrity:
     name: Pinned submodules and vendor artifact hashes

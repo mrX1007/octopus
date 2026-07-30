@@ -51,21 +51,15 @@ def validate_local_links(root: Path) -> int:
                 if not target or target.startswith("#") or target.startswith(_IGNORED_SCHEMES):
                     continue
                 path_text = unquote(target.split("#", 1)[0])
-                if not path_text:
-                    continue
                 candidate = (document.parent / path_text).resolve()
                 try:
                     candidate.relative_to(root)
                 except ValueError:
-                    failures.append(
-                        f"{document.relative_to(root)}:{line_number}: link escapes repository: {target}"
-                    )
+                    failures.append(f"{document.relative_to(root)}:{line_number}: link escapes repository: {target}")
                     continue
                 checked += 1
                 if not candidate.exists():
-                    failures.append(
-                        f"{document.relative_to(root)}:{line_number}: missing link target: {target}"
-                    )
+                    failures.append(f"{document.relative_to(root)}:{line_number}: missing link target: {target}")
     if failures:
         raise DocsGateError("\n".join(failures))
     return checked
@@ -103,9 +97,7 @@ def validate_schemas(root: Path) -> tuple[int, int]:
             validator.validate(_load_json(path))
         except ValidationError as exc:
             location = ".".join(str(item) for item in exc.absolute_path) or "<root>"
-            raise DocsGateError(
-                f"schema validation failed: {path}:{location}: {exc.message}"
-            ) from exc
+            raise DocsGateError(f"schema validation failed: {path}:{location}: {exc.message}") from exc
         instances += 1
     return len(schemas), instances
 
@@ -162,12 +154,8 @@ def validate_deprecations(root: Path) -> int:
             except (OSError, UnicodeError):
                 failures.append(f"{target}: caller is unreadable: {caller_text}")
                 continue
-            if reference_tokens and not any(
-                token and token in caller_source for token in reference_tokens
-            ):
-                failures.append(
-                    f"{target}: declared caller has no target reference: {caller_text}"
-                )
+            if reference_tokens and not any(token and token in caller_source for token in reference_tokens):
+                failures.append(f"{target}: declared caller has no target reference: {caller_text}")
     if failures:
         raise DocsGateError("\n".join(failures))
     return len(entries)
@@ -212,8 +200,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"docs gate failed: {exc}", file=sys.stderr)
         return 1
     print(
-        f"docs gate passed: {links} local links, {schemas} schemas, "
-        f"{instances} instances, {deprecations} deprecations"
+        f"docs gate passed: {links} local links, {schemas} schemas, {instances} instances, {deprecations} deprecations"
     )
     return 0
 

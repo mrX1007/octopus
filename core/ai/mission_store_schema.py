@@ -22,18 +22,18 @@ from core.ai.mission_store_models import (
 
 class MissionStoreSchemaMixin:
     def _init_db(self) -> None:
-        last_error: sqlite3.OperationalError | None = None
-        for attempt in range(12):
+        attempt = 0
+        while True:
             try:
                 self._init_db_once()
                 return
             except sqlite3.OperationalError as exc:
                 if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
                     raise
-                last_error = exc
+                if attempt == 11:
+                    raise
                 time.sleep(min(0.01 * (2**attempt), 0.25))
-        if last_error is not None:
-            raise last_error
+                attempt += 1
 
     def _init_db_once(self) -> None:
         with self._connection() as conn:

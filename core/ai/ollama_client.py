@@ -219,7 +219,7 @@ def ask_ollama(prompt: str, json_mode: bool = False) -> str:
         predict_tokens = JSON_MAX_TOKENS if json_mode else MAX_TOKENS
         opts = {
             "num_predict": predict_tokens,
-            "temperature": 0 if json_mode else TEMPERATURE,
+            "temperature": JSON_TEMPERATURE if json_mode else TEMPERATURE,
             "top_p": TOP_P,
             "top_k": TOP_K,
             "repeat_penalty": REPEAT_PENALTY,

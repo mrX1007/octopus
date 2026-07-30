@@ -79,10 +79,10 @@ func main() {
 		if err != nil {
 			return nil, err
 		}
-		
+
 		clientHello := getClientHelloID(reqData.Browser)
 		uConn := tls.UClient(conn, &tls.Config{InsecureSkipVerify: true}, clientHello)
-		
+
 		if err := uConn.Handshake(); err != nil {
 			return nil, err
 		}
@@ -98,7 +98,7 @@ func main() {
 		MaxIdleConns:      10,
 		IdleConnTimeout:   30 * time.Second,
 	}
-	
+
 	// Force HTTP/2 with strict browser-like settings
 	// uTLS doesn't automatically handle all HTTP/2 ALPN frame settings.
 	// We configure x/net/http2 transport to mimic strict browser SETTINGS frames.
@@ -107,7 +107,7 @@ func main() {
 		outputError(fmt.Sprintf("Failed to configure HTTP2: %v", err))
 		return
 	}
-	
+
 	// Align SETTINGS frames closer to Chrome (MaxConcurrentStreams, InitialWindowSize)
 	t2.StrictMaxConcurrentStreams = true
 	t2.ReadIdleTimeout = 30 * time.Second
@@ -143,7 +143,7 @@ func main() {
 	defer resp.Body.Close()
 
 	respBodyBytes, _ := ioutil.ReadAll(resp.Body)
-	
+
 	respHeaders := make(map[string]string)
 	for k, v := range resp.Header {
 		if len(v) > 0 {

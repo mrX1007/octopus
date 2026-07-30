@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import threading
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
@@ -36,7 +36,6 @@ class CredentialRef:
     service: str
     target: str
     username: str
-    secret_ref: str = field(default="", repr=False)
     auth_kind: str = "password"
     source: str = ""
     verified: bool = False
@@ -89,6 +88,43 @@ class CredentialMaterial:
         self._password = ""
 
 
+def sanitize_credential_text(
+    value: object,
+    plaintext: str,
+    secret_ref: str = "",
+) -> str:
+    """Render provider output without returning credential-owned values."""
+
+    text = str(value)
+    for sensitive in (plaintext, secret_ref):
+        if sensitive and sensitive != KEY_AUTH_MARKER:
+            text = text.replace(sensitive, "[REDACTED]")
+    return text
+
+
+def call_credential_provider(
+    credential: CredentialRef | str,
+    provider: Callable[[CredentialMaterial], object],
+) -> str:
+    """Reveal for one provider call and return only sanitized text.
+
+    Provider exceptions are converted after leaving both the ``except`` block
+    and reveal context. This keeps the original exception (and any secret it
+    contains) out of the returned control-plane value.
+    """
+
+    return CredentialStore.instance().call_provider(credential, provider)
+
+
+def sanitize_credential_result(
+    credential: CredentialRef | str,
+    value: object,
+) -> str:
+    """Sanitize a result from a provider that received only a reference."""
+
+    return CredentialStore.instance().sanitize_result(credential, value)
+
+
 class CredentialStore:
     """Thread-safe reference index backed by SecretStore and optional MariaDB."""
 
@@ -104,6 +140,7 @@ class CredentialStore:
         self.secret_store = secret_store or get_secret_store()
         self._cache: dict[tuple[str, str], list[CredentialRef]] = {}
         self._by_handle: dict[str, CredentialRef] = {}
+        self._secret_refs_by_handle: dict[str, str] = {}
         self._cache_lock = threading.RLock()
         self._db_available = False
         if hydrate:
@@ -140,14 +177,14 @@ class CredentialStore:
                     # A credential handle cannot recover secret material and must
                     # never be treated as a password.
                     continue
-                elif persisted_value:
+                elif not persisted_value:
+                    continue
+                else:
                     secret_ref = self.secret_store.store(
                         persisted_value,
                         kind=f"credential:{str(service).lower()}",
                     )
                     auth_kind = "password"
-                else:
-                    continue
 
                 credential = self._make_ref(
                     str(service),
@@ -156,7 +193,7 @@ class CredentialStore:
                     secret_ref,
                     auth_kind=auth_kind,
                 )
-                self._remember(credential)
+                self._remember(credential, secret_ref)
                 if secret_ref != persisted_value:
                     cursor.execute(
                         """
@@ -188,21 +225,30 @@ class CredentialStore:
         service = str(service or "").strip().lower()
         target = str(target or "").strip()
         username = str(username or "").strip()
-        payload = "\x1f".join((service, target, username, secret_ref, auth_kind))
+        normalized_port = max(0, int(port or 0))
+        payload = "\x1f".join(
+            (
+                service,
+                target,
+                username,
+                secret_ref,
+                auth_kind,
+                str(normalized_port),
+            )
+        )
         digest = self.secret_store.keyed_digest(payload, kind="credential_handle")
         return CredentialRef(
             handle=f"{CREDENTIAL_HANDLE_PREFIX}{digest[:40]}",
             service=service,
             target=target,
             username=username,
-            secret_ref=secret_ref,
             auth_kind=auth_kind,
             source=str(source or ""),
             verified=bool(verified),
-            port=max(0, int(port or 0)),
+            port=normalized_port,
         )
 
-    def _remember(self, credential: CredentialRef) -> bool:
+    def _remember(self, credential: CredentialRef, secret_ref: str) -> bool:
         key = (credential.service, credential.target)
         with self._cache_lock:
             current = self._by_handle.get(credential.handle)
@@ -210,6 +256,7 @@ class CredentialStore:
                 return False
             self._cache.setdefault(key, []).append(credential)
             self._by_handle[credential.handle] = credential
+            self._secret_refs_by_handle[credential.handle] = secret_ref
             return True
 
     def register(
@@ -239,6 +286,8 @@ class CredentialStore:
                 raise ValueError("credential handle target mismatch")
             if username and resolved.username != username:
                 raise ValueError("credential handle username mismatch")
+            if port and resolved.port and resolved.port != int(port):
+                raise ValueError("credential handle port mismatch")
             return resolved, False
         if secret_value == KEY_AUTH_MARKER:
             secret_ref = SSH_KEY_AUTH_REF
@@ -265,7 +314,7 @@ class CredentialStore:
             verified=verified,
             port=port,
         )
-        created = self._remember(credential)
+        created = self._remember(credential, secret_ref)
         if not created:
             existing = self.resolve(credential.handle)
             assert existing is not None
@@ -310,6 +359,9 @@ class CredentialStore:
         try:
             from db import get_connection
 
+            with self._cache_lock:
+                secret_ref = self._secret_refs_by_handle[credential.handle]
+
             conn = get_connection()
             cursor = conn.cursor()
             cursor.execute(
@@ -322,7 +374,7 @@ class CredentialStore:
                     credential.target,
                     credential.service,
                     credential.username,
-                    credential.secret_ref,
+                    secret_ref,
                 ),
             )
             conn.commit()
@@ -356,12 +408,12 @@ class CredentialStore:
         return self.all_refs(target)
 
     def resolve(self, credential: CredentialRef | str) -> CredentialRef | None:
-        if isinstance(credential, CredentialRef):
-            candidate = self._by_handle.get(credential.handle)
-            return candidate if candidate == credential else None
-        if not is_credential_handle(credential):
-            return None
         with self._cache_lock:
+            if isinstance(credential, CredentialRef):
+                candidate = self._by_handle.get(credential.handle)
+                return candidate if candidate == credential else None
+            if not is_credential_handle(credential):
+                return None
             return self._by_handle.get(str(credential))
 
     def best_ref(
@@ -371,6 +423,7 @@ class CredentialStore:
         *,
         username: str = "",
         prefer_privileged: bool = False,
+        port: int | None = None,
     ) -> CredentialRef | None:
         if service:
             candidates = list(self.refs(service, target))
@@ -384,6 +437,13 @@ class CredentialStore:
             candidates = list(dict.fromkeys(candidates))
         if username:
             candidates = [item for item in candidates if item.username == username]
+        if port is not None:
+            normalized_port = max(0, int(port or 0))
+            candidates = [
+                item
+                for item in candidates
+                if item.port in {0, normalized_port}
+            ]
 
         def rank(item: CredentialRef) -> tuple[int, str, str]:
             is_root = item.username.casefold() == "root"
@@ -429,10 +489,12 @@ class CredentialStore:
         resolved = self.resolve(credential)
         if resolved is None:
             raise KeyError("unknown credential handle")
+        with self._cache_lock:
+            secret_ref = self._secret_refs_by_handle.get(resolved.handle, "")
         if resolved.auth_kind == "ssh_key":
             password = KEY_AUTH_MARKER
-        elif is_secret_ref(resolved.secret_ref):
-            password = self.secret_store.reveal(resolved.secret_ref)
+        elif is_secret_ref(secret_ref):
+            password = self.secret_store.reveal(secret_ref)
         else:
             raise ValueError("credential has no revealable secret reference")
         material = CredentialMaterial(resolved, password)
@@ -441,6 +503,67 @@ class CredentialStore:
         finally:
             material.clear()
             password = ""
+
+    def call_provider(
+        self,
+        credential: CredentialRef | str,
+        provider: Callable[[CredentialMaterial], object],
+    ) -> str:
+        """Reveal for one call and sanitize its result with private ownership."""
+
+        resolved = self.resolve(credential)
+        if resolved is None:
+            raise KeyError("unknown credential handle")
+        with self._cache_lock:
+            secret_ref = self._secret_refs_by_handle.get(resolved.handle, "")
+
+        failure: tuple[str, str] | None = None
+        with self.material_for_execution(resolved) as material:
+            try:
+                result = provider(material)
+            except Exception as exc:
+                failure = (
+                    type(exc).__name__,
+                    sanitize_credential_text(
+                        exc,
+                        material.password,
+                        secret_ref,
+                    ),
+                )
+            else:
+                return sanitize_credential_text(
+                    result,
+                    material.password,
+                    secret_ref,
+                )
+
+        assert failure is not None
+        error_type, message = failure
+        detail = f": {message}" if message else ""
+        return f"[!] Credential provider failed ({error_type}){detail}"
+
+    def sanitize_result(
+        self,
+        credential: CredentialRef | str,
+        value: object,
+    ) -> str:
+        """Sanitize a control-plane value using privately owned secret data."""
+
+        resolved = self.resolve(credential)
+        if resolved is None:
+            raise KeyError("unknown credential handle")
+        with self._cache_lock:
+            secret_ref = self._secret_refs_by_handle.get(resolved.handle, "")
+        if resolved.auth_kind == "ssh_key":
+            plaintext = KEY_AUTH_MARKER
+        elif is_secret_ref(secret_ref):
+            plaintext = self.secret_store.reveal(secret_ref)
+        else:
+            raise ValueError("credential has no revealable secret reference")
+        try:
+            return sanitize_credential_text(value, plaintext, secret_ref)
+        finally:
+            plaintext = ""
 
     # Old ambiguous getters intentionally no longer reveal plaintext.
     def get(self, service: str, target: str) -> tuple[CredentialRef, ...]:
@@ -506,12 +629,14 @@ def get_best_credential_ref(
     *,
     username: str = "",
     prefer_privileged: bool = False,
+    port: int | None = None,
 ) -> CredentialRef | None:
     return CredentialStore.instance().best_ref(
         target,
         service,
         username=username,
         prefer_privileged=prefer_privileged,
+        port=port,
     )
 
 
@@ -557,6 +682,7 @@ __all__ = [
     "CredentialMaterial",
     "CredentialRef",
     "CredentialStore",
+    "call_credential_provider",
     "credential_material_for_execution",
     "deprecated_plaintext_credential_for_execution",
     "get_all_credential_refs_for_target",
@@ -565,4 +691,6 @@ __all__ = [
     "is_credential_handle",
     "register_credential",
     "resolve_credential_handle",
+    "sanitize_credential_result",
+    "sanitize_credential_text",
 ]

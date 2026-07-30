@@ -229,14 +229,14 @@ from positive verification and final `ExecutionPolicy` authorization.
 | C2 | `core/c2/` | Optional daemon, implants, operators and channels |
 | OSINT/browser | `shodan_module.py`, `core/osint/shardbrowser.py` | Shodan and ShardBrowser integrations |
 
-Current physical line-count snapshot (2026-07-23):
+Current physical line-count snapshot (2026-07-30):
 
 | File | Lines | Status |
 | --- | ---: | --- |
-| `core/ai/pipeline.py` | 2,374 | Below the enforced 2,400-line ceiling |
-| `core/ai/evidence.py` | 2,368 | Includes the 1,308-line `RegexParser` compatibility fallback |
-| `core/tools/post_tools.py` | 2,169 | Further wrapper decomposition remains |
-| `core/cli/application.py` | 2,234 | Workflow implementation behind the thin CLI entry points |
+| `core/ai/pipeline.py` | 2,287 | Below the enforced 2,400-line ceiling |
+| `core/ai/evidence.py` | 2,369 | Includes the `RegexParser` compatibility fallback |
+| `core/tools/post_tools.py` | 2,380 | Further wrapper decomposition remains |
+| `core/cli/application.py` | 2,288 | Workflow implementation behind the thin CLI entry points |
 | `core/benchmarks/competitors/launch.py` | 2,077 | Versioned live-campaign launcher |
 
 ## Tooling Overview
@@ -250,7 +250,7 @@ Common categories:
 - External intelligence: `whois`, `dig`, `shodan`
 - Web mapping: `httpx_probe`, `whatweb`, `curl_headers`, `scrapling`,
   `browser_surface_analysis`
-- Web content/API: `ffuf`, `katana_crawl`, `scrapling_crawl`,
+- Web content/API: `ffuf`, `gobuster`, `dirb`, `katana_crawl`, `scrapling_crawl`,
   `openapi_import`, `graphql_check`, `api_auth_check`
 - Web checks: `security_headers_check`, `cors_check`, `jwt_analyze`,
   `js_route_extract`, `burp_import`, `zap_import`
@@ -264,15 +264,62 @@ Common categories:
   `kerberoast`
 - Code/cloud/secrets: `gitleaks_scan`, `trufflehog_scan`, `semgrep_scan`,
   `trivy_scan`, `checkov_scan`, `prowler_scan`, `scoutsuite_scan`
-- Gated/manual actions: `msf_run`, `ssh_exec`, `socks_proxy`, `port_forward`,
+- Policy-gated/high-impact actions: `msf_run`, `ssh_exec`, `socks_proxy`, `port_forward`,
   C2 deployment and active kill-chain stages
 
-At this revision, the registry coverage command in Testing reports:
+At this revision, the profile-accounted registry coverage command in Testing
+reports:
 
 ```text
-covered/registered: 93/93
+covered/registered: 96/96
 unknown: []
 ```
+
+The decorator inventory contains 96 canonical names and 121 unique aliases.
+Of those canonical tools, 84 occur as AI task-map leaf providers and the
+remaining 12 are explicitly classified as follow-up, manual-gated, legacy or
+alias wrappers. The hermetic unified-runtime contract verifies that all 217
+declared names resolve through the action catalog, runtime dispatcher and
+stubbed provider facade. Undeclared `run_`/`_run_` spellings are rejected by
+both registries instead of becoming implicit aliases. No external provider is
+invoked by this contract.
+
+For application integrations, the documented public execution entry point is
+`core.tools.dispatch_registered_tool(command, execution_context)`. It requires
+an explicit typed `ExecutionContext`, accepts only decorator-registered tools,
+and rechecks execution policy immediately before provider dispatch. The
+top-level `tools` module, direct provider functions, raw process helper,
+shell/REPL and numeric-menu entry points remain import-compatible but are
+listed in `core.tools.DEPRECATED_TOOL_EXPORTS` as migration surfaces. The AI
+pipeline imports the registered-only facade directly; no production module
+imports the top-level compatibility module.
+
+This is not yet literal end-to-end unification of every project path:
+
+- all 84 AI task-map leaf providers, including `rustscan`, now resolve through
+  the decorator registry and `ActionCatalog`; unregistered direct-binary
+  execution fails closed;
+- the duplicated legacy numeric menu has 48 entries; each selection, plus the
+  `a`/`n`/`x` discovery profiles, must resolve the same identity through the
+  decorator registry and `ActionCatalog` before the final policy check. The
+  menu remains a compatibility facade outside the full `ActionExecutor`
+  lifecycle. The former JMX exploit-scan and DNS C2 listener entries were
+  removed because they had no registered policy identity; smart `n` mode only
+  reports credential-testing and `sqlmap` follow-ups as gated and never starts
+  them. The legacy menu fixes every numeric key to an immutable canonical tool
+  identity; cached-credential/post-access adapters and C2 builders that need
+  additional parameters fail closed instead of reusing a mutable label or
+  treating the scan target as build configuration;
+- class plugins are discovered behind the shared `plugin` gateway rather than
+  being registered as individual `PluginActionAdapter` entries;
+- all 58 conceptual task-map keys have explicit scheduling risk and
+  precondition metadata; only an unknown external task receives the
+  fail-closed default `risk: unknown` profile.
+
+Accordingly, `96/96` means every decorator-registered tool is accounted for by
+an execution profile; it must not be read as “every tool path is unified.” It
+also does not imply that optional external binaries or services are installed
+in a particular environment.
 
 ## Automation And Gating
 
@@ -287,7 +334,19 @@ Execution profiles:
 Default safe posture in `config.yaml`:
 
 ```yaml
+killchain:
+  enabled: true
+  stages:
+    vuln_assess: true
+    exploitation: true
+    privesc: true
+    persistence: true
+    lateral_movement: true
+    data_exfil: true
+    cleanup: true
+
 strategy:
+  auto_killchain: true
   auto_post_access_inventory: true
   auto_ssh_inventory: true
   auto_internal_recon: true
@@ -322,6 +381,22 @@ strategy:
       uncertainty: 1.5
 ```
 
+The seven names under `killchain.stages` are the configuration contract;
+legacy numeric stage labels are display text, not policy identifiers.
+`killchain.enabled` and each named stage are hard execution gates.
+`strategy.auto_killchain` controls autonomous selection only and cannot
+override either hard gate. Registered tool aliases are normalized through the
+same stage registry, and `ExecutionPolicy` rechecks the gate immediately before
+registered dispatch. Missing, misspelled or non-boolean gate values fail
+closed.
+
+Credentials remain opaque `CredentialRef` handles while planning, scheduling,
+policy evaluation and orchestration occur. Policy code neither resolves a
+secret nor invokes a provider; plaintext may be revealed only after the final
+gate, inside the immediate provider's bounded material context. See
+[`docs/architecture/configuration-contract.md`](docs/architecture/configuration-contract.md)
+for ownership and test requirements.
+
 Active Metasploit execution is only promoted when:
 
 1. `exploit_select` emits a matching `msf_check`.
@@ -342,19 +417,30 @@ contradicted, stale or coverage-degraded.
 
 ```bash
 cd /path/to/Octopus
-python3 -m venv venv
-source venv/bin/activate
-python -m pip install --upgrade pip wheel
-pip install -r requirements.txt
+python3.10 -m venv venv
+./venv/bin/python -m pip install --upgrade pip wheel
+./venv/bin/python -m pip install -e .
 ```
+
+The package requires CPython 3.10 or newer. For local tests, install the test
+profile as well:
+
+```bash
+./venv/bin/python -m pip install -r requirements/test.txt
+```
+
+Install only the optional package features you enable, for example
+`.[reporting]`, `.[osint-browser]`, `.[mysql]`, or `.[c2]`. The root
+`requirements.txt` remains a compatibility/full-development profile and pulls
+all optional requirement files; it is not the minimal runtime installation.
 
 ### System Tools
 
-Install the external commands you plan to use. Names differ by distribution,
-but common tools include:
+Install only the external commands approved for your environment. Names differ
+by distribution; the following is an illustrative, non-exhaustive list:
 
 ```bash
-nmap curl whois ffuf nikto sqlmap metasploit exploitdb hashcat john
+nmap curl whois ffuf nikto sqlmap msfconsole searchsploit hashcat john
 ```
 
 Optional tooling includes:
@@ -365,6 +451,10 @@ subfinder, dnsx, httpx, naabu, tlsx, waybackurls, gau, gitleaks,
 trufflehog, semgrep, trivy, checkov, prowler, ScoutSuite, impacket,
 ldap3, bloodhound-python, certipy, garble
 ```
+
+The authoritative per-tool availability contract is each registered
+`ToolDef.requires` list. Availability checks inspect those command or Python
+dependency tokens; they do not install anything.
 
 ### MariaDB / MySQL
 
@@ -431,6 +521,18 @@ python3 octopus.py
 `octopus.py` is the checkout-compatible executable and legacy import facade;
 the installed `octopus` command dispatches through `core.application` and
 `core.cli.main`.
+
+The package also installs three explicit secondary entry points:
+
+```bash
+octobench --help
+octobench-competitors --help
+octopus-c2 --help
+```
+
+`octopus-c2` requires the optional `c2` profile. The benchmark commands are
+documented below; their external-system mode remains separately authorized and
+configured.
 
 Supervisor commands:
 
@@ -556,17 +658,26 @@ execution results, deterministic planner fallback and durable mission resume.
 It does not start a scanner, network request, model provider or external tool.
 Custom injected runners remain supported.
 
-Run all ten scenarios with at least five repetitions each and write aggregates
-under `benchmarks/results/builtin-catalog/`:
+Run all ten scenarios with at least five repetitions each. By default, local
+aggregates are written under `./octobench-results/builtin-catalog/`:
 
 ```bash
 ./venv/bin/python -m core.benchmarks
 ```
 
-Regenerate only the published task-selection comparison:
+Generate only a local task-selection comparison. Its default output is
+`./octobench-results/noop-repeat-comparison-v1.json`:
 
 ```bash
 ./venv/bin/python -m core.benchmarks --comparison-only
+```
+
+To intentionally regenerate the checked-in published artifact, provide its
+path explicitly and review the resulting diff:
+
+```bash
+./venv/bin/python -m core.benchmarks --comparison-only \
+  --comparison-output benchmarks/results/noop-repeat-comparison-v1.json
 ```
 
 The checked-in `benchmarks/results/noop-repeat-comparison-v1.json` is a
@@ -929,7 +1040,7 @@ Fast hermetic suite:
 
 ```bash
 ./venv/bin/python -m pytest -q \
-  -m "not slow and not external and not external_tools and not mysql and not platform"
+  -m "(unit or contract) and not slow and not integration and not external_tools and not mysql and not platform"
 ```
 
 Focused replay, security and benchmark contracts:
@@ -961,7 +1072,10 @@ Compile check:
 
 ```bash
 env PYTHONPYCACHEPREFIX=/tmp/octopus_pycache \
-  ./venv/bin/python -m compileall -q core modules tests octopus.py tools.py
+  ./venv/bin/python -m compileall -q \
+  config.py db.py evasion.py export.py hash_cracker.py memory.py msf.py \
+  octopus.py octopus_c2.py search.py shodan_module.py tools.py \
+  core modules plugins scripts tests
 ```
 
 Registry coverage check:
@@ -975,6 +1089,72 @@ report = r.get_coverage_report([t.name for t in list_tools()])
 print("covered/registered: " + str(report["covered"]) + "/" + str(report["registered"]))
 print("unknown:", report["unknown"])'
 ```
+
+Unified tool-runtime contract (all providers are replaced with in-process
+stubs; no external tool is invoked):
+
+```bash
+./venv/bin/python -m pytest -q tests/test_unified_tool_runtime_contract.py
+```
+
+### CI And Coverage Gates
+
+The main CI workflow has ten jobs: minimal imports, optional-profile imports,
+static analysis, the Python-version fast-test matrix, the full suite, MySQL
+integration, packaging/docs, dependency/SBOM checks, Go checks, and vendor
+integrity. A separate nightly workflow runs the external-tool/OSINT smoke and
+deterministic benchmark contracts.
+
+The required release floor is 100%, with no production-line or partial-branch
+exclusions. Python uses a combined statement-plus-branch denominator; Go uses
+the native coverprofile statement/basic-block denominator because Go's standard
+tooling does not report branch edges.
+
+The latest recorded combined Python measurement for the current working-tree
+baseline on 2026-07-30 is still below that bar and therefore fails the gate:
+
+The corresponding full run completed with `3805 passed, 3 skipped` and no
+failures. Passing tests and passing the 100% coverage gate are separate
+conditions.
+
+| Metric | Covered / total | Result |
+| --- | ---: | ---: |
+| First-party Python files at exact 100% | 210 / 234 | 24 incomplete files |
+| Statements | 42,468 / 44,949 | 94.48% |
+| Branches | 14,945 / 15,752 | 94.88% |
+| Combined statements + branches | 57,413 / 60,701 | **94.58%** |
+| Excluded production lines | 0 | none |
+
+First-party Go is not yet at a reportable 100% either: the repository has two
+production `.go` files and no `*_test.go` files, while
+`core/opsec/ja3_client.go` is outside every checked-in Go module. The Go gate
+fails closed on that orphan instead of silently omitting it.
+
+Generate and enforce Python coverage:
+
+```bash
+./venv/bin/python -m coverage erase
+./venv/bin/python -m coverage run --rcfile=quality/coverage-ci.ini -m pytest -q
+./venv/bin/python scripts/quality/coverage_gate.py \
+  --root . --config quality/coverage-ci.ini --fail-under 100
+```
+
+Validate a Go coverprofile (requires Go 1.21 and a profile generated with
+`-covermode=atomic -coverpkg=./...`):
+
+```bash
+./venv/bin/python scripts/quality/go_coverage_gate.py \
+  --root . --profile /path/to/go.coverage.out --fail-under 100
+```
+
+The CI workflow is configured for a 100% global Python floor, exact 100%
+package floors for `core/actions`, `core/execution`, and `core/benchmarks`, and
+100% combined coverage on changed executable lines and their branch exits. It
+is also configured for a 100% Go statement/basic-block floor. A configured
+threshold is a quality target, not evidence that the current source tree
+passes it; both gates remain red. Details and denominator rules
+are documented in
+[`docs/quality/ci-and-vendor-integrity.md`](docs/quality/ci-and-vendor-integrity.md).
 
 ## Repository Layout
 
@@ -1066,6 +1246,8 @@ The complete parser checklist is in `docs/guides/parser-authoring.md`.
 - Architecture ownership and contracts:
   `docs/architecture/current-system-map.md` and
   `docs/architecture/contracts-and-ownership.md`
+- Runtime configuration, named-stage gates and credential boundary:
+  `docs/architecture/configuration-contract.md`
 - Mission lifecycle and task ranking:
   `docs/architecture/mission-lifecycle.md` and
   `docs/architecture/task-scoring.md`

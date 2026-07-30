@@ -99,10 +99,9 @@ def vuln_assess(target: str, recon_data: str = "") -> str:
                     for line in sp_output.splitlines():
                         if "|" in line and ("exploits/" in line or "shellcodes/" in line):
                             parts = line.split("|")
-                            if len(parts) >= 2:
-                                exploit_name = parts[0].strip()
-                                exploit_path = parts[-1].strip()
-                                output += f"  → EXPLOITABLE: {exploit_name} ({exploit_path})\n"
+                            exploit_name = parts[0].strip()
+                            exploit_path = parts[-1].strip()
+                            output += f"  → EXPLOITABLE: {exploit_name} ({exploit_path})\n"
             except Exception as e:
                 output += f"  [!] searchsploit error for '{query}': {e}\n"
     else:

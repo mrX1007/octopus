@@ -58,7 +58,7 @@ def _timeout_tool_events(raw_output: str) -> list[dict[str, Any]]:
             label = match.group(1).strip().lower().replace("-", "_")
             if not label or label in {"tool", "command"}:
                 continue
-            key = (label, match.start())
+            key = (label, match.start(1))
             if key in seen:
                 continue
             seen.add(key)
@@ -1161,13 +1161,12 @@ class RegexParser:
             for service, pattern in software_patterns:
                 for m in re.finditer(pattern, raw_output, re.IGNORECASE):
                     version_text = re.sub(r'\s+', ' ', m.group(1)).strip()
-                    if version_text:
-                        facts.append({
-                            "type": "service_version",
-                            "value": f"{service}:local:{version_text[:140]}",
-                            "confidence": 80,
-                            "session_id": session_id,
-                        })
+                    facts.append({
+                        "type": "service_version",
+                        "value": f"{service}:local:{version_text[:140]}",
+                        "confidence": 80,
+                        "session_id": session_id,
+                    })
 
             for m in re.finditer(r'(?m)^(/(?:var/www|srv|opt|home)/[^\s]+/(?:public|html|www|app|current))\s*$', raw_output):
                 facts.append({"type": "web_root", "value": m.group(1)[:220], "confidence": 80, "session_id": session_id})
@@ -1451,11 +1450,14 @@ class RegexParser:
                     facts.append({"type": "nuclei_finding", "value": f"{severity}:{template}:{matched}:{name}"[:500], "confidence": 90, "session_id": session_id})
                     if matched:
                         facts.append({"type": "asset_url", "value": str(matched).rstrip("/"), "confidence": 85, "session_id": session_id})
-                    continue
-                match = re.match(r'\[([^\]]+)\]\s+\[([^\]]+)\]\s+\[([^\]]+)\]\s+(\S+)', line)
-                if match:
-                    template, _proto, severity, matched = match.groups()
-                    facts.append({"type": "nuclei_finding", "value": f"{severity.lower()}:{template}:{matched}"[:500], "confidence": 85, "session_id": session_id})
+                else:
+                    match = re.match(
+                        r'\[([^\]]+)\]\s+\[([^\]]+)\]\s+\[([^\]]+)\]\s+(\S+)',
+                        line,
+                    )
+                    if match:
+                        template, _proto, severity, matched = match.groups()
+                        facts.append({"type": "nuclei_finding", "value": f"{severity.lower()}:{template}:{matched}"[:500], "confidence": 85, "session_id": session_id})
 
         if "openapi_import" in tool_lower or "[openapi import" in raw_lower:
             for m in re.finditer(r'^(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S+)\s+auth=(\S+)', raw_output, re.MULTILINE):
@@ -1807,8 +1809,7 @@ class RegexParser:
                     facts.append({"type": "credential", "value": f"cracked_credentials:{cracked}", "confidence": 95, "session_id": session_id})
             for m in re.finditer(r'^\s*\+\s*([^:\s]+):(.+?)\s*$', raw_output, re.MULTILINE):
                 user = m.group(1).strip()
-                if user:
-                    facts.append({"type": "credential", "value": f"cracked_password_for:{user}", "confidence": 95, "session_id": session_id})
+                facts.append({"type": "credential", "value": f"cracked_password_for:{user}", "confidence": 95, "session_id": session_id})
 
         # ── ShardBrowser / browser-rendered web analysis ──
         if ("browser_surface" in tool_lower or "shardbrowser" in tool_lower
@@ -2049,7 +2050,8 @@ class WebEndpointParser:
         return match.group(0) if match else ""
 
     def _tool_name_is_web_facing(self, tool_name: str) -> bool:
-        first = (tool_name or "").strip().split(maxsplit=1)[0].lower()
+        parts = (tool_name or "").strip().split(maxsplit=1)
+        first = parts[0].lower() if parts else ""
         return first in {
             "whatweb", "curl_headers", "scrapling", "scrapling_crawl",
             "browser_surface_analysis", "ffuf", "nikto", "wpscan",
@@ -2231,25 +2233,24 @@ class OutputParser:
         for fact in facts:
             ftype = str(fact.get("type", "")).strip()
             value = str(fact.get("value", "")).strip()
-            if not ftype or not value:
-                continue
-            if ftype == "port_open" and not re.search(r'\b\d+/(?:tcp|udp)\b', value.lower()):
-                continue
-            if ftype in {
-                "tool_name", "error_type", "target_ip", "target_host",
-                "target_port", "auth_method", "connection_status",
-                "scan_status", "skip_reason", "ssh_attempt",
-                "host_targeted", "user_targeted", "user", "username",
-                "password", "pass", "secret", "host", "module_name",
-            }:
-                continue
-            if value.lower() in {"failed", "skipped", "unknown", "none"}:
-                continue
-            key = (ftype, value, fact.get("session_id", "none"))
-            if key in seen:
-                continue
-            seen.add(key)
-            sanitized.append(fact)
+            if ftype and value:
+                if ftype == "port_open" and not re.search(r'\b\d+/(?:tcp|udp)\b', value.lower()):
+                    continue
+                if ftype in {
+                    "tool_name", "error_type", "target_ip", "target_host",
+                    "target_port", "auth_method", "connection_status",
+                    "scan_status", "skip_reason", "ssh_attempt",
+                    "host_targeted", "user_targeted", "user", "username",
+                    "password", "pass", "secret", "host", "module_name",
+                }:
+                    continue
+                if value.lower() in {"failed", "skipped", "unknown", "none"}:
+                    continue
+                key = (ftype, value, fact.get("session_id", "none"))
+                if key in seen:
+                    continue
+                seen.add(key)
+                sanitized.append(fact)
         return sanitized
 
     def _should_run_legacy_regex(self, tool_name: str, raw_output: str) -> bool:

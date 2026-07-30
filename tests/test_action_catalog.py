@@ -248,7 +248,9 @@ def test_typed_cancellation_preserves_partial_output_and_still_runs_cleanup():
     assert events[-1] == "cleanup"
 
 
-def test_registered_tool_adapter_preserves_aliases_and_does_not_equate_success_with_verified():
+def test_registered_tool_adapter_preserves_aliases_and_does_not_equate_success_with_verified(
+    monkeypatch,
+):
     calls = []
     tool = ToolDef(
         name="fixture_probe",
@@ -261,6 +263,11 @@ def test_registered_tool_adapter_preserves_aliases_and_does_not_equate_success_w
         tool,
         lambda command, context: calls.append((command, context.request_id)) or "[+] complete",
     )
+    from core.tools.registry import _REGISTRY
+
+    monkeypatch.setitem(_REGISTRY, tool.name, tool)
+    for alias in tool.aliases:
+        monkeypatch.setitem(_REGISTRY, alias, tool)
     catalog = ActionCatalog()
     catalog.register(adapter)
     executor = ActionExecutor(catalog, ExecutionPolicy())

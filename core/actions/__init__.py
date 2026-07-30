@@ -73,8 +73,18 @@ def build_action_catalog(
         from core.tools.registry import list_tools
 
         tool_defs = list_tools()
+    definitions = tuple(tool_defs)
     catalog = ActionCatalog()
-    register_tool_adapters(catalog, tuple(tool_defs), dispatch)
+    register_tool_adapters(catalog, definitions, dispatch)
+    expected = {str(tool_def.name).strip().casefold() for tool_def in definitions}
+    covered = {descriptor.name.strip().casefold() for descriptor in catalog.descriptors()}
+    if expected != covered:
+        missing = ", ".join(sorted(expected - covered)) or "none"
+        unexpected = ", ".join(sorted(covered - expected)) or "none"
+        raise RuntimeError(
+            "Action catalog does not match the decorator registry: "
+            f"missing={missing}; unexpected={unexpected}"
+        )
     return catalog
 
 

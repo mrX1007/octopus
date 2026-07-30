@@ -243,7 +243,7 @@ class TargetModel:
                 item.update(self._parse_cloud_finding(item["value"]))
             elif bucket == "code":
                 item.update(self._parse_severity_finding(item["value"], ("severity", "check_id", "location")))
-            elif bucket == "nuclei":
+            else:
                 item.update(self._parse_severity_finding(item["value"], ("severity", "template", "matched_at", "name")))
             buckets[bucket].append(item)
         return buckets
@@ -466,13 +466,12 @@ class TargetModel:
             )
             scope_type = str(scope.get("type") or result.get("scope_type") or "").strip().lower()
             scope_value = str(scope.get("value") or result.get("scope_value") or "").strip()
-            if not scope_type or not scope_value:
-                continue
-            scope_key = (scope_type, self._normalize_scope_value(scope_type, scope_value))
-            kind = str(result.get("kind") or result.get("check") or result.get("tool") or "unknown").strip().lower()
-            current = checks_by_scope.setdefault(scope_key, {}).get(kind)
-            if not current or float(result.get("timestamp") or 0) >= float(current.get("timestamp") or 0):
-                checks_by_scope.setdefault(scope_key, {})[kind] = result
+            if scope_type and scope_value:
+                scope_key = (scope_type, self._normalize_scope_value(scope_type, scope_value))
+                kind = str(result.get("kind") or result.get("check") or result.get("tool") or "unknown").strip().lower()
+                current = checks_by_scope.setdefault(scope_key, {}).get(kind)
+                if not current or float(result.get("timestamp") or 0) >= float(current.get("timestamp") or 0):
+                    checks_by_scope.setdefault(scope_key, {})[kind] = result
 
         endpoint_items = []
         service_items = []
@@ -714,7 +713,8 @@ class TargetModel:
                 "rotation_required": "unknown",
                 "exposure_scope": "unknown",
             }
-        secret_type, location, validated, rotation = parts
+        secret_type, remainder = value.split(":", 1)
+        location, validated, rotation = remainder.rsplit(":", 2)
         scope = "source_code"
         if location.startswith(("http://", "https://")):
             scope = "public_url"

@@ -58,9 +58,38 @@ SOCKS5_ATYP_IPV4 = 0x01
 SOCKS5_ATYP_DOMAIN = 0x03
 FORWARD_BUFFER_SIZE = 65536
 SCAN_TIMEOUT = 5
-COMMON_PORTS = [21, 22, 23, 25, 53, 80, 88, 110, 135, 139, 143, 389,
-                443, 445, 464, 636, 993, 995, 1433, 1521, 3306, 3389,
-                5432, 5900, 5985, 5986, 8080, 8443, 8888, 9090]
+COMMON_PORTS = [
+    21,
+    22,
+    23,
+    25,
+    53,
+    80,
+    88,
+    110,
+    135,
+    139,
+    143,
+    389,
+    443,
+    445,
+    464,
+    636,
+    993,
+    995,
+    1433,
+    1521,
+    3306,
+    3389,
+    5432,
+    5900,
+    5985,
+    5986,
+    8080,
+    8443,
+    8888,
+    9090,
+]
 
 # Active tunnels registry — used for cleanup
 _active_tunnels: dict[str, dict[str, Any]] = {}
@@ -68,13 +97,13 @@ _active_tunnels: dict[str, dict[str, Any]] = {}
 
 # SOCKS5 proxy
 
+
 class _Socks5Handler(threading.Thread):
     """Handle a single SOCKS5 client connection via SSH tunnel."""
 
     daemon = True
 
-    def __init__(self, client_sock: socket.socket,
-                 ssh_transport: "paramiko.Transport") -> None:
+    def __init__(self, client_sock: socket.socket, ssh_transport: "paramiko.Transport") -> None:
         super().__init__()
         self._client = client_sock
         self._transport = ssh_transport
@@ -143,8 +172,13 @@ class _Socks5Handler(threading.Thread):
 
     def _send_reply(self, status: int) -> None:
         reply = struct.pack(
-            "!BBBBIH", SOCKS5_VERSION, status, 0x00,
-            SOCKS5_ATYP_IPV4, 0, 0,
+            "!BBBBIH",
+            SOCKS5_VERSION,
+            status,
+            0x00,
+            SOCKS5_ATYP_IPV4,
+            0,
+            0,
         )
         self._client.sendall(reply)
 
@@ -155,17 +189,17 @@ class _Socks5Handler(threading.Thread):
                 # Check if channel is still alive
                 if channel.closed:
                     break
-                continue
-            if self._client in r:
-                data = self._client.recv(FORWARD_BUFFER_SIZE)
-                if not data:
-                    break
-                channel.sendall(data)
-            if channel in r:
-                data = channel.recv(FORWARD_BUFFER_SIZE)
-                if not data:
-                    break
-                self._client.sendall(data)
+            else:
+                if self._client in r:
+                    data = self._client.recv(FORWARD_BUFFER_SIZE)
+                    if not data:
+                        break
+                    channel.sendall(data)
+                if channel in r:
+                    data = channel.recv(FORWARD_BUFFER_SIZE)
+                    if not data:
+                        break
+                    self._client.sendall(data)
         channel.close()
 
 
@@ -231,8 +265,7 @@ def setup_socks_proxy(
                 break
         server_sock.close()
 
-    listener = threading.Thread(target=_accept_loop, daemon=True,
-                                name=f"socks5-{local_port}")
+    listener = threading.Thread(target=_accept_loop, daemon=True, name=f"socks5-{local_port}")
     listener.start()
 
     tunnel_id = f"socks5:{local_port}"
@@ -258,6 +291,7 @@ def setup_socks_proxy(
 
 # Local port forwarding
 
+
 def _forward_handler(
     local_sock: socket.socket,
     channel: "paramiko.Channel",
@@ -269,17 +303,17 @@ def _forward_handler(
             if not r:
                 if channel.closed:
                     break
-                continue
-            if local_sock in r:
-                data = local_sock.recv(FORWARD_BUFFER_SIZE)
-                if not data:
-                    break
-                channel.sendall(data)
-            if channel in r:
-                data = channel.recv(FORWARD_BUFFER_SIZE)
-                if not data:
-                    break
-                local_sock.sendall(data)
+            else:
+                if local_sock in r:
+                    data = local_sock.recv(FORWARD_BUFFER_SIZE)
+                    if not data:
+                        break
+                    channel.sendall(data)
+                if channel in r:
+                    data = channel.recv(FORWARD_BUFFER_SIZE)
+                    if not data:
+                        break
+                    local_sock.sendall(data)
     except Exception as exc:
         logger.debug("Forward handler error: %s", exc)
     finally:
@@ -343,7 +377,8 @@ def setup_local_forward(
                     client_sock.getpeername(),
                 )
                 t = threading.Thread(
-                    target=_forward_handler, args=(client_sock, channel),
+                    target=_forward_handler,
+                    args=(client_sock, channel),
                     daemon=True,
                 )
                 t.start()
@@ -355,8 +390,7 @@ def setup_local_forward(
                 break
         server_sock.close()
 
-    listener = threading.Thread(target=_accept_loop, daemon=True,
-                                name=f"fwd-L{local_port}")
+    listener = threading.Thread(target=_accept_loop, daemon=True, name=f"fwd-L{local_port}")
     listener.start()
 
     tunnel_id = f"local:{local_port}->{remote_host}:{remote_port}"
@@ -380,6 +414,7 @@ def setup_local_forward(
 
 
 # Remote port forwarding
+
 
 def setup_remote_forward(
     ssh_client: "paramiko.SSHClient",
@@ -432,7 +467,8 @@ def setup_remote_forward(
                 local_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 local_sock.connect((local_host, local_port))
                 t = threading.Thread(
-                    target=_forward_handler, args=(local_sock, channel),
+                    target=_forward_handler,
+                    args=(local_sock, channel),
                     daemon=True,
                 )
                 t.start()
@@ -441,8 +477,7 @@ def setup_remote_forward(
                     logger.debug("Reverse forward handler error: %s", exc)
                 continue
 
-    handler = threading.Thread(target=_reverse_handler, daemon=True,
-                               name=f"fwd-R{remote_port}")
+    handler = threading.Thread(target=_reverse_handler, daemon=True, name=f"fwd-R{remote_port}")
     handler.start()
 
     tunnel_id = f"remote:{remote_port}->{local_host}:{local_port}"
@@ -464,6 +499,7 @@ def setup_remote_forward(
 
 
 # Multi-hop SSH tunnel chain
+
 
 def create_ssh_chain(
     hop_list: list[dict[str, Any]],
@@ -516,22 +552,34 @@ def create_ssh_chain(
             if prev_transport is not None:
                 # Open a channel through the previous hop
                 channel = prev_transport.open_channel(
-                    "direct-tcpip", (host, port),
+                    "direct-tcpip",
+                    (host, port),
                     ("127.0.0.1", 0),
                 )
                 client.connect(
-                    hostname=host, port=port, username=user,
-                    password=password, sock=channel,
-                    timeout=15, look_for_keys=False, allow_agent=False,
-                    banner_timeout=10, auth_timeout=15,
+                    hostname=host,
+                    port=port,
+                    username=user,
+                    password=password,
+                    sock=channel,
+                    timeout=15,
+                    look_for_keys=False,
+                    allow_agent=False,
+                    banner_timeout=10,
+                    auth_timeout=15,
                 )
             else:
                 # First hop — direct connection
                 client.connect(
-                    hostname=host, port=port, username=user,
+                    hostname=host,
+                    port=port,
+                    username=user,
                     password=password,
-                    timeout=15, look_for_keys=False, allow_agent=False,
-                    banner_timeout=10, auth_timeout=15,
+                    timeout=15,
+                    look_for_keys=False,
+                    allow_agent=False,
+                    banner_timeout=10,
+                    auth_timeout=15,
                 )
 
             # Disable history on the hop
@@ -568,6 +616,7 @@ def create_ssh_chain(
 
 
 # Proxy-aware scanning
+
 
 def scan_through_proxy(
     proxy_port: int,
@@ -620,10 +669,15 @@ def scan_through_proxy(
     else:
         # Fall back to proxychains + nmap
         nmap_bin = subprocess.which("nmap") if hasattr(subprocess, "which") else None
-        proxychains_bin = subprocess.which("proxychains4") or subprocess.which("proxychains") if hasattr(subprocess, "which") else None
+        proxychains_bin = (
+            subprocess.which("proxychains4") or subprocess.which("proxychains")
+            if hasattr(subprocess, "which")
+            else None
+        )
 
         # Use shutil.which as proper fallback
         import shutil as _shutil
+
         nmap_bin = _shutil.which("nmap")
         proxychains_bin = _shutil.which("proxychains4") or _shutil.which("proxychains")
 
@@ -633,7 +687,10 @@ def scan_through_proxy(
             output += "  (via proxychains + nmap)\n"
             try:
                 result = subprocess.run(
-                    cmd, shell=True, capture_output=True, text=True,
+                    cmd,
+                    shell=True,
+                    capture_output=True,
+                    text=True,
                     timeout=len(ports) * timeout,
                 )
                 nmap_out = result.stdout
@@ -662,11 +719,7 @@ def scan_through_proxy(
                         continue
                     # Connect request
                     addr_bytes = socket.inet_aton(target)
-                    s.sendall(
-                        struct.pack("!BBBB", 0x05, 0x01, 0x00, 0x01)
-                        + addr_bytes
-                        + struct.pack("!H", port)
-                    )
+                    s.sendall(struct.pack("!BBBB", 0x05, 0x01, 0x00, 0x01) + addr_bytes + struct.pack("!H", port))
                     resp = s.recv(10)
                     if len(resp) >= 2 and resp[1] == 0x00:
                         open_ports.append(port)
@@ -686,6 +739,7 @@ def scan_through_proxy(
 
 
 # Network discovery
+
 
 def get_network_info(ssh_client: "paramiko.SSHClient") -> str:
     """Discover internal networks from a compromised host.
@@ -790,10 +844,12 @@ def get_network_info(ssh_client: "paramiko.SSHClient") -> str:
     # Hosts from ARP / connections
     for m in re.finditer(r"(\d+\.\d+\.\d+\.\d+)", all_text):
         ip = m.group(1)
-        if (ip not in discovered_hosts
-                and not ip.startswith("127.")
-                and not ip.startswith("0.")
-                and ip != "255.255.255.255"):
+        if (
+            ip not in discovered_hosts
+            and not ip.startswith("127.")
+            and not ip.startswith("0.")
+            and ip != "255.255.255.255"
+        ):
             discovered_hosts.append(ip)
 
     output += f"{'═' * 60}\n"

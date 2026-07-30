@@ -91,9 +91,13 @@ class TestJsonExport:
 
         assert data["scan"]["target"] == "192.168.1.100"
 
-    def test_json_preserves_vulnerability_provenance(self, sample_session_data, tmp_path):
+    def test_json_preserves_vulnerability_provenance(
+        self, monkeypatch, sample_session_data, tmp_path,
+    ):
+        import export
         from export import export_json
 
+        monkeypatch.setattr(export, "CFG", {"reporting": {"include_raw_output": True}})
         filepath = export_json(sample_session_data, str(tmp_path))
         with open(filepath, encoding="utf-8") as f:
             vuln = json.load(f)["vulnerabilities"][0]
@@ -148,9 +152,13 @@ class TestCsvExport:
         # Header + 2 vulnerabilities
         assert len(rows) == 3
 
-    def test_csv_neutralizes_spreadsheet_formulas(self, sample_session_data, tmp_path):
+    def test_csv_neutralizes_spreadsheet_formulas(
+        self, monkeypatch, sample_session_data, tmp_path,
+    ):
+        import export
         from export import export_csv
 
+        monkeypatch.setattr(export, "CFG", {"reporting": {"include_raw_output": True}})
         report = copy.deepcopy(sample_session_data)
         report["history"] = (1, "=HYPERLINK(\"https://example.test\")", "date", "complete")
         original = list(report["vulns"][0])
@@ -173,9 +181,13 @@ class TestCsvExport:
 
 
 class TestRenderedExports:
-    def test_html_escapes_all_dynamic_markup(self, sample_session_data, tmp_path):
+    def test_html_escapes_all_dynamic_markup(
+        self, monkeypatch, sample_session_data, tmp_path,
+    ):
+        import export
         from export import export_html
 
+        monkeypatch.setattr(export, "CFG", {"reporting": {"include_raw_output": True}})
         report = copy.deepcopy(sample_session_data)
         report["history"] = (1, "<script>target()</script>", "<date>", "complete")
         vuln = list(report["vulns"][0])

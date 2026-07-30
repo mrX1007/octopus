@@ -574,10 +574,8 @@ class ProviderFallbackExecutor:
                 stop_reason = "partial_output_not_ingested"
             elif not retryable:
                 stop_reason = "terminal_or_non_retryable_result"
-            elif not has_more:
-                stop_reason = "retryable_failure_no_provider_remaining"
             else:
-                stop_reason = "stopped"
+                stop_reason = "retryable_failure_no_provider_remaining"
             attempt = ProviderAttempt(
                 action_id=decision.action_id,
                 report=report,

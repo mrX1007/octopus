@@ -408,6 +408,80 @@ def test_analysis_attempt_links_verified_claim_fact_id(tmp_path):
     assert attempt.fact_ids == (verified_claim["id"],)
 
 
+@pytest.mark.parametrize(
+    ("analysis_result", "expected_status", "expected_reason", "failure_count"),
+    [
+        (
+            {"hypotheses": [], "llm_status": "ok"},
+            "no_new_facts",
+            "analysis_returned_no_hypotheses",
+            0,
+        ),
+        (
+            {
+                "hypotheses": [],
+                "llm_status": "failed",
+                "llm_error": "invalid_schema:hypotheses_not_list",
+            },
+            "failed",
+            "analysis_failed",
+            1,
+        ),
+    ],
+)
+def test_analysis_empty_success_is_distinct_from_response_failure(
+    tmp_path,
+    analysis_result,
+    expected_status,
+    expected_reason,
+    failure_count,
+):
+    pipeline = _configure_scan(
+        AIPipeline(str(tmp_path / f"analysis-{expected_status}.db")),
+        goals=("analyze", "conclude"),
+    )
+    pipeline.planner = SimpleNamespace(
+        create_plan=lambda _goal, _context, _history: {
+            "plan": [
+                {"agent": "AnalysisAgent", "task": "analyze_vulnerabilities"}
+            ],
+            "llm_status": "ok",
+        }
+    )
+    pipeline.analysis_agent = SimpleNamespace(
+        analyze=lambda _scan_id, _target: dict(analysis_result)
+    )
+    pipeline.verification_agent = SimpleNamespace(
+        verify_hypothesis=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("empty or failed analysis must not be verified")
+        )
+    )
+    health_events = []
+    pipeline._record_llm_health = (
+        lambda _scan_id, _target, role, result, _loop: health_events.append(
+            (role, dict(result))
+        )
+    )
+
+    pipeline.run_scan(
+        f"scan-analysis-{expected_status}",
+        TARGET,
+        max_iterations=2,
+    )
+
+    snapshot = pipeline.mission_store.snapshot(pipeline.mission_id)
+    attempt = _only(snapshot.attempts)
+    analysis_health = _only(
+        result for role, result in health_events if role == "analysis"
+    )
+    assert attempt.status == expected_status
+    assert attempt.outcome is not None
+    assert attempt.outcome.status == expected_status
+    assert attempt.outcome.reason == expected_reason
+    assert analysis_health["llm_status"] == analysis_result["llm_status"]
+    assert pipeline.consecutive_llm_failures == failure_count
+
+
 def test_hard_unavailable_plan_rejection_is_a_durable_blocked_outcome(tmp_path):
     pipeline = AIPipeline(str(tmp_path / "plan-rejection.db"))
     pipeline.tool_registry = _RegistryStub()

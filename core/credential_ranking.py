@@ -25,8 +25,6 @@ def credential_rank_key(credential: Credential) -> tuple:
         rank = 2
     elif is_key_marker:
         rank = 3
-    elif has_secret:
-        rank = 4
     else:
         rank = 5
     return (rank, username, secret_value)

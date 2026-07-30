@@ -244,7 +244,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         elif args.command == "address":
             print(_lab_address(environment, port=args.port))
-        else:  # pragma: no cover - argparse prevents this branch
+        else:
             raise LabControlError("health_invalid")
     except LabControlError as exc:
         diagnostic_error = exc

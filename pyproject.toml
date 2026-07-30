@@ -45,7 +45,7 @@ mysql = [
 
 [project.scripts]
 octopus = "core.application:main"
-octopus-c2 = "core.c2.daemon:main"
+octopus-c2 = "octopus_c2:main"
 octobench = "core.benchmarks.__main__:main"
 octobench-competitors = "core.benchmarks.competitors.__main__:main"
 
@@ -60,6 +60,7 @@ py-modules = [
     "memory",
     "msf",
     "octopus",
+    "octopus_c2",
     "search",
     "shodan_module",
     "tools",

@@ -271,6 +271,11 @@ def _legacy_marker_status(
     text = "\n".join(part for part in (_as_text(stdout), _as_text(stderr), _as_text(error)) if part).lower()
     if any(marker in text for marker in ("[timeout]", "timed out", "killed after")):
         return ExecutionStatus.TIMEOUT, output_present
+    if any(
+        marker in text
+        for marker in ("[!] execution denied:", "[blocked]", "[skipped]")
+    ):
+        return ExecutionStatus.BLOCKED, False
     if any(marker in text for marker in ("[partial output", "output limit reached", "output_limit")):
         return ExecutionStatus.PARTIAL, True
     if any(
@@ -280,9 +285,13 @@ def _legacy_marker_status(
             "tool not found:",
             "missing dependency",
             "no such file or directory",
+            " is not installed",
+            "not a real tool",
         )
     ):
         return ExecutionStatus.UNAVAILABLE, False
+    if "[!] error executing tool" in text:
+        return ExecutionStatus.FAILED, False
     return None, False
 
 

@@ -711,36 +711,38 @@ class FactAssessmentStore:
                 continue
             candidate_claim = self._scoped_claim(str(candidate_type), str(candidate_value))
             if (
-                candidate_claim is None
-                or candidate_claim[0] != claim[0]
-                or candidate_claim[1] == claim[1]
+                candidate_claim is not None
+                and candidate_claim[0] == claim[0]
+                and candidate_claim[1] != claim[1]
             ):
-                continue
-            candidate_assessment = self._current_in_connection(conn, int(candidate_id))
-            if candidate_assessment is None or candidate_assessment.status is AssessmentStatus.CONTRADICTED:
-                continue
-            candidate_keys = self._successful_execution_keys(
-                conn,
-                candidate_assessment.assessment_id,
-            )
-            if not candidate_keys or not execution_keys.isdisjoint(candidate_keys):
-                continue
-            self._assess_in_connection(
-                conn,
-                fact_id=int(candidate_id),
-                status=AssessmentStatus.CONTRADICTED,
-                confidence=candidate_assessment.confidence,
-                rule_id="fact.contradicted.scoped_opposite.v1",
-                reason=(
-                    "A later independent execution produced an opposite assertion "
-                    "for the same target, subject, and policy time window."
-                ),
-                assessor="fact_assessment.rules",
-                evidence_fact_ids=(int(fact_id),),
-                # The opposing execution belongs to the evidence fact, not to
-                # the older same-claim fact's producing provenance.
-                source_execution_ids=candidate_assessment.source_execution_ids,
-            )
+                candidate_assessment = self._current_in_connection(conn, int(candidate_id))
+                if (
+                    candidate_assessment is None
+                    or candidate_assessment.status is AssessmentStatus.CONTRADICTED
+                ):
+                    continue
+                candidate_keys = self._successful_execution_keys(
+                    conn,
+                    candidate_assessment.assessment_id,
+                )
+                if not candidate_keys or not execution_keys.isdisjoint(candidate_keys):
+                    continue
+                self._assess_in_connection(
+                    conn,
+                    fact_id=int(candidate_id),
+                    status=AssessmentStatus.CONTRADICTED,
+                    confidence=candidate_assessment.confidence,
+                    rule_id="fact.contradicted.scoped_opposite.v1",
+                    reason=(
+                        "A later independent execution produced an opposite assertion "
+                        "for the same target, subject, and policy time window."
+                    ),
+                    assessor="fact_assessment.rules",
+                    evidence_fact_ids=(int(fact_id),),
+                    # The opposing execution belongs to the evidence fact, not to
+                    # the older same-claim fact's producing provenance.
+                    source_execution_ids=candidate_assessment.source_execution_ids,
+                )
         return current
 
     @staticmethod

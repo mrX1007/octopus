@@ -24,6 +24,32 @@ def test_pipeline_runtime_zero_means_unlimited():
     assert pipeline._runtime_limit(7) == 7
 
 
+def test_pipeline_applies_director_and_tool_caps_to_their_own_budgets(
+    monkeypatch,
+    tmp_path,
+):
+    import config
+    from core.ai.pipeline import AIPipeline
+
+    monkeypatch.setitem(config.CFG["strategy"], "max_director_loops", 7)
+    monkeypatch.setitem(config.CFG["ollama"], "max_tool_loops", 19)
+    pipeline = AIPipeline(str(tmp_path / "separate-runtime-limits.db"))
+
+    assert pipeline._iteration_limit(0) == 7
+    assert pipeline._iteration_limit(3) == 3
+    assert pipeline._tool_limit(0) == 19
+    assert pipeline._tool_limit(5) == 5
+
+
+def test_effective_runtime_limit_rejects_boolean_and_nonpositive_values():
+    from core.runtime_config import effective_runtime_limit
+
+    assert effective_runtime_limit(True, False) is None
+    assert effective_runtime_limit(0, -1) is None
+    assert effective_runtime_limit("unlimited", 12) == 12
+    assert effective_runtime_limit(4, 12) == 4
+
+
 def test_x_mode_runs_exhaustive_applicable_coverage_without_real_tools():
     import builtins
     import sys
@@ -35,7 +61,7 @@ def test_x_mode_runs_exhaustive_applicable_coverage_without_real_tools():
     from core.tools.registry import get_tool
 
     old_input = builtins.input
-    old_default_recon = runner.run_default_recon
+    old_default_recon = runner._run_registered_default_recon
     old_killchain = sys.modules.get("core.killchain")
     patched_tools = {}
     calls = []
@@ -55,7 +81,7 @@ def test_x_mode_runs_exhaustive_applicable_coverage_without_real_tools():
 
     try:
         builtins.input = lambda _prompt="": "x"
-        runner.run_default_recon = fake_default_recon
+        runner._run_registered_default_recon = fake_default_recon
         fake_killchain = types.ModuleType("core.killchain")
         fake_killchain.vuln_assess = lambda target, recon_blob: f"vuln_assess ok {target}"
         sys.modules["core.killchain"] = fake_killchain
@@ -75,7 +101,7 @@ def test_x_mode_runs_exhaustive_applicable_coverage_without_real_tools():
         output = runner.interactive_tool_run("10.0.0.5")
     finally:
         builtins.input = old_input
-        runner.run_default_recon = old_default_recon
+        runner._run_registered_default_recon = old_default_recon
         if old_killchain is None:
             sys.modules.pop("core.killchain", None)
         else:
@@ -110,7 +136,7 @@ def test_x_mode_dedupes_default_heavy_web_scanners_without_dropping_distinct_por
     from core.tools.registry import get_tool
 
     old_input = builtins.input
-    old_default_recon = runner.run_default_recon
+    old_default_recon = runner._run_registered_default_recon
     old_killchain = sys.modules.get("core.killchain")
     patched_tools = {}
     calls = []
@@ -140,7 +166,7 @@ def test_x_mode_dedupes_default_heavy_web_scanners_without_dropping_distinct_por
 
     try:
         builtins.input = lambda _prompt="": "x"
-        runner.run_default_recon = fake_default_recon
+        runner._run_registered_default_recon = fake_default_recon
         fake_killchain = types.ModuleType("core.killchain")
         fake_killchain.vuln_assess = lambda target, recon_blob: f"vuln_assess ok {target}"
         sys.modules["core.killchain"] = fake_killchain
@@ -160,7 +186,7 @@ def test_x_mode_dedupes_default_heavy_web_scanners_without_dropping_distinct_por
         output = runner.interactive_tool_run("10.0.0.5")
     finally:
         builtins.input = old_input
-        runner.run_default_recon = old_default_recon
+        runner._run_registered_default_recon = old_default_recon
         if old_killchain is None:
             sys.modules.pop("core.killchain", None)
         else:

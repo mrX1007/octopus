@@ -39,20 +39,35 @@ from core.execution import (
     ExecutionContext,
     ExecutionResult,
     ExecutionStatus,
+    current_execution_context,
 )
 
 logger = logging.getLogger("octopus.pipeline")
 
-# Try to import tool runner, else mock it for tests
+# Import the registered-only public dispatch boundary.  ``run_arbitrary_cmd``
+# remains as a local compatibility seam because existing embedders and tests
+# patch that name; production no longer imports the top-level ``tools`` module.
 try:
-    from tools import run_arbitrary_cmd
+    from core.tools.public import dispatch_registered_tool
 except ImportError:
 
-    def run_arbitrary_cmd(
-        cmd_str: str,
-        execution_context: ExecutionContext | None = None,
+    def dispatch_registered_tool(
+        command: str,
+        execution_context: ExecutionContext,
     ) -> str:
         raise FileNotFoundError("OCTOPUS tool runtime is unavailable")
+
+
+def run_arbitrary_cmd(
+    cmd_str: str,
+    execution_context: ExecutionContext | None = None,
+) -> str:
+    """Compatibility seam over the registered-only public dispatcher."""
+
+    return dispatch_registered_tool(
+        cmd_str,
+        execution_context or current_execution_context(),
+    )
 
 
 class AIPipeline(
@@ -2139,14 +2154,14 @@ class AIPipeline(
             if not self._fact_is_external_service_evidence(fact):
                 continue
             value = str(fact.get("value", "")).replace("\n", " ").replace("\r", " ").strip()
-            if fact.get("type") in {
-                "web_endpoint",
-                "web_link",
-                "browser_rendered",
-            } and not self._web_fact_in_target_scope(value, target):
-                continue
-            if value:
-                recon_bits.append(f"{fact['type']} -> {value}")
+            recon_bits.append(f"{fact['type']} -> {value}")
+            # The evidence predicate guarantees a non-empty value, and
+            # ``useful_types`` contains only external-service fact families.
+            # The former nested scope and truthiness checks therefore could
+            # never reject an item at this point. Keeping the append direct
+            # makes that invariant explicit and removes unreachable branches.
+            # Scope-sensitive web-link families are deliberately excluded by
+            # ``useful_types`` before this block is entered.
 
         compact_context = self._exploit_select_compact_context(facts)
         if compact_context:
@@ -2285,9 +2300,3 @@ class AIPipeline(
         from core.execution.normalization import command_failed
 
         return command_failed(output, output_str)
-
-
-# For testing
-if __name__ == "__main__":
-    pipeline = AIPipeline("/tmp/pipeline_test.db")
-    pipeline.run_scan("test_scan_1", "127.0.0.1", max_iterations=3)

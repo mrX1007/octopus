@@ -1,6 +1,6 @@
 # CI and vendor integrity contract
 
-Effective date: 2026-07-14. Last verified: 2026-07-24.
+Effective date: 2026-07-14. Last verified: 2026-07-30.
 
 This document describes the bounded Phase 0.3 quality and supply-chain gates.
 It does not change application startup, execution policy, or the automatic C2
@@ -17,7 +17,7 @@ lifecycle.
 | `full-suite` | Validates all locks offline, installs the hashed `cp310/test.txt` lock, then runs the complete suite with branch coverage over every first-party Python file except the documented non-production trees. |
 | `mysql-integration` | Installs both the `cp310/test.txt` and `cp310/mysql.txt` locks, provisions MySQL 8.4, and runs the live database marker with the application's `OCTOPUS_DB_*` environment contract. |
 | `dependency-security` | Audits the exact `cp310/full.txt` dependency graph and emits a deterministic CycloneDX SBOM. |
-| `c2-go` | Uses Go 1.21, rejects non-`gofmt` source, verifies downloaded modules, and runs `go test`, `go vet`, and a clean `go build` in `core/c2`. |
+| `c2-go` | Uses Go 1.21, applies `gofmt` validation to every tracked Go source from the repository root, verifies downloaded modules, runs `go test`, `go vet`, and a clean `go build` in `core/c2`, then applies a fail-closed 100% statement-coverage gate to every first-party production Go source. |
 | `vendor-integrity` | Recursively checks out submodules and verifies parent gitlinks, checked-out commits, clean submodule worktrees, tracked artifact paths, and SHA-256 digests. Vendor code is never imported or executed by the verifier. |
 
 Every job is pinned to Ubuntu 22.04, matching the `manylinux_2_34` lock target,
@@ -49,24 +49,37 @@ human-maintained resolver inputs; they are not used as CI installation inputs.
 `quality/coverage-ci.ini` and `scripts/quality/coverage_gate.py` keep the Phase
 0.1 denominator honest. The gate explicitly discovers and reports every
 first-party Python file, including files that coverage.py cannot discover as an
-importable package and therefore measured at zero. Tests, generated data, local
-environments, generated build outputs, and vendor submodules are the only
-excluded trees. The global threshold is **59.50%**. A complete green local
-measurement on 2026-07-23 reported 59.88% across all 227 explicitly discovered
-first-party sources; the plain coverage.py report was 61.10%. The explicit
-helper result is the authoritative denominator. The 1.88-point margin keeps
-the ratchet independent of display rounding. It is a regression floor, not
-the final target or a claim that coverage is 100%.
+importable package and therefore measures at zero. Tests, local environments,
+generated build outputs, and vendor submodules are the only excluded source
+trees. Line and partial-branch exclusion lists are explicitly empty. The global
+threshold is **100% statement-plus-branch coverage** and the explicit helper
+result is the authoritative denominator; display rounding cannot turn a partial
+measurement into a passing result.
 
-The same CI step also enforces package floors for `core/actions`,
-`core/execution`, and `core/benchmarks`, plus 80% coverage on executable Python
-lines changed from the resolved Git base. The same measurement reported
-84.84%, 95.68%, and 79.07% for those three packages respectively. Raising a package or global floor
-must update its focused tests and this contract in the same logical change.
+The same CI step also enforces exact 100% package floors for `core/actions`,
+`core/execution`, and `core/benchmarks`, plus 100% combined statement-and-branch
+coverage on executable Python lines changed from the resolved Git base. Branch
+exits are attributed to their originating changed line, physical continuation
+lines are normalized to coverage.py's canonical statement line, and line-only
+coverage data fails closed. Any threshold change must update its focused tests
+and this contract in the same logical change.
 
 Raise the threshold in the same logical change that adds tests. Never exclude
-a production module merely to satisfy the gate. The long-term test wave still
-owns critical branch coverage and eventual project-wide improvement.
+a production module merely to satisfy the gate. The gate remains red until
+every measured statement and branch is covered.
+
+`scripts/quality/go_coverage_gate.py` separately discovers every first-party
+production `.go` file, requires each source to belong to a checked-in Go module,
+maps standard coverprofile module aliases without suffix guessing, and fails on
+missing, external, ambiguous, malformed, or overlapping profile data. It sums
+Go's `numStmt` weights and compares the exact rational result with a 100% floor.
+The current orphan `core/opsec/ja3_client.go` is therefore a deliberate failure,
+not a silently omitted file.
+
+The native Go coverprofile format measures statements/basic blocks, not branch
+edges. Consequently this job can prove Go statement coverage only. A claim of
+Go branch coverage additionally requires an approved branch-aware Go
+instrumenter; the Python statement-plus-branch gate does not substitute for it.
 
 ## Vendor trust manifest
 
@@ -100,15 +113,16 @@ python -I scripts/quality/verify_vendor.py --platform all --allow-dirty
 
 CI deliberately omits `--allow-dirty`.
 
-## Remaining dependency-lock gap
+## Dependency-lock immutability
 
 The Python Linux CI gap is closed by the reviewed target-specific locks,
-offline manifest validation, and hash-required installs. Go remains unresolved:
-`core/c2/go.mod` pins direct module versions, but the repository has no reviewed
-`core/c2/go.sum`. `go mod download` and `go mod verify` validate the modules
-obtained by the Linux runner, but they do not replace a committed checksum lock.
-Generate and review `go.sum` on a trusted Go 1.21 host, then switch Go commands
-to immutable/readonly mode in a separate logical change.
+offline manifest validation, and hash-required installs. The Go checksum gap is
+also closed: `core/c2/go.mod` pins direct module versions and the reviewed
+`core/c2/go.sum` is committed. Linux CI runs `go mod download` and
+`go mod verify` before Go test, vet, and build jobs. Test, vet, and build run
+with `-mod=readonly`; a final scoped `git diff --exit-code -- go.mod go.sum`
+proves that module resolution and all Go quality commands left both files
+unchanged.
 
 ## Local commands
 
@@ -117,7 +131,7 @@ venv/bin/python -m pytest -q tests/test_vendor_verification.py
 venv/bin/python -m ruff check scripts/quality tests/test_vendor_verification.py
 venv/bin/python -m mypy
 python scripts/lock_requirements.py validate
-venv/bin/python scripts/quality/coverage_gate.py --root . --fail-under 59.50
+venv/bin/python scripts/quality/coverage_gate.py --root . --fail-under 100
 python -I scripts/quality/import_smoke.py
 python -I scripts/quality/verify_vendor.py --platform all --allow-dirty
 ```
@@ -125,6 +139,7 @@ python -I scripts/quality/verify_vendor.py --platform all --allow-dirty
 Pass `--data-file /absolute/path/to/measurement.coverage` to validate an
 isolated measurement without replacing the repository-local `.coverage` file.
 
-The Go commands require Go 1.21 and network-resolved modules. They are evidence
-from Linux CI until that toolchain is installed in the macOS development
-environment.
+The Go commands require Go 1.21 and network-resolved modules. Linux CI generates
+`c2-go.coverage.out` with `-covermode=atomic -coverpkg=./...` and validates it
+with `scripts/quality/go_coverage_gate.py --fail-under 100`. They remain CI-only
+evidence until that toolchain is installed in the macOS development environment.

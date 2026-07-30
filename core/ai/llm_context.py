@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 ROLE_LIST_LIMITS = {
@@ -36,6 +37,7 @@ def compact_context_for_llm(context: dict[str, Any], role: str = "generic") -> d
         "typed_coverage_gaps",
         "stage_gates",
         "automation_policy",
+        "killchain_policy",
         "next_required_capability",
         "capability_assessment",
     ):
@@ -54,7 +56,60 @@ def compact_context_for_llm(context: dict[str, Any], role: str = "generic") -> d
         if isinstance(graph, dict):
             compact[graph_key] = _compact_graph(graph, role)
 
-    return compact
+    return _fit_summary_budget(compact)
+
+
+def _summary_budget() -> int:
+    try:
+        from config import CFG
+    except ImportError:
+        return 8000
+    raw = (CFG.get("ollama") or {}).get("summarize_threshold", 8000)
+    try:
+        return max(512, int(raw))
+    except (TypeError, ValueError):
+        return 8000
+
+
+def _fit_summary_budget(compact: dict[str, Any]) -> dict[str, Any]:
+    """Keep the compact JSON under the configured character threshold."""
+
+    budget = _summary_budget()
+    if len(json.dumps(compact, ensure_ascii=False, default=str)) <= budget:
+        return compact
+
+    priority = (
+        "host",
+        "state",
+        "services",
+        "open_questions",
+        "next_required_capability",
+        "stage_gates",
+        "automation_policy",
+        "killchain_policy",
+        "capability_assessment",
+        "coverage_gaps",
+        "typed_coverage_gaps",
+        "surface_states",
+        "target_model",
+        "network_graph",
+        "asset_graph",
+    )
+    fitted: dict[str, Any] = {"context_compacted": True}
+    omitted: list[str] = []
+    for key in priority:
+        if key not in compact:
+            continue
+        candidate = {**fitted, key: compact[key]}
+        if len(json.dumps(candidate, ensure_ascii=False, default=str)) <= budget:
+            fitted[key] = compact[key]
+        else:
+            omitted.append(key)
+    for key in compact:
+        if key not in fitted and key not in omitted:
+            omitted.append(key)
+    fitted["omitted_sections"] = omitted
+    return fitted
 
 
 def _compact_target_model(model: dict[str, Any], role: str) -> dict[str, Any]:

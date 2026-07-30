@@ -1110,8 +1110,7 @@ def _write_repacked_jsonl_shards(
         if handle is not None:
             handle.close()
         raise
-    if handle is not None:
-        handle.close()
+    handle.close()
     return tuple(names)
 
 
@@ -1338,11 +1337,9 @@ def _render_recall_panel(
         if estimate is None:
             fragments.append(f'<text class="small" x="260" y="{row_y + 13}">unavailable</text>')
             continue
-        if lower is None or upper is None:
-            raise BenchmarkV3SchemaError("statistics_missing_verified_recall")
         bar_width = 780.0 * float(estimate)
-        lower_x = 260.0 + 780.0 * float(lower)
-        upper_x = 260.0 + 780.0 * float(upper)
+        lower_x = 260.0 + 780.0 * float(cast(float, lower))
+        upper_x = 260.0 + 780.0 * float(cast(float, upper))
         fragments.extend(
             [
                 f'<rect x="260" y="{row_y}" width="{bar_width:.2f}" height="20" fill="{colors[index % len(colors)]}" opacity="0.8"/>',

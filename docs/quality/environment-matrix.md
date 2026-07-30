@@ -1,6 +1,6 @@
 # OCTOPUS environment matrix
 
-Baseline date: 2026-07-24.
+Baseline date: 2026-07-29.
 
 ## Python support policy
 
@@ -68,7 +68,7 @@ After that clean install succeeds, run the fast hermetic selector with one
 command:
 
 ```bash
-venv/bin/python -m pytest -q -m '(unit or contract) and not slow and not external_tools and not mysql and not platform'
+venv/bin/python -m pytest -q -m '(unit or contract) and not slow and not integration and not external_tools and not mysql and not platform'
 ```
 
 Run every locally collectible test, including slow contracts and process
@@ -93,10 +93,11 @@ Markers are registered with `--strict-markers` in `pyproject.toml`:
 Unclassified existing hermetic tests receive `unit` during collection.  New
 tests that cross a boundary must declare the appropriate non-unit marker.
 
-The Phase 0.1 macOS result is not itself proof of a clean/hermetic install: the
-existing venv predates this dependency split and is missing part of
-`requirements/test.txt`.  Clean-environment installation remains to be proved
-on the Linux test host (or in a newly created local venv with package access).
+The legacy macOS development venv is not itself proof of a clean/hermetic
+install because it predates the dependency split. Target-specific locked clean
+installs are instead proved in Ubuntu 22.04 CI for CPython 3.10, 3.11, and 3.12.
+A newly created local venv remains useful host-specific feedback, but does not
+replace that matrix.
 
 ## Optional MySQL behavior
 

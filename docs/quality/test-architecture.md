@@ -50,7 +50,7 @@ branches include:
 
 ```bash
 # Fast hermetic feedback
-venv/bin/python -m pytest -q -m "not slow and not external and not external_tools and not mysql and not platform"
+venv/bin/python -m pytest -q -m "(unit or contract) and not slow and not integration and not external_tools and not mysql and not platform"
 
 # Security and replay contracts
 venv/bin/python -m pytest -q -m security

@@ -80,6 +80,25 @@ def _config_csv(config: dict, key: str, default: str) -> str:
     return value or default
 
 
+def _config_bool(config: dict, key: str, default: bool) -> bool:
+    value = config.get(key, default)
+    return value if isinstance(value, bool) else default
+
+
+def _config_flags(config: dict, key: str, default: list[str]) -> list[str]:
+    value = config.get(key, default)
+    if not isinstance(value, (list, tuple)):
+        return list(default)
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _config_section(name: str) -> dict:
+    if not isinstance(CFG, dict):
+        return {}
+    value = CFG.get(name, {})
+    return value if isinstance(value, dict) else {}
+
+
 def _load_session_profile(path: str) -> dict:
     if not path or not os.path.exists(path):
         return {"headers": {}, "cookies": {}}
@@ -109,8 +128,17 @@ def run_nmap(target: str, extra_flags: Optional[list] = None) -> str:
     Prevents duplicate '-p-' scans which waste immense time.
     """
     tc = get_tool_config("nmap")
-    flags = list(tc.get("default_flags", ["-sV", "-sC", "-T4", "--open", "-Pn", "-sT"]))
-    timeout = tc.get("timeout", 300)
+    flags = _config_flags(
+        tc,
+        "default_flags",
+        ["-sV", "-sC", "-T4", "--open", "-Pn", "-sT"],
+    )
+    aggressive_flags = _config_flags(
+        tc,
+        "aggressive_flags",
+        ["-A", "-T4", "-p-", "-Pn", "-sT"],
+    )
+    timeout = _config_int(tc, "timeout", 300, minimum=0)
 
     if extra_flags:
         flags = extra_flags
@@ -134,7 +162,7 @@ def run_nmap(target: str, extra_flags: Optional[list] = None) -> str:
         # Phase 1: Top 1000 ports (Fast)
         print(f"  {C_YELLOW}  Phase 1: Top 1000 ports (fast){C_RESET}")
         flags_stage1 = [f for f in flags if f != "-p-"] + ["--top-ports", "1000"]
-        result1 = run_tool(["nmap", *flags_stage1, target], timeout=300)
+        result1 = run_tool(["nmap", *flags_stage1, target], timeout=timeout)
 
         # Extract open ports from Phase 1 to decide if we need Phase 2
         open_ports_p1 = re.findall(r"(\d+)/tcp\s+open", result1)
@@ -143,13 +171,15 @@ def run_nmap(target: str, extra_flags: Optional[list] = None) -> str:
         if len(open_ports_p1) < 5:
             print(f"  {C_YELLOW}  Phase 2: Few ports found, running full -p- scan{C_RESET}")
             # we do a fast full scan without version detection to find obscure ports quickly
-            flags_stage2 = ["-p-", "--min-rate", "1000", "-T4", "-Pn", target]
-            result2 = run_tool(["nmap", *flags_stage2], timeout=600)
+            flags_stage2 = list(aggressive_flags)
+            if "-p-" not in flags_stage2:
+                flags_stage2.append("-p-")
+            result2 = run_tool(["nmap", *flags_stage2, target], timeout=timeout)
         else:
             print(f"  {C_YELLOW}  Phase 2: Many common ports found, using targeted extension{C_RESET}")
             extended_ports = "8443,8000,8888,3000,27017,6379,11211,9200,5601,5985,5986,4444,9090,10000"
-            flags_stage2 = [f for f in flags if f != "-p-"] + ["-p", extended_ports]
-            result2 = run_tool(["nmap", *flags_stage2, target], timeout=300)
+            flags_stage2 = [f for f in aggressive_flags if f != "-p-"] + ["-p", extended_ports]
+            result2 = run_tool(["nmap", *flags_stage2, target], timeout=timeout)
 
         final_output = f"[PHASE 1 — Top 1000 ports]\n{result1}\n\n[PHASE 2 — Deep Scan]\n{result2}"
         
@@ -164,6 +194,24 @@ def run_nmap(target: str, extra_flags: Optional[list] = None) -> str:
 
     print(f"  [*] nmap {' '.join(flags)} {target}")
     return run_tool(["nmap", *flags, target], timeout=timeout)
+
+
+@tool(
+    name="rustscan",
+    aliases=[],
+    category="recon",
+    description="Run RustScan port discovery through the registered tool runtime.",
+    requires=["rustscan"],
+)
+def run_rustscan(target: str, extra_flags: Optional[list[str]] = None) -> str:
+    """Run RustScan as an argv-only registered reconnaissance provider."""
+    tc = get_tool_config("rustscan")
+    timeout = _config_int(tc, "timeout", 300, minimum=0)
+    flags = _config_flags(tc, "default_flags", ["--", "-sV"])
+    if extra_flags is not None:
+        flags = [str(flag).strip() for flag in extra_flags if str(flag).strip()]
+    print(f"  [*] rustscan -a {target} {' '.join(flags)}")
+    return run_tool(["rustscan", "-a", target, *flags], timeout=timeout)
 
 
 @tool(name="whois", aliases=[], category="recon", description="Run whois against target.", requires=["whois"])
@@ -187,12 +235,13 @@ def run_whatweb(target: str) -> str:
 def run_curl_headers(target: str) -> str:
     """curl -sI http and https"""
     tc = get_tool_config("curl")
-    timeout = tc.get("timeout", 20)
-    print(f"  [*] curl -sI {target}")
+    timeout = _config_int(tc, "timeout", 20, minimum=0)
+    flags = _config_flags(tc, "flags", ["-sI", "--max-time", "10", "--location"])
+    print(f"  [*] curl {' '.join(flags)} {target}")
     parts = []
     for url in _url_candidates(target):
-        curl_cmd = ["curl", "-sI", "--max-time", "10", "--location"]
-        if url.startswith("https://"):
+        curl_cmd = ["curl", *flags]
+        if url.startswith("https://") and not {"-k", "--insecure"}.intersection(flags):
             curl_cmd.append("-k")
         output = run_tool([*curl_cmd, url], timeout=timeout)
         parts.append(f"[Headers: {url}]\n{output}")
@@ -629,7 +678,7 @@ def run_smtp_probe(target: str, port: int = 25) -> str:
                     logging.debug("Suppressed SMTP close error: %s", _exc)
 
 
-@tool(name="ffuf", aliases=["dirb", "dirbuster", "dirb_fuzz"], category="recon", description="Run ffuf for fast directory discovery.", requires=["ffuf"])
+@tool(name="ffuf", aliases=["dirbuster", "dirb_fuzz"], category="recon", description="Run ffuf for fast directory discovery.", requires=["ffuf"])
 def run_ffuf(target: str) -> str:
     """ffuf for fast directory discovery using config-driven wordlists."""
     print(f"  [*] ffuf {target}")
@@ -637,11 +686,13 @@ def run_ffuf(target: str) -> str:
         return "[!] ffuf is not installed. AI: do NOT attempt dirb_fuzz anymore! Fall back to curl or finding logic bugs."
 
     tc = get_tool_config("ffuf")
-    threads = str(tc.get("threads", 50))
-    match_codes = tc.get("match_codes", "200,204,301,302,307,401,403")
-    timeout = tc.get("timeout", 120)
-    maxtime = str(tc.get("maxtime", min(timeout, 60)))
-    request_timeout = str(tc.get("request_timeout", 5))
+    threads = str(_config_int(tc, "threads", 50, minimum=1))
+    match_codes = _config_csv(tc, "match_codes", "200,204,301,302,307,401,403")
+    timeout = _config_int(tc, "timeout", 120, minimum=0)
+    default_maxtime = min(timeout, 60) if timeout > 0 else 0
+    maxtime = str(_config_int(tc, "maxtime", default_maxtime, minimum=0))
+    request_timeout = str(_config_int(tc, "request_timeout", 5, minimum=1))
+    flags = _config_flags(tc, "flags", ["-c"])
 
     base_url = _ensure_url(target)
     try:
@@ -670,9 +721,41 @@ def run_ffuf(target: str) -> str:
     print(f"  [*] Using wordlist: {os.path.basename(wordlist)}")
     return run_tool([
         "ffuf", "-w", wordlist, "-u", f"{base_url}/FUZZ",
-        "-t", threads, "-mc", match_codes, "-c",
+        "-t", threads, "-mc", match_codes, *flags,
         "-timeout", request_timeout, "-maxtime", maxtime,
     ], timeout=timeout)
+
+
+@tool(name="gobuster", aliases=["gobuster_dir"], category="recon", description="Run gobuster directory discovery.", requires=["gobuster"])
+def run_gobuster(target: str) -> str:
+    """Run the configured native gobuster provider with the shared web wordlist."""
+    tc = get_tool_config("gobuster")
+    timeout = _config_int(tc, "timeout", 180, minimum=0)
+    threads = str(_config_int(tc, "threads", 50, minimum=1))
+    flags = _config_flags(tc, "flags", [])
+    wordlist = find_wordlist("web_dirs")
+    if not wordlist:
+        return "[!] No common web wordlists found on system. Add paths to config.yaml → wordlists → web_dirs."
+    url = _ensure_url(target)
+    print(f"  [*] gobuster dir -u {url} -w {os.path.basename(wordlist)}")
+    return run_tool(
+        ["gobuster", "dir", "-u", url, "-w", wordlist, "-t", threads, *flags],
+        timeout=timeout,
+    )
+
+
+@tool(name="dirb", aliases=["dirb_native"], category="recon", description="Run native dirb directory discovery.", requires=["dirb"])
+def run_dirb(target: str) -> str:
+    """Run the configured native dirb provider with the shared web wordlist."""
+    tc = get_tool_config("dirb")
+    timeout = _config_int(tc, "timeout", 180, minimum=0)
+    flags = _config_flags(tc, "flags", [])
+    wordlist = find_wordlist("web_dirs")
+    if not wordlist:
+        return "[!] No common web wordlists found on system. Add paths to config.yaml → wordlists → web_dirs."
+    url = _ensure_url(target)
+    print(f"  [*] dirb {url} {os.path.basename(wordlist)}")
+    return run_tool(["dirb", url, wordlist, *flags], timeout=timeout)
 
 
 @tool(name="enum4linux", aliases=[], category="recon", description="Run enum4linux for SMB and Windows enumeration.", requires=["enum4linux"])
@@ -858,11 +941,18 @@ def run_scrapling_fetch(url: str) -> str:
     Fetch a URL using scrapling's StealthyFetcher for JS-rendered pages and anti-bot bypass.
     Falls back to requests and BeautifulSoup to preserve form/link extraction.
     """
+    scrapling_cfg = _config_section("scrapling")
+    if not _config_bool(scrapling_cfg, "enabled", True):
+        return "[SKIPPED] Scrapling is disabled by config (scrapling.enabled=false)."
+    timeout = _config_int(scrapling_cfg, "timeout", 30, minimum=1)
+    use_stealth = _config_bool(scrapling_cfg, "use_stealth", True)
+
     # Ensure URL has protocol
     if not url.startswith("http"):
         url = f"http://{url}"
 
-    print(f"  [*] Scrapling (StealthyFetcher): {url}")
+    mode = "StealthyFetcher" if use_stealth and _SCRAPLING_OK else "requests+BeautifulSoup"
+    print(f"  [*] Scrapling ({mode}, timeout={timeout}s): {url}")
 
     def _extract_page_data(page_obj=None, html_str=None, status_code=200, source="scrapling"):
         """Unified extraction logic for both scrapling and BS4 fallback."""
@@ -900,7 +990,7 @@ def run_scrapling_fetch(url: str) -> str:
                 if name and content:
                     meta_info.append(f"  {name}: {content[:100]}")
 
-        elif html_str is not None:
+        else:
             # BeautifulSoup fallback
             from bs4 import BeautifulSoup
             soup = BeautifulSoup(html_str, "html.parser")
@@ -951,10 +1041,10 @@ def run_scrapling_fetch(url: str) -> str:
         return output
 
     # Try scrapling first
-    if _SCRAPLING_OK:
+    if use_stealth and _SCRAPLING_OK:
         try:
             fetcher = _StealthyFetcher()
-            page = fetcher.fetch(url)
+            page = fetcher.fetch(url, timeout=timeout * 1000)
             if page.status == 200:
                 return _extract_page_data(page_obj=page, status_code=page.status)
             else:
@@ -974,7 +1064,7 @@ def run_scrapling_fetch(url: str) -> str:
     session.mount("https://", HTTPAdapter(max_retries=retries))
 
     try:
-        resp = session.get(url, timeout=(5, 15), verify=False,
+        resp = session.get(url, timeout=(min(5, timeout), timeout), verify=False,
                           headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/120.0"})
         return _extract_page_data(html_str=resp.text, status_code=resp.status_code, source="requests+bs4")
     except Exception as e:
@@ -987,26 +1077,39 @@ def run_scrapling_fetch(url: str) -> str:
             if alt_url == url:
                 continue
             try:
-                resp = session.get(alt_url, timeout=(3, 10), verify=False,
+                resp = session.get(alt_url, timeout=(min(3, timeout), timeout), verify=False,
                                   headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code == 200:
                     print(f"  {C_GREEN}[+] Alt port {alt_port} responded!{C_RESET}")
                     return _extract_page_data(html_str=resp.text, status_code=resp.status_code,
                                            source=f"requests+bs4 (port {alt_port})")
-            except Exception as e:
+            except Exception:
                 continue
         return f"[!] All scrapling/requests attempts failed for {url}. Target web service may be down."
 
 
 @tool(name="scrapling_crawl", aliases=["crawl"], category="recon", description="Deep crawl a website using scrapling or requests+BeautifulSoup fallback for link discovery.")
-def run_scrapling_crawl(url: str, max_pages: int = 10) -> str:
+def run_scrapling_crawl(url: str, max_pages: Optional[int] = None) -> str:
     """
     Deep crawl a website using scrapling for link discovery and content extraction.
     """
+    scrapling_cfg = _config_section("scrapling")
+    if not _config_bool(scrapling_cfg, "enabled", True):
+        return "[SKIPPED] Scrapling crawl is disabled by config (scrapling.enabled=false)."
+    timeout = _config_int(scrapling_cfg, "timeout", 30, minimum=1)
+    configured_max_pages = _config_int(scrapling_cfg, "max_crawl_pages", 10, minimum=1)
+    requested_max_pages = (
+        configured_max_pages
+        if max_pages is None
+        else _config_int({"max_pages": max_pages}, "max_pages", configured_max_pages, minimum=1)
+    )
+    page_limit = min(requested_max_pages, configured_max_pages)
+    use_stealth = _config_bool(scrapling_cfg, "use_stealth", True)
+
     if not url.startswith("http"):
         url = f"http://{url}"
 
-    print(f"  [*] Scrapling Crawl (max {max_pages} pages): {url}")
+    print(f"  [*] Scrapling Crawl (max {page_limit} pages, timeout={timeout}s): {url}")
 
     def _same_host_link(base_url: str, href: str) -> str:
         if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
@@ -1017,21 +1120,19 @@ def run_scrapling_crawl(url: str, max_pages: int = 10) -> str:
         return absolute if base_host and link_host == base_host else ""
 
     try:
-        fetcher = _StealthyFetcher() if _SCRAPLING_OK else None
+        fetcher = _StealthyFetcher() if use_stealth and _SCRAPLING_OK else None
 
         visited = set()
         to_visit = [url]
         results = []
 
-        while to_visit and len(visited) < max_pages:
+        while to_visit and len(visited) < page_limit:
             current_url = to_visit.pop(0)
-            if current_url in visited:
-                continue
             visited.add(current_url)
 
             try:
                 if fetcher is not None:
-                    page = fetcher.fetch(current_url)
+                    page = fetcher.fetch(current_url, timeout=timeout * 1000)
                     status = int(getattr(page, "status", 0) or 0)
                     if status == 200:
                         title_el = page.css_first("title")
@@ -1050,7 +1151,7 @@ def run_scrapling_crawl(url: str, max_pages: int = 10) -> str:
                     import requests as _req
                     resp = _req.get(
                         current_url,
-                        timeout=(5, 15),
+                        timeout=(min(5, timeout), timeout),
                         verify=False,
                         headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/120.0"},
                     )
@@ -1162,7 +1263,10 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
 
     print(f"  [*] Phase 1: Testing {len(canary_users)} canary users for false-positive detection...")
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    with ThreadPoolExecutor(max_workers=4) as executor:
+
+    from core.runtime_config import effective_parallel_workers
+
+    with ThreadPoolExecutor(max_workers=effective_parallel_workers(4)) as executor:
         futures = {executor.submit(_check_user, u): u for u in canary_users}
         for future in as_completed(futures):
             username = futures[future]
@@ -1203,7 +1307,7 @@ def run_ssh_user_enum(target: str, port: int = 22) -> str:
     # Just test the remaining users
     print(f"  [*] Phase 2: Server may be vulnerable — testing {len(remaining)} more usernames...")
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=effective_parallel_workers(4)) as executor:
         futures = {executor.submit(_check_user, u): u for u in remaining}
         for future in as_completed(futures):
             username = futures[future]

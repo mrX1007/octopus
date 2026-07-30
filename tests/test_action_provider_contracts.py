@@ -7,16 +7,15 @@ pytestmark = pytest.mark.contract
 
 def test_n_mode_uses_registry_safe_deep_coverage_without_real_tools():
     import builtins
-    import sys
-    import types
 
+    import core.killchain as killchain
     import core.tools.recon_tools  # noqa: F401 - registers safe/deep tools
     import core.tools.runner as runner
     from core.tools.registry import get_tool
 
     old_input = builtins.input
-    old_default_recon = runner.run_default_recon
-    old_killchain = sys.modules.get("core.killchain")
+    old_default_recon = runner._run_registered_default_recon
+    old_vuln_assess = killchain.vuln_assess
     old_web_funcs = {
         "wpscan": runner.run_wpscan,
         "sqlmap": runner.run_sqlmap,
@@ -44,10 +43,8 @@ def test_n_mode_uses_registry_safe_deep_coverage_without_real_tools():
 
     try:
         builtins.input = lambda _prompt="": "n"
-        runner.run_default_recon = fake_default_recon
-        fake_killchain = types.ModuleType("core.killchain")
-        fake_killchain.vuln_assess = lambda target, recon_blob: f"vuln_assess ok {target}"
-        sys.modules["core.killchain"] = fake_killchain
+        runner._run_registered_default_recon = fake_default_recon
+        killchain.vuln_assess = lambda target, recon_blob: f"vuln_assess ok {target}"
         runner.run_wpscan = fake_tool("wpscan")
         runner.run_sqlmap = fake_tool("sqlmap")
         runner.run_nikto = fake_tool("nikto")
@@ -57,6 +54,7 @@ def test_n_mode_uses_registry_safe_deep_coverage_without_real_tools():
         runner.run_bruteforce = fake_tool("bruteforce")
 
         for tool_name in (
+            "wpscan", "sqlmap", "nikto", "scrapling",
             "httpx_probe", "naabu", "tlsx", "security_headers_check",
             "cors_check", "nuclei_safe", "katana_crawl", "openapi_import",
             "graphql_check",
@@ -69,11 +67,8 @@ def test_n_mode_uses_registry_safe_deep_coverage_without_real_tools():
         output = runner.interactive_tool_run("10.0.0.5")
     finally:
         builtins.input = old_input
-        runner.run_default_recon = old_default_recon
-        if old_killchain is None:
-            sys.modules.pop("core.killchain", None)
-        else:
-            sys.modules["core.killchain"] = old_killchain
+        runner._run_registered_default_recon = old_default_recon
+        killchain.vuln_assess = old_vuln_assess
         runner.run_wpscan = old_web_funcs["wpscan"]
         runner.run_sqlmap = old_web_funcs["sqlmap"]
         runner.run_nikto = old_web_funcs["nikto"]
@@ -92,6 +87,12 @@ def test_n_mode_uses_registry_safe_deep_coverage_without_real_tools():
     assert "asm_domain_discovery: not_applicable:target_is_ip" in output
     assert "secrets/code/cloud: not_applicable" in output
     assert "vuln_assess ok 10.0.0.5" in output
+    assert "gated web_login_brute" in output
+    assert "gated ssh_bruteforce" in output
+    assert "gated sqlmap" in output
+    assert "web_login_brute" not in called_tools
+    assert "bruteforce" not in called_tools
+    assert "sqlmap" not in called_tools
     assert {"httpx_probe", "naabu", "tlsx", "security_headers_check", "cors_check", "nuclei_safe", "katana_crawl", "openapi_import", "graphql_check"}.issubset(called_tools)
     assert ("security_headers_check", "http://10.0.0.5") in calls
     assert ("openapi_import", "http://10.0.0.5/openapi.json") in calls

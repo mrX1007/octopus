@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import io
+import math
 import os
 import re
 import subprocess
 import sys
 from collections import defaultdict
 from collections.abc import Sequence
+from decimal import Decimal
 from pathlib import Path
 
 from coverage import Coverage
@@ -27,25 +29,31 @@ _EXCLUDED_DIRECTORIES = frozenset(
         ".venv",
         "__pycache__",
         "build",
-        "data",
         "tests",
         "vendor",
         "venv",
     }
 )
+_ALLOWED_OMIT_PATTERNS = frozenset({"build/*", "tests/*", "vendor/*", "venv/*"})
 
 
 class CoverageGateError(argparse.ArgumentTypeError):
     """Raised when the complete first-party coverage gate cannot be evaluated."""
 
 
-def _relative_source(root: Path, path: Path) -> str:
-    return path.resolve().relative_to(root.resolve()).as_posix()
+def _parse_threshold(value: str | float) -> float:
+    try:
+        threshold = float(value)
+    except (TypeError, ValueError) as exc:
+        raise CoverageGateError("coverage threshold must be numeric") from exc
+    if not math.isfinite(threshold) or not 0 <= threshold <= 100:
+        raise CoverageGateError("coverage threshold must be between 0 and 100")
+    return threshold
 
 
 def _package_sources(root: Path, package: str) -> list[Path]:
     normalized = str(package).strip().replace(".", "/").strip("/")
-    if not normalized or normalized.startswith(".."):
+    if not normalized:
         raise CoverageGateError(f"invalid package coverage path: {package}")
     package_root = (root / normalized).resolve()
     try:
@@ -53,9 +61,7 @@ def _package_sources(root: Path, package: str) -> list[Path]:
     except ValueError as exc:
         raise CoverageGateError(f"package path escapes repository: {package}") from exc
     sources = [
-        item
-        for item in discover_first_party_python(root)
-        if item == package_root or package_root in item.parents
+        item for item in discover_first_party_python(root) if item == package_root or package_root in item.parents
     ]
     if not sources:
         raise CoverageGateError(f"package coverage path has no Python sources: {package}")
@@ -70,7 +76,7 @@ def _parse_package_threshold(value: str) -> tuple[str, float]:
         threshold = float(raw_threshold)
     except ValueError as exc:
         raise CoverageGateError("package threshold must be numeric") from exc
-    if not 0 <= threshold <= 100:
+    if not math.isfinite(threshold) or not 0 <= threshold <= 100:
         raise CoverageGateError("package threshold must be between 0 and 100")
     return package.strip(), threshold
 
@@ -115,27 +121,28 @@ def _changed_python_lines(root: Path, base: str) -> dict[Path, set[int]]:
     return dict(changed)
 
 
-def _line_data(coverage: Coverage, root: Path, path: Path) -> set[int]:
-    data = coverage.get_data()
-    relative = _relative_source(root, path)
-    return set(data.lines(relative) or data.lines(str(path.resolve())) or ())
-
-
 def discover_first_party_python(root: Path) -> list[Path]:
     """Return every Python source outside generated, test, venv, and vendor trees."""
     root = root.resolve(strict=True)
     sources = []
     for current, directory_names, file_names in os.walk(root, followlinks=False):
-        directory_names[:] = sorted(
-            name
-            for name in directory_names
-            if name not in _EXCLUDED_DIRECTORIES and not (Path(current) / name).is_symlink()
-        )
         current_path = Path(current)
+        included_directories = []
+        for name in sorted(directory_names):
+            if name in _EXCLUDED_DIRECTORIES:
+                continue
+            directory = current_path / name
+            if directory.is_symlink():
+                raise CoverageGateError(f"first-party source directory is a symlink: {directory}")
+            included_directories.append(name)
+        directory_names[:] = included_directories
         for file_name in sorted(file_names):
             path = current_path / file_name
-            if path.suffix == ".py" and not path.is_symlink():
-                sources.append(path)
+            if path.suffix != ".py":
+                continue
+            if path.is_symlink():
+                raise CoverageGateError(f"first-party Python source is a symlink: {path}")
+            sources.append(path)
     if not sources:
         raise CoverageGateError(f"no first-party Python files found below {root}")
     return sorted(sources)
@@ -148,10 +155,13 @@ def evaluate_coverage(
     xml_path: Path | None = None,
     package_thresholds: Sequence[tuple[str, float]] = (),
     diff_base: str = "",
-    diff_fail_under: float = 0.0,
+    diff_fail_under: float = 100.0,
     data_file: Path | None = None,
 ) -> float:
     """Load measured data, report every source, and enforce the exact floor."""
+    fail_under = _parse_threshold(fail_under)
+    diff_fail_under = _parse_threshold(diff_fail_under)
+    package_thresholds = tuple((package, _parse_threshold(threshold)) for package, threshold in package_thresholds)
     root = root.resolve(strict=True)
     sources = discover_first_party_python(root)
     coverage_data = root / ".coverage" if data_file is None else data_file
@@ -160,11 +170,24 @@ def evaluate_coverage(
         data_file=str(coverage_data.resolve()),
     )
     coverage.load()
+    if coverage.get_option("run:branch") is not True:
+        raise CoverageGateError("branch measurement must be enabled")
+    configured_omit = frozenset(coverage.get_option("run:omit") or ())
+    if configured_omit != _ALLOWED_OMIT_PATTERNS:
+        raise CoverageGateError("coverage omit patterns must be exactly the approved non-production trees")
+    if coverage.get_option("run:include"):
+        raise CoverageGateError("run include filters are forbidden by the complete coverage gate")
+    if coverage.get_option("report:include") or coverage.get_option("report:omit"):
+        raise CoverageGateError("report include/omit filters are forbidden by the complete coverage gate")
+    if not coverage.get_data().has_arcs():
+        raise CoverageGateError("branch coverage cannot be evaluated: coverage data has no arcs")
+    if coverage.get_exclude_list():
+        raise CoverageGateError("line exclusions are forbidden by the complete coverage gate")
+    if coverage.get_exclude_list("partial"):
+        raise CoverageGateError("partial-branch exclusions are forbidden by the complete coverage gate")
     total = coverage.report(morfs=[str(path) for path in sources], file=sys.stdout)
     if total < fail_under:
-        raise CoverageGateError(
-            f"coverage regression: {total:.2f}% is below the required {fail_under:.2f}%"
-        )
+        raise CoverageGateError(f"coverage regression: {total:.2f}% is below the required {fail_under:.2f}%")
     for package, threshold in package_thresholds:
         package_sources = _package_sources(root, package)
         package_total = coverage.report(
@@ -173,37 +196,40 @@ def evaluate_coverage(
         )
         if package_total < threshold:
             raise CoverageGateError(
-                f"package coverage regression: {package} {package_total:.2f}% "
-                f"is below {threshold:.2f}%"
+                f"package coverage regression: {package} {package_total:.2f}% is below {threshold:.2f}%"
             )
-        print(
-            f"package coverage passed: {package} "
-            f"{package_total:.2f}% >= {threshold:.2f}%"
-        )
+        print(f"package coverage passed: {package} {package_total:.2f}% >= {threshold:.2f}%")
     if diff_base:
         changed = _changed_python_lines(root, diff_base)
-        executable = 0
-        covered = 0
+        executable_lines = 0
+        covered_lines = 0
+        possible_branches = 0
+        covered_branches = 0
         for path, lines in changed.items():
             try:
-                _filename, statements, _excluded, _missing, _formatted = coverage.analysis2(
-                    str(path)
-                )
+                canonical_lines = coverage._get_file_reporter(str(path)).translate_lines(lines)
+                _filename, statements, _excluded, missing, _formatted = coverage.analysis2(str(path))
+                branch_stats = coverage.branch_stats(str(path))
             except CoverageException as exc:
                 raise CoverageGateError(f"cannot analyze changed file {path}: {exc}") from exc
-            relevant = set(statements).intersection(lines)
-            executable += len(relevant)
-            covered += len(relevant.intersection(_line_data(coverage, root, path)))
-        diff_total = 100.0 if executable == 0 else 100.0 * covered / executable
-        if diff_total < diff_fail_under:
+            relevant = set(statements).intersection(canonical_lines)
+            executable_lines += len(relevant)
+            covered_lines += len(relevant.difference(missing))
+            for line in canonical_lines:
+                branch_total, branch_taken = branch_stats.get(line, (0, 0))
+                possible_branches += branch_total
+                covered_branches += branch_taken
+        possible = executable_lines + possible_branches
+        covered = covered_lines + covered_branches
+        diff_total = 100.0 if possible == 0 else 100.0 * covered / possible
+        evidence = f"{covered_lines}/{executable_lines} lines, {covered_branches}/{possible_branches} branches"
+        required = Decimal(str(diff_fail_under)) * Decimal(possible)
+        measured = Decimal(covered) * Decimal(100)
+        if measured < required:
             raise CoverageGateError(
-                f"diff coverage regression: {diff_total:.2f}% is below "
-                f"{diff_fail_under:.2f}% ({covered}/{executable} lines)"
+                f"diff coverage regression: {diff_total:.2f}% is below {diff_fail_under:.2f}% ({evidence})"
             )
-        print(
-            f"diff coverage passed: {diff_total:.2f}% >= "
-            f"{diff_fail_under:.2f}% ({covered}/{executable} lines)"
-        )
+        print(f"diff coverage passed: {diff_total:.2f}% >= {diff_fail_under:.2f}% ({evidence})")
     if xml_path is not None:
         coverage.xml_report(
             morfs=[str(path) for path in sources],
@@ -217,7 +243,7 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--config", type=Path, default=Path("quality/coverage-ci.ini"))
-    parser.add_argument("--fail-under", type=float, default=59.50)
+    parser.add_argument("--fail-under", type=_parse_threshold, default=100.0)
     parser.add_argument("--xml", type=Path)
     parser.add_argument(
         "--package-fail-under",
@@ -227,7 +253,7 @@ def _argument_parser() -> argparse.ArgumentParser:
         metavar="PACKAGE=PERCENT",
     )
     parser.add_argument("--diff-base", default="")
-    parser.add_argument("--diff-fail-under", type=float, default=80.0)
+    parser.add_argument("--diff-fail-under", type=_parse_threshold, default=100.0)
     parser.add_argument("--data-file", type=Path)
     return parser
 

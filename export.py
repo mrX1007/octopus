@@ -6,7 +6,7 @@ import html
 import os
 import re
 import unicodedata
-from typing import Optional
+from typing import Any, Optional
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -17,6 +17,11 @@ from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer,
 
 from core.secrets import redact_data, redact_text
 from db import get_all_history, get_session
+
+try:
+    from config import CFG
+except ImportError:
+    CFG = {}
 
 SEVERITY_COLORS = {
     "critical": "#c0392b",
@@ -33,6 +38,37 @@ RISK_COLORS = {
     "LOW":      "#27ae60",
     "UNKNOWN":  "#7f8c8d",
 }
+
+
+def _as_bool(value, default: bool = False) -> bool:
+    """Coerce YAML/environment-compatible values to a real boolean."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off", ""}:
+        return False
+    return default
+
+
+def _reporting_option(name: str, default: bool) -> bool:
+    reporting = CFG.get("reporting", {}) if isinstance(CFG, dict) else {}
+    if not isinstance(reporting, dict):
+        return default
+    return _as_bool(reporting.get(name), default)
+
+
+def _include_raw_output() -> bool:
+    return _reporting_option("include_raw_output", False)
+
+
+def _cvss_scoring_enabled() -> bool:
+    return _reporting_option("cvss_scoring", True)
 
 
 def _normalize_session_report(data: dict) -> dict:
@@ -125,15 +161,36 @@ def _cvss_from_severity(severity: str) -> float:
     return mapping.get((severity or "unknown").lower(), 0.0)
 
 
-def _vuln_cvss(vulnerability) -> float:
-    """Prefer the score stored by the scanner, then fall back to severity."""
+def _vuln_cvss(vulnerability) -> Optional[float]:
+    """Prefer a stored score and only infer one when configured to do so."""
     stored = _row_value(vulnerability, 11, None)
     if stored not in (None, ""):
         try:
             return float(stored)
         except (TypeError, ValueError):
             pass
+    if not _cvss_scoring_enabled():
+        return None
     return _cvss_from_severity(_sev(vulnerability))
+
+
+def _cvss_display(vulnerability) -> str:
+    score = _vuln_cvss(vulnerability)
+    return "-" if score is None else f"{score:.1f}"
+
+
+def _raw_scan_output(data: dict) -> str:
+    """Return the redacted full scan output only when reporting opts into it."""
+    if not _include_raw_output():
+        return ""
+    summary = data.get("summary")
+    return redact_text(_row_value(summary, 2, ""), kind="report")
+
+
+def _vulnerability_raw_evidence(vulnerability) -> str:
+    if not _include_raw_output():
+        return ""
+    return redact_text(_row_value(vulnerability, 9, ""), kind="report")
 
 
 def _generate_executive_summary(data: dict) -> str:
@@ -265,9 +322,8 @@ def export_pdf(data: dict, output_dir: Optional[str] = None) -> str:
     if data["vulns"]:
         vd = [["#", "Vulnerability", "Severity", "CVSS", "Port", "Service"]]
         for v in data["vulns"]:
-            cvss = _vuln_cvss(v)
             vd.append([str(_row_value(v, 0, "-")), str(_row_value(v, 2, "-") or "-"),
-                       str(_row_value(v, 3, "-") or "-").upper(), f"{cvss:.1f}",
+                       str(_row_value(v, 3, "-") or "-").upper(), _cvss_display(v),
                        str(_row_value(v, 4, "-") or "-"),
                        str(_row_value(v, 5, "-") or "-")])
         vt  = Table(vd, colWidths=[10*mm, 60*mm, 22*mm, 15*mm, 15*mm, 28*mm], repeatRows=1)
@@ -305,7 +361,7 @@ def export_pdf(data: dict, output_dir: Optional[str] = None) -> str:
             provenance = []
             confidence = _row_value(v, 7, "")
             evidence_source = _row_value(v, 8, "")
-            raw_evidence = _row_value(v, 9, "")
+            raw_evidence = _vulnerability_raw_evidence(v)
             repro_cmd = _row_value(v, 10, "")
             if confidence:
                 provenance.append(f"Confidence: {confidence}")
@@ -371,6 +427,15 @@ def export_pdf(data: dict, output_dir: Optional[str] = None) -> str:
     else:
         story.append(Paragraph("No AI analysis recorded.", body_style))
 
+    raw_output = _raw_scan_output(data)
+    if raw_output:
+        story.append(Spacer(1, 6))
+        story.append(Paragraph("Raw Tool Output", h1_style))
+        story.append(HRFlowable(width="100%", thickness=0.5,
+                                 color=colors.HexColor("#dddddd"), spaceAfter=6))
+        for line in raw_output.splitlines() or [raw_output]:
+            story.append(Paragraph(_pdf_text(line or " "), code_style))
+
     story.append(Spacer(1, 10))
     story.append(HRFlowable(width="100%", thickness=0.5,
                              color=colors.HexColor("#dddddd"), spaceAfter=4))
@@ -408,8 +473,9 @@ def export_html(data: dict, output_dir: Optional[str] = None) -> str:
             provenance.append(f"Confidence: {_row_value(v, 7)}")
         if _row_value(v, 8, ""):
             provenance.append(f"Source: {_row_value(v, 8)}")
-        if _row_value(v, 9, ""):
-            provenance.append(f"Evidence: {_row_value(v, 9)}")
+        raw_evidence = _vulnerability_raw_evidence(v)
+        if raw_evidence:
+            provenance.append(f"Evidence: {raw_evidence}")
         if _row_value(v, 10, ""):
             provenance.append(f"Reproduce: {_row_value(v, 10)}")
         provenance_html = "".join(
@@ -440,6 +506,11 @@ def export_html(data: dict, output_dir: Optional[str] = None) -> str:
 
     ai_html = "".join(f"<p>{_html_text(line)}</p>"
                       for line in str(ai).split("\n") if line.strip())
+    raw_output = _raw_scan_output(data)
+    raw_output_html = (
+        f"<section><h2>Raw Tool Output</h2><pre>{_html_text(raw_output)}</pre></section>"
+        if raw_output else ""
+    )
 
     html_doc = f"""<!DOCTYPE html>
 <html lang="en">
@@ -471,6 +542,8 @@ code{{background:#1e1e1e;padding:2px 6px;border-radius:3px;
 .ai-box{{background:#111;border:1px solid #333;border-radius:6px;
          padding:16px;font-size:.9em;line-height:1.7;color:#ccc}}
 .ai-box p{{margin-bottom:8px}}
+pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#111;border:1px solid #333;
+     border-radius:6px;padding:16px;font-family:monospace;font-size:.8em;color:#ccc}}
 .footer{{text-align:center;color:#444;font-size:.78em;
          margin-top:40px;border-top:1px solid #222;padding-top:16px}}
 a{{color:#555}}
@@ -524,6 +597,8 @@ a{{color:#555}}
     {ai_html if ai_html else '<p style="color:#888">None recorded.</p>'}
   </div>
 </section>
+
+{raw_output_html}
 
 <div class="footer">
   Generated by OCTOPUS &mdash;
@@ -613,7 +688,10 @@ def export_json(data: dict, output_dir: str = ".") -> str:
     exploits = data["exploits"]
     summary = data["summary"]
 
-    report = {
+    computed_scores = [
+        score for score in (_vuln_cvss(v) for v in vulns) if score is not None
+    ]
+    report: dict[str, Any] = {
         "metadata": {
             "tool": "OCTOPUS",
             "version": "10.0",
@@ -638,7 +716,7 @@ def export_json(data: dict, output_dir: str = ".") -> str:
             "medium": sum(1 for v in vulns if _sev(v) == "medium"),
             "low": sum(1 for v in vulns if _sev(v) == "low"),
             "exploits_attempted": len(exploits),
-            "cvss_max": max((_vuln_cvss(v) for v in vulns), default=0.0),
+            "cvss_max": max(computed_scores) if computed_scores else None,
         },
         "vulnerabilities": [
             {
@@ -650,7 +728,7 @@ def export_json(data: dict, output_dir: str = ".") -> str:
                 "description": _row_value(v, 6),
                 "confidence": _row_value(v, 7),
                 "evidence_source": _row_value(v, 8),
-                "raw_evidence": _row_value(v, 9),
+                "raw_evidence": _vulnerability_raw_evidence(v),
                 "repro_cmd": _row_value(v, 10),
                 "cvss_score": _vuln_cvss(v),
             }
@@ -677,6 +755,9 @@ def export_json(data: dict, output_dir: str = ".") -> str:
             for e in exploits
         ],
     }
+    raw_output = _raw_scan_output(data)
+    if raw_output:
+        report["summary"]["raw_output"] = raw_output
 
     filename = _report_path(output_dir, sl_no, target, "json")
     with open(filename, "w", encoding="utf-8") as f:
@@ -719,13 +800,13 @@ def export_csv(data: dict, output_dir: str = ".") -> str:
                 target,
                 _row_value(v, 2),
                 _row_value(v, 3),
-                _vuln_cvss(v),
+                _cvss_display(v),
                 _row_value(v, 4),
                 _row_value(v, 5),
                 _row_value(v, 6),
                 _row_value(v, 7),
                 _row_value(v, 8),
-                _row_value(v, 9),
+                _vulnerability_raw_evidence(v),
                 _row_value(v, 10),
             ]])
 

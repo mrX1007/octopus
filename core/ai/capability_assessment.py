@@ -35,25 +35,25 @@ STRATEGIC_TASKS: dict[str, tuple[str, ...]] = {
 # strategic loop.  They do not grant execution permission.
 STRATEGIC_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "service_discovery": (),
-    "vulnerability_assessment": ("stage:recon", "services"),
+    "vulnerability_assessment": ("stage:recon", "services", "killchain:vuln_assess"),
     "credential_harvesting": ("stage:recon", "services"),
-    "privilege_escalation": ("stage:credentials", "access"),
+    "privilege_escalation": ("stage:credentials", "access", "killchain:privesc"),
     "post_access_inventory": ("stage:root", "access"),
-    "persistence": ("stage:root", "access", "policy:auto_persistence"),
+    "persistence": ("stage:root", "access", "policy:auto_persistence", "killchain:persistence"),
     "internal_reconnaissance": ("stage:root", "access", "policy:auto_internal_recon"),
-    "data_exfiltration": ("stage:root", "access", "policy:auto_data_exfil"),
-    "cleanup": ("stage:exfiltration", "access", "policy:auto_cleanup"),
+    "data_exfiltration": ("stage:root", "access", "policy:auto_data_exfil", "killchain:data_exfil"),
+    "cleanup": ("stage:exfiltration", "access", "policy:auto_cleanup", "killchain:cleanup"),
     "conclude": (),
 }
 
 TASK_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "post_access_inventory": ("stage:root",),
     "payload_generation": ("stage:root", "policy:auto_payload_generation"),
-    "establish_persistence": ("stage:root", "policy:auto_persistence"),
+    "establish_persistence": ("stage:root", "policy:auto_persistence", "killchain:persistence"),
     "internal_network_recon": ("stage:root", "policy:auto_internal_recon"),
     "internal_service_discovery": ("stage:root", "policy:auto_internal_recon"),
-    "exfiltrate_data": ("stage:root", "policy:auto_data_exfil"),
-    "stealth_cleanup": ("stage:exfiltration", "policy:auto_cleanup"),
+    "exfiltrate_data": ("stage:root", "policy:auto_data_exfil", "killchain:data_exfil"),
+    "stealth_cleanup": ("stage:exfiltration", "policy:auto_cleanup", "killchain:cleanup"),
 }
 
 _WEB_FACT_TYPES = {
@@ -264,6 +264,12 @@ class CapabilityResolver:
         if requirement.startswith("policy:"):
             flag = requirement.split(":", 1)[1]
             return bool((context.get("automation_policy") or {}).get(flag, False))
+        if requirement.startswith("killchain:"):
+            stage = requirement.split(":", 1)[1]
+            configured = context.get("killchain_policy") or {}
+            if not configured:
+                return True
+            return bool((configured.get("automated_stages") or {}).get(stage, True))
         if requirement == "services":
             return bool(services)
         if requirement == "web":

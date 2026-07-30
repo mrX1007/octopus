@@ -308,13 +308,14 @@ def main() -> int:
     try:
         encoded = dumps_message(response)
     except BaseException as exc:
-        encoded = dumps_message({
+        response = {
             "ok": False,
             "error_type": type(exc).__name__,
             "error": f"worker response is not JSON-serializable: {exc}",
             "stdout": capture.stdout,
             "stderr": capture.stderr,
-        })
+        }
+        encoded = dumps_message(response)
     sys.stdout.buffer.write(encoded)
     sys.stdout.buffer.flush()
     return 0 if response.get("ok") else 1

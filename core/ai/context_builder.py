@@ -160,6 +160,7 @@ class ContextBuilder:
             "coverage_details": coverage_details,
             "stage_gates": stage_gates,
             "automation_policy": self._automation_policy(),
+            "killchain_policy": self._killchain_policy(),
             "next_required_capability": next_required_capability,
             "network_graph": self._network_graph(facts),
             "asset_graph": asset_graph,
@@ -480,6 +481,7 @@ class ContextBuilder:
     def _automation_policy(self) -> dict[str, bool]:
         strategy = CFG.get("strategy") or {}
         return {
+            "auto_killchain": bool(strategy.get("auto_killchain", True)),
             "auto_post_access_inventory": bool(strategy.get(
                 "auto_post_access_inventory",
                 strategy.get("auto_ssh_inventory", True),
@@ -492,6 +494,11 @@ class ContextBuilder:
             "auto_cleanup": bool(strategy.get("auto_cleanup", False)),
             "allow_active_msf": bool(strategy.get("allow_active_msf", False)),
         }
+
+    def _killchain_policy(self) -> dict[str, Any]:
+        from core.killchain.policy import policy_snapshot
+
+        return policy_snapshot(CFG)
 
     def _stage_gates(self, state: dict) -> dict[str, bool]:
         return {

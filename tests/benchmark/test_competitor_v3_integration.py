@@ -13,6 +13,7 @@ import pytest
 
 from core.ai.evidence import RegexParser
 from core.benchmarks.competitors import adapter as adapter_module
+from core.benchmarks.competitors import campaign as campaign_module
 from core.benchmarks.competitors import labctl, launch
 from core.benchmarks.competitors.campaign import CampaignConfig, run_campaign
 from core.benchmarks.competitors.lab import ResetAttestation
@@ -35,6 +36,11 @@ pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 
 _TOKEN = re.compile(r"OCTOBENCH_V3_[A-Z0-9]{16,160}")
 _V3_DEFINITION = launch._CAMPAIGN_DEFINITIONS[launch._SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID]
+
+
+@pytest.fixture(autouse=True)
+def _stub_repository_revision(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(campaign_module, "_repository_revision", lambda: "0" * 40)
 
 
 def _scenario_payload(repetitions: int = 5) -> dict:

@@ -249,7 +249,6 @@ def run_tool(command: list, timeout: int = 120) -> str:
                     if rendered:
                         elapsed = int(time.monotonic() - start_time)
                         print(f"      [{elapsed}s] {redact_sensitive_command(rendered)[:160]}")
-                    continue
                 if tool_bin in {
                     "hydra", "nmap", "masscan", "nikto", "sqlmap", "gobuster", "ffuf",
                 } and any(

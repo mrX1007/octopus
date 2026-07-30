@@ -641,7 +641,7 @@ def _run_cli_product(
             )
         )
         accepted = frozenset({0})
-    else:  # pragma: no cover - guarded by caller
+    else:
         raise ProductAdapterError("unsupported_cli_product")
 
     exit_code, timed_out, output_exceeded, stdout_text, duration = _run_bounded_process(
@@ -1079,7 +1079,7 @@ def _kill_product_on_parent_termination(
     SIGTERM/SIGINT synchronously to that nested group before unwinding.
     """
 
-    if os.name != "posix":  # pragma: no cover - live campaigns require Linux
+    if os.name != "posix":
         yield
         return
     previous: dict[int, Any] = {}
@@ -1121,7 +1121,7 @@ def _terminate_process(process: subprocess.Popen[Any]) -> None:
         if process.poll() is None:
             with suppress(ProcessLookupError, PermissionError):
                 os.killpg(process.pid, signal.SIGKILL)
-    else:  # pragma: no cover - Linux is the live campaign target
+    else:
         process.terminate()
         with suppress(subprocess.TimeoutExpired):
             process.wait(timeout=0.5)

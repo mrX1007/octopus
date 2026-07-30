@@ -43,7 +43,7 @@ and benchmark tests must be hermetic and use injected runners/providers; they
 must not contact a public target or launch an installed security scanner.
 
 ```bash
-venv/bin/python -m pytest -q -m "not slow and not external and not external_tools and not mysql and not platform"
+venv/bin/python -m pytest -q -m "(unit or contract) and not slow and not integration and not external_tools and not mysql and not platform"
 venv/bin/python -m pytest -q -m security
 venv/bin/python -m pytest -q -m replay
 venv/bin/python -m pytest -q tests/benchmark -m benchmark

@@ -64,6 +64,59 @@ def _lazy_module_call(module_name: str, function_name: str, *args, **kwargs):
     return function(*args, **kwargs)
 
 
+def _config_bool(section: str, name: str, default: bool = False) -> bool:
+    section_cfg = CFG.get(section, {}) if isinstance(CFG, dict) else {}
+    value = section_cfg.get(name) if isinstance(section_cfg, dict) else None
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off", ""}:
+        return False
+    return default
+
+
+def _append_auto_shodan_context(target: str, raw_scan: str) -> str:
+    """Best-effort Shodan enrichment for a direct scan when explicitly enabled."""
+    if not _config_bool("shodan", "auto_scan", False):
+        return raw_scan
+    if "[shodan" in str(raw_scan).lower():
+        return raw_scan
+    try:
+        shodan_output = _lazy_module_call("shodan_module", "run_shodan_smart", target)
+    except Exception as exc:
+        logging.warning("Automatic Shodan lookup failed for %s: %s", target, exc)
+        warn(f"Automatic Shodan lookup unavailable: {exc}")
+        return raw_scan
+    shodan_output = str(shodan_output or "").strip()
+    if not shodan_output or shodan_output.startswith("[!]"):
+        if shodan_output:
+            warn(shodan_output)
+        return raw_scan
+    info("Shodan context added automatically.")
+    parts = [part.strip() for part in (raw_scan, shodan_output) if str(part).strip()]
+    return "\n\n".join(parts) + "\n"
+
+
+def _auto_export_session(data: dict) -> bool:
+    """Generate the configured automatic PDF report without an input prompt."""
+    if not _config_bool("reporting", "auto_export", False):
+        return False
+    try:
+        path = _lazy_module_call("export", "export_pdf", data)
+    except Exception as exc:
+        logging.exception("Automatic report export failed")
+        warn(f"Automatic PDF export failed: {exc}")
+        return False
+    success(f"PDF report exported automatically: {path}")
+    return True
+
+
 def _lazy_db(function_name: str):
     def call(*args, **kwargs):
         return _lazy_module_call("db", function_name, *args, **kwargs)
@@ -379,6 +432,7 @@ def _new_scan_direct():
     divider("RECON")
     info("Choose recon tools to run:")
     raw_scan = interactive_tool_run(target)
+    raw_scan = _append_auto_shodan_context(target, raw_scan)
 
     if not raw_scan.strip():
         warn("No scan data collected. Aborting.")
@@ -487,8 +541,7 @@ def _shodan_recon_worker(index: int, total: int, target: dict) -> dict:
         recon_output = json.loads(encoded)
         if not isinstance(recon_output, dict):
             raise TypeError("recon child result must be a mapping")
-        if isinstance(recon_output, dict):
-            collected = recon_output.get(target_ip, "")
+        collected = recon_output.get(target_ip, "")
         return {
             "index": index,
             "total": total,
@@ -1709,7 +1762,8 @@ def _save_and_show_results(sl_no: int, result: dict, duration_str: str = ""):
     data = get_session(sl_no)
     print_session(data)
 
-    if confirm("Export this session?"):
+    auto_exported = _auto_export_session(data)
+    if not auto_exported and confirm("Export this session?"):
         export_menu(data)
 
     if confirm("Edit or delete anything in this session?"):

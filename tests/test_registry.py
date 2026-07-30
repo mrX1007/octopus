@@ -15,10 +15,14 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture(autouse=True)
 def clean_registry():
-    """Clear registry before each test."""
+    """Isolate registrations without erasing the process-wide built-in registry."""
+    original = dict(_REGISTRY)
     _REGISTRY.clear()
-    yield
-    _REGISTRY.clear()
+    try:
+        yield
+    finally:
+        _REGISTRY.clear()
+        _REGISTRY.update(original)
 
 
 # ─── Registration Tests ─────────────────────────
@@ -60,6 +64,94 @@ class TestToolDecorator:
 
         assert _REGISTRY["scanner"].category == "recon"
 
+    def test_rejects_normalized_canonical_collision_transactionally(self):
+        calls = []
+
+        @tool("Scanner", aliases=["scan"])
+        def original(target):
+            calls.append(target)
+
+        before = dict(_REGISTRY)
+        with pytest.raises(ValueError, match="Tool registration collision"):
+
+            @tool("  SCANNER  ", aliases=["replacement-alias"])
+            def replacement(target):
+                calls.append(target)
+
+        assert before == _REGISTRY
+        assert get_tool("scanner").func is original
+        assert get_tool("replacement-alias") is None
+        assert calls == []
+
+    def test_rejects_normalized_alias_collision_transactionally(self):
+        @tool("first", aliases=["shared-name"])
+        def first(target):
+            return target
+
+        before = dict(_REGISTRY)
+        with pytest.raises(ValueError, match="Tool registration collision"):
+
+            @tool("second", aliases=["  SHARED-NAME  "])
+            def second(target):
+                return target
+
+        assert before == _REGISTRY
+        assert get_tool("second") is None
+        assert get_tool("shared-name").func is first
+
+    @pytest.mark.parametrize(
+        "aliases",
+        [
+            [" DECLARED "],
+            ["alias", " ALIAS "],
+        ],
+    )
+    def test_rejects_intra_declaration_normalized_collisions(self, aliases):
+        before = dict(_REGISTRY)
+
+        with pytest.raises(
+            ValueError,
+            match="Tool registration collision within declaration",
+        ):
+
+            @tool("declared", aliases=aliases)
+            def rejected(target):
+                return target
+
+        assert before == _REGISTRY
+
+    @pytest.mark.parametrize(
+        ("name", "aliases"),
+        [
+            (" ", []),
+            ("declared", [" "]),
+        ],
+    )
+    def test_rejects_empty_normalized_names(self, name, aliases):
+        before = dict(_REGISTRY)
+
+        with pytest.raises(ValueError, match="names must be non-empty"):
+
+            @tool(name, aliases=aliases)
+            def rejected(target):
+                return target
+
+        assert before == _REGISTRY
+
+    def test_rejects_canonical_name_owned_by_existing_alias(self):
+        @tool("owner", aliases=["shared"])
+        def owner(target):
+            return target
+
+        before = dict(_REGISTRY)
+        with pytest.raises(ValueError, match="shared -> owner"):
+
+            @tool("  SHARED  ")
+            def rejected(target):
+                return target
+
+        assert before == _REGISTRY
+
 
 # ─── Lookup Tests ────────────────────────────────
 
@@ -96,14 +188,13 @@ class TestGetTool:
         result = get_tool("nonexistent_tool_xyz")
         assert result is None
 
-    def test_lookup_strips_run_prefix(self):
+    def test_lookup_rejects_undeclared_run_prefix(self):
         @tool("hydra", category="exploit")
         def run_hydra(target):
             pass
 
-        result = get_tool("run_hydra")
-        assert result is not None
-        assert result.name == "hydra"
+        assert get_tool("run_hydra") is None
+        assert get_tool("_run_hydra") is None
 
 
 # ─── List and Menu Tests ─────────────────────────

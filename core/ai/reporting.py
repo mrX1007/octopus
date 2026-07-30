@@ -184,16 +184,15 @@ def build_coverage_summary(facts: list[dict[str, Any]]) -> dict[str, Any]:
 
     def add_degraded(item: dict[str, Any]) -> None:
         for existing in degraded:
-            if existing.get("tool") != item.get("tool") or existing.get("status") != item.get("status"):
-                continue
-            if item.get("kind") and existing.get("kind") and item.get("kind") != existing.get("kind"):
-                continue
-            scope = item.get("scope")
-            if scope:
-                scopes = existing.setdefault("scopes", [])
-                if scope not in scopes:
-                    scopes.append(scope)
-            return
+            if existing.get("tool") == item.get("tool") and existing.get("status") == item.get("status"):
+                if item.get("kind") and existing.get("kind") and item.get("kind") != existing.get("kind"):
+                    continue
+                scope = item.get("scope")
+                if scope:
+                    scopes = existing.setdefault("scopes", [])
+                    if scope not in scopes:
+                        scopes.append(scope)
+                return
         scope = item.get("scope")
         if scope:
             item["scopes"] = [scope]
@@ -235,24 +234,22 @@ def build_coverage_summary(facts: list[dict[str, Any]]) -> dict[str, Any]:
                     "scope": check.get("scope", {}),
                     "evidence": fact.get("id"),
                 })
-            continue
-        if fact.get("type") != "service_status":
-            continue
-        value = str(fact.get("value", ""))
-        if value.startswith("tool_timeout:"):
-            tool = value.split(":", 1)[1]
-            add_degraded({
-                "tool": tool,
-                "status": "timeout",
-                "impact": f"{tool} coverage incomplete",
-                "recommended_rerun": "increase timeout or narrow templates/scope",
-            })
-        elif any(marker in value for marker in (
-            "_failed", "_skipped", "_not_vulnerable", "invalid_options",
-            "no_injection_found", "unreliable_or_patched",
-            "no_host_information", "no_get_parameters_found", "not_confirmed",
-        )):
-            add_checked({"status": value, "evidence": fact.get("id")})
+        elif fact.get("type") == "service_status":
+            value = str(fact.get("value", ""))
+            if value.startswith("tool_timeout:"):
+                tool = value.split(":", 1)[1]
+                add_degraded({
+                    "tool": tool,
+                    "status": "timeout",
+                    "impact": f"{tool} coverage incomplete",
+                    "recommended_rerun": "increase timeout or narrow templates/scope",
+                })
+            elif any(marker in value for marker in (
+                "_failed", "_skipped", "_not_vulnerable", "invalid_options",
+                "no_injection_found", "unreliable_or_patched",
+                "no_host_information", "no_get_parameters_found", "not_confirmed",
+            )):
+                add_checked({"status": value, "evidence": fact.get("id")})
     return {
         "confidence": "partial" if degraded else "normal",
         "checked_but_not_confirmed": checked,

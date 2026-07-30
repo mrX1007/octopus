@@ -2,7 +2,9 @@
 
 
 import copy
+import math
 import os
+from collections.abc import Mapping
 from typing import Optional
 
 import yaml
@@ -25,21 +27,48 @@ try:
 except ImportError:
     pass  # python-dotenv not installed — env vars still work via os.environ
 
-# Config locations are ordered from highest to lowest priority.
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_CONFIG_PATHS = [
-    os.environ.get("OCTOPUS_CONFIG", ""),
-    os.path.join(_SCRIPT_DIR, "config.yaml"),
-    os.path.expanduser("~/.octopus/config.yaml"),
-    "/etc/octopus/config.yaml",
-]
+_USER_CONFIG_PATH = "~/.octopus/config.yaml"
+_SYSTEM_CONFIG_PATH = "/etc/octopus/config.yaml"
+_BUNDLED_CONFIG_PATH = os.path.join(_SCRIPT_DIR, "config.yaml")
+
+
+class ConfigValidationError(ValueError):
+    """Raised when an explicit configuration source violates the contract."""
 
 
 def _find_config() -> str:
-    for path in _CONFIG_PATHS:
-        if path and os.path.isfile(path):
+    """Resolve config with explicit > user > system > bundled precedence."""
+
+    explicit = os.environ.get("OCTOPUS_CONFIG", "").strip()
+    if explicit:
+        explicit = os.path.abspath(os.path.expanduser(explicit))
+        if not os.path.isfile(explicit):
+            raise ConfigValidationError(
+                f"OCTOPUS_CONFIG does not reference a readable file: {explicit}"
+            )
+        return explicit
+
+    for candidate in (
+        _USER_CONFIG_PATH,
+        _SYSTEM_CONFIG_PATH,
+        _BUNDLED_CONFIG_PATH,
+    ):
+        path = os.path.abspath(os.path.expanduser(candidate))
+        if os.path.isfile(path):
             return path
     return ""
+
+
+KILLCHAIN_STAGE_KEYS: tuple[str, ...] = (
+    "vuln_assess",
+    "exploitation",
+    "privesc",
+    "persistence",
+    "lateral_movement",
+    "data_exfil",
+    "cleanup",
+)
 
 
 DEFAULTS = {
@@ -57,6 +86,7 @@ DEFAULTS = {
         "temperature": 0.4,
         "json_temperature": 0.15,
         "top_p": 0.9,
+        "top_k": 10,
         "timeout": 1200,
         "retries": 3,
         "context_window": 6,
@@ -68,6 +98,8 @@ DEFAULTS = {
         "num_ctx": 16384,
         "num_batch": 512,
         "repeat_penalty": 1.15,
+        "json_format": True,
+        "json_think": False,
     },
     "shodan": {
         "api_key": os.environ.get("SHODAN_API_KEY", ""),
@@ -87,16 +119,9 @@ DEFAULTS = {
     },
     "killchain": {
         "enabled": True,
-        "stages": {
-            "vuln_assess": True,
-            "exploitation": True,
-            "privesc": True,
-            "persistence": True,
-            "lateral_movement": True,
-            "data_exfil": True,
-            "cleanup": True,
-        },
-        "exfil_dir": "/tmp",
+        "stages": dict.fromkeys(KILLCHAIN_STAGE_KEYS, True),
+        "quick_privesc_after_root": True,
+        "credential_harvest_timeout": 25,
     },
     "bruteforce": {
         "adaptive_threads": True,
@@ -136,6 +161,7 @@ DEFAULTS = {
         "exploit_select_context_facts": 0,
         "parallel_tools": 8,
         "max_director_loops": 10,
+        "plan_enrichment_limit": 8,
         "mission": {
             "task_retry_budget": 2,
             "retryable_error_classes": [
@@ -170,6 +196,7 @@ DEFAULTS = {
         "reports": "~/OCTOPUS/reports",
         "logs": "~/OCTOPUS/logs",
         "checkpoints": "/tmp",
+        "memory": "~/OCTOPUS/memory",
         "secrets": "data/secrets.db",
     },
     "wordlists": {
@@ -207,26 +234,146 @@ DEFAULTS = {
         "test", "guest", "operator", "ftp", "www",
     ],
     "tools": {
-        "nmap":         {"default_flags": ["-sV", "-sC", "-T4", "--open", "-Pn", "-sT"], "timeout": 180},
-        "hydra":        {"threads": 4, "timeout": 300},
-        "ffuf":         {"threads": 50, "timeout": 120, "match_codes": "200,204,301,302,307,401,403"},
-        "nikto":        {"timeout": 300},
-        "sqlmap":       {"level": 1, "risk": 1, "timeout": 180},
-        "wpscan":       {"timeout": 180},
-        "enum4linux":   {"timeout": 150},
-        "sslscan":      {"timeout": 120},
-        "smbclient":    {"timeout": 45},
-        "curl":         {"timeout": 20},
-        "dig":          {"timeout": 15},
+        "nmap":         {"default_flags": ["-sV", "-sC", "-T4", "--open", "-Pn", "-sT"], "timeout": 300, "aggressive_flags": ["-A", "-T4", "-p-", "-Pn", "-sT"]},
+        "hydra":        {"threads": 16, "timeout": 600, "flags": ["-V"]},
+        "ffuf":         {"threads": 50, "timeout": 120, "match_codes": "200,204,301,302,307,401,403", "flags": ["-c"], "maxtime": 60, "request_timeout": 5},
+        "nikto":        {"timeout": 300, "flags": ["-nointeractive"]},
+        "sqlmap":       {"level": 1, "risk": 1, "timeout": 180, "flags": ["--batch", "--crawl=1"]},
+        "wpscan":       {"timeout": 180, "flags": ["--no-update", "--random-user-agent"]},
+        "enum4linux":   {"timeout": 150, "flags": ["-a"]},
+        "sslscan":      {"timeout": 120, "flags": ["--no-colour"]},
+        "smbclient":    {"timeout": 45, "flags": ["-N"]},
+        "curl":         {"timeout": 20, "flags": ["-sI", "--max-time", "10", "--location"]},
+        "dig":          {"timeout": 15, "record_types": ["A", "MX", "NS", "TXT", "AAAA", "CNAME"]},
         "whois":        {"timeout": 30},
-        "whatweb":      {"timeout": 90},
+        "whatweb":      {"timeout": 90, "aggression": 3},
         "searchsploit": {"timeout": 30, "max_results": 20},
         "msfconsole":   {"timeout": 300},
+        "gobuster":     {"threads": 50, "timeout": 180, "flags": []},
+        "dirb":         {"timeout": 180, "flags": []},
+        "nuclei":       {"timeout": 1200, "request_timeout": 20, "retries": 2, "severity": "info,low,medium,high,critical", "exclude_tags": "dos,fuzz,bruteforce,intrusive,destructive"},
     },
 }
 
 
-def _matches_default_type(value, default) -> bool:
+_EMPTY_LIST_ITEM_TYPES: dict[tuple[str, ...], type] = {
+    ("strategy", "authorized_targets"): str,
+    ("wordlists", "dns"): str,
+    ("wordlists", "snmp"): str,
+    ("wordlists", "ftp_passwords"): str,
+    ("wordlists", "ssh_passwords"): str,
+    ("wordlists", "http_default_creds"): str,
+    ("wordlists", "sqli"): str,
+    ("wordlists", "xss"): str,
+    ("wordlists", "lfi"): str,
+    ("tools", "gobuster", "flags"): str,
+    ("tools", "dirb", "flags"): str,
+}
+
+_NUMERIC_RANGES: dict[
+    tuple[str, ...], tuple[Optional[float], Optional[float]]
+] = {
+    ("ollama", "max_tokens"): (1, None),
+    ("ollama", "json_max_tokens"): (1, None),
+    ("ollama", "temperature"): (0, 2),
+    ("ollama", "json_temperature"): (0, 2),
+    ("ollama", "top_p"): (0, 1),
+    ("ollama", "top_k"): (1, None),
+    ("ollama", "timeout"): (1, None),
+    ("ollama", "retries"): (0, None),
+    ("ollama", "context_window"): (1, None),
+    ("ollama", "max_tool_loops"): (1, None),
+    ("ollama", "summarize_threshold"): (512, None),
+    ("ollama", "concurrent_tools"): (1, 256),
+    ("ollama", "num_threads"): (1, None),
+    ("ollama", "num_ctx"): (1, None),
+    ("ollama", "num_batch"): (1, None),
+    ("ollama", "repeat_penalty"): (0.01, None),
+    ("shodan", "max_results"): (1, None),
+    ("shodan", "timeout"): (1, None),
+    ("hash_cracker", "gpu_device"): (0, None),
+    ("hash_cracker", "workload"): (1, 4),
+    ("hash_cracker", "timeout"): (1, None),
+    ("hash_cracker", "max_wordlist_size"): (1, None),
+    ("killchain", "credential_harvest_timeout"): (1, 3600),
+    ("bruteforce", "max_retries"): (0, None),
+    ("bruteforce", "ssh_wait_W"): (0, None),
+    ("bruteforce", "ssh_wait_w"): (0, None),
+    ("bruteforce", "cooldown_between_tiers"): (0, None),
+    ("strategy", "max_bruteforce_time"): (0, None),
+    ("strategy", "max_active_msf_runs_per_scan"): (0, None),
+    ("strategy", "fact_action_max_depth"): (0, None),
+    ("strategy", "fact_action_max_commands"): (0, None),
+    ("strategy", "fact_action_batch_commands"): (0, None),
+    ("strategy", "verification_followup_commands"): (0, None),
+    ("strategy", "searchsploit_followup_queries"): (0, None),
+    ("strategy", "web_surface_endpoint_limit"): (0, None),
+    ("strategy", "web_surface_followup_commands"): (0, None),
+    ("strategy", "web_path_followup_commands"): (0, None),
+    ("strategy", "web_link_followup_commands"): (0, None),
+    ("strategy", "web_link_url_limit"): (0, None),
+    ("strategy", "exploit_select_context_facts"): (0, None),
+    ("strategy", "parallel_tools"): (1, 256),
+    ("strategy", "max_director_loops"): (1, None),
+    ("strategy", "plan_enrichment_limit"): (0, None),
+    ("strategy", "mission", "task_retry_budget"): (0, None),
+    ("strategy", "mission", "max_state_replans"): (0, None),
+    ("scrapling", "timeout"): (1, None),
+    ("scrapling", "max_crawl_pages"): (1, None),
+}
+
+for _tool_name, _tool_defaults in DEFAULTS["tools"].items():
+    _NUMERIC_RANGES[("tools", _tool_name, "timeout")] = (0, None)
+    if "threads" in _tool_defaults:
+        _NUMERIC_RANGES[("tools", _tool_name, "threads")] = (1, 256)
+    if "request_timeout" in _tool_defaults:
+        _NUMERIC_RANGES[("tools", _tool_name, "request_timeout")] = (1, None)
+    if "retries" in _tool_defaults:
+        _NUMERIC_RANGES[("tools", _tool_name, "retries")] = (0, None)
+
+_NUMERIC_RANGES.update(
+    {
+        ("tools", "ffuf", "maxtime"): (0, None),
+        ("tools", "sqlmap", "level"): (1, 5),
+        ("tools", "sqlmap", "risk"): (1, 3),
+        ("tools", "whatweb", "aggression"): (1, 4),
+        ("tools", "searchsploit", "max_results"): (1, None),
+    }
+)
+
+_NUMERIC_LIST_RANGES: dict[
+    tuple[str, ...], tuple[Optional[float], Optional[float]]
+] = {
+    ("bruteforce", "ssh_thread_levels"): (1, 256),
+    ("bruteforce", "backoff_seconds"): (0, None),
+}
+
+
+def _path_label(path: tuple[str, ...]) -> str:
+    return ".".join(path) or "<root>"
+
+
+def _expected_type_name(default) -> str:
+    if isinstance(default, bool):
+        return "boolean"
+    if isinstance(default, int):
+        return "integer"
+    if isinstance(default, float):
+        return "number"
+    if isinstance(default, str):
+        return "string"
+    if isinstance(default, list):
+        return "list"
+    if isinstance(default, dict):
+        return "mapping"
+    return type(default).__name__
+
+
+def _matches_default_type(
+    value,
+    default,
+    path: tuple[str, ...] = (),
+) -> bool:
     """Return whether a configured value is compatible with a known default."""
     if isinstance(default, bool):
         return isinstance(value, bool)
@@ -241,47 +388,132 @@ def _matches_default_type(value, default) -> bool:
             return False
         if default:
             exemplar = default[0]
-            return all(_matches_default_type(item, exemplar) for item in value)
-        return True
+            return all(_matches_default_type(item, exemplar, path) for item in value)
+        item_type = _EMPTY_LIST_ITEM_TYPES.get(path)
+        return not value if item_type is None else all(
+            isinstance(item, item_type) for item in value
+        )
     if isinstance(default, dict):
         return isinstance(value, dict)
     return isinstance(value, type(default))
 
 
-def _deep_merge(base: dict, override: dict) -> dict:
-    """Merge a mapping into a detached copy, retaining valid known-key types."""
-    if not isinstance(base, dict) or not isinstance(override, dict):
-        raise TypeError("configuration base and override must be mappings")
+def _validate_value(path: tuple[str, ...], value) -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ConfigValidationError(
+            f"{_path_label(path)} must be finite; got {value!r}"
+        )
+
+    bounds = _NUMERIC_RANGES.get(path)
+    if bounds is not None:
+        minimum, maximum = bounds
+        if minimum is not None and value < minimum:
+            raise ConfigValidationError(
+                f"{_path_label(path)} must be >= {minimum:g}; got {value!r}"
+            )
+        if maximum is not None and value > maximum:
+            raise ConfigValidationError(
+                f"{_path_label(path)} must be <= {maximum:g}; got {value!r}"
+            )
+
+    list_bounds = _NUMERIC_LIST_RANGES.get(path)
+    if list_bounds is not None:
+        minimum, maximum = list_bounds
+        for index, item in enumerate(value):
+            if minimum is not None and item < minimum:
+                raise ConfigValidationError(
+                    f"{_path_label(path)}[{index}] must be >= {minimum:g}; "
+                    f"got {item!r}"
+                )
+            if maximum is not None and item > maximum:
+                raise ConfigValidationError(
+                    f"{_path_label(path)}[{index}] must be <= {maximum:g}; "
+                    f"got {item!r}"
+                )
+
+
+def _deep_merge(
+    base: Mapping,
+    override: Mapping,
+    *,
+    _path: tuple[str, ...] = (),
+) -> dict:
+    """Strictly merge a validated mapping into a detached defaults copy."""
+    if not isinstance(base, Mapping) or not isinstance(override, Mapping):
+        raise ConfigValidationError(
+            f"{_path_label(_path)} must be a mapping"
+        )
     result = copy.deepcopy(base)
     for key, value in override.items():
-        if key in base and isinstance(base[key], dict):
-            if isinstance(value, dict):
-                result[key] = _deep_merge(base[key], value)
-        elif key in base:
-            if _matches_default_type(value, base[key]):
-                result[key] = copy.deepcopy(value)
-        else:
-            # Unknown extension keys have no schema, but must still be detached.
-            result[key] = copy.deepcopy(value)
+        path = (*_path, str(key))
+        if key not in base:
+            if _path == ("killchain", "stages"):
+                allowed = ", ".join(KILLCHAIN_STAGE_KEYS)
+                raise ConfigValidationError(
+                    f"unknown killchain stage {_path_label(path)!r}; "
+                    f"allowed stages: {allowed}"
+                )
+            raise ConfigValidationError(
+                f"unknown configuration key {_path_label(path)!r}"
+            )
+
+        default = base[key]
+        if isinstance(default, dict):
+            if not isinstance(value, Mapping):
+                raise ConfigValidationError(
+                    f"{_path_label(path)} must be a mapping; "
+                    f"got {type(value).__name__}"
+                )
+            result[key] = _deep_merge(default, value, _path=path)
+            continue
+
+        if not _matches_default_type(value, default, path):
+            raise ConfigValidationError(
+                f"{_path_label(path)} must be {_expected_type_name(default)}; "
+                f"got {type(value).__name__}"
+            )
+        _validate_value(path, value)
+        result[key] = copy.deepcopy(value)
     return result
 
 
+def _env_int(name: str, path: tuple[str, ...]) -> Optional[int]:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigValidationError(
+            f"environment variable {name} must be an integer; got {raw!r}"
+        ) from exc
+    _validate_value(path, value)
+    return value
+
+
 def load_config() -> dict:
-    """Load config.yaml and merge with defaults. Returns final config dict."""
+    """Load and strictly validate the highest-precedence config source."""
     config_path = _find_config()
 
     if config_path:
         try:
-            with open(config_path) as f:
+            with open(config_path, encoding="utf-8") as f:
                 user_config = yaml.safe_load(f)
             if user_config is None:
                 user_config = {}
-            if not isinstance(user_config, dict):
-                raise TypeError("the top-level YAML value must be a mapping")
+            if not isinstance(user_config, Mapping):
+                raise ConfigValidationError(
+                    "the top-level YAML value must be a mapping"
+                )
             cfg = _deep_merge(DEFAULTS, user_config)
-        except Exception as e:
-            print(f"\033[93m[!] Failed to load {config_path}: {e}. Using defaults.\033[0m")
-            cfg = copy.deepcopy(DEFAULTS)
+        except ConfigValidationError as exc:
+            raise ConfigValidationError(
+                f"invalid configuration in {config_path}: {exc}"
+            ) from exc
+        except Exception as exc:
+            raise ConfigValidationError(
+                f"failed to read configuration {config_path}: {exc}"
+            ) from exc
     else:
         print("\033[93m[!] No config.yaml found. Using built-in defaults.\033[0m")
         cfg = copy.deepcopy(DEFAULTS)
@@ -301,10 +533,12 @@ def load_config() -> dict:
         cfg["ollama"]["url"] = os.environ["OCTOPUS_OLLAMA_URL"]
     if os.environ.get("OCTOPUS_OLLAMA_MODEL"):
         cfg["ollama"]["model"] = os.environ["OCTOPUS_OLLAMA_MODEL"]
-    if os.environ.get("OCTOBENCH_OLLAMA_CONTEXT_LENGTH"):
-        cfg["ollama"]["num_ctx"] = int(
-            os.environ["OCTOBENCH_OLLAMA_CONTEXT_LENGTH"]
-        )
+    env_num_ctx = _env_int(
+        "OCTOBENCH_OLLAMA_CONTEXT_LENGTH",
+        ("ollama", "num_ctx"),
+    )
+    if env_num_ctx is not None:
+        cfg["ollama"]["num_ctx"] = env_num_ctx
 
     return cfg
 

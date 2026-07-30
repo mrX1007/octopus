@@ -963,16 +963,12 @@ class KnowledgeGraph:
         # BFS
         all_paths = []
         queue = deque([(src_id, [src_id])])
-        visited_paths = set()
 
         while queue:
             current, path = queue.popleft()
 
             if current == dst_id:
-                path_key = "->".join(path)
-                if path_key not in visited_paths:
-                    visited_paths.add(path_key)
-                    all_paths.append(path)
+                all_paths.append(path)
                 continue
 
             if len(path) > max_depth * 2:  # node-edge-node = 2 per hop
@@ -1044,23 +1040,24 @@ class KnowledgeGraph:
                 assessment_refs = [assessment_refs]
             if not isinstance(evidence_fact_ids, list):
                 evidence_fact_ids = [evidence_fact_ids]
-            if not assessment_refs or not evidence_fact_ids:
-                continue
-            source_execution_ids = (
-                item.get("current_source_execution_ids")
-                or item.get("source_execution_ids")
-                or []
-            )
-            if not isinstance(source_execution_ids, list):
-                source_execution_ids = [source_execution_ids]
-            chain.append({
-                "fact_id": item.get("fact_id"),
-                "assessment_id": item.get("assessment_id") or assessment_refs[-1],
-                "assessment_status": str(item.get("assessment_status") or "observed"),
-                "confidence": int(item.get("confidence", 0) or 0),
-                "evidence_fact_ids": list(dict.fromkeys(evidence_fact_ids)),
-                "source_execution_ids": list(dict.fromkeys(source_execution_ids)),
-            })
+            if assessment_refs and evidence_fact_ids:
+                source_execution_ids = (
+                    item.get("current_source_execution_ids")
+                    or item.get("source_execution_ids")
+                    or []
+                )
+                if not isinstance(source_execution_ids, list):
+                    source_execution_ids = [source_execution_ids]
+                chain.append({
+                    "fact_id": item.get("fact_id"),
+                    "assessment_id": item.get("assessment_id") or assessment_refs[-1],
+                    "assessment_status": str(
+                        item.get("assessment_status") or "observed"
+                    ),
+                    "confidence": int(item.get("confidence", 0) or 0),
+                    "evidence_fact_ids": list(dict.fromkeys(evidence_fact_ids)),
+                    "source_execution_ids": list(dict.fromkeys(source_execution_ids)),
+                })
         if not chain:
             return False, "missing_evidence_chain", []
         return True, "", chain
@@ -1180,12 +1177,10 @@ class KnowledgeGraph:
             nodes: list[str] = [source]
             steps: list[dict[str, Any]] = []
             for edge in raw_path:
-                supported, _reason, chain = self._edge_support(
+                _supported, _reason, chain = self._edge_support(
                     edge["properties"],
                     include_inferred=include_inferred,
                 )
-                if not supported:
-                    continue
                 nodes.append(edge["dst"])
                 steps.append({
                     "from": edge["src"],
@@ -1274,14 +1269,13 @@ class KnowledgeGraph:
         # Direct trust relationships
         trust_edges = self.get_edges_from(asset_id, EdgeType.TRUSTS)
         for edge in trust_edges:
-            if edge["dst"] not in seen:
-                seen.add(edge["dst"])
-                node = self.get_node(edge["dst"])
-                targets.append({
-                    "target": edge["dst"],
-                    "method": "trust",
-                    "details": node["properties"] if node else {},
-                })
+            seen.add(edge["dst"])
+            node = self.get_node(edge["dst"])
+            targets.append({
+                "target": edge["dst"],
+                "method": "trust",
+                "details": node["properties"] if node else {},
+            })
 
         # Pivot via shared credentials
         # Get all creds for this host, then find other hosts they can access

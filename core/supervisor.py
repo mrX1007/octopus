@@ -772,7 +772,7 @@ def cli():
         else:
             print("OCTOPUS is not running")
 
-    elif args.action == "health":
+    else:  # argparse choices guarantee the remaining action is "health"
         pid = Supervisor.get_pid()
         if not pid or not Supervisor._is_pid_alive(pid):
             print("OCTOPUS is not running")

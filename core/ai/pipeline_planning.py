@@ -19,6 +19,7 @@ from core.execution import (
     CAP_REGISTERED_TOOL,
     ExecutionContext,
 )
+from core.runtime_config import effective_runtime_limit
 
 
 class PipelinePlanningMixin(PipelineMixinBase):
@@ -39,6 +40,26 @@ class PipelinePlanningMixin(PipelineMixinBase):
         except (TypeError, ValueError):
             return None
         return None if parsed <= 0 else parsed
+
+    def _iteration_limit(self, requested):
+        """Combine the caller limit with the configured Director-loop cap."""
+
+        try:
+            from config import CFG
+        except ImportError:
+            CFG = {}
+        configured = (CFG.get("strategy") or {}).get("max_director_loops")
+        return effective_runtime_limit(requested, configured)
+
+    def _tool_limit(self, requested):
+        """Combine the caller budget with the configured tool-execution cap."""
+
+        try:
+            from config import CFG
+        except ImportError:
+            CFG = {}
+        configured = (CFG.get("ollama") or {}).get("max_tool_loops")
+        return effective_runtime_limit(requested, configured)
 
     def _execution_context(self, scan_id: str, target: str) -> ExecutionContext:
         """Bind automatic commands to the current scan target and origin."""
@@ -330,12 +351,21 @@ class PipelinePlanningMixin(PipelineMixinBase):
             "internal_recon_completed",
             "exfiltration_completed",
         }
+        from core.killchain.policy import automated_stage_enabled
+
+        killchain_allowed = {
+            stage: automated_stage_enabled(stage)
+            for stage in ("persistence", "data_exfil", "cleanup")
+        }
         if goal == "post_access_inventory" and state in post_states:
             return [
                 {"agent": "VerificationAgent", "task": "post_access_inventory"}
             ]
         if goal == "persistence" and state in post_states:
-            if not self._strategy_enabled("auto_persistence", False):
+            if (
+                not self._strategy_enabled("auto_persistence", False)
+                or not killchain_allowed["persistence"]
+            ):
                 return []
             plan = []
             if self._strategy_enabled("auto_payload_generation", False):
@@ -360,11 +390,17 @@ class PipelinePlanningMixin(PipelineMixinBase):
                 {"agent": "VerificationAgent", "task": "internal_network_recon"}
             ]
         if goal == "data_exfiltration" and state in post_states:
-            if not self._strategy_enabled("auto_data_exfil", False):
+            if (
+                not self._strategy_enabled("auto_data_exfil", False)
+                or not killchain_allowed["data_exfil"]
+            ):
                 return []
             return [{"agent": "VerificationAgent", "task": "exfiltrate_data"}]
         if goal == "cleanup" and state in post_states:
-            if not self._strategy_enabled("auto_cleanup", False):
+            if (
+                not self._strategy_enabled("auto_cleanup", False)
+                or not killchain_allowed["cleanup"]
+            ):
                 return []
             return [{"agent": "VerificationAgent", "task": "stealth_cleanup"}]
         return None
@@ -466,6 +502,8 @@ class PipelinePlanningMixin(PipelineMixinBase):
             and len(plan) <= 3
             and "cpanel_assessment" in candidates
         )
+        enrichment_limit = self._plan_enrichment_limit()
+        noncritical_added = 0
         for task in self._rank_candidate_tasks(
             candidates,
             context,
@@ -485,8 +523,8 @@ class PipelinePlanningMixin(PipelineMixinBase):
             ):
                 continue
             is_critical = task in critical_candidates
-            if len(enriched) >= self._plan_enrichment_limit() and not is_critical:
-                break
+            if not is_critical and noncritical_added >= enrichment_limit:
+                continue
             if task in present or self._task_exhausted(task):
                 continue
             if not self.tool_registry.task_has_available_tools(task):
@@ -501,13 +539,13 @@ class PipelinePlanningMixin(PipelineMixinBase):
             )
             enriched.insert(insert_at, {"agent": "DiscoveryAgent", "task": task})
             present.add(task)
+            if not is_critical:
+                noncritical_added += 1
             print(
                 f"[*] Plan enriched with {task} "
                 f"from context services={sorted(services)}"
             )
-            if (
-                short_specialized_vuln_plan and task == "cpanel_assessment"
-            ) or len(enriched) > self._plan_enrichment_limit():
+            if short_specialized_vuln_plan and task == "cpanel_assessment":
                 self._trim_low_priority_enrichment(enriched, protected={task})
 
         if (
@@ -768,7 +806,7 @@ class PipelinePlanningMixin(PipelineMixinBase):
             value = int(raw)
         except (TypeError, ValueError):
             return 8
-        return max(3, value)
+        return max(0, value)
 
     def _target_looks_domain(self, target: str) -> bool:
         from core.tools.targeting import target_looks_domain
