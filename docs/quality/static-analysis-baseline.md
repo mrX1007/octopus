@@ -231,3 +231,39 @@ so changing the mode without resolving the inventory would make the required
 static-analysis job red. The next safe migration must remove this global skip
 while fixing or explicitly owning each newly followed module; it must not hide
 the inventory behind a broader ignore.
+
+## Expanded direct and import-aware ratchets (2026-08-01)
+
+The configured direct-check boundary now covers 197 of 236 first-party Python
+sources discovered by the coverage gate, up from 90 sources. The expansion
+checks all of `core/ai`, `core/cli`, and `core/knowledge`, plus clean C2,
+killchain, OSINT, tooling, transport, entrypoint, packaging, and quality-gate
+modules. It adds no `type: ignore`, per-file suppression, or excluded source
+tree:
+
+```text
+venv/bin/python -m mypy --no-incremental
+Success: no issues found in 197 source files
+```
+
+The primary breadth ratchet retains `follow_imports = "skip"` while its known
+dependency backlog is resolved. Enabling normal import traversal even for the
+`core/actions` and `core/execution` boundary currently exposes 136 errors in 26
+transitive files. Those errors include missing third-party stubs and existing
+types in configuration, C2, killchain, and tool modules; they are not hidden by
+new suppressions in this revision.
+
+To make import traversal itself a required ratchet, CI also runs a separate
+configuration over nine isolated runtime and quality-infrastructure leaves.
+That gate uses `follow_imports = normal`, does not enable
+`ignore_missing_imports`, and is green without suppressions:
+
+```text
+venv/bin/python -m mypy --config-file quality/mypy-import-aware.ini --no-incremental
+Success: no issues found in 9 source files
+```
+
+This remains incremental static assurance rather than a whole-tree
+type-safety claim. The next expansion should first resolve the recorded
+transitive inventory, then move additional package boundaries from the broad
+direct-check gate into the import-aware gate.

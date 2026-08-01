@@ -1,0 +1,137 @@
+name: ollama-scanner-lab-e2e
+
+on:
+  schedule:
+    - cron: "41 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ollama-scanner-lab-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUNBUFFERED: "1"
+  OLLAMA_VERSION: "0.18.3"
+  OLLAMA_HOST: "127.0.0.1:11434"
+  OLLAMA_NUM_PARALLEL: "1"
+  OLLAMA_MAX_LOADED_MODELS: "1"
+  OCTOPUS_OLLAMA_URL: "http://127.0.0.1:11434/api/generate"
+  OCTOPUS_OLLAMA_MODEL: "qwen2.5:0.5b"
+  OCTOPUS_E2E_MODEL_ID_PREFIX: "a8b0c5157701"
+  OCTOPUS_E2E_OLLAMA_VERSION: "0.18.3"
+  OCTOBENCH_OLLAMA_CONTEXT_LENGTH: "4096"
+  OCTOPUS_E2E_TARGET: "127.0.0.1"
+  OCTOPUS_E2E_PORT: "18080"
+  OCTOPUS_RUN_OLLAMA_LAB_E2E: "1"
+  OCTOPUS_E2E_ARTIFACT_DIR: "artifacts/ollama-scanner-lab-e2e"
+
+jobs:
+  live-e2e:
+    name: Octopus + Ollama + Nmap + vulnerable lab
+    runs-on: ubuntu-22.04
+    timeout-minutes: 55
+    steps:
+      - name: Checkout pinned dependencies
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Prepare artifact directory
+        run: mkdir -p "${OCTOPUS_E2E_ARTIFACT_DIR}"
+
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes nmap zstd
+
+      - name: Install locked Python profile
+        run: |
+          python scripts/lock_requirements.py validate
+          python -m pip install --require-hashes -r requirements/locks/linux-x86_64/cp312/full.txt
+          python -m pip check
+
+      - name: Install checksum-verified Ollama release
+        run: |
+          ollama_dist="${RUNNER_TEMP}/ollama-dist"
+          ollama_root="${RUNNER_TEMP}/ollama-root"
+          mkdir -p "${ollama_dist}" "${ollama_root}"
+          curl --fail --location --retry 5 --retry-all-errors \
+            "https://github.com/ollama/ollama/releases/download/v${OLLAMA_VERSION}/ollama-linux-amd64.tar.zst" \
+            --output "${ollama_dist}/ollama-linux-amd64.tar.zst"
+          curl --fail --location --retry 5 --retry-all-errors \
+            "https://github.com/ollama/ollama/releases/download/v${OLLAMA_VERSION}/sha256sum.txt" \
+            --output "${ollama_dist}/sha256sum.txt"
+          grep ' ollama-linux-amd64.tar.zst$' "${ollama_dist}/sha256sum.txt" \
+            > "${ollama_dist}/ollama-linux-amd64.sha256"
+          test -s "${ollama_dist}/ollama-linux-amd64.sha256"
+          (cd "${ollama_dist}" && sha256sum --check --strict ollama-linux-amd64.sha256)
+          tar --zstd --extract --file "${ollama_dist}/ollama-linux-amd64.tar.zst" \
+            --directory "${ollama_root}"
+          echo "${ollama_root}/bin" >> "${GITHUB_PATH}"
+          echo "LD_LIBRARY_PATH=${ollama_root}/lib/ollama" >> "${GITHUB_ENV}"
+
+      - name: Start Ollama and attest the model
+        run: |
+          nohup ollama serve > "${OCTOPUS_E2E_ARTIFACT_DIR}/ollama.log" 2>&1 &
+          echo "$!" > "${OCTOPUS_E2E_ARTIFACT_DIR}/ollama.pid"
+          for attempt in $(seq 1 90); do
+            if curl --fail --silent "http://${OLLAMA_HOST}/api/version" \
+              > "${OCTOPUS_E2E_ARTIFACT_DIR}/ollama-version.json"; then
+              break
+            fi
+            sleep 2
+          done
+          curl --fail --silent "http://${OLLAMA_HOST}/api/version"
+          ollama pull "${OCTOPUS_OLLAMA_MODEL}"
+          curl --fail --silent "http://${OLLAMA_HOST}/api/tags" \
+            > "${OCTOPUS_E2E_ARTIFACT_DIR}/ollama-tags.json"
+          python -c 'import json, os, pathlib; data=json.loads(pathlib.Path(os.environ["OCTOPUS_E2E_ARTIFACT_DIR"], "ollama-tags.json").read_text()); model=os.environ["OCTOPUS_OLLAMA_MODEL"]; item=next((x for x in data.get("models", []) if (x.get("name") or x.get("model")) == model), None); assert item is not None; assert str(item.get("digest", "")).removeprefix("sha256:").startswith(os.environ["OCTOPUS_E2E_MODEL_ID_PREFIX"])'
+
+      - name: Start isolated vulnerable lab
+        run: |
+          docker compose --file tests/integration/ollama_scanner_lab/compose.yaml \
+            up --detach --build --wait --wait-timeout 120
+          curl --fail --silent "http://${OCTOPUS_E2E_TARGET}:${OCTOPUS_E2E_PORT}/__health"
+
+      - name: Run live end-to-end assertion
+        run: >-
+          python -m pytest -q -m 'integration and external_tools and slow'
+          tests/integration/test_ollama_scanner_lab_e2e.py
+
+      - name: Capture service diagnostics
+        if: always()
+        run: |
+          docker compose --file tests/integration/ollama_scanner_lab/compose.yaml logs \
+            > "${OCTOPUS_E2E_ARTIFACT_DIR}/vulnerable-lab.log" 2>&1 || true
+          nmap --version > "${OCTOPUS_E2E_ARTIFACT_DIR}/nmap-version.txt" 2>&1 || true
+          ollama --version > "${OCTOPUS_E2E_ARTIFACT_DIR}/ollama-cli-version.txt" 2>&1 || true
+          docker version > "${OCTOPUS_E2E_ARTIFACT_DIR}/docker-version.txt" 2>&1 || true
+
+      - name: Stop isolated services
+        if: always()
+        run: |
+          docker compose --file tests/integration/ollama_scanner_lab/compose.yaml \
+            down --volumes --remove-orphans || true
+          if test -f "${OCTOPUS_E2E_ARTIFACT_DIR}/ollama.pid"; then
+            kill "$(cat "${OCTOPUS_E2E_ARTIFACT_DIR}/ollama.pid")" || true
+          fi
+
+      - name: Upload end-to-end evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ollama-scanner-lab-e2e-${{ github.run_id }}
+          path: artifacts/ollama-scanner-lab-e2e
+          if-no-files-found: error
+          retention-days: 14

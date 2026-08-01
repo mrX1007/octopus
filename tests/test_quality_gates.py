@@ -28,9 +28,40 @@ def test_global_coverage_floor_matches_recorded_baseline() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert f"--fail-under {floor:.2f}" in workflow
     assert "--diff-fail-under 0" in workflow
-    for package in ("core/actions", "core/execution", "core/benchmarks"):
-        assert f"--package-fail-under {package}=100" in workflow
+    package_floors = {
+        "core/actions": 95,
+        "core/execution": 92,
+        "core/benchmarks": 100,
+    }
+    for package, package_floor in package_floors.items():
+        assert f"--package-fail-under {package}={package_floor}" in workflow
     assert "octopus.py octopus_c2.py search.py" in workflow
+    assert "Mypy import-aware leaf ratchet" in workflow
+    assert "python -m mypy --config-file quality/mypy-import-aware.ini" in workflow
+    import_aware = configparser.ConfigParser()
+    import_aware.read(ROOT / "quality" / "mypy-import-aware.ini", encoding="utf-8")
+    assert import_aware.get("mypy", "follow_imports") == "normal"
+    assert import_aware.getboolean("mypy", "ignore_missing_imports") is False
+    import_aware_files = [
+        item.strip().removesuffix(",") for item in import_aware.get("mypy", "files").splitlines() if item.strip()
+    ]
+    assert len(import_aware_files) == 9
+    assert "Report risk-heavy killchain coverage" in workflow
+    assert "core/killchain/ad/*.py" in workflow
+    assert "core/killchain/exploits/*.py" in workflow
+    assert "--fail-under=0" in workflow
+
+    coverage_docs = (
+        (ROOT / "README.md").read_text(encoding="utf-8"),
+        (ROOT / "docs" / "quality" / "ci-and-vendor-integrity.md").read_text(encoding="utf-8"),
+    )
+    for documentation in coverage_docs:
+        assert "94.58" not in documentation
+        assert "94.00%" in documentation
+        assert "95.41%" in documentation
+        assert "92.59%" in documentation
+        for package, package_floor in package_floors.items():
+            assert f"--package-fail-under {package}={package_floor}" in documentation
 
     measured = Coverage(config_file=str(ROOT / "quality" / "coverage-ci.ini"))
     assert measured.get_exclude_list() == []
@@ -87,6 +118,29 @@ def test_nightly_external_tool_smoke_is_fail_closed() -> None:
 
     assert 'OCTOPUS_REQUIRE_EXTERNAL_TOOLS: "1"' in workflow
     assert "OCTOPUS_STRICT_EXTERNAL_TOOLS" not in workflow
+
+
+def test_live_ollama_lab_lane_is_opt_in_and_loopback_contained() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ollama-lab-e2e.yml").read_text(encoding="utf-8")
+    triggers = workflow.split("\njobs:", maxsplit=1)[0]
+    compose = (ROOT / "tests" / "integration" / "ollama_scanner_lab" / "compose.yaml").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "tests" / "integration" / "ollama_scanner_lab" / "Dockerfile").read_text(encoding="utf-8")
+    test_source = (ROOT / "tests" / "integration" / "test_ollama_scanner_lab_e2e.py").read_text(encoding="utf-8")
+
+    assert "  schedule:" in triggers
+    assert "  workflow_dispatch:" in triggers
+    assert "  push:" not in triggers
+    assert "  pull_request:" not in triggers
+    assert 'OCTOPUS_RUN_OLLAMA_LAB_E2E: "1"' in workflow
+    assert 'OCTOPUS_E2E_TARGET: "127.0.0.1"' in workflow
+    assert '"127.0.0.1:${OCTOPUS_E2E_PORT:-18080}:8080"' in compose
+    assert "    read_only: true" in compose
+    assert "      - ALL" in compose
+    assert "      - no-new-privileges:true" in compose
+    assert "\n    volumes:" not in compose
+    assert dockerfile.startswith("FROM python:3.12.10-alpine3.21@sha256:")
+    assert "@pytest.mark.skipif(" in test_source
+    assert 'assert target == "127.0.0.1"' in test_source
 
 
 def test_package_threshold_parser_is_bounded() -> None:

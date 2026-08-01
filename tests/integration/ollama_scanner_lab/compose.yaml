@@ -1,0 +1,32 @@
+services:
+  vulnerable-http-lab:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: octopus/ollama-scanner-lab:1.0
+    init: true
+    restart: "no"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=8m
+    pids_limit: 32
+    mem_limit: 96m
+    cpus: 0.50
+    ports:
+      - "127.0.0.1:${OCTOPUS_E2E_PORT:-18080}:8080"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          urllib.request.urlopen('http://127.0.0.1:8080/__health', timeout=1).read()
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 2s

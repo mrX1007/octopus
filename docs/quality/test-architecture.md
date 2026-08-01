@@ -68,3 +68,25 @@ console-script shebangs even when its Python interpreter is valid.
 
 External tests must state prerequisites and safe target fixtures. They are not
 part of replay benchmarks and must never default to a public target.
+
+## Current integration and risk evidence
+
+Before the dedicated live lane was introduced, the repository collected only
+13 tests carrying the `integration` marker. This revision adds one explicitly
+opt-in scenario that crosses all of these live boundaries:
+
+```text
+Octopus policy dispatcher -> real Nmap -> loopback vulnerable lab
+live Ollama -> AIPipeline -> validated machine report + trace artifact
+```
+
+It runs weekly or via `workflow_dispatch`, never on an arbitrary/public target,
+and remains outside the mandatory push/PR suite. See
+`docs/integration/ollama-scanner-lab-e2e.md` for exact prerequisites and
+containment controls.
+
+The aggregate coverage gate is supplemented by a non-blocking per-module
+killchain table and focused hermetic tests for denial, input validation, error
+mapping, cleanup, bounded output, and optional-dependency absence. These tests
+improve executable-path evidence without claiming that mocked branches replace
+live authorization, scanner, target, or model boundaries.
