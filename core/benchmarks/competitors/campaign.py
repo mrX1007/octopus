@@ -30,6 +30,7 @@ from ..schema import (
 from ..v3.analysis import AnalysisPlan
 from ..v3.publication import publish_v3_results, verify_v3_results
 from ..v3.schema import BenchmarkRunV3, BenchmarkV3SchemaError
+from ..v4 import EfficiencyPlan
 from .lab import (
     CommandLabController,
     LabCommand,
@@ -58,6 +59,7 @@ from .v3_integration import (
     fixture_reveals,
     planned_fixture_seed,
     validate_campaign_plan,
+    validate_efficiency_campaign_plan,
 )
 
 CAMPAIGN_CONFIG_SCHEMA_VERSION = "1.0"
@@ -320,6 +322,17 @@ def run_campaign(
         if resolved.benchmark_v3 is not None
         else None
     )
+    efficiency_plan = _configured_efficiency_plan(resolved)
+    if efficiency_plan is not None:
+        if v3_plan is None:
+            raise BenchmarkV3SchemaError("efficiency_plan_requires_v3_plan")
+        validate_efficiency_campaign_plan(
+            efficiency_plan,
+            source_plan=v3_plan,
+            system_ids=tuple(item.system_id for item in manifests),
+            scenario_ids=tuple(item.scenario_id for item in scenarios),
+            repetitions=resolved.repetitions,
+        )
     effective_environment = _effective_environment(resolved, environment)
     required_environment = tuple(
         sorted(
@@ -360,6 +373,7 @@ def run_campaign(
         manifests,
         scenarios,
         v3_plan=v3_plan,
+        efficiency_plan=efficiency_plan,
     )
     controller_source_identity = _controller_source_identity()
     fingerprint = campaign_fingerprint(
@@ -483,6 +497,7 @@ def run_campaign(
                             started_at=started_at,
                             finished_at=float(result["finished_at"]),
                             reset_attestation=attestation.to_dict(),
+                            efficiency_plan=efficiency_plan,
                         )
                         if resolved.benchmark_v3 is not None and v3_plan is not None
                         else None
@@ -568,6 +583,12 @@ def run_campaign(
             for run in aggregate.runs
         )
         v3_runs = _journal_v3_runs(journal, schedule) if v3_plan is not None else ()
+        if efficiency_plan is not None and any(
+            run.environment.get("efficiency_plan_digest")
+            != efficiency_plan.digest
+            for run in v3_runs
+        ):
+            raise BenchmarkV3SchemaError("efficiency_run_attestation_mismatch")
         if v3_runs:
             status_counts = Counter(run.execution_status for run in v3_runs)
             task_status_counts = Counter(run.task_status for run in v3_runs)
@@ -610,9 +631,21 @@ def run_campaign(
                 v3_config = resolved.benchmark_v3
                 if v3_config is None:
                     raise CampaignConfigError("missing_benchmark_v3_config")
+                public_campaign = resolved.public_payload()
+                if efficiency_plan is not None:
+                    public_v3 = public_campaign.get("benchmark_v3")
+                    if not isinstance(public_v3, Mapping) or (
+                        public_v3.get("efficiency_plan_digest")
+                        != efficiency_plan.digest
+                        or public_v3.get("efficiency_track_id")
+                        != efficiency_plan.efficiency_track_id
+                    ):
+                        raise BenchmarkV3SchemaError(
+                            "efficiency_plan_digest_mismatch"
+                        )
                 campaign_context = {
                     "attestations": journal.read_attestations(),
-                    "campaign": resolved.public_payload(),
+                    "campaign": public_campaign,
                     "campaign_status": campaign_status,
                     "cleanup": cleanup_attestation,
                     "fingerprint": fingerprint,
@@ -627,6 +660,10 @@ def run_campaign(
                     "schema_version": "1.0",
                     "systems": [item.to_dict() for item in manifests],
                 }
+                if efficiency_plan is not None:
+                    campaign_context["efficiency_plan_attestation"] = (
+                        _efficiency_plan_attestation(efficiency_plan)
+                    )
                 if _contains_secret_canary(campaign_context, secret_canaries):
                     raise CampaignConfigError("secret_canary_detected")
                 bundle = publish_v3_results(
@@ -719,7 +756,30 @@ def _build_schedule(
     scenarios: Sequence[BenchmarkScenario],
     *,
     v3_plan: AnalysisPlan | None = None,
+    efficiency_plan: EfficiencyPlan | None = None,
 ) -> tuple[dict[str, Any], ...]:
+    selected_efficiency_plan = (
+        efficiency_plan
+        if efficiency_plan is not None
+        else _configured_efficiency_plan(config)
+    )
+    if selected_efficiency_plan is not None:
+        source_plan = v3_plan or _configured_analysis_plan(config)
+        if source_plan is None:
+            raise BenchmarkV3SchemaError("efficiency_plan_requires_v3_plan")
+        validate_efficiency_campaign_plan(
+            selected_efficiency_plan,
+            source_plan=source_plan,
+            system_ids=tuple(item.system_id for item in manifests),
+            scenario_ids=tuple(item.scenario_id for item in scenarios),
+            repetitions=int(config.repetitions),
+        )
+        return _build_efficiency_schedule(
+            manifests,
+            scenarios,
+            selected_efficiency_plan,
+        )
+
     schedule: list[dict[str, Any]] = []
     order = 0
     for repetition in range(1, config.repetitions + 1):
@@ -751,6 +811,71 @@ def _build_schedule(
                     }
                 )
     return tuple(schedule)
+
+
+def _build_efficiency_schedule(
+    manifests: Sequence[SystemManifest],
+    scenarios: Sequence[BenchmarkScenario],
+    efficiency_plan: EfficiencyPlan,
+) -> tuple[dict[str, Any], ...]:
+    manifests_by_id = {item.system_id: item for item in manifests}
+    scenarios_by_id = {item.scenario_id: item for item in scenarios}
+    if (
+        len(manifests_by_id) != len(manifests)
+        or tuple(manifests_by_id) != efficiency_plan.system_ids
+        or tuple(scenarios_by_id) != efficiency_plan.scenario_ids
+    ):
+        raise BenchmarkV3SchemaError("efficiency_plan_schedule_mismatch")
+
+    schedule: list[dict[str, Any]] = []
+    order = 0
+    for block in efficiency_plan.schedule:
+        if block.scenario_id not in scenarios_by_id:
+            raise BenchmarkV3SchemaError("efficiency_plan_schedule_mismatch")
+        for system_id in block.system_order:
+            if system_id not in manifests_by_id:
+                raise BenchmarkV3SchemaError("efficiency_plan_schedule_mismatch")
+            order += 1
+            schedule.append(
+                {
+                    "order": order,
+                    "run_key": schedule_run_key(
+                        system_id,
+                        block.scenario_id,
+                        block.repetition,
+                        block.matched_fixture_seed,
+                    ),
+                    "system_id": system_id,
+                    "scenario_id": block.scenario_id,
+                    "repetition": block.repetition,
+                    "seed": block.matched_fixture_seed,
+                }
+            )
+    if len({item["run_key"] for item in schedule}) != len(schedule):
+        raise BenchmarkV3SchemaError("efficiency_plan_schedule_mismatch")
+    return tuple(schedule)
+
+
+def _configured_efficiency_plan(config: Any) -> EfficiencyPlan | None:
+    benchmark_v3 = getattr(config, "benchmark_v3", None)
+    loader = getattr(benchmark_v3, "efficiency_plan", None)
+    return loader() if callable(loader) else None
+
+
+def _configured_analysis_plan(config: Any) -> AnalysisPlan | None:
+    benchmark_v3 = getattr(config, "benchmark_v3", None)
+    loader = getattr(benchmark_v3, "plan", None)
+    return loader() if callable(loader) else None
+
+
+def _efficiency_plan_attestation(plan: EfficiencyPlan) -> dict[str, str]:
+    return {
+        "efficiency_track_id": plan.efficiency_track_id,
+        "plan_digest": plan.digest,
+        "plan_id": plan.plan_id,
+        "source_analysis_plan_digest": plan.source_analysis_plan_digest,
+        "source_track_id": plan.source_track_id,
+    }
 
 
 def _scheduled_context(
@@ -969,6 +1094,7 @@ def _controller_source_identity() -> dict[str, str]:
     sources = [
         *sorted(competitor_root.glob("*.py")),
         *sorted((benchmark_root / "v3").glob("*.py")),
+        *sorted((benchmark_root / "v4").glob("*.py")),
         benchmark_root / "harness.py",
         benchmark_root / "schema.py",
     ]

@@ -16,6 +16,8 @@ runner is still supported.
   of all ten catalog scenarios.
 - `core/benchmarks/task_efficiency.py`: versioned baseline-versus-configured
   task-selection replay and atomic result writer.
+- `core/benchmarks/v4/`: additive live-system efficiency plan, paired
+  controller-derived statistics, companion publication, and verifier.
 - `benchmarks/scenarios/`: the ten required scenario definitions.
 - `benchmarks/results/noop-repeat-comparison-v1.json`: reproducible published
   no-op/repeated-task comparison.
@@ -108,3 +110,10 @@ The normative data and full provenance remain in
 New live bundles generate and checksum their own `comparison.svg`; failed or
 timed-out runs remain terminal outcomes and are never converted into zero
 quality scores.
+
+The prospective [Benchmark v4 methodology](benchmark-v4.md) adds an isolated
+efficiency companion to a verified v3 live bundle. It treats wall time and the
+controller request ledger as primary resource evidence, preserves unavailable
+token/cost telemetry as `N/A`, and gates directional efficiency analysis on
+both systems completing the matched task. It never changes or silently
+reinterprets the published v3 bundle.

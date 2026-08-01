@@ -1,0 +1,827 @@
+{
+  "$id": "https://octopus.local/schemas/benchmark-efficiency-statistics-v4.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "automatic_winner": { "const": false },
+    "comparisons": {
+      "items": { "$ref": "#/$defs/comparison" },
+      "maxItems": 2016,
+      "minItems": 1,
+      "type": "array"
+    },
+    "efficiency_plan_digest": { "$ref": "#/$defs/digest" },
+    "efficiency_plan_id": {
+      "pattern": "^efficiency-plan-[0-9a-f]{20}$",
+      "type": "string"
+    },
+    "efficiency_track_id": { "$ref": "#/$defs/identifier" },
+    "fairness": { "$ref": "#/$defs/fairness" },
+    "paired_effects": {
+      "items": { "$ref": "#/$defs/effectProjection" },
+      "maxItems": 20160,
+      "minItems": 10,
+      "type": "array"
+    },
+    "run_count": { "minimum": 1, "type": "integer" },
+    "schema_version": { "const": "1.0" },
+    "source_analysis_plan_digest": { "$ref": "#/$defs/digest" },
+    "source_v3_validation": {
+      "additionalProperties": false,
+      "properties": {
+        "analysis_plan_digest": { "$ref": "#/$defs/digest" },
+        "analysis_plan_id": { "$ref": "#/$defs/identifier" },
+        "run_count": { "minimum": 1, "type": "integer" },
+        "schedule_validated": { "const": true }
+      },
+      "required": ["analysis_plan_digest", "analysis_plan_id", "run_count", "schedule_validated"],
+      "type": "object"
+    },
+    "systems": {
+      "additionalProperties": { "$ref": "#/$defs/systemStatistics" },
+      "maxProperties": 64,
+      "minProperties": 2,
+      "propertyNames": { "$ref": "#/$defs/identifier" },
+      "type": "object"
+    }
+  },
+  "required": [
+    "automatic_winner",
+    "comparisons",
+    "efficiency_plan_digest",
+    "efficiency_plan_id",
+    "efficiency_track_id",
+    "fairness",
+    "paired_effects",
+    "run_count",
+    "schema_version",
+    "source_analysis_plan_digest",
+    "source_v3_validation",
+    "systems"
+  ],
+  "title": "OCTOPUS Benchmark v4 deterministic efficiency statistics",
+  "type": "object",
+  "$defs": {
+    "bootstrapDifference": {
+      "oneOf": [
+        { "$ref": "#/$defs/bootstrapUnavailable" },
+        { "$ref": "#/$defs/bootstrapDifferenceAvailable" }
+      ]
+    },
+    "bootstrapDifferenceAvailable": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha": { "exclusiveMaximum": 1, "exclusiveMinimum": 0, "type": "number" },
+        "available": { "const": true },
+        "bootstrap_samples": { "maximum": 100000, "minimum": 100, "type": "integer" },
+        "effect_right_minus_left": { "type": "number" },
+        "estimate": { "type": "number" },
+        "estimand": { "const": "difference" },
+        "lower": { "type": "number" },
+        "sample_size": { "minimum": 1, "type": "integer" },
+        "scenario_count": { "minimum": 1, "type": "integer" },
+        "scenario_estimates": {
+          "additionalProperties": { "type": "number" },
+          "maxProperties": 4096,
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/identifier" },
+          "type": "object"
+        },
+        "upper": { "type": "number" }
+      },
+      "required": [
+        "alpha",
+        "available",
+        "bootstrap_samples",
+        "effect_right_minus_left",
+        "estimate",
+        "estimand",
+        "lower",
+        "sample_size",
+        "scenario_count",
+        "scenario_estimates",
+        "upper"
+      ],
+      "type": "object"
+    },
+    "bootstrapRatio": {
+      "oneOf": [
+        { "$ref": "#/$defs/bootstrapUnavailable" },
+        { "$ref": "#/$defs/bootstrapRatioAvailable" }
+      ]
+    },
+    "bootstrapRatioAvailable": {
+      "additionalProperties": false,
+      "properties": {
+        "alpha": { "exclusiveMaximum": 1, "exclusiveMinimum": 0, "type": "number" },
+        "available": { "const": true },
+        "bootstrap_samples": { "maximum": 100000, "minimum": 100, "type": "integer" },
+        "estimate": { "exclusiveMinimum": 0, "type": "number" },
+        "estimand": { "const": "geometric_ratio" },
+        "geometric_mean_ratio_right_over_left": { "exclusiveMinimum": 0, "type": "number" },
+        "lower": { "exclusiveMinimum": 0, "type": "number" },
+        "sample_size": { "minimum": 1, "type": "integer" },
+        "scenario_count": { "minimum": 1, "type": "integer" },
+        "scenario_estimates": {
+          "additionalProperties": { "exclusiveMinimum": 0, "type": "number" },
+          "maxProperties": 4096,
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/identifier" },
+          "type": "object"
+        },
+        "upper": { "exclusiveMinimum": 0, "type": "number" }
+      },
+      "required": [
+        "alpha",
+        "available",
+        "bootstrap_samples",
+        "estimate",
+        "estimand",
+        "geometric_mean_ratio_right_over_left",
+        "lower",
+        "sample_size",
+        "scenario_count",
+        "scenario_estimates",
+        "upper"
+      ],
+      "type": "object"
+    },
+    "bootstrapUnavailable": {
+      "additionalProperties": false,
+      "properties": {
+        "available": { "const": false },
+        "reason": { "const": "no_eligible_pairs" },
+        "sample_size": { "const": 0 },
+        "scenario_count": { "const": 0 }
+      },
+      "required": ["available", "reason", "sample_size", "scenario_count"],
+      "type": "object"
+    },
+    "componentSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "available": { "minimum": 0, "type": "integer" },
+        "coverage": { "$ref": "#/$defs/ratio" },
+        "mean": { "$ref": "#/$defs/nullableRatio" },
+        "median": { "$ref": "#/$defs/nullableRatio" },
+        "scheduled": { "minimum": 1, "type": "integer" }
+      },
+      "required": ["available", "coverage", "mean", "median", "scheduled"],
+      "type": "object"
+    },
+    "comparison": {
+      "additionalProperties": false,
+      "properties": {
+        "all_scheduled_noninferiority": { "$ref": "#/$defs/noninferiorityMap" },
+        "left_system_id": { "$ref": "#/$defs/identifier" },
+        "multiple_testing": {
+          "additionalProperties": false,
+          "properties": {
+            "claim_alpha": { "exclusiveMaximum": 1, "exclusiveMinimum": 0, "type": "number" },
+            "family_size": { "maximum": 4032, "minimum": 2, "type": "integer" },
+            "method": { "const": "bonferroni_comparison_pairs_x_primary_resources" },
+            "nominal_alpha": { "exclusiveMaximum": 1, "exclusiveMinimum": 0, "type": "number" }
+          },
+          "required": ["claim_alpha", "family_size", "method", "nominal_alpha"],
+          "type": "object"
+        },
+        "paired_effects": {
+          "items": { "$ref": "#/$defs/effectProjection" },
+          "maxItems": 10,
+          "minItems": 10,
+          "type": "array"
+        },
+        "primary_metric_gates": { "$ref": "#/$defs/primaryMetricGates" },
+        "resources": { "$ref": "#/$defs/resourceEffectMap" },
+        "right_system_id": { "$ref": "#/$defs/identifier" },
+        "scheduled_pair_count": { "minimum": 1, "type": "integer" }
+      },
+      "required": [
+        "all_scheduled_noninferiority",
+        "left_system_id",
+        "multiple_testing",
+        "paired_effects",
+        "primary_metric_gates",
+        "resources",
+        "right_system_id",
+        "scheduled_pair_count"
+      ],
+      "type": "object"
+    },
+    "coverageGate": {
+      "additionalProperties": false,
+      "properties": {
+        "eligible_pair_count": { "minimum": 0, "type": "integer" },
+        "measurement_pair_count": { "minimum": 0, "type": "integer" },
+        "observed": { "$ref": "#/$defs/ratio" },
+        "passed": { "type": "boolean" },
+        "required": { "$ref": "#/$defs/nullableRatio" },
+        "scheduled_pair_count": { "minimum": 1, "type": "integer" }
+      },
+      "required": [
+        "eligible_pair_count",
+        "measurement_pair_count",
+        "observed",
+        "passed",
+        "required",
+        "scheduled_pair_count"
+      ],
+      "type": "object"
+    },
+    "directionalClaim": {
+      "enum": [
+        "inconclusive",
+        "left_more_efficient",
+        "right_more_efficient",
+        "secondary_descriptive_only"
+      ]
+    },
+    "directionalClaims": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "claim_eligible_resource": { "const": true } },
+            "required": ["claim_eligible_resource"]
+          },
+          "then": {
+            "properties": {
+              "result": {
+                "enum": ["inconclusive", "left_more_efficient", "right_more_efficient"]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "left_more_efficient": { "const": false },
+              "result": { "const": "secondary_descriptive_only" },
+              "right_more_efficient": { "const": false }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "automatic_winner": { "const": false },
+        "claim_eligible_resource": { "type": "boolean" },
+        "left_more_efficient": { "type": "boolean" },
+        "result": { "$ref": "#/$defs/directionalClaim" },
+        "right_more_efficient": { "type": "boolean" }
+      },
+      "required": [
+        "automatic_winner",
+        "claim_eligible_resource",
+        "left_more_efficient",
+        "result",
+        "right_more_efficient"
+      ],
+      "type": "object"
+    },
+    "digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "executionOutcomeCounts": {
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "cancelled": { "minimum": 1, "type": "integer" },
+        "failed": { "minimum": 1, "type": "integer" },
+        "invalid": { "minimum": 1, "type": "integer" },
+        "succeeded": { "minimum": 1, "type": "integer" },
+        "timeout": { "minimum": 1, "type": "integer" }
+      },
+      "type": "object"
+    },
+    "effectProjection": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "resource": { "enum": ["fixture_http_requests", "wall_time_seconds"] }
+            },
+            "required": ["resource"]
+          },
+          "then": {
+            "properties": {
+              "directional_claim": {
+                "enum": ["inconclusive", "left_more_efficient", "right_more_efficient"]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "directional_claim": { "const": "secondary_descriptive_only" }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "directional_claim": { "$ref": "#/$defs/directionalClaim" },
+        "left_system_id": { "$ref": "#/$defs/identifier" },
+        "quality_qualified_pairs": { "minimum": 0, "type": "integer" },
+        "resource": { "$ref": "#/$defs/resourceName" },
+        "right_system_id": { "$ref": "#/$defs/identifier" }
+      },
+      "required": [
+        "directional_claim",
+        "left_system_id",
+        "quality_qualified_pairs",
+        "resource",
+        "right_system_id"
+      ],
+      "type": "object"
+    },
+    "exclusions": {
+      "additionalProperties": false,
+      "properties": {
+        "excluded_pair_count": { "minimum": 0, "type": "integer" },
+        "reason_counts": { "$ref": "#/$defs/exclusionReasonCounts" }
+      },
+      "required": ["excluded_pair_count", "reason_counts"],
+      "type": "object"
+    },
+    "exclusionReasonCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "both_tasks_not_completed": { "minimum": 1, "type": "integer" },
+        "left_task_not_completed": { "minimum": 1, "type": "integer" },
+        "nonpositive_resource": { "minimum": 1, "type": "integer" },
+        "quality_unavailable": { "minimum": 1, "type": "integer" },
+        "resource_unavailable": { "minimum": 1, "type": "integer" },
+        "right_task_not_completed": { "minimum": 1, "type": "integer" }
+      },
+      "type": "object"
+    },
+    "fairness": {
+      "additionalProperties": false,
+      "properties": {
+        "base_eligible": { "type": "boolean" },
+        "campaign_attestation": { "type": "boolean" },
+        "common_profile": { "type": "boolean" },
+        "counterbalanced_first_position": { "const": true },
+        "diagnostic_attestation_waiver": { "type": "boolean" },
+        "eligible": { "type": "boolean" },
+        "exact_ledger_run_coverage": { "const": true },
+        "no_policy_violations": { "type": "boolean" },
+        "paired_host_batch": { "type": "boolean" },
+        "primary_metric_gates": {
+          "additionalProperties": { "$ref": "#/$defs/primaryMetricGates" },
+          "maxProperties": 2016,
+          "minProperties": 1,
+          "propertyNames": {
+            "pattern": "^pair-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "prospective_design": { "type": "boolean" },
+        "run_attestation": { "type": "boolean" },
+        "same_hardware_declaration": { "type": "boolean" },
+        "same_model_declaration": { "type": "boolean" },
+        "schedule_order": { "type": "boolean" },
+        "shared_runtime_model_digest": { "type": "boolean" }
+      },
+      "required": [
+        "base_eligible",
+        "campaign_attestation",
+        "common_profile",
+        "counterbalanced_first_position",
+        "diagnostic_attestation_waiver",
+        "eligible",
+        "exact_ledger_run_coverage",
+        "no_policy_violations",
+        "paired_host_batch",
+        "primary_metric_gates",
+        "prospective_design",
+        "run_attestation",
+        "same_hardware_declaration",
+        "same_model_declaration",
+        "schedule_order",
+        "shared_runtime_model_digest"
+      ],
+      "type": "object"
+    },
+    "identifier": {
+      "pattern": "^[a-z0-9][a-z0-9_.:-]{0,159}$",
+      "type": "string"
+    },
+    "nullableNonnegativeNumber": {
+      "oneOf": [
+        { "minimum": 0, "type": "number" },
+        { "type": "null" }
+      ]
+    },
+    "nullableRatio": {
+      "oneOf": [
+        { "$ref": "#/$defs/ratio" },
+        { "type": "null" }
+      ]
+    },
+    "noninferiorityGate": {
+      "additionalProperties": false,
+      "properties": {
+        "effect": { "$ref": "#/$defs/bootstrapDifference" },
+        "left_noninferior": { "type": "boolean" },
+        "margin": { "$ref": "#/$defs/ratio" },
+        "right_noninferior": { "type": "boolean" }
+      },
+      "required": ["effect", "left_noninferior", "margin", "right_noninferior"],
+      "type": "object"
+    },
+    "noninferiorityMap": {
+      "additionalProperties": false,
+      "properties": {
+        "task_completion_rate": { "$ref": "#/$defs/noninferiorityGate" },
+        "verified_f1": { "$ref": "#/$defs/noninferiorityGate" },
+        "verified_f1_both_completed": { "$ref": "#/$defs/noninferiorityGate" }
+      },
+      "required": ["task_completion_rate", "verified_f1", "verified_f1_both_completed"],
+      "type": "object"
+    },
+    "observationSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "available": { "minimum": 0, "type": "integer" },
+        "coverage": { "$ref": "#/$defs/ratio" },
+        "maximum": { "$ref": "#/$defs/nullableNonnegativeNumber" },
+        "mean": { "$ref": "#/$defs/nullableNonnegativeNumber" },
+        "median": { "$ref": "#/$defs/nullableNonnegativeNumber" },
+        "minimum": { "$ref": "#/$defs/nullableNonnegativeNumber" },
+        "reliability_counts": { "$ref": "#/$defs/reliabilityCounts" },
+        "scheduled": { "minimum": 1, "type": "integer" },
+        "total": { "$ref": "#/$defs/nullableNonnegativeNumber" }
+      },
+      "required": [
+        "available",
+        "coverage",
+        "maximum",
+        "mean",
+        "median",
+        "minimum",
+        "reliability_counts",
+        "scheduled",
+        "total"
+      ],
+      "type": "object"
+    },
+    "paretoCounts": {
+      "additionalProperties": false,
+      "properties": {
+        "left_dominates": { "minimum": 0, "type": "integer" },
+        "right_dominates": { "minimum": 0, "type": "integer" },
+        "tie": { "minimum": 0, "type": "integer" },
+        "tradeoff": { "minimum": 0, "type": "integer" }
+      },
+      "required": ["left_dominates", "right_dominates", "tie", "tradeoff"],
+      "type": "object"
+    },
+    "primaryCoverageGate": {
+      "allOf": [
+        { "$ref": "#/$defs/coverageGate" },
+        {
+          "properties": {
+            "required": { "$ref": "#/$defs/ratio" }
+          }
+        }
+      ]
+    },
+    "primaryMetricGates": {
+      "additionalProperties": false,
+      "properties": {
+        "fixture_http_requests": { "$ref": "#/$defs/primaryCoverageGate" },
+        "wall_time_seconds": { "$ref": "#/$defs/primaryCoverageGate" }
+      },
+      "required": ["fixture_http_requests", "wall_time_seconds"],
+      "type": "object"
+    },
+    "primaryResourceEffect": {
+      "allOf": [
+        { "$ref": "#/$defs/resourceEffect" },
+        {
+          "properties": {
+            "coverage_gate": { "$ref": "#/$defs/primaryCoverageGate" },
+            "directional_claims": {
+              "properties": { "claim_eligible_resource": { "const": true } }
+            }
+          }
+        }
+      ]
+    },
+    "qualitySummary": {
+      "additionalProperties": false,
+      "properties": {
+        "verified_claim_precision": { "$ref": "#/$defs/componentSummary" },
+        "verified_f1": { "$ref": "#/$defs/observationSummary" },
+        "verified_f1_availability": { "minimum": 0, "type": "integer" },
+        "verified_f1_mean": { "$ref": "#/$defs/nullableRatio" },
+        "verified_f1_median": { "$ref": "#/$defs/nullableRatio" },
+        "verified_recall": { "$ref": "#/$defs/componentSummary" }
+      },
+      "required": [
+        "verified_claim_precision",
+        "verified_f1",
+        "verified_f1_availability",
+        "verified_f1_mean",
+        "verified_f1_median",
+        "verified_recall"
+      ],
+      "type": "object"
+    },
+    "ratio": {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+    },
+    "reliabilityCounts": {
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "derived": { "minimum": 1, "type": "integer" },
+        "legacy_incomplete": { "minimum": 1, "type": "integer" },
+        "measured": { "minimum": 1, "type": "integer" },
+        "self_reported": { "minimum": 1, "type": "integer" },
+        "unavailable": { "minimum": 1, "type": "integer" },
+        "verified": { "minimum": 1, "type": "integer" }
+      },
+      "type": "object"
+    },
+    "resourceEffect": {
+      "additionalProperties": false,
+      "properties": {
+        "coverage_gate": { "$ref": "#/$defs/coverageGate" },
+        "directional_claims": { "$ref": "#/$defs/directionalClaims" },
+        "effect_projection": { "$ref": "#/$defs/effectProjection" },
+        "exclusions": { "$ref": "#/$defs/exclusions" },
+        "jointly_completed_pair_count": { "minimum": 0, "type": "integer" },
+        "pareto_counts": { "$ref": "#/$defs/paretoCounts" },
+        "population": { "const": "both_task_status_completed" },
+        "quality_per_resource_delta": { "$ref": "#/$defs/bootstrapDifference" },
+        "resource_available_pair_count": { "minimum": 0, "type": "integer" },
+        "resource_ratio": { "$ref": "#/$defs/bootstrapRatio" },
+        "scheduled_pair_count": { "minimum": 1, "type": "integer" }
+      },
+      "required": [
+        "coverage_gate",
+        "directional_claims",
+        "effect_projection",
+        "exclusions",
+        "jointly_completed_pair_count",
+        "pareto_counts",
+        "population",
+        "quality_per_resource_delta",
+        "resource_available_pair_count",
+        "resource_ratio",
+        "scheduled_pair_count"
+      ],
+      "type": "object"
+    },
+    "resourceEffectMap": {
+      "additionalProperties": false,
+      "properties": {
+        "api_cost_usd": { "$ref": "#/$defs/secondaryResourceEffect" },
+        "evidence_bearing_requests": { "$ref": "#/$defs/secondaryResourceEffect" },
+        "fixture_http_requests": { "$ref": "#/$defs/primaryResourceEffect" },
+        "model_tokens": { "$ref": "#/$defs/secondaryResourceEffect" },
+        "output_bytes": { "$ref": "#/$defs/secondaryResourceEffect" },
+        "repeated_fixture_requests": { "$ref": "#/$defs/secondaryResourceEffect" },
+        "tool_calls": { "$ref": "#/$defs/secondaryResourceEffect" },
+        "unique_fixture_targets": { "$ref": "#/$defs/secondaryResourceEffect" },
+        "unsuccessful_fixture_requests": { "$ref": "#/$defs/secondaryResourceEffect" },
+        "wall_time_seconds": { "$ref": "#/$defs/primaryResourceEffect" }
+      },
+      "required": [
+        "api_cost_usd",
+        "evidence_bearing_requests",
+        "fixture_http_requests",
+        "model_tokens",
+        "output_bytes",
+        "repeated_fixture_requests",
+        "tool_calls",
+        "unique_fixture_targets",
+        "unsuccessful_fixture_requests",
+        "wall_time_seconds"
+      ],
+      "type": "object"
+    },
+    "resourceName": {
+      "enum": [
+        "api_cost_usd",
+        "evidence_bearing_requests",
+        "fixture_http_requests",
+        "model_tokens",
+        "output_bytes",
+        "repeated_fixture_requests",
+        "tool_calls",
+        "unique_fixture_targets",
+        "unsuccessful_fixture_requests",
+        "wall_time_seconds"
+      ]
+    },
+    "secondaryCoverageGate": {
+      "allOf": [
+        { "$ref": "#/$defs/coverageGate" },
+        {
+          "properties": {
+            "passed": { "const": false },
+            "required": { "const": null }
+          }
+        }
+      ]
+    },
+    "secondaryResourceEffect": {
+      "allOf": [
+        { "$ref": "#/$defs/resourceEffect" },
+        {
+          "properties": {
+            "coverage_gate": { "$ref": "#/$defs/secondaryCoverageGate" },
+            "directional_claims": {
+              "properties": { "claim_eligible_resource": { "const": false } }
+            }
+          }
+        }
+      ]
+    },
+    "observationResourceMap": {
+      "additionalProperties": false,
+      "properties": {
+        "api_cost_usd": { "$ref": "#/$defs/observationSummary" },
+        "evidence_bearing_requests": { "$ref": "#/$defs/observationSummary" },
+        "fixture_http_requests": { "$ref": "#/$defs/observationSummary" },
+        "model_tokens": { "$ref": "#/$defs/observationSummary" },
+        "output_bytes": { "$ref": "#/$defs/observationSummary" },
+        "repeated_fixture_requests": { "$ref": "#/$defs/observationSummary" },
+        "tool_calls": { "$ref": "#/$defs/observationSummary" },
+        "unique_fixture_targets": { "$ref": "#/$defs/observationSummary" },
+        "unsuccessful_fixture_requests": { "$ref": "#/$defs/observationSummary" },
+        "wall_time_seconds": { "$ref": "#/$defs/observationSummary" }
+      },
+      "required": [
+        "api_cost_usd",
+        "evidence_bearing_requests",
+        "fixture_http_requests",
+        "model_tokens",
+        "output_bytes",
+        "repeated_fixture_requests",
+        "tool_calls",
+        "unique_fixture_targets",
+        "unsuccessful_fixture_requests",
+        "wall_time_seconds"
+      ],
+      "type": "object"
+    },
+    "scenarioStatistics": {
+      "additionalProperties": false,
+      "properties": {
+        "quality": { "$ref": "#/$defs/qualitySummary" },
+        "resources": { "$ref": "#/$defs/observationResourceMap" },
+        "run_count": { "minimum": 1, "type": "integer" }
+      },
+      "required": ["quality", "resources", "run_count"],
+      "type": "object"
+    },
+    "stability": {
+      "additionalProperties": false,
+      "properties": {
+        "execution_outcome_counts": { "$ref": "#/$defs/executionOutcomeCounts" },
+        "execution_success_rate": { "$ref": "#/$defs/ratio" },
+        "execution_success_wilson": { "$ref": "#/$defs/wilson" },
+        "task_completion_rate": { "$ref": "#/$defs/ratio" },
+        "task_completion_wilson": { "$ref": "#/$defs/wilson" },
+        "task_outcome_counts": { "$ref": "#/$defs/taskOutcomeCounts" }
+      },
+      "required": [
+        "execution_outcome_counts",
+        "execution_success_rate",
+        "execution_success_wilson",
+        "task_completion_rate",
+        "task_completion_wilson",
+        "task_outcome_counts"
+      ],
+      "type": "object"
+    },
+    "systemStatistics": {
+      "additionalProperties": false,
+      "properties": {
+        "completed_yield_per_resource": { "$ref": "#/$defs/yieldResourceMap" },
+        "quality": { "$ref": "#/$defs/qualitySummary" },
+        "resources": { "$ref": "#/$defs/observationResourceMap" },
+        "run_count": { "minimum": 1, "type": "integer" },
+        "scenarios": {
+          "additionalProperties": { "$ref": "#/$defs/scenarioStatistics" },
+          "maxProperties": 4096,
+          "minProperties": 1,
+          "propertyNames": { "$ref": "#/$defs/identifier" },
+          "type": "object"
+        },
+        "stability": { "$ref": "#/$defs/stability" }
+      },
+      "required": [
+        "completed_yield_per_resource",
+        "quality",
+        "resources",
+        "run_count",
+        "scenarios",
+        "stability"
+      ],
+      "type": "object"
+    },
+    "taskOutcomeCounts": {
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "completed": { "minimum": 1, "type": "integer" },
+        "invalid": { "minimum": 1, "type": "integer" },
+        "not_completed": { "minimum": 1, "type": "integer" },
+        "not_evaluated": { "minimum": 1, "type": "integer" },
+        "partial": { "minimum": 1, "type": "integer" }
+      },
+      "type": "object"
+    },
+    "wilson": {
+      "additionalProperties": false,
+      "properties": {
+        "estimate": { "$ref": "#/$defs/ratio" },
+        "lower": { "$ref": "#/$defs/ratio" },
+        "successes": { "minimum": 0, "type": "integer" },
+        "trials": { "minimum": 1, "type": "integer" },
+        "upper": { "$ref": "#/$defs/ratio" }
+      },
+      "required": ["estimate", "lower", "successes", "trials", "upper"],
+      "type": "object"
+    },
+    "yieldSummary": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "available": { "const": true } },
+            "required": ["available"]
+          },
+          "then": {
+            "properties": {
+              "completed_tasks_per_unit": { "minimum": 0, "type": "number" },
+              "reason": { "const": "" },
+              "resource_total": { "exclusiveMinimum": 0, "type": "number" },
+              "run_count": { "minimum": 1, "type": "integer" },
+              "verified_f1_per_unit": { "$ref": "#/$defs/nullableNonnegativeNumber" }
+            }
+          },
+          "else": {
+            "properties": {
+              "completed_tasks_per_unit": { "const": null },
+              "reason": { "const": "no_positive_resource_observations" },
+              "resource_total": { "const": null },
+              "verified_f1_per_unit": { "const": null }
+            }
+          }
+        }
+      ],
+      "properties": {
+        "available": { "type": "boolean" },
+        "completed_tasks_per_unit": { "$ref": "#/$defs/nullableNonnegativeNumber" },
+        "reason": { "type": "string" },
+        "resource_total": { "$ref": "#/$defs/nullableNonnegativeNumber" },
+        "run_count": { "minimum": 0, "type": "integer" },
+        "verified_f1_per_unit": { "$ref": "#/$defs/nullableNonnegativeNumber" }
+      },
+      "required": [
+        "available",
+        "completed_tasks_per_unit",
+        "reason",
+        "resource_total",
+        "run_count",
+        "verified_f1_per_unit"
+      ],
+      "type": "object"
+    },
+    "yieldResourceMap": {
+      "additionalProperties": false,
+      "properties": {
+        "api_cost_usd": { "$ref": "#/$defs/yieldSummary" },
+        "evidence_bearing_requests": { "$ref": "#/$defs/yieldSummary" },
+        "fixture_http_requests": { "$ref": "#/$defs/yieldSummary" },
+        "model_tokens": { "$ref": "#/$defs/yieldSummary" },
+        "output_bytes": { "$ref": "#/$defs/yieldSummary" },
+        "repeated_fixture_requests": { "$ref": "#/$defs/yieldSummary" },
+        "tool_calls": { "$ref": "#/$defs/yieldSummary" },
+        "unique_fixture_targets": { "$ref": "#/$defs/yieldSummary" },
+        "unsuccessful_fixture_requests": { "$ref": "#/$defs/yieldSummary" },
+        "wall_time_seconds": { "$ref": "#/$defs/yieldSummary" }
+      },
+      "required": [
+        "api_cost_usd",
+        "evidence_bearing_requests",
+        "fixture_http_requests",
+        "model_tokens",
+        "output_bytes",
+        "repeated_fixture_requests",
+        "tool_calls",
+        "unique_fixture_targets",
+        "unsuccessful_fixture_requests",
+        "wall_time_seconds"
+      ],
+      "type": "object"
+    }
+  }
+}

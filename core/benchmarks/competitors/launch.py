@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 from ..schema import BenchmarkScenario
 from ..v3.analysis import AnalysisPlan, build_analysis_plan
 from ..v3.fixture import LAB_V3_VERSION, SCENARIO_FAMILIES
+from ..v4 import EfficiencyPlan, build_efficiency_plan
 from .adapter import STRIX_BENCHMARK_SCAN_MODE
 from .campaign import CampaignConfig, run_campaign
 from .diagnostic import (
@@ -56,6 +57,7 @@ _DEFAULT_CAMPAIGN_DEFINITION_ID = "linux-blackbox-v1"
 _SMALL_MODEL_CAMPAIGN_DEFINITION_ID = "linux-blackbox-small-model-v1"
 _SMALL_MODEL_CAMPAIGN_V2_DEFINITION_ID = "linux-blackbox-small-model-v2"
 _SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID = "linux-blackbox-small-model-v3"
+_SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID = "linux-blackbox-small-model-v4"
 _V3_BASE_FIXTURE_SEED_ENVIRONMENT = "OCTOBENCH_V3_BASE_FIXTURE_SEED"
 _V3_BATCH_ID_ENVIRONMENT = "OCTOBENCH_V3_BATCH_ID"
 _V3_HOST_ID_ENVIRONMENT = "OCTOBENCH_V3_HOST_ID"
@@ -169,6 +171,7 @@ class _CampaignDefinition:
     evaluation_scope: str | None = None
     lab_definition_id: str | None = None
     benchmark_v3_track_id: str | None = None
+    efficiency_track_id: str | None = None
     repetitions: int | None = None
 
 
@@ -227,6 +230,20 @@ _CAMPAIGN_DEFINITIONS = {
         lab_definition_id=LAB_V3_VERSION,
         benchmark_v3_track_id="small-model-stress-v3",
         repetitions=12,
+    ),
+    _SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID: _CampaignDefinition(
+        definition_id=_SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID,
+        allowed_profiles=frozenset({"core"}),
+        ollama_model=_SMALL_MODEL_CAMPAIGN_OLLAMA_MODEL,
+        ollama_digest=_SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST,
+        ollama_context_length=_SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH,
+        ollama_server_version=_SMALL_MODEL_CAMPAIGN_OLLAMA_SERVER_VERSION,
+        fairness_profile_id="small-model-efficiency-v4",
+        evaluation_scope="generated-blinded-read-only-discovery-efficiency-v4",
+        lab_definition_id=LAB_V3_VERSION,
+        benchmark_v3_track_id="small-model-stress-v3",
+        efficiency_track_id="small-model-efficiency-v4",
+        repetitions=20,
     ),
 }
 
@@ -476,6 +493,7 @@ def _prepare_generated_campaign(
     )
     payloads.update(scenario_payloads)
     analysis_plan: AnalysisPlan | None = None
+    efficiency_plan: EfficiencyPlan | None = None
     if campaign_definition.benchmark_v3_track_id is not None:
         scenario_ids = tuple(
             str(payload["scenario_id"])
@@ -490,6 +508,15 @@ def _prepare_generated_campaign(
             publication_tier="full",
         )
         payloads["analysis-plan.json"] = analysis_plan.to_dict()
+        if campaign_definition.efficiency_track_id is not None:
+            efficiency_plan = build_efficiency_plan(
+                analysis_plan,
+                efficiency_track_id=campaign_definition.efficiency_track_id,
+                schedule_seed=1,
+                publication_tier="full",
+                require_run_attestation=True,
+            )
+            payloads["efficiency-plan.json"] = efficiency_plan.to_dict()
     config_name = "campaign.json"
     payloads[config_name] = _campaign_payload(
         campaign_id,
@@ -499,6 +526,7 @@ def _prepare_generated_campaign(
         repetitions=repetitions,
         campaign_definition=campaign_definition,
         analysis_plan=analysis_plan,
+        efficiency_plan=efficiency_plan,
     )
     for system in systems:
         SystemManifest.from_dict(
@@ -727,6 +755,11 @@ def _manifest_payload(
                 else {}
             ),
             **(
+                {"benchmark_v4_efficiency_track_id": selected_definition.efficiency_track_id}
+                if selected_definition.efficiency_track_id is not None
+                else {}
+            ),
+            **(
                 {"scan_mode": STRIX_BENCHMARK_SCAN_MODE}
                 if system.system_id == "strix"
                 else {}
@@ -745,6 +778,7 @@ def _campaign_payload(
     repetitions: int,
     campaign_definition: _CampaignDefinition,
     analysis_plan: AnalysisPlan | None = None,
+    efficiency_plan: EfficiencyPlan | None = None,
 ) -> dict[str, Any]:
     python = ROOT / "venv" / "bin" / "python"
     lab = ROOT / "benchmarks" / "competitors" / "run_lab.py"
@@ -858,6 +892,14 @@ def _campaign_payload(
             "schema_version": "1.0",
             "state_directory": str(ROOT / ".benchmark-state" / "lab-v3"),
         }
+        if campaign_definition.efficiency_track_id is not None:
+            if efficiency_plan is None:
+                raise LaunchError("campaign_definition_mismatch")
+            payload["benchmark_v3"]["efficiency_plan"] = str(
+                _generated_directory(campaign_id) / "efficiency-plan.json"
+            )
+        elif efficiency_plan is not None:
+            raise LaunchError("campaign_definition_mismatch")
     return payload
 
 
@@ -997,6 +1039,16 @@ def _generated_v3_scenario_payloads(
                     "scenario_family": family,
                     "track_id": campaign_definition.benchmark_v3_track_id,
                 },
+                **(
+                    {
+                        "benchmark_v4": {
+                            "efficiency_track_id": campaign_definition.efficiency_track_id,
+                            "source_track_id": campaign_definition.benchmark_v3_track_id,
+                        }
+                    }
+                    if campaign_definition.efficiency_track_id is not None
+                    else {}
+                ),
             },
             # Native v3 paired seeds come only from the frozen analysis plan;
             # this legacy field is deliberately inert compatibility metadata.
@@ -1038,6 +1090,11 @@ def _generated_v3_scenario_payloads(
                 "blinded",
                 "read-only",
                 "small-model-stress-v3",
+                *(
+                    [campaign_definition.efficiency_track_id]
+                    if campaign_definition.efficiency_track_id is not None
+                    else []
+                ),
                 family.replace("_", "-"),
             ],
         }
@@ -1079,6 +1136,7 @@ def _fairness_profile(
         in {
             _SMALL_MODEL_CAMPAIGN_V2_DEFINITION_ID,
             _SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID,
+            _SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID,
         }
     )
     return {
@@ -1098,8 +1156,14 @@ def _fairness_profile(
             "65536-token context. "
             + (
                 (
-                    "Twelve generated, blinded read-only fixture families use "
-                    "paired seeds and a 900-second hard cap. "
+                    (
+                        "Twelve generated, blinded read-only fixture families use "
+                        f"{selected_definition.repetitions} paired repetitions and "
+                        "a 900-second hard cap. "
+                        if selected_definition.efficiency_track_id is not None
+                        else "Twelve generated, blinded read-only fixture families use "
+                        "paired seeds and a 900-second hard cap. "
+                    )
                     if selected_definition.benchmark_v3_track_id is not None
                     else "Four scenario-isolated read-only surfaces use a "
                     "900-second hard cap derived from the published v1 runtime "

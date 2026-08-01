@@ -797,8 +797,9 @@ The checked-in `STRIX_IMAGE` value is an immutable Linux amd64 digest; do not
 replace it with a mutable tag or another digest.
 
 For the calibrated `linux-blackbox-small-model-v1`, multi-surface
-`linux-blackbox-small-model-v2`, and generated blinded
-`linux-blackbox-small-model-v3` definitions, use this exact private env
+`linux-blackbox-small-model-v2`, generated blinded
+`linux-blackbox-small-model-v3`, and efficiency-focused
+`linux-blackbox-small-model-v4` definitions, use this exact private env
 configuration. The two acknowledgement values below are valid only after you
 have personally confirmed authorization and host isolation:
 
@@ -822,7 +823,7 @@ LLM_API_BASE=http://127.0.0.1:11434
 LLM_API_KEY=
 ```
 
-All three small-model definitions are intentionally separate altered-model
+All four small-model definitions are intentionally separate altered-model
 stress profiles. They require the exact tag
 `huihui_ai/qwen3.5-abliterated:9b`, server version `0.18.3`, context `65536`,
 flash attention `1`, and KV cache type `q8_0`; the live launcher also pins the

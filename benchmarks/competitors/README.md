@@ -8,6 +8,12 @@ The additive [Benchmark v3 methodology](../../docs/benchmarks/benchmark-v3.md)
 defines generated blinded fixtures, schema-2.0 outcomes, frozen statistics,
 and non-mergeable tracks. The checked-in v1/v2 result bundles remain unchanged.
 
+The prospective [Benchmark v4 methodology](../../docs/benchmarks/benchmark-v4.md)
+is a separate efficiency companion over a checksum-verified v3 evidence
+bundle. It adds a pre-run frozen randomized paired schedule, controller-derived
+wall/request metrics, quality-on-resource statistics, and an independent
+companion verifier without changing v3 artifacts.
+
 The default `python -m core.benchmarks` command remains an in-process,
 deterministic OCTOPUS regression benchmark. It does not launch OCTOPUS as a
 scanner, call a model provider, use a network, or run a competitor. Never cite
@@ -190,8 +196,9 @@ standalone lab control defaults to `127.0.0.1`. Optional explicit host, bind
 and port overrides are documented as comments in the template.
 
 For the calibrated `linux-blackbox-small-model-v1`, multi-surface
-`linux-blackbox-small-model-v2`, and generated blinded
-`linux-blackbox-small-model-v3` definitions, use this exact private env
+`linux-blackbox-small-model-v2`, generated blinded
+`linux-blackbox-small-model-v3`, and efficiency-focused
+`linux-blackbox-small-model-v4` definitions, use this exact private env
 configuration. The two acknowledgement values below are valid only after you
 have personally confirmed authorization and host isolation:
 
@@ -215,7 +222,7 @@ LLM_API_BASE=http://127.0.0.1:11434
 LLM_API_KEY=
 ```
 
-All three small-model definitions are intentionally separate altered-model
+All four small-model definitions are intentionally separate altered-model
 stress profiles. They require the exact tag
 `huihui_ai/qwen3.5-abliterated:9b`, server version `0.18.3`, context `65536`,
 flash attention `1`, and KV cache type `q8_0`; the live launcher also pins the
@@ -332,7 +339,7 @@ The launcher requires the v3 base seed but never serializes it directly. Do
 not reuse a prepared campaign ID for a later run: generated state is
 write-once, so use a fresh ID.
 
-Four checked-in definitions are available. `linux-blackbox-v1` is the
+Five checked-in definitions are available. `linux-blackbox-v1` is the
 backward-compatible default 300-second smoke contract. The explicitly selected
 `linux-blackbox-small-model-v1` freezes the altered 9B model tag/digest,
 Ollama 0.18.3, 65536-token context, q8_0 KV policy and a 600-second hard cap.
@@ -349,7 +356,11 @@ blinded read-only fixture families, schema-2.0 outcomes, an independently
 frozen plan, and 12 paired repetitions per system/scenario. It schedules 288
 product executions and belongs only to `small-model-stress-v3`; its sequential
 worst-case product-time allowance is 72 hours before reset, health, cleanup,
-and publication overhead.
+and publication overhead. The v4 definition retains that source evidence
+contract, freezes an additional randomized efficiency plan, raises the design
+to 20 paired repetitions per system/scenario, and schedules 480 executions.
+Its 120-hour sequential ceiling and full-system tool differences make it an
+engineering efficiency comparison, not a universal ranking.
 
 Use a fresh immutable ID for the repeated small-model campaign:
 

@@ -1,0 +1,193 @@
+{
+  "$id": "https://octopus.local/schemas/benchmark-efficiency-plan-v4.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "publication_tier": { "enum": ["canary", "full"] }
+        },
+        "required": ["publication_tier"]
+      },
+      "then": {
+        "properties": {
+          "require_run_attestation": { "const": true }
+        }
+      }
+    }
+  ],
+  "properties": {
+    "alpha": { "exclusiveMaximum": 1, "exclusiveMinimum": 0, "type": "number" },
+    "bootstrap_samples": { "maximum": 100000, "minimum": 100, "type": "integer" },
+    "bootstrap_seed": { "minimum": 0, "type": "integer" },
+    "comparison_pairs": {
+      "items": {
+        "items": { "$ref": "#/$defs/identifier" },
+        "maxItems": 2,
+        "minItems": 2,
+        "type": "array",
+        "uniqueItems": true
+      },
+      "maxItems": 2016,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "completion_noninferiority_margin": { "maximum": 1, "minimum": 0, "type": "number" },
+    "coverage_gates": {
+      "additionalProperties": false,
+      "properties": {
+        "fixture_http_requests": { "maximum": 1, "minimum": 0, "type": "number" },
+        "wall_time_seconds": { "maximum": 1, "minimum": 0, "type": "number" }
+      },
+      "required": ["fixture_http_requests", "wall_time_seconds"],
+      "type": "object"
+    },
+    "efficiency_track_id": { "$ref": "#/$defs/identifier" },
+    "frozen": { "const": true },
+    "methodology": {
+      "additionalProperties": false,
+      "properties": {
+        "automatic_winner": { "const": false },
+        "bootstrap_unit": { "const": "scenario_then_matched_block" },
+        "claim_resources": {
+          "const": ["wall_time_seconds", "fixture_http_requests"]
+        },
+        "completion_gate": { "const": "all_scheduled_noninferiority" },
+        "missing_data": { "const": "unavailable_no_imputation" },
+        "multiple_testing": { "const": "bonferroni_comparison_pairs_x_primary_resources" },
+        "paired_quality_gate": { "const": "both_completed_verified_f1_noninferiority" },
+        "quality_gate": { "const": "all_scheduled_verified_f1_noninferiority" },
+        "resource_direction": { "const": "lower_is_better" },
+        "resource_pair_population": { "const": "both_task_status_completed" }
+      },
+      "required": [
+        "automatic_winner",
+        "bootstrap_unit",
+        "claim_resources",
+        "completion_gate",
+        "missing_data",
+        "multiple_testing",
+        "paired_quality_gate",
+        "quality_gate",
+        "resource_direction",
+        "resource_pair_population"
+      ],
+      "type": "object"
+    },
+    "noninferiority_margin": { "maximum": 1, "minimum": 0, "type": "number" },
+    "plan_digest": { "$ref": "#/$defs/digest" },
+    "plan_id": {
+      "pattern": "^efficiency-plan-[0-9a-f]{20}$",
+      "type": "string"
+    },
+    "primary_resources": {
+      "const": ["wall_time_seconds", "fixture_http_requests"]
+    },
+    "publication_tier": { "enum": ["diagnostic", "canary", "full"] },
+    "quality_metric": { "const": "verified_f1" },
+    "repetitions": { "maximum": 10000, "minimum": 1, "type": "integer" },
+    "require_run_attestation": { "type": "boolean" },
+    "scenario_ids": {
+      "items": { "$ref": "#/$defs/identifier" },
+      "maxItems": 4096,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+    },
+    "schedule": {
+      "items": { "$ref": "#/$defs/scheduleBlock" },
+      "maxItems": 250000,
+      "minItems": 1,
+      "type": "array"
+    },
+    "schedule_seed": {
+      "maximum": 115792089237316195423570985008687907853269984665640564039457584007913129639935,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "schema_version": { "const": "1.0" },
+    "secondary_resources": {
+      "const": [
+        "unique_fixture_targets",
+        "repeated_fixture_requests",
+        "unsuccessful_fixture_requests",
+        "evidence_bearing_requests",
+        "tool_calls",
+        "output_bytes",
+        "model_tokens",
+        "api_cost_usd"
+      ]
+    },
+    "source_analysis_plan_digest": { "$ref": "#/$defs/digest" },
+    "source_track_id": { "$ref": "#/$defs/identifier" },
+    "system_ids": {
+      "items": { "$ref": "#/$defs/identifier" },
+      "maxItems": 64,
+      "minItems": 2,
+      "type": "array",
+      "uniqueItems": true
+    }
+  },
+  "required": [
+    "alpha",
+    "bootstrap_samples",
+    "bootstrap_seed",
+    "comparison_pairs",
+    "completion_noninferiority_margin",
+    "coverage_gates",
+    "efficiency_track_id",
+    "frozen",
+    "methodology",
+    "noninferiority_margin",
+    "plan_digest",
+    "plan_id",
+    "primary_resources",
+    "publication_tier",
+    "quality_metric",
+    "repetitions",
+    "require_run_attestation",
+    "scenario_ids",
+    "schedule",
+    "schedule_seed",
+    "schema_version",
+    "secondary_resources",
+    "source_analysis_plan_digest",
+    "source_track_id",
+    "system_ids"
+  ],
+  "title": "OCTOPUS Benchmark v4 frozen efficiency plan",
+  "type": "object",
+  "$defs": {
+    "digest": {
+      "pattern": "^[0-9a-f]{64}$",
+      "type": "string"
+    },
+    "identifier": {
+      "pattern": "^[a-z0-9][a-z0-9_.:-]{0,159}$",
+      "type": "string"
+    },
+    "scheduleBlock": {
+      "additionalProperties": false,
+      "properties": {
+        "matched_fixture_seed": {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "repetition": { "maximum": 10000, "minimum": 1, "type": "integer" },
+        "scenario_id": { "$ref": "#/$defs/identifier" },
+        "system_order": {
+          "items": { "$ref": "#/$defs/identifier" },
+          "maxItems": 64,
+          "minItems": 2,
+          "type": "array",
+          "uniqueItems": true
+        }
+      },
+      "required": ["matched_fixture_seed", "repetition", "scenario_id", "system_order"],
+      "type": "object"
+    }
+  }
+}

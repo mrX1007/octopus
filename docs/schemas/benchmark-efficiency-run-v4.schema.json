@@ -1,0 +1,212 @@
+{
+  "$id": "https://octopus.local/schemas/benchmark-efficiency-run-v4.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "batch_id": { "$ref": "#/$defs/optionalText" },
+    "efficiency_plan_attested": { "type": "boolean" },
+    "efficiency_track_id": { "$ref": "#/$defs/identifier" },
+    "execution_status": {
+      "enum": ["succeeded", "failed", "timeout", "invalid", "cancelled"]
+    },
+    "finished_at": { "type": "number" },
+    "host_id": { "$ref": "#/$defs/optionalText" },
+    "matched_fixture_seed": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "quality": {
+      "allOf": [
+        { "$ref": "#/$defs/observation" },
+        {
+          "properties": {
+            "name": { "const": "verified_f1" },
+            "unit": { "const": "ratio" },
+            "value": { "maximum": 1 }
+          }
+        }
+      ]
+    },
+    "repetition": { "maximum": 10000, "minimum": 1, "type": "integer" },
+    "resources": {
+      "additionalProperties": false,
+      "properties": {
+        "api_cost_usd": { "$ref": "#/$defs/apiCost" },
+        "evidence_bearing_requests": { "$ref": "#/$defs/evidenceBearingRequests" },
+        "fixture_http_requests": { "$ref": "#/$defs/fixtureHttpRequests" },
+        "model_tokens": { "$ref": "#/$defs/modelTokens" },
+        "output_bytes": { "$ref": "#/$defs/outputBytes" },
+        "repeated_fixture_requests": { "$ref": "#/$defs/repeatedFixtureRequests" },
+        "tool_calls": { "$ref": "#/$defs/toolCalls" },
+        "unique_fixture_targets": { "$ref": "#/$defs/uniqueFixtureTargets" },
+        "unsuccessful_fixture_requests": { "$ref": "#/$defs/unsuccessfulFixtureRequests" },
+        "wall_time_seconds": { "$ref": "#/$defs/wallTimeSeconds" }
+      },
+      "required": [
+        "api_cost_usd",
+        "evidence_bearing_requests",
+        "fixture_http_requests",
+        "model_tokens",
+        "output_bytes",
+        "repeated_fixture_requests",
+        "tool_calls",
+        "unique_fixture_targets",
+        "unsuccessful_fixture_requests",
+        "wall_time_seconds"
+      ],
+      "type": "object"
+    },
+    "run_id": { "$ref": "#/$defs/identifier" },
+    "scenario_id": { "$ref": "#/$defs/identifier" },
+    "schema_version": { "const": "1.0" },
+    "source_track_id": { "$ref": "#/$defs/identifier" },
+    "started_at": { "type": "number" },
+    "system_id": { "$ref": "#/$defs/identifier" },
+    "task_status": {
+      "enum": ["completed", "partial", "not_completed", "not_evaluated", "invalid"]
+    }
+  },
+  "required": [
+    "batch_id",
+    "efficiency_plan_attested",
+    "efficiency_track_id",
+    "execution_status",
+    "finished_at",
+    "host_id",
+    "matched_fixture_seed",
+    "quality",
+    "repetition",
+    "resources",
+    "run_id",
+    "scenario_id",
+    "schema_version",
+    "source_track_id",
+    "started_at",
+    "system_id",
+    "task_status"
+  ],
+  "title": "OCTOPUS Benchmark v4 efficiency run projection",
+  "type": "object",
+  "$defs": {
+    "apiCost": {
+      "allOf": [
+        { "$ref": "#/$defs/observation" },
+        { "properties": { "name": { "const": "api_cost_usd" }, "unit": { "const": "usd" } } }
+      ]
+    },
+    "evidenceBearingRequests": {
+      "allOf": [
+        { "$ref": "#/$defs/observation" },
+        { "properties": { "name": { "const": "evidence_bearing_requests" }, "unit": { "const": "requests" } } }
+      ]
+    },
+    "fixtureHttpRequests": {
+      "allOf": [
+        { "$ref": "#/$defs/observation" },
+        { "properties": { "name": { "const": "fixture_http_requests" }, "unit": { "const": "requests" } } }
+      ]
+    },
+    "identifier": {
+      "pattern": "^[a-z0-9][a-z0-9_.:-]{0,159}$",
+      "type": "string"
+    },
+    "modelTokens": {
+      "allOf": [
+        { "$ref": "#/$defs/observation" },
+        { "properties": { "name": { "const": "model_tokens" }, "unit": { "const": "tokens" } } }
+      ]
+    },
+    "observation": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": { "available": { "const": true } },
+            "required": ["available"]
+          },
+          "then": {
+            "properties": {
+              "reliability": {
+                "enum": ["verified", "measured", "derived", "self_reported", "legacy_incomplete"]
+              },
+              "value": { "minimum": 0, "type": "number" }
+            }
+          },
+          "else": {
+            "properties": {
+              "reliability": { "const": "unavailable" },
+              "value": { "const": null }
+            },
+            "required": ["reason"]
+          }
+        }
+      ],
+      "properties": {
+        "available": { "type": "boolean" },
+        "name": { "$ref": "#/$defs/identifier" },
+        "reason": {
+          "maxLength": 16384,
+          "minLength": 1,
+          "pattern": "^[^\\u0000]+$",
+          "type": "string"
+        },
+        "reliability": {
+          "enum": ["verified", "measured", "derived", "self_reported", "legacy_incomplete", "unavailable"]
+        },
+        "source": { "$ref": "#/$defs/identifier" },
+        "unit": { "$ref": "#/$defs/identifier" },
+        "value": { "type": ["number", "null"] }
+      },
+      "required": ["available", "name", "reliability", "source", "unit", "value"],
+      "type": "object"
+    },
+    "optionalText": {
+      "oneOf": [
+        {
+          "maxLength": 16384,
+          "minLength": 1,
+          "pattern": "^[^\\u0000]+$",
+          "type": "string"
+        },
+        { "type": "null" }
+      ]
+    },
+    "outputBytes": {
+      "allOf": [
+        { "$ref": "#/$defs/observation" },
+        { "properties": { "name": { "const": "output_bytes" }, "unit": { "const": "bytes" } } }
+      ]
+    },
+    "repeatedFixtureRequests": {
+      "allOf": [
+        { "$ref": "#/$defs/observation" },
+        { "properties": { "name": { "const": "repeated_fixture_requests" }, "unit": { "const": "requests" } } }
+      ]
+    },
+    "toolCalls": {
+      "allOf": [
+        { "$ref": "#/$defs/observation" },
+        { "properties": { "name": { "const": "tool_calls" }, "unit": { "const": "calls" } } }
+      ]
+    },
+    "uniqueFixtureTargets": {
+      "allOf": [
+        { "$ref": "#/$defs/observation" },
+        { "properties": { "name": { "const": "unique_fixture_targets" }, "unit": { "const": "targets" } } }
+      ]
+    },
+    "unsuccessfulFixtureRequests": {
+      "allOf": [
+        { "$ref": "#/$defs/observation" },
+        { "properties": { "name": { "const": "unsuccessful_fixture_requests" }, "unit": { "const": "requests" } } }
+      ]
+    },
+    "wallTimeSeconds": {
+      "allOf": [
+        { "$ref": "#/$defs/observation" },
+        { "properties": { "name": { "const": "wall_time_seconds" }, "unit": { "const": "seconds" } } }
+      ]
+    }
+  }
+}

@@ -1,4 +1,4 @@
-"""Hermetic CLI coverage for both benchmark entrypoints."""
+"""Hermetic CLI coverage for benchmark entrypoints."""
 
 from __future__ import annotations
 
@@ -170,7 +170,11 @@ def test_load_manifests_combines_files_and_directories(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     "module_name",
-    ("core.benchmarks.__main__", "core.benchmarks.competitors.__main__"),
+    (
+        "core.benchmarks.__main__",
+        "core.benchmarks.competitors.__main__",
+        "core.benchmarks.v4.__main__",
+    ),
 )
 def test_module_entry_guards_execute_help(module_name, monkeypatch):
     monkeypatch.setattr(sys, "argv", [module_name, "--help"])

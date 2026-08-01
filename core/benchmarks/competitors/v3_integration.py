@@ -37,6 +37,7 @@ from ..v3.fixture import (
 )
 from ..v3.ledger import ControlPlaneLedger, read_ledger
 from ..v3.schema import BenchmarkRunV3, BenchmarkV3SchemaError, canonical_json, stable_digest
+from ..v4 import BenchmarkV4SchemaError, EfficiencyPlan, load_efficiency_plan
 
 V3_CAMPAIGN_CONFIG_SCHEMA_VERSION = "1.0"
 V3_PRODUCT_CLAIM_CONTRACT = "native-final-report-claims-v1"
@@ -45,6 +46,7 @@ _CONFIG_KEYS = frozenset(
     {
         "analysis_plan",
         "batch_id",
+        "efficiency_plan",
         "host_id",
         "state_directory",
         "schema_version",
@@ -63,6 +65,7 @@ class BenchmarkV3CampaignConfig:
     batch_id: str
     host_id: str
     schema_version: str = V3_CAMPAIGN_CONFIG_SCHEMA_VERSION
+    efficiency_plan_path: Path | None = None
 
     @classmethod
     def from_dict(
@@ -86,25 +89,56 @@ class BenchmarkV3CampaignConfig:
             base=base,
             name="state_directory",
         )
+        raw_efficiency_plan = payload.get("efficiency_plan")
+        efficiency_plan = (
+            _resolved_path(
+                raw_efficiency_plan,
+                base=base,
+                name="efficiency_plan",
+            )
+            if "efficiency_plan" in payload
+            else None
+        )
         return cls(
             analysis_plan_path=analysis_plan,
             state_directory=state_directory,
             batch_id=_identifier(payload.get("batch_id"), "batch_id"),
             host_id=_identifier(payload.get("host_id"), "host_id"),
+            efficiency_plan_path=efficiency_plan,
         )
 
     def plan(self) -> AnalysisPlan:
         return load_analysis_plan(self.analysis_plan_path)
 
+    def efficiency_plan(self) -> EfficiencyPlan | None:
+        if self.efficiency_plan_path is None:
+            return None
+        try:
+            return load_efficiency_plan(self.efficiency_plan_path)
+        except BenchmarkV4SchemaError:
+            raise
+        except (OSError, UnicodeError, ValueError, TypeError):
+            raise BenchmarkV3SchemaError("efficiency_plan_load_failed") from None
+
     def fingerprint_payload(self) -> dict[str, Any]:
         plan = self.plan()
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "analysis_plan_digest": plan.digest,
             "batch_id": self.batch_id,
             "host_id": self.host_id,
             "track_id": plan.track_id,
         }
+        efficiency_plan = self.efficiency_plan()
+        if efficiency_plan is not None:
+            _validate_efficiency_plan_source(efficiency_plan, plan)
+            payload.update(
+                {
+                    "efficiency_plan_digest": efficiency_plan.digest,
+                    "efficiency_track_id": efficiency_plan.efficiency_track_id,
+                }
+            )
+        return payload
 
     def public_payload(self) -> dict[str, Any]:
         return self.fingerprint_payload()
@@ -146,7 +180,85 @@ def validate_campaign_plan(
         raise BenchmarkV3SchemaError("v3_plan_scenario_mismatch")
     if int(repetitions) != plan.repetitions:
         raise BenchmarkV3SchemaError("v3_plan_repetition_mismatch")
+    efficiency_plan = _configured_efficiency_plan(config)
+    if efficiency_plan is not None:
+        validate_efficiency_campaign_plan(
+            efficiency_plan,
+            source_plan=plan,
+            system_ids=system_ids,
+            scenario_ids=scenario_ids,
+            repetitions=repetitions,
+        )
     return plan
+
+
+def validate_efficiency_campaign_plan(
+    efficiency_plan: EfficiencyPlan,
+    *,
+    source_plan: AnalysisPlan,
+    system_ids: Sequence[str],
+    scenario_ids: Sequence[str],
+    repetitions: int,
+) -> EfficiencyPlan:
+    """Validate the additive v4 design against its exact v3 source design."""
+
+    _validate_efficiency_plan_source(efficiency_plan, source_plan)
+    expected_systems = tuple(system_ids)
+    expected_scenarios = tuple(scenario_ids)
+    if (
+        efficiency_plan.system_ids != expected_systems
+        or expected_systems != source_plan.system_ids
+    ):
+        raise BenchmarkV3SchemaError("efficiency_plan_system_mismatch")
+    if (
+        efficiency_plan.scenario_ids != expected_scenarios
+        or expected_scenarios != source_plan.scenario_ids
+    ):
+        raise BenchmarkV3SchemaError("efficiency_plan_scenario_mismatch")
+
+    expected_repetitions = int(repetitions)
+    if (
+        efficiency_plan.repetitions != expected_repetitions
+        or expected_repetitions != source_plan.repetitions
+    ):
+        raise BenchmarkV3SchemaError("efficiency_plan_repetition_mismatch")
+    expected_blocks = {
+        (scenario_id, repetition): int(
+            source_plan.fixture_seeds[scenario_id][repetition - 1]
+        )
+        for scenario_id in expected_scenarios
+        for repetition in range(1, expected_repetitions + 1)
+    }
+    observed_blocks: dict[tuple[str, int], int] = {}
+    for block in efficiency_plan.schedule:
+        identity = (block.scenario_id, block.repetition)
+        if identity in observed_blocks:
+            raise BenchmarkV3SchemaError("efficiency_plan_schedule_mismatch")
+        observed_blocks[identity] = block.matched_fixture_seed
+        if tuple(block.system_order) != tuple(dict.fromkeys(block.system_order)):
+            raise BenchmarkV3SchemaError("efficiency_plan_schedule_mismatch")
+        if set(block.system_order) != set(expected_systems):
+            raise BenchmarkV3SchemaError("efficiency_plan_schedule_mismatch")
+    if set(observed_blocks) != set(expected_blocks):
+        raise BenchmarkV3SchemaError("efficiency_plan_repetition_mismatch")
+    if observed_blocks != expected_blocks:
+        raise BenchmarkV3SchemaError("efficiency_plan_schedule_mismatch")
+    return efficiency_plan
+
+
+def _validate_efficiency_plan_source(
+    efficiency_plan: EfficiencyPlan,
+    source_plan: AnalysisPlan,
+) -> None:
+    if efficiency_plan.source_analysis_plan_digest != source_plan.digest:
+        raise BenchmarkV3SchemaError("efficiency_plan_source_digest_mismatch")
+    if efficiency_plan.source_track_id != source_plan.track_id:
+        raise BenchmarkV3SchemaError("efficiency_plan_source_track_mismatch")
+
+
+def _configured_efficiency_plan(config: Any) -> EfficiencyPlan | None:
+    loader = getattr(config, "efficiency_plan", None)
+    return loader() if callable(loader) else None
 
 
 def planned_fixture_seed(
@@ -254,6 +366,7 @@ def build_v3_run(
     started_at: float,
     finished_at: float,
     reset_attestation: Mapping[str, Any],
+    efficiency_plan: EfficiencyPlan | None = None,
 ) -> BenchmarkRunV3:
     expected_seed = planned_fixture_seed(
         plan,
@@ -360,6 +473,34 @@ def build_v3_run(
         "reset_attestation": dict(reset_attestation),
         "scenario_family": variant.scenario_family,
     }
+    configured_efficiency_plan = _configured_efficiency_plan(config)
+    if efficiency_plan is not None and (
+        configured_efficiency_plan is None
+        or configured_efficiency_plan.digest != efficiency_plan.digest
+    ):
+        raise BenchmarkV3SchemaError("efficiency_plan_digest_mismatch")
+    selected_efficiency_plan = configured_efficiency_plan or efficiency_plan
+    if selected_efficiency_plan is not None:
+        validate_efficiency_campaign_plan(
+            selected_efficiency_plan,
+            source_plan=plan,
+            system_ids=plan.system_ids,
+            scenario_ids=plan.scenario_ids,
+            repetitions=plan.repetitions,
+        )
+        matching_blocks = tuple(
+            block
+            for block in selected_efficiency_plan.schedule
+            if block.scenario_id == scenario.scenario_id
+            and block.repetition == repetition
+        )
+        if (
+            len(matching_blocks) != 1
+            or matching_blocks[0].matched_fixture_seed != seed
+            or system_id not in matching_blocks[0].system_order
+        ):
+            raise BenchmarkV3SchemaError("efficiency_plan_schedule_mismatch")
+        environment["efficiency_plan_digest"] = selected_efficiency_plan.digest
     return make_run(
         track_id=plan.track_id,
         system_id=system_id,
@@ -581,4 +722,5 @@ __all__ = [
     "run_artifacts",
     "scenario_family",
     "validate_campaign_plan",
+    "validate_efficiency_campaign_plan",
 ]
