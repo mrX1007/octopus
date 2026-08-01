@@ -157,17 +157,22 @@ def test_verification_gap_matrix(fact, expected):
 
 
 def test_access_root_cleanup_candidate_and_evidence_helpers():
-    assert schema._is_access_fact("exploit_success", {}) is True
+    assert schema._is_access_fact("exploit_success", {}) is False
     assert schema._is_access_fact("credential", {"value": "ssh_login_success:user@host"}) is True
     assert schema._is_access_fact("credential", {"value": "found username"}) is False
-    assert schema._is_access_fact("service_status", {"value": "authenticated_access:yes"}) is True
-    assert schema._is_access_fact("verified_claim", {"value": "root_access_confirmed"}) is True
+    assert schema._is_access_fact("service_status", {"value": "ssh_authenticated"}) is True
+    assert schema._is_access_fact("service_status", {"value": "authenticated_access:yes"}) is False
+    assert schema._is_access_fact("verified_claim", {"value": "root_access_confirmed"}) is False
     assert schema._is_access_fact("verified_claim", {"value": "other"}) is False
     assert schema._is_access_fact("other", {}) is False
-    assert schema._is_root_access_fact({"value": "uid=0(root)"}) is True
+    assert schema._is_root_access_fact({"type": "system_access", "value": "uid=0"}) is True
+    assert schema._is_root_access_fact({"type": "system_access", "value": "uid=0(root)"}) is False
     assert schema._is_root_access_fact({"value": "user"}) is False
     assert schema._is_cleanup_fact("observation", {"value": "cleanup"}) is False
-    assert schema._is_cleanup_fact("service_status", {"value": "cleanup_succeeded"}) is True
+    assert schema._is_cleanup_fact(
+        "cleanup_status",
+        {"type": "cleanup_status", "value": "success"},
+    ) is True
     assert schema._looks_like_cve_candidate("observation", {"value": "CVE-1"}) is False
     assert schema._looks_like_cve_candidate("finding", {"value": "CVE-2026-1"}) is True
     assert schema._looks_like_cve_candidate("finding", {"value": "version only"}) is False

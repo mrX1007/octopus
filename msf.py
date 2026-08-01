@@ -16,6 +16,7 @@ try:
         current_execution_context,
         redact_sensitive_command,
     )
+    from core.execution.policy import validate_msf_options
     from core.tools.base import (
         _bounded_process_output,
         _terminate_process_tree,
@@ -77,6 +78,11 @@ def run_msf_module(module: str, options_str: str, timeout: Optional[int] = None,
         timeout: Execution timeout in seconds
         mode: "check" for exploit check/auxiliary run, "run" for active execution
     """
+    try:
+        validate_msf_options(options_str)
+    except ValueError as exc:
+        return f"[!] MSF execution blocked: {exc}"
+
     if not shutil.which("msfconsole"):
         return "[!] msfconsole is not installed or not in PATH. Use exploit_select/searchsploit for planning, or install Metasploit to enable msf_check."
 
@@ -201,18 +207,16 @@ def run_msf_module(module: str, options_str: str, timeout: Optional[int] = None,
     for k, v in opts.items():
         script += f"set {k} {v}; "
     
-    # Auto-set payload for exploit modules
+    # Auto-select bind payloads so the action remains confined to the explicit
+    # RHOSTS target. Reverse/callback payloads require a future typed callback
+    # scope and are rejected by validate_msf_options.
     if module.startswith("exploit/") and not opts.get("PAYLOAD"):
-        # Default payloads by platform
         if "unix" in module or "linux" in module:
-            script += "set PAYLOAD cmd/unix/reverse_python; "
+            script += "set PAYLOAD cmd/unix/bind_netcat; "
         elif "windows" in module:
-            script += "set PAYLOAD windows/meterpreter/reverse_tcp; "
+            script += "set PAYLOAD windows/meterpreter/bind_tcp; "
         else:
-            script += "set PAYLOAD generic/shell_reverse_tcp; "
-        # Set LHOST if not specified
-        if not opts.get("LHOST"):
-            script += "set LHOST 0.0.0.0; "
+            script += "set PAYLOAD generic/shell_bind_tcp; "
         if not opts.get("LPORT"):
             script += "set LPORT 4444; "
     

@@ -10,6 +10,10 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from core.ai.fact_predicates import (
+    NON_DECISION_TRUST_LEVELS,
+    fact_trust_level,
+)
 from core.knowledge.identity import canonicalize_scope_values
 
 EVALUATED_FACT_SNAPSHOT_SCHEMA_VERSION = "1.0"
@@ -18,11 +22,12 @@ EVALUATED_FACT_SNAPSHOT_SCHEMA_VERSION = "1.0"
 def fact_is_decision_usable(fact: Mapping[str, Any]) -> bool:
     """Return whether a fact may support a current decision.
 
-    Historical facts remain available to reporting and replay.  A contradicted,
-    stale, or degraded observation cannot close a current stage/capability gate.
-    Unknown freshness is retained for compatibility when no execution outcome
-    exists; a timeout is represented separately as degraded coverage and is
-    therefore excluded without being converted into negative evidence.
+    Historical facts remain available to reporting and replay.  A fact backed
+    only by target-controlled/untrusted observations, or one that is
+    contradicted, stale, or degraded, cannot close a current stage/capability
+    gate.  Unknown freshness is retained for compatibility when no execution
+    outcome exists; a timeout is represented separately as degraded coverage
+    and is therefore excluded without being converted into negative evidence.
     """
 
     assessment = fact.get("assessment")
@@ -33,7 +38,8 @@ def fact_is_decision_usable(fact: Mapping[str, Any]) -> bool:
     freshness_status = str(fact.get("freshness_status") or "").strip().casefold()
     coverage_status = str(fact.get("coverage_status") or "").strip().casefold()
     return (
-        assessment_status != "contradicted"
+        fact_trust_level(fact) not in NON_DECISION_TRUST_LEVELS
+        and assessment_status != "contradicted"
         and freshness_status != "stale"
         and coverage_status != "degraded"
     )
@@ -48,6 +54,7 @@ class EvaluatedFact:
     assessment_status: str
     freshness_status: str
     coverage_status: str
+    trust_level: str
     decision_usable: bool
     payload_json: str
 
@@ -77,6 +84,7 @@ class EvaluatedFact:
             coverage_status=str(payload.get("coverage_status") or "unknown")
             .strip()
             .casefold(),
+            trust_level=fact_trust_level(payload),
             decision_usable=fact_is_decision_usable(payload),
             payload_json=json.dumps(
                 payload,
@@ -248,6 +256,7 @@ class EvaluatedFactSnapshot:
                     "status": item.assessment_status,
                     "freshness_status": item.freshness_status,
                     "coverage_status": item.coverage_status,
+                    "trust_level": item.trust_level,
                     "decision_usable": item.decision_usable,
                 }
                 for item in self.facts

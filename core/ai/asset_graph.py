@@ -9,6 +9,7 @@ import re
 from typing import Any, Union, cast
 from urllib.parse import urlparse
 
+from core.ai.evaluated_facts import fact_is_decision_usable
 from core.knowledge.identity import (
     ENTITY_NORMALIZATION_VERSION,
     canonical_asset,
@@ -23,7 +24,10 @@ class AssetGraph:
     def __init__(self, target: str, facts: list[dict[str, Any]]):
         self.target = target
         self.host = self._target_host(target)
-        self.facts = facts or []
+        # AssetGraph drives deterministic planning.  Keep historical and
+        # target-controlled observations in reports, but never materialize
+        # them as confirmed graph nodes at this decision boundary.
+        self.facts = [fact for fact in (facts or []) if fact_is_decision_usable(fact)]
         self.nodes: dict[str, dict[str, Any]] = {}
         self.edges: dict[str, dict[str, Any]] = {}
         self.aliases: dict[str, str] = {}

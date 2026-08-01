@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from core.ai.evaluated_facts import fact_is_decision_usable
 from core.credential_ranking import KEY_AUTH_MARKER
 from core.credentials import CredentialRef
 from core.secrets import is_secret_ref
@@ -74,6 +75,8 @@ class RuntimeCredentialSynchronizer:
 
         host = target_host(target)
         for fact in facts:
+            if not fact_is_decision_usable(fact):
+                continue
             if fact.get("type") != "credential":
                 continue
             value = str(fact.get("value", "")).strip()

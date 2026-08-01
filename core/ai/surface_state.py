@@ -3,6 +3,8 @@
 from collections.abc import Iterable
 from typing import Any, ClassVar
 
+from core.ai.evaluated_facts import fact_is_decision_usable
+
 
 class SurfaceState:
     """Classify major assessment surfaces as unknown/present/absent."""
@@ -43,7 +45,9 @@ class SurfaceState:
     }
 
     def __init__(self, facts: Iterable[dict[str, Any]]):
-        self.facts = list(facts or [])
+        self.facts = [
+            fact for fact in (facts or []) if fact_is_decision_usable(fact)
+        ]
 
     def to_dict(self) -> dict[str, str]:
         return {surface: self.state(surface) for surface in self.SURFACES}

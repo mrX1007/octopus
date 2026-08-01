@@ -22,6 +22,7 @@ pytestmark = [pytest.mark.contract, pytest.mark.security]
 
 EXPECTED_BUILTIN_TOOL_COUNT = 96
 TARGET = "192.0.2.10"
+CALLBACK_TARGET = "192.0.2.11"
 PROFILE_ONLY_BUILTINS = {
     "deploy_c2_beacon",
     "jmx2rce_cleanup",
@@ -51,9 +52,24 @@ def _approved_context() -> ExecutionContext:
     return ExecutionContext.operator(
         actor="unified-runtime-contract",
         approval_id="hermetic-contract-approval",
-        target_scope=(TARGET,),
+        target_scope=(TARGET, CALLBACK_TARGET),
         allow_active_tools=True,
     )
+
+
+def _provider_command(tool_def, lookup_name: str) -> str:
+    bound_arguments = {
+        "bruteforce": f"ssh {TARGET}",
+        "build_go_implant": f"http://{TARGET}",
+        "build_ps_stager": f"http://{TARGET}",
+        "build_python_implant": f"http://{TARGET}",
+        "deploy_c2_beacon": f"{TARGET} fixture-user fixture-password {CALLBACK_TARGET}",
+        "killchain_persist": f"{TARGET} fixture-user fixture-password {CALLBACK_TARGET}",
+        "plugin": f"fixture {TARGET}",
+        "port_forward": f"{TARGET} 8080 {TARGET} 80",
+        "stealth_brute": f"ssh {TARGET}",
+    }.get(tool_def.name, TARGET)
+    return f"{lookup_name} {bound_arguments}"
 
 
 def test_builtin_registry_ai_classification_and_action_catalog_are_complete():
@@ -314,7 +330,7 @@ def test_every_builtin_name_and_alias_dispatches_through_one_runtime(tmp_path):
     for tool_def in definitions:
         for lookup_name in (tool_def.name, *tool_def.aliases):
             expected_calls += 1
-            command = f"{lookup_name} {TARGET}"
+            command = _provider_command(tool_def, lookup_name)
             report = runtime.execute_action(
                 lookup_name,
                 ActionRequest(
@@ -358,7 +374,7 @@ def test_every_builtin_name_and_alias_crosses_scheduler_and_action_catalog(tmp_p
     for tool_def in definitions:
         for lookup_name in (tool_def.name, *tool_def.aliases):
             expected_calls += 1
-            command = f"{lookup_name} {TARGET}"
+            command = _provider_command(tool_def, lookup_name)
             decision = runtime.decide(command, (), set(), context)
             result = runtime.execute(
                 decision,
@@ -379,7 +395,7 @@ def test_every_builtin_name_and_alias_crosses_scheduler_and_action_catalog(tmp_p
 
 def test_automatic_context_never_dispatches_policy_active_builtin_or_alias(tmp_path):
     definitions = tuple(replace(tool_def, requires=[], enabled=True) for tool_def in _builtin_tool_defs())
-    context = ExecutionContext.automatic(target_scope=(TARGET,))
+    context = ExecutionContext.automatic(target_scope=(TARGET, CALLBACK_TARGET))
     calls: list[str] = []
 
     def runner(command: str, _execution_context: ExecutionContext):
@@ -394,7 +410,7 @@ def test_automatic_context_never_dispatches_policy_active_builtin_or_alias(tmp_p
 
     for tool_def in definitions:
         for lookup_name in (tool_def.name, *tool_def.aliases):
-            command = f"{lookup_name} {TARGET}"
+            command = _provider_command(tool_def, lookup_name)
             call_count = len(calls)
             report = runtime.execute_action(
                 lookup_name,
@@ -444,7 +460,7 @@ def test_real_command_facade_reaches_all_builtin_providers_without_external_io(
     for tool_def in definitions:
         for lookup_name in (tool_def.name, *tool_def.aliases):
             expected_names.append(tool_def.name)
-            result = run_tool_by_command(f"{lookup_name} {TARGET}", context)
+            result = run_tool_by_command(_provider_command(tool_def, lookup_name), context)
             assert result == f"provider-stub:{tool_def.name}"
 
     assert [name for name, _context in called] == expected_names

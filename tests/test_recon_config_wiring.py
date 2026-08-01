@@ -7,6 +7,7 @@ pytestmark = pytest.mark.unit
 
 def test_nmap_smart_phases_use_configured_aggressive_flags_and_timeout(monkeypatch):
     import core.tools.recon_tools as recon_tools
+    from core.execution import ExecutionContext, bind_execution_context
 
     calls = []
 
@@ -31,7 +32,13 @@ def test_nmap_smart_phases_use_configured_aggressive_flags_and_timeout(monkeypat
 
     monkeypatch.setattr(recon_tools, "run_tool", fake_run_tool)
 
-    output = recon_tools.run_nmap("scan.example", extra_flags=["-p-", "-sV"])
+    context = ExecutionContext.automatic(
+        ("scan.example",),
+        actor="recon-config-contract",
+        origin="tests",
+    )
+    with bind_execution_context(context):
+        output = recon_tools.run_nmap("scan.example", extra_flags=["-p-", "-sV"])
 
     assert calls == [
         (
@@ -43,7 +50,7 @@ def test_nmap_smart_phases_use_configured_aggressive_flags_and_timeout(monkeypat
     assert "deep scan complete" in output
 
 
-def test_curl_headers_uses_configured_flags_and_timeout(monkeypatch):
+def test_curl_headers_uses_code_owned_flags_and_configured_timeout(monkeypatch):
     import core.tools.recon_tools as recon_tools
 
     calls = []
@@ -61,7 +68,21 @@ def test_curl_headers_uses_configured_flags_and_timeout(monkeypatch):
 
     output = recon_tools.run_curl_headers("app.example")
 
-    assert calls == [(["curl", "-sS", "--max-time", "7", "-k", "https://app.example/login"], 41)]
+    assert calls == [
+        (
+            [
+                "curl",
+                "-sI",
+                "--max-time",
+                "10",
+                "--noproxy",
+                "*",
+                "-k",
+                "https://app.example/login",
+            ],
+            41,
+        )
+    ]
     assert "HTTP/2 200" in output
 
 
@@ -89,7 +110,15 @@ def test_ffuf_uses_configured_flags_and_limits(monkeypatch):
             else {}
         ),
     )
-    monkeypatch.setattr(requests, "get", lambda *_args, **_kwargs: object())
+    class FakeSession:
+        def __init__(self):
+            self.trust_env = True
+
+        @staticmethod
+        def get(*_args, **_kwargs):
+            return object()
+
+    monkeypatch.setattr(requests, "Session", FakeSession)
     monkeypatch.setattr(
         recon_tools,
         "run_tool",
@@ -173,30 +202,58 @@ def test_scrapling_enabled_is_a_hard_feature_gate(monkeypatch):
     assert "disabled by config" in recon_tools.run_scrapling_crawl("web.example")
 
 
-def test_scrapling_stealth_fetch_uses_configured_timeout(monkeypatch):
+def test_scrapling_stealth_config_cannot_bypass_nonstealth_hardening(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    import requests
+
     import core.tools.recon_tools as recon_tools
 
-    seen = []
+    fetcher_calls = []
+    request_calls = []
 
-    class FakePage:
-        status = 200
+    class ForbiddenFetcher:
+        def __init__(self):
+            fetcher_calls.append("constructed")
+
+    class FakeResponse:
+        status_code = 200
+        text = "<html><body>page body</body></html>"
+
+    class FakeSession:
+        def __init__(self):
+            self.trust_env = True
 
         @staticmethod
-        def css_first(_selector):
+        def mount(*_args, **_kwargs):
             return None
 
+        def get(self, url, **kwargs):
+            request_calls.append((url, kwargs))
+            return FakeResponse()
+
+    class FakeBody:
         @staticmethod
-        def css(_selector):
+        def __call__(*args, **kwargs):
             return []
 
         @staticmethod
-        def text(*_args, **_kwargs):
+        def get_text(*args, **kwargs):
             return "page body"
 
-    class FakeFetcher:
-        def fetch(self, url, **kwargs):
-            seen.append((url, kwargs))
-            return FakePage()
+    class FakeSoup:
+        @staticmethod
+        def find(name):
+            return FakeBody() if name == "body" else None
+
+        @staticmethod
+        def find_all(*args, **kwargs):
+            return []
+
+        @staticmethod
+        def get_text(*args, **kwargs):
+            return "page body"
 
     monkeypatch.setattr(
         recon_tools,
@@ -204,11 +261,20 @@ def test_scrapling_stealth_fetch_uses_configured_timeout(monkeypatch):
         {"scrapling": {"enabled": True, "timeout": 12, "use_stealth": True}},
     )
     monkeypatch.setattr(recon_tools, "_SCRAPLING_OK", True)
-    monkeypatch.setattr(recon_tools, "_StealthyFetcher", FakeFetcher)
+    monkeypatch.setattr(recon_tools, "_StealthyFetcher", ForbiddenFetcher)
+    monkeypatch.setattr(requests, "Session", FakeSession)
+    monkeypatch.setitem(
+        sys.modules,
+        "bs4",
+        SimpleNamespace(BeautifulSoup=lambda html, parser: FakeSoup()),
+    )
 
     output = recon_tools.run_scrapling_fetch("https://web.example")
 
-    assert seen == [("https://web.example", {"timeout": 12000})]
+    assert fetcher_calls == []
+    assert request_calls[0][0] == "https://web.example"
+    assert request_calls[0][1]["timeout"] == (5, 12)
+    assert request_calls[0][1]["allow_redirects"] is False
     assert "page body" in output
 
 
@@ -240,7 +306,14 @@ def test_scrapling_crawl_caps_pages_and_uses_requests_timeout_when_stealth_is_of
         },
     )
     monkeypatch.setattr(recon_tools, "_SCRAPLING_OK", True)
-    monkeypatch.setattr(requests, "get", fake_get)
+    class FakeSession:
+        def __init__(self):
+            self.trust_env = True
+
+        def get(self, url, **kwargs):
+            return fake_get(url, **kwargs)
+
+    monkeypatch.setattr(requests, "Session", FakeSession)
 
     output = recon_tools.run_scrapling_crawl("http://web.example", max_pages=20)
 

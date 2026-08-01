@@ -161,6 +161,148 @@ def test_parse_invocation_marks_shell_and_extracts_unique_targets():
     assert parse_invocation("/bin/echo ok", allow_executable_path=True).executable == "/bin/echo"
 
 
+def test_registered_single_label_target_is_bound_by_callable_contract_and_scoped():
+    policy = ExecutionPolicy()
+    in_scope = _context(CAP_REGISTERED_TOOL, scope=("intranet",))
+    out_of_scope = _context(CAP_REGISTERED_TOOL, scope=("approved.example",))
+
+    allowed = policy.authorize_command("nmap intranet", in_scope)
+    denied = policy.authorize_command("nmap intranet", out_of_scope)
+
+    assert allowed.allowed is True
+    assert allowed.invocation is not None
+    assert allowed.invocation.targets == ("intranet",)
+    assert denied.allowed is False
+    assert denied.reason == "target_out_of_scope:intranet"
+    assert denied.invocation is not None
+    assert denied.invocation.targets == ("intranet",)
+
+
+def test_registered_signature_target_cannot_be_shadowed_by_network_like_argument():
+    policy = ExecutionPolicy()
+    context = _context(
+        CAP_REGISTERED_TOOL,
+        CAP_ACTIVE_TOOL,
+        scope=("approved.example",),
+        approved=True,
+    )
+
+    decision = policy.authorize_command(
+        "bruteforce approved.example intranet",
+        context,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "target_out_of_scope:intranet"
+    assert decision.invocation is not None
+    assert decision.invocation.targets == ("intranet",)
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("nmap -Pn approved.example intranet", "intranet"),
+        ("rustscan -a intranet", "intranet"),
+        ("curl_headers -H approved.example https://intranet", "https://intranet"),
+        ("nikto -output approved.example -h intranet", "intranet"),
+        ("sqlmap --proxy approved.example -u http://intranet", "http://intranet"),
+        ("wpscan --api-token approved.example --url http://intranet", "http://intranet"),
+    ],
+)
+def test_registered_flag_grammars_authorize_the_dispatched_target(command, expected):
+    policy = ExecutionPolicy()
+    context = _context(CAP_REGISTERED_TOOL, scope=("approved.example",))
+
+    decision = policy.authorize_command(command, context)
+
+    assert decision.allowed is False
+    assert decision.reason == f"target_out_of_scope:{expected}"
+    assert decision.invocation is not None
+    assert decision.invocation.targets[0] == expected
+
+
+def test_registered_network_tool_without_a_typed_target_fails_closed():
+    policy = ExecutionPolicy()
+    context = _context(CAP_REGISTERED_TOOL, scope=("intranet",))
+
+    command_decision = policy.authorize_command("nmap", context)
+    direct_decision = policy.authorize_registered(
+        _invocation("nmap", targets=(), argv=("nmap",)),
+        context,
+    )
+
+    assert command_decision.reason == "missing_explicit_target"
+    assert direct_decision.reason == "missing_explicit_target"
+
+
+def test_registered_network_tool_requires_nonempty_scope_and_checks_secondary_host():
+    policy = ExecutionPolicy()
+    no_scope = _context(CAP_REGISTERED_TOOL)
+
+    assert policy.authorize_command("nmap intranet", no_scope).reason == (
+        "missing_target_scope"
+    )
+
+    scoped = _context(
+        CAP_REGISTERED_TOOL,
+        CAP_ACTIVE_TOOL,
+        scope=("approved.example",),
+        approved=True,
+    )
+    decision = policy.authorize_command(
+        "port_forward approved.example 8080 intranet 80",
+        scoped,
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "target_out_of_scope:intranet"
+    assert decision.invocation is not None
+    assert decision.invocation.targets == ("approved.example", "intranet")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "nmap outside.example inside.example",
+        "rustscan -a inside.example -- outside.example",
+        "msf_check inside.example exploit/example RHOSTS=outside.example",
+    ],
+)
+def test_registered_options_cannot_smuggle_secondary_targets(command):
+    policy = ExecutionPolicy()
+    context = _context(
+        CAP_REGISTERED_TOOL,
+        CAP_ACTIVE_TOOL,
+        scope=("inside.example",),
+        approved=True,
+    )
+
+    decision = policy.authorize_command(command, context)
+
+    assert decision.allowed is False
+    assert decision.reason == "target_out_of_scope:outside.example"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "build_go_implant https://c2.example:9443",
+        "build_python_implant https://c2.example:9443",
+        "build_ps_stager https://c2.example:9443",
+        "shodan outside.example",
+        "shardbrowser_osint outside.example",
+    ],
+)
+def test_nonstandard_network_parameters_require_explicit_scope(command):
+    decision = ExecutionPolicy().authorize_command(
+        command,
+        _context(CAP_REGISTERED_TOOL, CAP_ACTIVE_TOOL, approved=True),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason == "missing_target_scope"
+
+
 def test_parse_invocation_rejects_empty_tokenization(monkeypatch):
     import core.execution.policy as policy_module
 
@@ -181,7 +323,7 @@ def test_registered_policy_covers_limits_capabilities_special_actions_and_local_
     assert policy.authorize_registered(normal, _context()).reason == "missing_capability:registered_tool"
     assert policy.authorize_registered(
         _invocation(targets=("bad target",)), _context(CAP_REGISTERED_TOOL)
-    ).reason.startswith("invalid_target:")
+    ).reason.startswith("invalid_nmap_target:")
 
     cpanel_scan = _invocation(
         "cpanel_exploit",
@@ -284,7 +426,7 @@ def test_shell_policy_covers_every_authority_gate_without_execution():
     assert policy.authorize_shell("/bin/rm /tmp/example", destructive).allowed
 
 
-def test_shell_policy_falls_back_when_shell_target_lexer_fails(monkeypatch):
+def test_shell_policy_fails_closed_when_shell_target_lexer_fails(monkeypatch):
     import core.execution.policy as policy_module
 
     original_shlex = policy_module.shlex.shlex
@@ -299,7 +441,10 @@ def test_shell_policy_falls_back_when_shell_target_lexer_fails(monkeypatch):
     monkeypatch.setattr(policy_module.shlex, "shlex", fail_second_lexer)
     context = _context(CAP_MANAGED_SHELL, origin="operator", approved=True)
 
-    assert policy_module.ExecutionPolicy().authorize_shell("echo ok", context).allowed
+    decision = policy_module.ExecutionPolicy().authorize_shell("echo ok", context)
+
+    assert not decision.allowed
+    assert decision.reason == "invalid_remote_command_quoting"
 
 
 def test_python_repl_policy_covers_every_authority_gate():

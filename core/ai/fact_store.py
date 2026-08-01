@@ -17,6 +17,11 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from core.ai.fact_assessment import FactAssessment, FactAssessmentStore, FreshnessPolicy
+from core.ai.fact_predicates import (
+    TRUSTED,
+    aggregate_observation_trust,
+    canonical_trust_level,
+)
 from core.execution.results import ExecutionResult, ExecutionStatus
 from core.secrets import Redactor, SecretStore, default_secret_store_path
 
@@ -372,6 +377,7 @@ class FactStore:
                     source TEXT NOT NULL,
                     source_identity TEXT NOT NULL DEFAULT '',
                     observation_method TEXT NOT NULL DEFAULT '',
+                    trust_level TEXT NOT NULL DEFAULT 'trusted',
                     session_id TEXT NOT NULL DEFAULT 'none',
                     evidence_hash TEXT DEFAULT '',
                     timestamp REAL NOT NULL,
@@ -486,6 +492,12 @@ class FactStore:
                 "fact_observations",
                 "observation_method",
                 "TEXT NOT NULL DEFAULT ''",
+            )
+            self._ensure_column(
+                cursor,
+                "fact_observations",
+                "trust_level",
+                "TEXT NOT NULL DEFAULT 'trusted'",
             )
             self._ensure_column(cursor, "command_results", "schema_version", "TEXT NOT NULL DEFAULT '0'")
             self._ensure_column(cursor, "command_results", "status", "TEXT NOT NULL DEFAULT 'legacy'")
@@ -608,9 +620,9 @@ class FactStore:
         never create a new automatic verification.
         """
 
-        for row_id, source, source_identity, observation_method in cursor.execute(
+        for row_id, source, source_identity, observation_method, trust_level in cursor.execute(
             """
-            SELECT id, source, source_identity, observation_method
+            SELECT id, source, source_identity, observation_method, trust_level
             FROM fact_observations
             """
         ).fetchall():
@@ -630,14 +642,23 @@ class FactStore:
                 ),
                 source_identity=identity,
             )
-            if identity != source_identity or method != observation_method:
+            canonical_trust = canonical_trust_level(
+                trust_level,
+                observation_method=method,
+                default=TRUSTED,
+            )
+            if (
+                identity != source_identity
+                or method != observation_method
+                or canonical_trust != trust_level
+            ):
                 cursor.execute(
                     """
                     UPDATE fact_observations
-                    SET source_identity = ?, observation_method = ?
+                    SET source_identity = ?, observation_method = ?, trust_level = ?
                     WHERE id = ?
                     """,
-                    (identity, method, int(row_id)),
+                    (identity, method, canonical_trust, int(row_id)),
                 )
 
     def _redact_existing_rows(self, cursor) -> None:
@@ -1014,7 +1035,8 @@ class FactStore:
                  derived_from: list[int] | None = None, evidence_hash: str = "",
                  source_execution_ids: Sequence[str] | None = None,
                  source_identity: str | None = None,
-                 observation_method: str | None = None) -> int:
+                 observation_method: str | None = None,
+                 trust_level: str | None = None) -> int:
         """Add a fact and return its row id.
 
         For backward compatibility this returns the existing id when the fact is
@@ -1034,6 +1056,7 @@ class FactStore:
             source_execution_ids=source_execution_ids,
             source_identity=source_identity,
             observation_method=observation_method,
+            trust_level=trust_level,
         )
         return fact_id
 
@@ -1043,6 +1066,7 @@ class FactStore:
                              source_execution_ids: Sequence[str] | None = None,
                              source_identity: str | None = None,
                              observation_method: str | None = None,
+                             trust_level: str | None = None,
                              completion_claim: CommandCompletionClaim | None = None,
                              ) -> tuple[int, bool]:
         """Add a fact and return (row_id, created).
@@ -1072,6 +1096,11 @@ class FactStore:
         canonical_observation_method = self._canonical_observation_method(
             raw_observation_method,
             source_identity=canonical_source_identity,
+        )
+        canonical_trust = canonical_trust_level(
+            trust_level,
+            observation_method=canonical_observation_method,
+            default=TRUSTED,
         )
         session_id = self.redactor.redact_text(session_id, kind="session_id")
         derived_json = json.dumps(derived_from)
@@ -1108,6 +1137,7 @@ class FactStore:
                     int(fact_id),
                     canonical_source_identity,
                     canonical_observation_method,
+                    canonical_trust,
                     evidence_hash,
                     source_execution_ids or (),
                 ):
@@ -1134,6 +1164,7 @@ class FactStore:
                     cursor, fact_id, scan_id, host, fact_type, value,
                     confidence, source, session_id, evidence_hash, now, secret_refs,
                     canonical_source_identity, canonical_observation_method,
+                    canonical_trust,
                     source_execution_ids or (),
                 )
                 self.assessments.ensure_initial_in_connection(
@@ -1161,6 +1192,7 @@ class FactStore:
                 cursor, fact_id, scan_id, host, fact_type, value,
                 confidence, source, session_id, evidence_hash, now, secret_refs,
                 canonical_source_identity, canonical_observation_method,
+                canonical_trust,
                 source_execution_ids or (),
             )
             self.assessments.ensure_initial_in_connection(
@@ -1179,6 +1211,7 @@ class FactStore:
         fact_id: int,
         source_identity: str,
         observation_method: str,
+        trust_level: str,
         evidence_hash: str,
         source_execution_ids: Sequence[str],
     ) -> bool:
@@ -1206,6 +1239,7 @@ class FactStore:
             WHERE o.fact_id = ?
               AND o.source_identity = ?
               AND o.observation_method = ?
+              AND o.trust_level = ?
               AND o.evidence_hash = ?
               AND foe.execution_key IN ({placeholders})
             GROUP BY o.id
@@ -1216,6 +1250,7 @@ class FactStore:
                 int(fact_id),
                 source_identity,
                 observation_method,
+                trust_level,
                 evidence_hash,
                 *execution_keys,
                 len(execution_keys),
@@ -1228,18 +1263,19 @@ class FactStore:
                             session_id: str, evidence_hash: str, timestamp: float,
                             secret_refs: tuple[str, ...], source_identity: str,
                             observation_method: str,
+                            trust_level: str,
                             source_execution_ids: Sequence[str]) -> None:
         cursor.execute('''
             INSERT INTO fact_observations (
                 fact_id, scan_id, host, type, value, confidence, source,
-                source_identity, observation_method, session_id, evidence_hash,
-                timestamp, secret_refs
+                source_identity, observation_method, trust_level, session_id,
+                evidence_hash, timestamp, secret_refs
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             fact_id, scan_id, host, fact_type, value, confidence, source,
-            source_identity, observation_method, session_id, evidence_hash,
-            timestamp, json.dumps(secret_refs),
+            source_identity, observation_method, trust_level, session_id,
+            evidence_hash, timestamp, json.dumps(secret_refs),
         ))
         observation_id = int(cursor.lastrowid)
         execution_ids = tuple(
@@ -1397,6 +1433,7 @@ class FactStore:
                         "",
                         source_identity=self._source_identity_from_source(row[6]),
                     ),
+                    "trust_level": TRUSTED,
                     "session_id": row[7],
                     "evidence_hash": row[9],
                     "timestamp": row[10],
@@ -1404,6 +1441,7 @@ class FactStore:
                 }]
             sources = sorted({obs["source"] for obs in observations if obs.get("source")})
             sessions = sorted({obs["session_id"] for obs in observations if obs.get("session_id")})
+            aggregate_trust = aggregate_observation_trust(observations)
             results.append({
                 "id": row[0],
                 "scan_id": row[1],
@@ -1418,6 +1456,7 @@ class FactStore:
                 "timestamp": row[10],
                 "secret_refs": list(self._load_refs(row[11])),
                 "observations": observations,
+                "trust_level": aggregate_trust,
                 "sources": sources,
                 "sessions": sessions,
                 "assessment": assessment.to_dict() if assessment else None,
@@ -1469,8 +1508,8 @@ class FactStore:
         placeholders = ",".join("?" for _ in fact_ids)
         cursor.execute(f'''
             SELECT id, fact_id, confidence, source, source_identity,
-                   observation_method, session_id, evidence_hash, timestamp,
-                   secret_refs
+                   observation_method, trust_level, session_id, evidence_hash,
+                   timestamp, secret_refs
             FROM fact_observations
             WHERE fact_id IN ({placeholders})
             ORDER BY timestamp ASC
@@ -1483,10 +1522,15 @@ class FactStore:
                 "source": row[3],
                 "source_identity": row[4],
                 "observation_method": row[5],
-                "session_id": row[6],
-                "evidence_hash": row[7],
-                "timestamp": row[8],
-                "secret_refs": list(self._load_refs(row[9])),
+                "trust_level": canonical_trust_level(
+                    row[6],
+                    observation_method=row[5],
+                    default=TRUSTED,
+                ),
+                "session_id": row[7],
+                "evidence_hash": row[8],
+                "timestamp": row[9],
+                "secret_refs": list(self._load_refs(row[10])),
             })
         return grouped
 

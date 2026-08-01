@@ -13,6 +13,8 @@ from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from typing import Any
 
+from core.ai.evaluated_facts import fact_is_decision_usable
+
 DECISION_TRACE_SCHEMA_VERSION = "1.0"
 DECISION_METRICS_SCHEMA_VERSION = "1.0"
 
@@ -476,7 +478,9 @@ def build_decision_metrics(
     baseline = min(timestamps, default=None)
     useful_facts = [item for item in fact_list if _useful_fact(item)]
     verified_facts = [
-        item for item in fact_list if _assessment_status(item) == "verified"
+        item
+        for item in fact_list
+        if _assessment_status(item) == "verified" and fact_is_decision_usable(item)
     ]
     first_useful = _first_delay(useful_facts, baseline)
     first_verified = _first_delay(verified_facts, baseline)
@@ -503,6 +507,7 @@ def build_decision_metrics(
         item
         for item in fact_list
         if str(item.get("type") or "").lower() in _CANDIDATE_FACT_TYPES
+        and fact_is_decision_usable(item)
     ]
     verified_candidates = [
         item for item in candidate_facts if _assessment_status(item) == "verified"
@@ -643,7 +648,11 @@ def _first_delay(
 
 def _useful_fact(fact: Mapping[str, Any]) -> bool:
     fact_type = str(fact.get("type") or "").lower()
-    return fact_type not in _INTERNAL_FACT_TYPES and _assessment_status(fact) != "contradicted"
+    return (
+        fact_type not in _INTERNAL_FACT_TYPES
+        and _assessment_status(fact) != "contradicted"
+        and fact_is_decision_usable(fact)
+    )
 
 
 def _verified_fact_complete(fact: Mapping[str, Any]) -> bool:

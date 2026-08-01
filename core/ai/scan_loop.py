@@ -11,6 +11,7 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from core.ai.evidence_policy import claim_evidence_policy
 from core.execution import CancellationContext
 
 
@@ -464,17 +465,18 @@ class ScanLifecycle:
 
                     for hypothesis in hypotheses:
                         claim = hypothesis.get("claim")
-                        required_evidence = hypothesis.get("required_evidence", [])
+                        evidence_policy = claim_evidence_policy(str(claim or ""))
+                        policy_requirements = list(evidence_policy.persistence_labels)
                         print(f"     [?] Hypothesis: {claim}")
                         pipeline.fact_store.add_hypothesis(
                             scan_id,
                             target,
                             claim,
-                            required_evidence,
+                            policy_requirements,
                             "AnalysisAgent",
                         )
                         verify_res = pipeline.verification_agent.verify_hypothesis(
-                            scan_id, target, claim, required_evidence
+                            scan_id, target, claim
                         )
                         print(f"         Status: {verify_res.get('status')} - {verify_res.get('reason')}")
                         if verify_res.get("status") == "accepted":

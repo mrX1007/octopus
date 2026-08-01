@@ -15,8 +15,12 @@ from core.execution import (
     ExecutionResult,
     ToolInvocation,
     adapt_execution_result,
+    validate_target,
 )
-from core.execution.policy import parse_invocation
+from core.execution.policy import (
+    parse_invocation,
+    registered_tool_uses_network_scope,
+)
 
 from .models import (
     ActionCheckResult,
@@ -45,11 +49,7 @@ class ActionAdapter(ABC):
         """Classify risk without granting authority or invoking a provider."""
 
         del request, phase
-        return (
-            ActiveRiskClass.ACTIVE
-            if self.descriptor.requirements.active
-            else ActiveRiskClass.READ_ONLY
-        )
+        return ActiveRiskClass.ACTIVE if self.descriptor.requirements.active else ActiveRiskClass.READ_ONLY
 
     def applicability(self, request: ActionRequest) -> ApplicabilityResult:
         requirements = self.descriptor.requirements
@@ -86,8 +86,34 @@ class ActionAdapter(ABC):
         request: ActionRequest,
         phase: str,
     ) -> ExecutionDecision:
+        invocation = self.invocation(request, phase)
+        if self.descriptor.requirements.target_required:
+            explicit_target = str(request.target or "").strip()
+            if not explicit_target:
+                return ExecutionDecision(
+                    allowed=False,
+                    reason="missing_explicit_target",
+                    context=request.execution_context,
+                    invocation=invocation,
+                )
+            invocation = replace(
+                invocation,
+                targets=tuple(
+                    dict.fromkeys(
+                        (explicit_target, *invocation.targets),
+                    )
+                ),
+            )
+            registered_name = invocation.registered_name or invocation.executable
+            if registered_tool_uses_network_scope(registered_name) and not validate_target(explicit_target):
+                return ExecutionDecision(
+                    allowed=False,
+                    reason=f"invalid_target:{explicit_target[:120]}",
+                    context=request.execution_context,
+                    invocation=invocation,
+                )
         return policy.authorize_registered(
-            self.invocation(request, phase),
+            invocation,
             request.execution_context,
         )
 

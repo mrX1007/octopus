@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Optional
 from urllib.parse import urlparse, urlunparse
 
+from core.ai.evaluated_facts import fact_is_decision_usable
 from core.execution import (
     ExecutionContext,
     ExecutionPolicy,
@@ -145,6 +146,11 @@ class CommandScheduler:
         return command
 
     def _negative_fact_block(self, command: str, facts: Iterable[dict[str, Any]]) -> str:
+        # This helper is also called directly by replay/tests and therefore
+        # owns its trust boundary instead of relying on AIPipeline to pass an
+        # evaluated snapshot.  A target-controlled status must never suppress
+        # a legitimate command.
+        facts = tuple(fact for fact in facts if fact_is_decision_usable(fact))
         parts = re.sub(r"\s+", " ", (command or "").strip()).split()
         if not parts:
             return ""

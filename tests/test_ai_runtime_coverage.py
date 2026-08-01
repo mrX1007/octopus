@@ -204,6 +204,15 @@ def test_registered_action_normalizes_unavailable_runs(
     expected_class,
 ) -> None:
     instance = bare_runtime()
+    instance._action_catalog = SimpleNamespace(
+        resolve=lambda _name: SimpleNamespace(
+            adapter=SimpleNamespace(
+                descriptor=SimpleNamespace(
+                    requirements=SimpleNamespace(target_required=False),
+                )
+            )
+        )
+    )
     instance.scheduler = SimpleNamespace(command_key=lambda command: f"key:{command}")
     instance._registered_provider_candidates = lambda *_args, **_kwargs: (("primary",), {})
     selection = SimpleNamespace(
@@ -237,6 +246,38 @@ def test_registered_action_normalizes_unavailable_runs(
 
     assert result["error_message"] == expected_reason
     assert result["error_class"] == expected_class
+
+
+def test_registered_runtime_rejects_missing_target_instead_of_using_scope_fallback() -> None:
+    instance = bare_runtime()
+    instance._action_catalog = SimpleNamespace(
+        resolve=lambda _name: SimpleNamespace(
+            adapter=SimpleNamespace(
+                descriptor=SimpleNamespace(
+                    requirements=SimpleNamespace(target_required=True),
+                )
+            )
+        )
+    )
+    instance.execute_with_fallback = MagicMock(side_effect=AssertionError("missing target reached provider selection"))
+    instance._normalize_result = MagicMock(side_effect=lambda value, **_kwargs: value)
+
+    result = instance._execute_registered_action(
+        CommandDecision("fixture", "key", "execute", "allowed"),
+        context(target_scope=("intranet",)),
+        invocation(targets=()),
+        execution_id="execution",
+        policy_ref="policy",
+        facts=(),
+        capability="",
+        provider_commands=(),
+        partial_result_ingest=None,
+    )
+
+    assert result["status"] is ExecutionStatus.BLOCKED
+    assert result["error_message"] == "missing_explicit_target"
+    assert result["metadata"]["authorization_phase"] == "action_request"
+    instance.execute_with_fallback.assert_not_called()
 
 
 class StubAdapter:

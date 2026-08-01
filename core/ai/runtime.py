@@ -555,9 +555,35 @@ class PipelineRuntime:
         as explicit action calls.
         """
 
-        target = (
-            invocation.targets[0] if invocation.targets else (context.target_scope[0] if context.target_scope else "")
-        )
+        target = invocation.targets[0] if invocation.targets else ""
+        catalog = getattr(self, "_action_catalog", None)
+        if catalog is None and hasattr(self, "_runner"):
+            catalog = self.action_catalog
+        resolved = catalog.resolve(invocation.registered_name) if catalog is not None else None
+        if not target and resolved is not None and resolved.adapter.descriptor.requirements.target_required:
+            request_denial = PolicyDenial.create(
+                "action_request",
+                "missing_explicit_target",
+                policy_ref,
+            )
+            return self._normalize_result(
+                {
+                    "status": ExecutionStatus.BLOCKED,
+                    "error_class": "ExecutionBlocked",
+                    "error_message": request_denial.reason_code,
+                    "metadata": {
+                        "decision_reason": request_denial.reason_code,
+                        "authorization_phase": "action_request",
+                        "policy_denial": request_denial.to_dict(),
+                    },
+                },
+                decision=decision,
+                context=context,
+                execution_id=execution_id,
+                policy_ref=policy_ref,
+                duration=0.0,
+                executed=False,
+            )
         fact_items = tuple(dict(item) for item in facts)
         candidate_names, command_by_action = self._registered_provider_candidates(
             invocation,
@@ -915,6 +941,7 @@ class PipelineRuntime:
             source_execution_ids=tuple(source_execution_ids),
             source_identity=(str(safe_fact["source_identity"]) if safe_fact.get("source_identity") else None),
             observation_method=(str(safe_fact["observation_method"]) if safe_fact.get("observation_method") else None),
+            trust_level=(str(safe_fact["trust_level"]) if safe_fact.get("trust_level") else None),
             completion_claim=completion_claim,
         )
         fact_ids = [fact_id]
@@ -947,6 +974,11 @@ class PipelineRuntime:
                 observation_method=(
                     str(safe_derived.get("observation_method") or safe_fact.get("observation_method"))
                     if (safe_derived.get("observation_method") or safe_fact.get("observation_method"))
+                    else None
+                ),
+                trust_level=(
+                    str(safe_derived.get("trust_level") or safe_fact.get("trust_level"))
+                    if (safe_derived.get("trust_level") or safe_fact.get("trust_level"))
                     else None
                 ),
                 completion_claim=completion_claim,

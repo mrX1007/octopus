@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import core.actions.adapters as action_adapters
 from core.actions import (
     ActionAdapter,
     ActionCatalog,
@@ -343,11 +344,17 @@ class FixtureExploit(ExploitBase):
         return True, "provider run completed"
 
 
-def test_exploit_base_adapter_wraps_check_and_run_without_auto_verification():
+def test_exploit_base_adapter_wraps_check_and_run_without_auto_verification(monkeypatch):
     adapter = ExploitBaseAdapter(FixtureExploit())
+    fixture_handle = object()
+    monkeypatch.setattr(
+        action_adapters,
+        "_request_handle_binding",
+        lambda _request: SimpleNamespace(handle=fixture_handle),
+    )
     report = executor_for(adapter).run(
         adapter.descriptor.action_id,
-        ActionRequest("example.com", approved(), handle=object()),
+        ActionRequest("example.com", approved(), handle=fixture_handle),
     )
 
     assert report.lifecycle.check is CheckStatus.COMPLETED
@@ -355,6 +362,24 @@ def test_exploit_base_adapter_wraps_check_and_run_without_auto_verification():
     assert report.lifecycle.attempt is AttemptStatus.ATTEMPTED
     assert report.lifecycle.outcome is OutcomeStatus.SUCCEEDED
     assert report.lifecycle.verification is VerificationStatus.UNVERIFIED
+
+
+def test_exploit_base_adapter_rejects_caller_forged_peer_handle():
+    class ForgedHandle:
+        @staticmethod
+        def getpeername():
+            return ("example.com", 22)
+
+    adapter = ExploitBaseAdapter(FixtureExploit())
+    report = executor_for(adapter).run(
+        adapter.descriptor.action_id,
+        ActionRequest("example.com", approved(), handle=ForgedHandle()),
+    )
+
+    assert report.lifecycle.applicability is ApplicabilityStatus.NOT_APPLICABLE
+    assert report.applicability is not None
+    assert "provider_handle_binding_required" in report.applicability.missing_requirements
+    assert report.lifecycle.attempt is AttemptStatus.NOT_ATTEMPTED
 
 
 def test_metasploit_adapter_has_separate_check_and_execute_modes():

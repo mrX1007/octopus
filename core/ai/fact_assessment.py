@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, ClassVar
 
+from core.ai.fact_predicates import TRUSTED, canonical_trust_level
 from core.secrets import Redactor, SecretStore
 
 FACT_ASSESSMENT_SCHEMA_VERSION = "1.1"
@@ -645,9 +646,9 @@ class FactAssessmentStore:
                 confidence=current.confidence,
                 rule_id="fact.corroborated.independent_execution.v1",
                 reason=(
-                    "Independent source identity or observation method, backed "
-                    "by separate successful executions, corroborated the same "
-                    "target-scoped fact within the policy window."
+                    "Independent trusted source identity or observation method, "
+                    "backed by separate successful executions, corroborated "
+                    "the same target-scoped fact within the policy window."
                 ),
                 assessor="fact_assessment.rules",
                 evidence_fact_ids=current.evidence_fact_ids or (int(fact_id),),
@@ -789,7 +790,7 @@ class FactAssessmentStore:
         assessment_id: str,
         successful_execution_keys: set[str],
     ) -> bool:
-        """Require two successful executions from distinct source/method pairs."""
+        """Require two trusted observations from distinct successful executions."""
 
         if len(successful_execution_keys) < 2:
             return False
@@ -797,7 +798,7 @@ class FactAssessmentStore:
         rows = conn.execute(
             f"""
             SELECT DISTINCT foe.execution_key, o.source_identity,
-                            o.observation_method
+                            o.observation_method, o.trust_level
             FROM fact_observations AS o
             JOIN fact_observation_executions AS foe
               ON foe.observation_id = o.id
@@ -820,8 +821,13 @@ class FactAssessmentStore:
                 str(source_identity or "").strip().casefold(),
                 str(observation_method or "").strip().casefold(),
             )
-            for execution_key, source_identity, observation_method in rows
+            for execution_key, source_identity, observation_method, trust_level in rows
             if str(source_identity or "").strip() and str(observation_method or "").strip()
+            and canonical_trust_level(
+                trust_level,
+                observation_method=observation_method,
+                default=TRUSTED,
+            ) == TRUSTED
         ]
         return any(
             left[0] != right[0] and left[1:] != right[1:]

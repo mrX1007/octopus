@@ -39,6 +39,7 @@ def build_evidence_index(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "assessment_status": assessment.get("status") or fact.get("assessment_status", "observed"),
                 "assessment_reason": assessment.get("reason", ""),
                 "assessment_confidence": assessment.get("confidence", fact.get("confidence", 100)),
+                "trust_level": fact.get("trust_level", "trusted"),
                 "evidence_fact_ids": list(assessment.get("evidence_fact_ids") or []),
                 "source_execution_ids": list(assessment.get("source_execution_ids") or []),
             }
@@ -48,6 +49,11 @@ def build_evidence_index(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def build_finding_groups(facts: list[dict[str, Any]], state: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
     """Group repeated facts into finding records with clear proof state."""
+    facts = [
+        fact
+        for fact in facts
+        if fact_is_decision_usable(fact)
+    ]
     state = state or {}
     evidence_by_fact_id = {fact.get("id"): f"E-{idx:03d}" for idx, fact in enumerate(facts, 1)}
     groups: dict[str, dict[str, Any]] = {}
@@ -126,17 +132,12 @@ def build_access_findings(facts: list[dict[str, Any]], state: Optional[dict[str,
     if not state.get("root_access_confirmed"):
         return findings
 
-    supporting_facts: list[dict[str, Any]] = []
-    for fact in facts:
-        ftype = str(fact.get("type", ""))
-        value = str(fact.get("value", ""))
-        if (
-            (ftype == "credential" and value.startswith(("ssh_login_success:", "ssh_key_available:")))
-            or (ftype == "service_status" and value == "ssh_authenticated")
-            or (ftype == "system_access" and value in {"uid=0", "root_access_confirmed"})
-            or (ftype == "verified_claim" and value == "root_access_confirmed")
-        ):
-            supporting_facts.append(fact)
+    # State is only a routing hint.  The report must independently require a
+    # direct, typed OS-level observation; a verified hypothesis, an open SSH
+    # port, or an authenticated non-root session is not root proof.
+    supporting_facts = [fact for fact in facts if _is_direct_root_access_fact(fact)]
+    if not supporting_facts:
+        return findings
     canonical_assessments = any(_has_assessment(fact) for fact in supporting_facts)
     if canonical_assessments:
         supporting_facts = [fact for fact in supporting_facts if _fact_is_verified(fact)]
@@ -268,12 +269,18 @@ def build_coverage_summary(facts: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def build_attack_path(facts: list[dict[str, Any]], state: dict[str, Any]) -> list[dict[str, str]]:
+    facts = [fact for fact in facts if fact_is_decision_usable(fact)]
     steps = []
     if any(f.get("type") == "credential" for f in facts):
         steps.append(
             {"stage": "Initial access", "status": "observed", "detail": "Credential or session material present"}
         )
-    if any(f.get("type") == "post_exploit_stage" for f in facts):
+    if any(
+        f.get("type") == "post_exploit_stage"
+        and str(f.get("value", "")).casefold()
+        == "post_access_inventory_completed"
+        for f in facts
+    ):
         steps.append({"stage": "Host inventory", "status": "completed", "detail": "Post-access inventory collected"})
     if any(f.get("type") in {"privesc_vector", "exploit_attempted"} for f in facts):
         status = "confirmed" if state.get("root_access_confirmed") else "tested"
@@ -284,10 +291,6 @@ def build_attack_path(facts: list[dict[str, Any]], state: dict[str, Any]) -> lis
         steps.append({"stage": "Root access", "status": "confirmed", "detail": "uid=0/root access confirmed"})
     if state.get("persistence_established"):
         steps.append({"stage": "Persistence", "status": "completed", "detail": "Persistence mechanism recorded"})
-    elif any("persistence" in str(f.get("value", "")).lower() for f in facts):
-        steps.append(
-            {"stage": "Persistence", "status": "not_confirmed", "detail": "Persistence mentioned but not confirmed"}
-        )
     if state.get("internal_recon_completed") or any(
         f.get("type") in {"internal_host", "internal_subnet"} for f in facts
     ):
@@ -410,6 +413,24 @@ def _fact_is_verified(
     if not _has_assessment(fact):
         return legacy_default
     return _assessment_status(fact) == "verified"
+
+
+def _is_direct_root_access_fact(fact: dict[str, Any]) -> bool:
+    """Recognize only exact typed root-access predicates.
+
+    ``verified_claim`` is deliberately excluded: it is an audit record of a
+    verifier decision, not an authority-bearing observation in its own right.
+    """
+
+    if not fact_is_decision_usable(fact):
+        return False
+    fact_type = str(fact.get("type", "")).strip().casefold()
+    value = str(fact.get("value", "")).strip().casefold()
+    if fact_type == "system_access":
+        return value in {"uid=0", "root_access_confirmed"}
+    if fact_type == "credential":
+        return re.fullmatch(r"ssh_login_success:root(?:@[^\s:]+(?::\d{1,5})?)?", value) is not None
+    return False
 
 
 def _attach_assessment(group: dict[str, Any], fact: dict[str, Any]) -> None:

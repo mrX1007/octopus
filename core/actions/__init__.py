@@ -11,6 +11,7 @@ from .adapters import (
     MetasploitActionAdapter,
     PluginActionAdapter,
     RegisteredToolAdapter,
+    bind_provider_handle,
     canonical_assessment_applicability,
     register_tool_adapters,
 )
@@ -133,6 +134,7 @@ __all__ = [
     "ResolvedAction",
     "RetryClassifier",
     "VerificationStatus",
+    "bind_provider_handle",
     "build_action_catalog",
     "canonical_assessment_applicability",
     "register_tool_adapters",

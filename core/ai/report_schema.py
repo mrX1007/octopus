@@ -9,10 +9,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 from core.ai.evaluated_facts import fact_is_decision_usable
+from core.ai.fact_predicates import (
+    NON_DECISION_TRUST_LEVELS,
+    confirms_cleanup,
+    fact_trust_level,
+)
 from core.secrets import redact_data
 
 EVIDENCE_REPORT_SCHEMA_VERSION = "1.0"
@@ -122,6 +128,11 @@ def build_evidence_report(
     for fact in fact_list:
         fact_type = _text(fact.get("type"), 256).lower()
         if not fact_type:
+            continue
+        if fact_trust_level(fact) in NON_DECISION_TRUST_LEVELS:
+            item = _fact_item("observations", fact, evidence_by_fact)
+            item["kind"] = "untrusted_observation"
+            _append(raw_sections, seen, "observations", item)
             continue
         if _is_cleanup_fact(fact_type, fact):
             _append(
@@ -332,6 +343,7 @@ def _canonical_evidence_index(
                 "assessment_ref": _assessment_ref(fact),
                 "assessment_status": _assessment_status(fact),
                 "assessment_reason": _text(assessment.get("reason"), _MAX_TEXT_BYTES),
+                "trust_level": _text(fact.get("trust_level") or "trusted", 64),
                 "source_execution_ids": _refs(
                     assessment.get("source_execution_ids")
                     or fact.get("source_execution_ids")
@@ -401,9 +413,10 @@ def _access_item(
     evidence_by_fact: Mapping[int | None, Mapping[str, Any]],
     state: Mapping[str, Any],
 ) -> dict[str, Any]:
-    root = bool(state.get("root_access_confirmed")) or any(
-        _is_root_access_fact(fact) for fact in facts
-    )
+    # Never let aggregate state upgrade an authenticated-access observation to
+    # root severity.  Severity is derived again from the exact supporting facts
+    # that passed the report-verification boundary.
+    root = any(_is_root_access_fact(fact) for fact in facts)
     fact_items = [
         _fact_item("access_findings", fact, evidence_by_fact) for fact in facts
     ]
@@ -739,28 +752,46 @@ def _candidate_status(fact: Mapping[str, Any]) -> str:
 
 def _is_access_fact(fact_type: str, fact: Mapping[str, Any]) -> bool:
     value = _text(fact.get("value"), _MAX_TEXT_BYTES).lower()
-    if fact_type == "exploit_success":
-        return True
-    if fact_type in {"application_access", "system_access", "verified_access"}:
-        return True
+    if fact_type == "system_access":
+        return value in {"uid=0", "root_access_confirmed"}
+    if fact_type == "application_access":
+        return value in {
+            "cpanel_whm_authenticated",
+            "authenticated_access_confirmed",
+        }
+    if fact_type == "verified_access":
+        return value in {
+            "authenticated_access_confirmed",
+            "root_access_confirmed",
+        }
     if fact_type == "credential":
-        return value.startswith(("ssh_login_success:", "ssh_key_available:"))
+        return re.fullmatch(
+            r"ssh_login_success:[^\s@:]+(?:@[^\s:]+(?::\d{1,5})?)?",
+            value,
+        ) is not None
     if fact_type == "service_status":
-        return value == "ssh_authenticated" or "authenticated_access" in value
-    if fact_type == "verified_claim":
-        return value in {"root_access_confirmed", "authenticated_access_confirmed"}
+        return value == "ssh_authenticated"
     return False
 
 
 def _is_root_access_fact(fact: Mapping[str, Any]) -> bool:
+    fact_type = _text(fact.get("type"), 256).lower()
     value = _text(fact.get("value"), _MAX_TEXT_BYTES).lower()
-    return any(marker in value for marker in ("uid=0", "root_access", "login_success:root@"))
+    if fact_type == "system_access":
+        return value in {"uid=0", "root_access_confirmed"}
+    if fact_type == "verified_access":
+        return value == "root_access_confirmed"
+    if fact_type == "credential":
+        return re.fullmatch(
+            r"ssh_login_success:root(?:@[^\s:]+(?::\d{1,5})?)?",
+            value,
+        ) is not None
+    return False
 
 
 def _is_cleanup_fact(fact_type: str, fact: Mapping[str, Any]) -> bool:
-    if fact_type not in {"cleanup_outcome", "post_exploit_stage", "service_status"}:
-        return False
-    return "cleanup" in _text(fact.get("value"), _MAX_TEXT_BYTES).lower()
+    del fact_type
+    return confirms_cleanup(fact)
 
 
 def _looks_like_cve_candidate(fact_type: str, fact: Mapping[str, Any]) -> bool:

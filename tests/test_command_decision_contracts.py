@@ -3,7 +3,13 @@
 
 import pytest
 
+from core.execution import ExecutionContext
+
 pytestmark = pytest.mark.contract
+
+
+def _automatic_context() -> ExecutionContext:
+    return ExecutionContext.automatic(("10.0.0.5",), actor="scheduler-contract", origin="tests")
 
 def test_command_scheduler_skips_duplicate_and_negative_http_surface():
     import uuid
@@ -27,9 +33,19 @@ def test_command_scheduler_skips_duplicate_and_negative_http_surface():
     )
 
     facts = pipeline.fact_store.get_facts(scan_id, target)
-    first = pipeline.command_scheduler.decide("ffuf http://10.0.0.5", facts, pipeline.executed_command_keys)
+    first = pipeline.command_scheduler.decide(
+        "ffuf http://10.0.0.5",
+        facts,
+        pipeline.executed_command_keys,
+        execution_context=_automatic_context(),
+    )
     pipeline.executed_command_keys.add(pipeline.command_scheduler.command_key("curl_headers http://10.0.0.5"))
-    second = pipeline.command_scheduler.decide("curl_headers http://10.0.0.5/", facts, pipeline.executed_command_keys)
+    second = pipeline.command_scheduler.decide(
+        "curl_headers http://10.0.0.5/",
+        facts,
+        pipeline.executed_command_keys,
+        execution_context=_automatic_context(),
+    )
 
     assert first.action == "skip"
     assert first.reason == "confirmed_absent:no_http_response"
@@ -57,7 +73,7 @@ def test_command_scheduler_blocks_web_checks_after_fetch_failed():
         "katana_crawl http://10.0.0.5",
         "graphql_check http://10.0.0.5/graphql",
     ):
-        decision = scheduler.decide(command, facts, set())
+        decision = scheduler.decide(command, facts, set(), execution_context=_automatic_context())
         assert decision.action == "skip", command
         assert decision.reason == "confirmed_absent:no_http_response"
 
@@ -71,7 +87,12 @@ def test_nuclei_completion_fact_blocks_repeat_command():
         "[NUCLEI SAFE - http://10.0.0.5]\nNo nuclei findings detected.\n[NUCLEI COMPLETE - http://10.0.0.5]",
     )
 
-    decision = CommandScheduler().decide("nuclei -u http://10.0.0.5/", facts, set())
+    decision = CommandScheduler().decide(
+        "nuclei -u http://10.0.0.5/",
+        facts,
+        set(),
+        execution_context=_automatic_context(),
+    )
 
     assert decision.action == "skip"
     assert decision.reason == "already_completed:nuclei_scan"
@@ -88,7 +109,12 @@ def test_nuclei_completion_fact_blocks_bare_host_repeat_command():
         }
     ]
 
-    decision = CommandScheduler().decide("nuclei_safe 10.0.0.5", facts, set())
+    decision = CommandScheduler().decide(
+        "nuclei_safe 10.0.0.5",
+        facts,
+        set(),
+        execution_context=_automatic_context(),
+    )
 
     assert decision.key == "nuclei_safe http://10.0.0.5"
     assert decision.action == "skip"

@@ -12,6 +12,7 @@ import json
 import time
 from typing import Any
 
+from core.ai.evaluated_facts import fact_is_decision_usable
 from core.ai.mission_store import (
     TASK_DEFINITION_SCHEMA_VERSION,
     MissionTaskDefinition,
@@ -103,6 +104,8 @@ class PipelineMissionMixin(PipelineMixinBase):
             if result.get("command_key")
         )
         for fact in facts:
+            if not fact_is_decision_usable(fact):
+                continue
             if fact.get("type") != "check_result":
                 continue
             try:

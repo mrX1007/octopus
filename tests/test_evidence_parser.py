@@ -179,7 +179,7 @@ User root may run the following commands on web01:
     assert ("privesc_vector", "sudo_rights_present") not in pairs
 
 
-def test_privesc_output_confirms_root_pwnkit_and_post_exploit_state():
+def test_privesc_output_records_exploit_but_requires_independent_root_identity():
     from core.ai.evidence import OutputParser
 
     output = """
@@ -196,13 +196,13 @@ root:$6$hash
 [+] ✓ ROOT ACCESS CONFIRMED
 """
 
-    facts = OutputParser().parse_tool_output("manual_recon", output)
+    facts = OutputParser().parse_tool_output("killchain_privesc 83.166.241.164", output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("exploit_success", "CVE-2021-4034 PwnKit root access") in pairs
     assert ("vulnerability", "CVE-2021-4034") in pairs
-    assert ("system_access", "uid=0") in pairs
-    assert ("system_access", "root_access_confirmed") in pairs
+    assert ("system_access", "uid=0") not in pairs
+    assert ("system_access", "root_access_confirmed") not in pairs
     assert ("credential", "ssh_login_success:support@83.166.241.164") in pairs
     assert ("port_open", "22/tcp (ssh)") in pairs
     assert ("privesc_vector", "suid_pkexec") in pairs
@@ -231,10 +231,10 @@ def test_cpanel_sniper_output_becomes_app_access_not_ssh_root():
     facts = OutputParser().parse_tool_output("cpanel_exploit 67.215.12.67", output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
-    assert ("port_open", "2087/tcp (cpanel) [cPanel/WHM]") in pairs
-    assert ("web_surface", "cpanel_whm:2087") in pairs
-    assert ("credential", "whm_session:nllWuSD9KpP7C1kL") in pairs
-    assert ("application_access", "cpanel_whm_authenticated") in pairs
+    assert ("port_open", "2087/tcp (cpanel) [cPanel/WHM]") not in pairs
+    assert ("web_surface", "cpanel_whm:2087") not in pairs
+    assert ("credential", "whm_session:nllWuSD9KpP7C1kL") not in pairs
+    assert ("application_access", "cpanel_whm_authenticated") not in pairs
     assert ("system_access", "root_access_confirmed") not in pairs
 
 
@@ -299,7 +299,7 @@ Title: Welcome to nginx!
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("port_open", "80/tcp (http)") in pairs
-    assert ("web_title", "Welcome to nginx!") in pairs
+    assert ("web_title", "Welcome to nginx!") not in pairs
 
 
 def test_timestamped_nmap_output_becomes_ports_and_versions():
@@ -475,7 +475,7 @@ PwnKit binary output: uid=0(root) gid=0(root)
 [+] ✓ ROOT ACCESS CONFIRMED
 """
 
-    facts = OutputParser().parse_tool_output("manual_recon", output)
+    facts = OutputParser().parse_tool_output("killchain_privesc 83.166.241.164", output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("credential", "ssh_login_success:support@83.166.241.164") in pairs
@@ -734,7 +734,10 @@ Parameter: id (GET)
 Apache Tomcat JMX Proxy is accessible without authentication - vulnerable
 """
 
-    facts = OutputParser().parse_tool_output("wpscan sqlmap jmx2rce_scan http://10.0.0.5", output)
+    parser = OutputParser()
+    facts = parser.parse_tool_output("wpscan http://10.0.0.5", output)
+    facts += parser.parse_tool_output("sqlmap http://10.0.0.5", output)
+    facts += parser.parse_tool_output("jmx2rce_scan http://10.0.0.5", output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("service_version", "WordPress 6.2") in pairs
@@ -773,8 +776,8 @@ C2: http://127.0.0.1:8443
 
     assert ("plugin_result", "cpanel_auth_bypass:success") in pairs
     assert ("plugin_artifact", "/tmp/report.json") in pairs
-    assert ("credential", "cpanel_session:cpsess123") in pairs
-    assert ("vulnerability", "cpanel_auth_bypass_confirmed") in pairs
+    assert ("credential", "cpanel_session:cpsess123") not in pairs
+    assert ("vulnerability", "cpanel_auth_bypass_confirmed") not in pairs
     assert (
         "payload_artifact",
         "python_implant:/Users/admin/Downloads/Octopus2/data/generated/implant_python.py",
@@ -802,11 +805,11 @@ CVE-2026-41940 detected during scan
     facts = OutputParser().parse_tool_output("plugin cpanel_auth_bypass 10.0.0.5 scan", output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
-    assert ("potential_vulnerability", "CVE-2026-41940") in pairs
+    assert ("potential_vulnerability", "CVE-2026-41940") not in pairs
     assert ("plugin_result", "cpanel_auth_bypass:success") in pairs
     assert ("plugin_artifact", "/tmp/cpanel.json") in pairs
-    assert ("credential", "cpanel_session:cpsess456") in pairs
-    assert ("vulnerability", "cpanel_auth_bypass_confirmed") in pairs
+    assert ("credential", "cpanel_session:cpsess456") not in pairs
+    assert ("vulnerability", "cpanel_auth_bypass_confirmed") not in pairs
 
 
 def test_legacy_killchain_stage_outputs_become_stage_status_facts():
@@ -948,7 +951,10 @@ $krb5tgs$23$*svc/http
 [+] DCSync successful — 42 hash(es) extracted
 """
 
-    facts = OutputParser().parse_tool_output("kerberos_assessment", output)
+    parser = OutputParser()
+    facts = parser.parse_tool_output("asrep_roast 10.10.10.5", output)
+    facts += parser.parse_tool_output("kerberoast 10.10.10.5", output)
+    facts += parser.parse_tool_output("dcsync 10.10.10.5", output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("kerberos_hashes", "asrep_count:2") in pairs
@@ -994,10 +1000,15 @@ def test_negative_evidence_from_timeouts_and_unconfirmed_checks():
 No response from endpoint
 """
 
-    facts = OutputParser().parse_tool_output(
-        "nuclei_safe sqlmap shodan graphql_check http://10.0.0.5",
-        output,
-    )
+    parser = OutputParser()
+    facts = []
+    for tool_name in (
+        "nuclei_safe http://10.0.0.5",
+        "sqlmap http://10.0.0.5",
+        "shodan 10.0.0.5",
+        "graphql_check http://10.0.0.5/graphql",
+    ):
+        facts += parser.parse_tool_output(tool_name, output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("service_status", "tool_timeout:nuclei_safe") in pairs
@@ -1017,8 +1028,8 @@ def test_manual_recon_timeout_preserves_actual_tool_names():
     facts = OutputParser().parse_tool_output("manual_recon", output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
-    assert ("service_status", "tool_timeout:nuclei") in pairs
-    assert ("service_status", "tool_timeout:nikto") in pairs
+    assert ("service_status", "tool_timeout:nuclei") not in pairs
+    assert ("service_status", "tool_timeout:nikto") not in pairs
     assert ("service_status", "tool_timeout:manual_recon") not in pairs
 
 
@@ -1040,7 +1051,12 @@ No nuclei findings detected.
 [NUCLEI COMPLETE - http://10.0.0.5]
 """
 
-    facts = OutputParser().parse_tool_output("manual_recon", output)
+    parser = OutputParser()
+    facts = parser.parse_tool_output("nikto http://10.0.0.5", output)
+    facts += parser.parse_tool_output(
+        "nuclei_safe http://10.0.0.5",
+        output,
+    )
     pairs = {(fact["type"], fact["value"]) for fact in facts}
     checks = [
         json.loads(fact["value"])
@@ -1091,7 +1107,7 @@ def test_low_value_failed_structured_facts_are_sanitized():
     assert ("target_host", "83.166.241.164") not in pairs
     assert ("connection_status", "Failed") not in pairs
     assert ("scan_status", "skipped") not in pairs
-    assert ("port_open", "22/tcp") in pairs
+    assert ("port_open", "22/tcp") not in pairs
 
 
 def test_web_endpoint_parser_rejects_trailing_json_context_garbage():
@@ -1186,7 +1202,12 @@ https://app.example.com [200] [Admin Panel] [nginx,React]
 {"template-id":"exposed-panel","info":{"name":"Panel","severity":"medium"},"matched-at":"https://app.example.com/admin"}
 """
 
-    facts = OutputParser().parse_tool_output("httpx_probe example.com nuclei_safe https://app.example.com", output)
+    parser = OutputParser()
+    facts = parser.parse_tool_output("httpx_probe example.com", output)
+    facts += parser.parse_tool_output(
+        "nuclei_safe https://app.example.com",
+        output,
+    )
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("asset_domain", "app.example.com") in pairs
@@ -1216,10 +1237,17 @@ POST /admin auth=required
 {"Status":"FAIL","Severity":"high","CheckID":"s3_bucket_public_access","ResourceId":"bucket-1"}
 """
 
-    facts = OutputParser().parse_tool_output(
-        "openapi_import openapi.json graphql_check https://api.example.com/graphql gitleaks_scan . semgrep_scan . trivy_scan . prowler_scan aws",
-        output,
-    )
+    parser = OutputParser()
+    facts = []
+    for tool_name in (
+        "openapi_import openapi.json",
+        "graphql_check https://api.example.com/graphql",
+        "gitleaks_scan .",
+        "semgrep_scan .",
+        "trivy_scan .",
+        "prowler_scan aws",
+    ):
+        facts += parser.parse_tool_output(tool_name, output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("api_endpoint", "GET:/users:auth=unknown_or_none") in pairs
@@ -1263,10 +1291,17 @@ URL https://app.example.com/account?id=123
 ALERT Medium Cookie No HttpOnly Flag
 """
 
-    facts = OutputParser().parse_tool_output(
-        "security_headers_check https://app.example.com cors_check https://app.example.com jwt_analyze token js_route_extract https://app.example.com/app.js burp_import burp.xml zap_import zap.json",
-        output,
-    )
+    parser = OutputParser()
+    facts = []
+    for tool_name in (
+        "security_headers_check https://app.example.com",
+        "cors_check https://app.example.com",
+        "jwt_analyze token",
+        "js_route_extract https://app.example.com/app.js",
+        "burp_import burp.xml",
+        "zap_import zap.json",
+    ):
+        facts += parser.parse_tool_output(tool_name, output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("web_security_note", "missing_hsts") in pairs

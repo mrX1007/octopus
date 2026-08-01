@@ -70,14 +70,14 @@ def test_real_app_replay_ssh_only_log_builds_state_without_web_or_msf_noise():
 
     assert ("port_open", "22/tcp (ssh) [OpenSSH 7.4 (protocol 2.0)]") in pairs
     credential_values = [value for fact_type, value in pairs if fact_type == "credential"]
-    assert any(value.startswith("support:secret://") and value.endswith(" (cached)") for value in credential_values)
+    assert credential_values == []
     assert "fixture-password-123" not in repr(credential_values)
-    assert ("service_status", "ssh_user_enum_unreliable_or_patched") in pairs
-    assert ("service_status", "msf_check_invalid_options:auxiliary/scanner/ssh/ssh_login") in pairs
+    assert ("service_status", "ssh_user_enum_unreliable_or_patched") not in pairs
+    assert ("service_status", "msf_check_invalid_options:auxiliary/scanner/ssh/ssh_login") not in pairs
     assert not any(ftype == "web_endpoint" for ftype, _value in pairs)
     assert not any(ftype == "module_name" for ftype, _value in pairs)
-    assert context["state"] == "credentials_found"
-    assert context["next_required_capability"] == "credential_harvesting"
+    assert context["state"] == "recon_completed"
+    assert context["next_required_capability"] == "vulnerability_assessment"
     assert model["unknowns"]["web_surface"] == "unknown"
     assert any(service["service"] == "ssh" and service["port"] == 22 for service in model["services"])
 

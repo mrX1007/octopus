@@ -11,11 +11,16 @@ import os
 import re
 import shutil
 import socket
+from pathlib import Path
 from typing import Optional
 from urllib.parse import urljoin, urlparse
 
+from core.execution.models import current_execution_context
+from core.execution.policy import (
+    authorize_final_registered_arguments,
+    validate_registered_arguments,
+)
 from core.tools.base import (
-    C_GREEN,
     C_RESET,
     C_YELLOW,
     get_tool_config,
@@ -158,6 +163,20 @@ def run_nmap(target: str, extra_flags: Optional[list] = None) -> str:
         if "-sT" not in flags:
             flags.insert(1, "-sT")
 
+    try:
+        validate_registered_arguments("nmap", (*flags, target))
+        validate_registered_arguments("nmap", (*aggressive_flags, target))
+    except ValueError as exc:
+        return f"[!] Execution denied: {exc}"
+    for final_flags in (flags, aggressive_flags):
+        decision = authorize_final_registered_arguments(
+            "nmap",
+            (*final_flags, target),
+            current_execution_context(),
+        )
+        if not decision.allowed:
+            return f"[!] Execution denied: {decision.reason}"
+
     # Reuse Nmap results across staged execution.
     if "-p-" in flags:
         print(f"  {C_YELLOW}[FIX] Full port scan (-p-) intercepted → using Smart Nmap{C_RESET}")
@@ -220,6 +239,25 @@ def run_rustscan(target: str, extra_flags: Optional[list[str]] = None) -> str:
     flags = _config_flags(tc, "default_flags", ["--", "-sV"])
     if extra_flags is not None:
         flags = [str(flag).strip() for flag in extra_flags if str(flag).strip()]
+    if Path(target).is_file():
+        return "[!] Execution denied: ambiguous_rustscan_address_file"
+    # RustScan otherwise merges ~/.config/.rustscan.toml after parsing CLI
+    # arguments, allowing local configuration to replace addresses/commands.
+    # The provider owns this flag; callers cannot supply alternate config,
+    # resolver, or script sources through the policy grammar above.
+    if "--no-config" not in flags:
+        flags.insert(0, "--no-config")
+    try:
+        validate_registered_arguments("rustscan", ("-a", target, *flags))
+    except ValueError as exc:
+        return f"[!] Execution denied: {exc}"
+    decision = authorize_final_registered_arguments(
+        "rustscan",
+        ("-a", target, *flags),
+        current_execution_context(),
+    )
+    if not decision.allowed:
+        return f"[!] Execution denied: {decision.reason}"
     print(f"  [*] rustscan -a {target} {' '.join(flags)}")
     return run_tool(["rustscan", "-a", target, *flags], timeout=timeout)
 
@@ -258,10 +296,16 @@ def run_curl_headers(target: str) -> str:
     """curl -sI http and https"""
     tc = get_tool_config("curl")
     timeout = _config_int(tc, "timeout", 20, minimum=0)
-    flags = _config_flags(tc, "flags", ["-sI", "--max-time", "10", "--location"])
+    # Provider-owned flags prevent curl config/proxy/redirect options from
+    # introducing endpoints after the registered command was authorized.
+    flags = ["-sI", "--max-time", "10", "--noproxy", "*"]
     print(f"  [*] curl {' '.join(flags)} {target}")
     parts = []
     for url in _url_candidates(target):
+        try:
+            validate_registered_arguments("curl_headers", (*flags, url))
+        except ValueError as exc:
+            return f"[!] Execution denied: {exc}"
         curl_cmd = ["curl", *flags]
         if url.startswith("https://") and not {"-k", "--insecure"}.intersection(flags):
             curl_cmd.append("-k")
@@ -349,7 +393,6 @@ def run_httpx_probe(target: str) -> str:
             "-title",
             "-tech-detect",
             "-status-code",
-            "-follow-redirects",
             "-u",
             host,
         ],
@@ -450,6 +493,9 @@ def run_nuclei_safe(target: str) -> str:
             str(request_timeout),
             "-retries",
             str(retries),
+            "-no-interactsh",
+            "-disable-update-check",
+            "-disable-redirects",
         ],
         timeout=wall_timeout,
     )
@@ -471,7 +517,10 @@ def run_nuclei_safe(target: str) -> str:
 def run_katana_crawl(target: str) -> str:
     scan_target = _as_url(target)
     print(f"  [*] katana -silent -js-crawl -known-files all -u {scan_target}")
-    output = run_tool(["katana", "-silent", "-js-crawl", "-known-files", "all", "-u", scan_target], timeout=240)
+    output = run_tool(
+        ["katana", "-silent", "-js-crawl", "-known-files", "all", "-fs", "fqdn", "-u", scan_target],
+        timeout=240,
+    )
     return f"[KATANA CRAWL - {scan_target}]\n{output}"
 
 
@@ -490,7 +539,9 @@ def run_openapi_import(target: str) -> str:
         if source.startswith(("http://", "https://")):
             import requests
 
-            resp = requests.get(source, timeout=20, verify=False)
+            session = requests.Session()
+            session.trust_env = False
+            resp = session.get(source, timeout=20, verify=False, allow_redirects=False)
             body = resp.text
         else:
             with open(source, encoding="utf-8", errors="ignore") as fh:
@@ -587,7 +638,9 @@ def run_authenticated_crawl(target: str, session_profile: str = "") -> str:
     cookies = profile.get("cookies") or {}
     lines = [f"[AUTHENTICATED CRAWL - {url}]", f"Session profile: {session_profile or 'none'}"]
     try:
-        resp = requests.get(url, headers=headers, cookies=cookies, timeout=20, verify=False, allow_redirects=True)
+        session = requests.Session()
+        session.trust_env = False
+        resp = session.get(url, headers=headers, cookies=cookies, timeout=20, verify=False, allow_redirects=False)
         lines.append(f"Status: {resp.status_code}")
         lines.append(f"Final URL: {resp.url}")
         body = resp.text[:500000]
@@ -624,10 +677,12 @@ def run_api_auth_check(target: str, session_profile: str = "") -> str:
     profile = _load_session_profile(session_profile)
     lines = [f"[API AUTH CHECK - {url}]", f"Session profile: {session_profile or 'none'}"]
     try:
-        anon = requests.get(url, timeout=15, verify=False, allow_redirects=False)
+        session = requests.Session()
+        session.trust_env = False
+        anon = session.get(url, timeout=15, verify=False, allow_redirects=False)
         lines.append(f"Anonymous status: {anon.status_code}")
         if profile.get("headers") or profile.get("cookies"):
-            auth = requests.get(
+            auth = session.get(
                 url,
                 headers=profile.get("headers") or {},
                 cookies=profile.get("cookies") or {},
@@ -905,9 +960,11 @@ def run_ffuf(target: str) -> str:
 
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         reachable = ""
+        session = requests.Session()
+        session.trust_env = False
         for candidate in _url_candidates(target):
             try:
-                requests.get(candidate, timeout=(3, 5), verify=False, allow_redirects=True)
+                session.get(candidate, timeout=(3, 5), verify=False, allow_redirects=False)
                 reachable = candidate
                 break
             except requests.RequestException:
@@ -1066,7 +1123,7 @@ def run_nikto(target: str) -> str:
 def run_security_headers_check(target: str) -> str:
     url = _as_url(target)
     print(f"  [*] Security headers check {url}")
-    output = run_tool(["curl", "-skI", "--max-time", "15", "--location", url], timeout=30)
+    output = run_tool(["curl", "-skI", "--max-time", "15", url], timeout=30)
     return f"[SECURITY HEADERS - {url}]\n{output}"
 
 
@@ -1240,7 +1297,10 @@ def run_scrapling_fetch(url: str) -> str:
     if not _config_bool(scrapling_cfg, "enabled", True):
         return "[SKIPPED] Scrapling is disabled by config (scrapling.enabled=false)."
     timeout = _config_int(scrapling_cfg, "timeout", 30, minimum=1)
-    use_stealth = _config_bool(scrapling_cfg, "use_stealth", True)
+    # Browser-backed fetchers can load redirects and third-party resources
+    # outside the explicit target.  Use the inspectable HTTP fallback until a
+    # per-request browser interception policy is available.
+    use_stealth = False
 
     # Ensure URL has protocol
     if not url.startswith("http"):
@@ -1355,6 +1415,7 @@ def run_scrapling_fetch(url: str) -> str:
     from urllib3.util.retry import Retry
 
     session = _req.Session()
+    session.trust_env = False
     retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
     session.mount("http://", HTTPAdapter(max_retries=retries))
     session.mount("https://", HTTPAdapter(max_retries=retries))
@@ -1364,29 +1425,12 @@ def run_scrapling_fetch(url: str) -> str:
             url,
             timeout=(min(5, timeout), timeout),
             verify=False,
+            allow_redirects=False,
             headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/120.0"},
         )
         return _extract_page_data(html_str=resp.text, status_code=resp.status_code, source="requests+bs4")
     except Exception as e:
         print(f"  {C_YELLOW}[!] Requests fallback failed: {str(e)[:80]}{C_RESET}")
-        # Try alternate web ports when the primary URL fails.
-        base_host = url.split("//")[-1].split("/")[0].split(":")[0]
-        alt_ports = [8080, 8443, 443, 1443, 3000, 9090]
-        for alt_port in alt_ports:
-            alt_url = f"http://{base_host}:{alt_port}"
-            if alt_url == url:
-                continue
-            try:
-                resp = session.get(
-                    alt_url, timeout=(min(3, timeout), timeout), verify=False, headers={"User-Agent": "Mozilla/5.0"}
-                )
-                if resp.status_code == 200:
-                    print(f"  {C_GREEN}[+] Alt port {alt_port} responded!{C_RESET}")
-                    return _extract_page_data(
-                        html_str=resp.text, status_code=resp.status_code, source=f"requests+bs4 (port {alt_port})"
-                    )
-            except Exception:
-                continue
         return f"[!] All scrapling/requests attempts failed for {url}. Target web service may be down."
 
 
@@ -1411,7 +1455,7 @@ def run_scrapling_crawl(url: str, max_pages: Optional[int] = None) -> str:
         else _config_int({"max_pages": max_pages}, "max_pages", configured_max_pages, minimum=1)
     )
     page_limit = min(requested_max_pages, configured_max_pages)
-    use_stealth = _config_bool(scrapling_cfg, "use_stealth", True)
+    use_stealth = False
 
     if not url.startswith("http"):
         url = f"http://{url}"
@@ -1457,10 +1501,13 @@ def run_scrapling_crawl(url: str, max_pages: Optional[int] = None) -> str:
                 else:
                     import requests as _req
 
-                    resp = _req.get(
+                    session = _req.Session()
+                    session.trust_env = False
+                    resp = session.get(
                         current_url,
                         timeout=(min(5, timeout), timeout),
                         verify=False,
+                        allow_redirects=False,
                         headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Gecko/20100101 Firefox/120.0"},
                     )
                     try:

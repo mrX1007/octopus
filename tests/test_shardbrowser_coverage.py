@@ -92,8 +92,12 @@ class _Page:
         self._screenshot = screenshot
         self.response = response
         self.goto_calls = []
+        self.route_calls = []
         self.wait_calls = []
         self.closed = False
+
+    async def route(self, pattern, handler):
+        self.route_calls.append((pattern, handler))
 
     async def goto(self, url, **kwargs):
         self.goto_calls.append((url, kwargs))
@@ -113,6 +117,55 @@ class _Page:
 
     async def close(self):
         self.closed = True
+
+
+class _Route:
+    def __init__(self, url: str):
+        self.request = SimpleNamespace(url=url)
+        self.continue_calls = 0
+        self.abort_calls = 0
+
+    async def continue_(self):
+        self.continue_calls += 1
+
+    async def abort(self):
+        self.abort_calls += 1
+
+
+def _assert_scoped_route(
+    monkeypatch: pytest.MonkeyPatch,
+    page: _Page,
+    expected_url: str,
+) -> None:
+    assert len(page.route_calls) == 1
+    pattern, handler = page.route_calls[0]
+    assert pattern == "**/*"
+
+    same_origin = _Route(f"{expected_url}/assets/app.js")
+    cross_origin = _Route("https://outside.test/tracker.js")
+
+    # The repository supports Python >=3.10, while this workspace's local venv
+    # uses Python 3.9. Keep this hermetic test able to exercise the production
+    # callback there despite the helper's ``int | None`` nested annotation.
+    with monkeypatch.context() as runtime_patch:
+        if sys.version_info < (3, 10):
+            class _AnnotationInt:
+                def __or__(self, _other):
+                    return object
+
+            runtime_patch.setattr(
+                shardbrowser,
+                "int",
+                _AnnotationInt(),
+                raising=False,
+            )
+        asyncio.run(handler(same_origin))
+        asyncio.run(handler(cross_origin))
+
+    assert same_origin.continue_calls == 1
+    assert same_origin.abort_calls == 0
+    assert cross_origin.continue_calls == 0
+    assert cross_origin.abort_calls == 1
 
 
 class _Context:
@@ -474,7 +527,12 @@ def test_browse_async_http_fallback_is_fully_mocked(monkeypatch):
     content = asyncio.run(browser._browse_async("ws://cdp", "https://target.test"))
 
     assert content == "http fallback"
-    assert clients[0].options == {"verify": False, "timeout": 15}
+    assert clients[0].options == {
+        "verify": False,
+        "timeout": 15,
+        "follow_redirects": False,
+        "trust_env": False,
+    }
     assert clients[0].calls == [("https://target.test", {})]
 
 
@@ -499,6 +557,7 @@ def test_browse_async_mocked_cdp(monkeypatch, existing_context):
     assert page.closed is True
     assert cdp_browser.closed is True
     assert cdp_browser.new_context_calls == (0 if existing_context else 1)
+    _assert_scoped_route(monkeypatch, page, "https://target.test")
 
 
 def test_browse_sync_success_and_mocked_thread_fallback(monkeypatch):
@@ -531,6 +590,7 @@ def test_screenshot_async_url_output_and_empty_paths(monkeypatch):
     file_mock.assert_called_once_with("/virtual/screenshot.png", "wb")
     file_mock().write.assert_called_once_with(b"png")
     assert page.wait_calls == [2000]
+    _assert_scoped_route(monkeypatch, page, "https://target.test")
 
     page = _Page(screenshot=b"other")
     context = _Context(page)
@@ -538,6 +598,7 @@ def test_screenshot_async_url_output_and_empty_paths(monkeypatch):
     _install_patchright(monkeypatch, cdp_browser)
     assert asyncio.run(browser.screenshot_async("ws://cdp", "")) == b"other"
     assert page.goto_calls == []
+    assert page.route_calls == []
     assert cdp_browser.new_context_calls == 1
 
 
@@ -566,7 +627,12 @@ def test_cookie_browse_http_fallback_is_fully_mocked(monkeypatch):
         "url_final": "https://redirect.test/",
         "status_code": 202,
     }
-    assert clients[0].options == {"verify": False, "timeout": 20}
+    assert clients[0].options == {
+        "verify": False,
+        "timeout": 20,
+        "follow_redirects": False,
+        "trust_env": False,
+    }
     assert clients[0].calls[0][1] == {"cookies": {"session": "secret"}}
 
 
@@ -612,6 +678,7 @@ def test_cookie_browse_mocked_cdp_paths(
     assert result["cookies_after"][0]["value"] == "v" * 40
     assert result["cookies_after"][1]["domain"] == ""
     assert context.added_cookies == injected
+    _assert_scoped_route(monkeypatch, page, "https://target.test")
     if screenshot_path:
         assert result["screenshot"] == screenshot_path
         file_mock().write.assert_called_once_with(b"image")

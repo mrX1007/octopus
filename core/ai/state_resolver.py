@@ -5,6 +5,20 @@ import json
 from typing import Any
 
 from core.ai.evaluated_facts import EvaluatedFactSnapshot
+from core.ai.fact_predicates import (
+    confirms_cleanup,
+    confirms_credentials,
+    confirms_exfiltration,
+    confirms_persistence,
+    confirms_root,
+    confirms_system_access_exploit,
+    fact_type,
+    fact_value,
+    is_vulnerability_fact,
+    is_web_fact,
+    parse_port_open,
+    web_fact_port,
+)
 
 
 class StateResolver:
@@ -29,8 +43,6 @@ class StateResolver:
         all_facts = list(snapshot.historical_facts())
         facts = list(snapshot.decision_facts())
         host = snapshot.canonical_scope[0] if snapshot.canonical_scope else ""
-        fact_values = [f['value'].lower() for f in facts]
-        fact_types = [f['type'].lower() for f in facts]
 
         state: dict[str, Any] = {
             "target": host,
@@ -52,13 +64,17 @@ class StateResolver:
                 status: sum(
                     1
                     for fact in all_facts
-                    if str(fact.get("assessment_status") or "observed") == status
+                    if str(fact.get("assessment_status") or "observed")
+                    .strip()
+                    .casefold()
+                    == status
                 )
                 for status in ("observed", "inferred", "verified", "contradicted")
             },
         }
 
-        # Group facts by session_id
+        # Group decision-usable facts by session_id for explicitly correlated
+        # outcomes.  Free-form text never participates in the predicates.
         session_facts: dict[Any, list[dict[str, Any]]] = {}
         for f in facts:
             sid = f.get('session_id', 'none')
@@ -66,39 +82,27 @@ class StateResolver:
                 session_facts[sid] = []
             session_facts[sid].append(f)
 
-        # Recon and Ports
+        # Recon and ports.  Values are fully parsed so port 8222 is not SSH and
+        # 1800 is not mistaken for HTTP merely because it contains "80".
         for f in facts:
-            if f['type'] == 'port_open':
+            port = parse_port_open(f)
+            if port is not None:
                 state["recon_completed"] = True
-                val = f['value'].lower()
-                state["open_ports"].append(val)
-                if 'http' in val or '80' in val or '443' in val:
+                state["open_ports"].append(port.rendered)
+                if port.is_web:
                     state["web_services_found"] = True
-                if '22' in val or 'ssh' in val:
+                if port.is_ssh:
                     state["ssh_service_found"] = True
-            elif f['type'] in {
-                'browser_rendered', 'web_title', 'web_surface', 'web_input',
-                'web_endpoint', 'web_link', 'web_server', 'web_redirect', 'web_powered_by',
-            }:
+            elif is_web_fact(f):
                 state["recon_completed"] = True
                 state["web_services_found"] = True
-                val = f['value'].lower()
-                if f['type'] == 'browser_rendered':
-                    if val.startswith("https://") or ":443" in val:
-                        state["open_ports"].append("443/tcp (https)")
-                    elif val.startswith("http://") or ":80" in val:
-                        state["open_ports"].append("80/tcp (http)")
-                elif not any("80/tcp" in port or "443/tcp" in port for port in state["open_ports"]):
-                    state["open_ports"].append("80/tcp (http)")
+                endpoint_port = web_fact_port(f)
+                if endpoint_port is not None:
+                    state["open_ports"].append(endpoint_port.rendered)
 
-        # Vulnerabilities (including hypotheses)
-        vulnerability_facts = [
-            fact
-            for fact in facts
-            if "vuln" in str(fact.get("type", "")).lower()
-            or "cve" in str(fact.get("value", "")).lower()
-            or "exploit_success" in str(fact.get("type", "")).lower()
-        ]
+        # Vulnerabilities are recognized by a closed set of typed facts.  A
+        # CVE-shaped string in an unrelated fact is not a vulnerability.
+        vulnerability_facts = [fact for fact in facts if is_vulnerability_fact(fact)]
         if vulnerability_facts:
             state["vulnerability_candidates_found"] = True
             state["vulnerabilities_found"] = True
@@ -108,107 +112,63 @@ class StateResolver:
         ):
             state["verified_vulnerabilities_found"] = True
 
-        if any('uid=0' in fv or 'root_access_confirmed' in fv for fv in fact_values):
-            state["root_access_confirmed"] = True
-        if any(
-            ft == "credential" and fv.startswith("ssh_login_success:root@")
-            for ft, fv in zip(fact_types, fact_values)
-        ):
-            state["root_access_confirmed"] = True
-        if any('credential' in ft for ft in fact_types) or any('ssh_login_success' in fv for fv in fact_values):
-            state["credentials_found"] = True
+        state["credentials_found"] = any(confirms_credentials(fact) for fact in facts)
+        state["root_access_confirmed"] = any(confirms_root(fact) for fact in facts)
 
-        # Credentials & Root Access (Correlated by session)
-        for sid, sfacts in session_facts.items():
-            s_values = [f['value'].lower() for f in sfacts]
-            s_types = [f['type'].lower() for f in sfacts]
-            
-            has_creds = any('login_success' in v or 'credential' in t or 'cpanel_auth' in v or 'whm_session' in v for v, t in zip(s_values, s_types))
-            has_uid0 = any('uid=0' in v for v in s_values)
-            has_root_ssh_login = any(
-                t == "credential" and v.startswith("ssh_login_success:root@")
-                for v, t in zip(s_values, s_types)
-            )
-            has_system_exploit_success = any(
-                'exploit_success' in t and self._is_system_access_exploit(v)
-                for v, t in zip(s_values, s_types)
-            )
-            
+        # Credentials remain useful for routing, but exploit status is not an
+        # authority fact. Root requires a direct typed access observation.
+        for sfacts in session_facts.values():
+            has_creds = any(confirms_credentials(fact) for fact in sfacts)
             if has_creds:
                 state["credentials_found"] = True
-            
-            # Root access is confirmed only by OS-level evidence. Application
-            # sessions such as cPanel/WHM auth bypass are credentials, not SSH
-            # or uid=0 shell access.
-            if has_uid0 and (has_creds or sid != 'none'):
-                state["root_access_confirmed"] = True
-            if has_root_ssh_login:
-                state["root_access_confirmed"] = True
-            if has_system_exploit_success and has_creds:
-                state["root_access_confirmed"] = True
 
-        if any('exploit_success' in ft and self._is_system_access_exploit(fv)
-               for ft, fv in zip(fact_types, fact_values)) and any('uid=0' in fv for fv in fact_values):
-            state["root_access_confirmed"] = True
-
-        if any(ft == "post_exploit_stage" and fv == "post_access_inventory_completed"
-               for ft, fv in zip(fact_types, fact_values)):
+        if any(
+            fact_type(fact) == "post_exploit_stage"
+            and fact_value(fact) == "post_access_inventory_completed"
+            for fact in facts
+        ):
             state["post_access_inventory_completed"] = True
 
         # Persistence
-        if any('persistence' in ft for ft in fact_types) or any('mechanism_planted' in fv for fv in fact_values):
+        if any(confirms_persistence(fact) for fact in facts):
             state["persistence_established"] = True
 
         # Internal recon / pivot observations. Host/subnet facts can be observed
         # during SSH inventory, so only explicit network_recon evidence closes
         # this stage.
-        if any(ft == "internal_network" for ft in fact_types):
+        if any(fact_type(fact) == "internal_network" for fact in facts):
             state["internal_recon_completed"] = True
-        if any(ft == "post_exploit_stage" and fv == "internal_network_recon_completed"
-               for ft, fv in zip(fact_types, fact_values)):
+        if any(
+            fact_type(fact) == "post_exploit_stage"
+            and fact_value(fact) == "internal_network_recon_completed"
+            for fact in facts
+        ):
             state["internal_recon_completed"] = True
-        if any(ft == "service_status" and fv in {"network_recon_completed", "internal_network_recon_completed"}
-               for ft, fv in zip(fact_types, fact_values)):
+        if any(
+            fact_type(fact) == "service_status"
+            and fact_value(fact)
+            in {"network_recon_completed", "internal_network_recon_completed"}
+            for fact in facts
+        ):
             state["internal_recon_completed"] = True
 
         # Exfil & Cleanup
         # Not every loot-like fact means the data-exfiltration stage completed.
         # For example, /etc/shadow may be copied during privesc to verify root
         # or collect hashes. Only explicit exfil stage outcomes advance state.
-        if any(self._is_exfil_completion(ft, fv) for ft, fv in zip(fact_types, fact_values)):
+        if any(confirms_exfiltration(fact) for fact in facts):
             state["exfiltration_completed"] = True
-        if any('cleanup' in ft and fv in ("success", "partial", "completed") for ft, fv in zip(fact_types, fact_values)):
+        if any(confirms_cleanup(fact) for fact in facts):
             state["cleanup_completed"] = True
 
         state["open_ports"] = sorted(set(state["open_ports"]))
         return state
 
     def _is_exfil_completion(self, fact_type: str, fact_value: str) -> bool:
-        if fact_type == "post_exploit_stage" and fact_value == "data_exfiltration_completed":
-            return True
-        if fact_type in {"data_exfiltration", "data_exfiltration_status"}:
-            files_match = None
-            if fact_value.startswith("files_exfiltrated:"):
-                try:
-                    files_match = int(fact_value.split(":", 1)[1])
-                except (TypeError, ValueError):
-                    files_match = 0
-            return (
-                fact_value in {"completed", "complete", "loot_collected"}
-                or (files_match is not None and files_match > 0)
-                or fact_value.startswith("completed:")
-            )
-        return False
+        return confirms_exfiltration({"type": fact_type, "value": fact_value})
 
     def _is_system_access_exploit(self, fact_value: str) -> bool:
-        value = (fact_value or "").lower()
-        app_only_markers = ("cpanel", "whm", "webmin", "joomla", "wordpress")
-        if any(marker in value for marker in app_only_markers):
-            return False
-        return any(marker in value for marker in (
-            "uid=0", "root access", "root shell", "pwnkit", "dirtycow",
-            "dirty pipe", "baron samedit", "local privilege escalation",
-        ))
+        return confirms_system_access_exploit(fact_value)
 
     def get_state_for_llm(self, scan_id: str, host: str) -> str:
         """Returns the inferred state as a JSON string for the Director LLM."""

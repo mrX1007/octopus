@@ -197,6 +197,7 @@ def test_retry_command_without_durable_grant_is_skipped() -> None:
     pipeline.mission_store = SimpleNamespace(consume_retry_command=lambda *_args, **_kwargs: False)
     pipeline._execution_context = lambda *_args: ExecutionContext.automatic(target_scope=("host",))
     pipeline._accepted_task_decision_facts = lambda *_args: []
+    pipeline.fact_store = SimpleNamespace(get_facts=lambda *_args: [])
     traces: list[dict] = []
     pipeline._record_command_trace = lambda audit, result: traces.append({**audit, "result": result})
 
@@ -332,10 +333,12 @@ def test_check_result_boundary_helpers_cover_internal_scopes_and_kinds() -> None
 def test_store_fact_preserves_secret_refs_and_deduplicates_derived_facts() -> None:
     pipeline = _bare_pipeline()
     calls = 0
+    stored_kwargs = []
 
-    def add_fact(*_args, **_kwargs):
+    def add_fact(*_args, **kwargs):
         nonlocal calls
         calls += 1
+        stored_kwargs.append(kwargs)
         return calls, calls == 1
 
     pipeline.fact_store = SimpleNamespace(
@@ -351,12 +354,25 @@ def test_store_fact_preserves_secret_refs_and_deduplicates_derived_facts() -> No
     result = pipeline._store_fact(
         "scan",
         "host",
-        {"type": "credential", "value": "secret", "confidence": 90},
+        {
+            "type": "credential",
+            "value": "secret",
+            "confidence": 90,
+            "source_identity": "manual_recon",
+            "observation_method": "target_controlled_stdout",
+            "trust_level": "target_controlled",
+        },
         "fixture",
     )
 
     assert result["fact"]["secret_refs"] == ["secret-ref"]
     assert result["new_facts"] == 1
+    assert all(item["source_identity"] == "manual_recon" for item in stored_kwargs)
+    assert all(
+        item["observation_method"] == "target_controlled_stdout"
+        for item in stored_kwargs
+    )
+    assert all(item["trust_level"] == "target_controlled" for item in stored_kwargs)
 
 
 def test_endpoint_and_graph_parsers_reject_malformed_or_hostless_values() -> None:

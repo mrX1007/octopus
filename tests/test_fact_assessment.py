@@ -394,7 +394,8 @@ def test_evidence_verifier_persists_chain_and_execution_provenance(tmp_path):
         [],
     )
     assert rejected["status"] == "rejected"
-    assert "mandatory" in rejected["reason"]
+    assert rejected["policy_id"] == "unsupported.claim.v1"
+    assert "no code-owned evidence policy" in rejected["reason"]
 
 
 @pytest.mark.parametrize("invalidity", ["stale", "degraded"])
@@ -536,9 +537,7 @@ def test_reports_and_state_consume_current_assessment_not_type_name(tmp_path):
         evidence_fact_ids=(port_id,),
     )
 
-    contradicted_group = build_finding_groups(store.get_facts("scan", "host"))[0]
-    assert contradicted_group["verified"] is False
-    assert contradicted_group["contradicted"] is True
+    assert build_finding_groups(store.get_facts("scan", "host")) == []
     state = StateResolver(store).resolve_state("scan", "host")
     assert state["recon_completed"] is False
     assert state["fact_assessment_counts"]["contradicted"] == 2

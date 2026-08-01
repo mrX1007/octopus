@@ -34,6 +34,7 @@ from core.execution import (
     current_execution_context,
     redact_sensitive_command,
 )
+from core.execution.policy import registered_tool_network_parameter_names
 from core.runtime_config import effective_parallel_workers
 
 # IMPORTS FROM SHARED BASE (breaks circular deps)
@@ -763,9 +764,6 @@ def format_recon_for_llm(results: dict) -> str:
 
 
 _EXECUTION_POLICY = ExecutionPolicy()
-_NETWORK_PARAMETER_NAMES = {"target", "target_ip", "host", "url"}
-
-
 def _execution_context_or_current(
     execution_context: Optional[ExecutionContext] = None,
 ) -> ExecutionContext:
@@ -814,13 +812,20 @@ def _bounded_tool_result(result: Any, context: ExecutionContext):
     return _truncate_output_text(str(result), context.max_output_bytes)
 
 
-def _bound_network_targets(func, positional_args: list, kwargs: dict) -> tuple[str, ...]:
+def _bound_network_targets(tool_def, positional_args: list, kwargs: dict) -> tuple[str, ...]:
+    func = getattr(tool_def, "func", tool_def)
     try:
         bound = inspect.signature(func).bind_partial(*positional_args, **kwargs)
     except (TypeError, ValueError):
         return ()
+    name = str(getattr(tool_def, "name", "") or "")
+    network_parameter_names = (
+        registered_tool_network_parameter_names(name)
+        if name
+        else frozenset({"callback_host", "host", "remote_host", "target", "target_ip", "url"})
+    )
     values = []
-    for name in _NETWORK_PARAMETER_NAMES:
+    for name in network_parameter_names:
         value = bound.arguments.get(name)
         if isinstance(value, str) and value and value not in values:
             values.append(value)
@@ -913,6 +918,15 @@ def run_tool_by_command(
 
     if tool_def is not None and not getattr(tool_def, "enabled", True):
         return _execution_denied("provider_disabled", context.request_id)
+
+    if tool_def is not None:
+        # Authorize the exact textual grammar before binding arguments.  The
+        # later bound-argument decision remains in place to catch defaults and
+        # normalization.  Together they prevent extra positional targets or
+        # target-bearing option strings from disappearing during binding.
+        raw_decision = _EXECUTION_POLICY.authorize_command(command_str, context)
+        if not raw_decision.allowed:
+            return _execution_denied(raw_decision.reason, context.request_id)
 
     # Historical hints must never shadow a canonical registry name or alias.
     if not tool_def and cmd_lower in _FAKE_TOOLS:
@@ -1202,7 +1216,7 @@ def run_tool_by_command(
             argv=tuple(parts),
             raw_command=command_str,
             registered_name=tool_def.name,
-            targets=_bound_network_targets(tool_def.func, p_args, p_kwargs),
+            targets=_bound_network_targets(tool_def, p_args, p_kwargs),
         )
         decision = _EXECUTION_POLICY.authorize_registered(invocation, context)
         if not decision.allowed:

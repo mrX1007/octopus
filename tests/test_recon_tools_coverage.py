@@ -15,6 +15,7 @@ from unittest.mock import MagicMock, mock_open
 
 import pytest
 
+from core.execution import ExecutionContext, bind_execution_context
 from core.tools import recon_tools
 
 pytestmark = pytest.mark.unit
@@ -101,44 +102,46 @@ def test_nmap_cache_regular_many_ports_and_write_failure(monkeypatch: pytest.Mon
         "run_tool",
         lambda command, timeout: calls.append((command, timeout)) or "ok",
     )
-    assert recon_tools.run_nmap("host") == "ok"
-    assert calls[-1][0] == ["nmap", "-sV", "host"]
-    recon_tools.run_nmap("host", extra_flags=["-Pn", "-sT"])
+    context = ExecutionContext.automatic(("host",), actor="recon-provider-contract", origin="tests")
+    with bind_execution_context(context):
+        assert recon_tools.run_nmap("host") == "ok"
+        assert calls[-1][0] == ["nmap", "-sV", "host"]
+        recon_tools.run_nmap("host", extra_flags=["-Pn", "-sT"])
 
-    monkeypatch.setattr(
-        recon_tools,
-        "get_tool_config",
-        lambda _name: {"timeout": "11", "default_flags": ["--", "-sV"]},
-    )
-    assert recon_tools.run_rustscan("host") == "ok"
-    assert calls[-1] == (["rustscan", "-a", "host", "--", "-sV"], 11)
-    assert recon_tools.run_rustscan("host", extra_flags=[" -- ", "", " -sC "]) == "ok"
-    assert calls[-1] == (["rustscan", "-a", "host", "--", "-sC"], 11)
+        monkeypatch.setattr(
+            recon_tools,
+            "get_tool_config",
+            lambda _name: {"timeout": "11", "default_flags": ["--", "-sV"]},
+        )
+        assert recon_tools.run_rustscan("host") == "ok"
+        assert calls[-1] == (["rustscan", "-a", "host", "--no-config", "--", "-sV"], 11)
+        assert recon_tools.run_rustscan("host", extra_flags=[" -- ", "", " -sC "]) == "ok"
+        assert calls[-1] == (["rustscan", "-a", "host", "--no-config", "--", "-sC"], 11)
 
-    monkeypatch.setattr(recon_tools.os.path, "exists", lambda _path: True)
-    monkeypatch.setattr("builtins.open", mock_open(read_data="cached"))
-    assert recon_tools.run_nmap("host", extra_flags=["-p-"]) == "cached"
+        monkeypatch.setattr(recon_tools.os.path, "exists", lambda _path: True)
+        monkeypatch.setattr("builtins.open", mock_open(read_data="cached"))
+        assert recon_tools.run_nmap("host", extra_flags=["-p-"]) == "cached"
 
-    outputs = iter(["\n".join(f"{port}/tcp open svc" for port in range(1, 6)), "deep"])
-    monkeypatch.setattr(recon_tools.os.path, "exists", lambda _path: False)
-    monkeypatch.setattr(
-        recon_tools,
-        "run_tool",
-        lambda command, timeout: calls.append((command, timeout)) or next(outputs),
-    )
-    monkeypatch.setattr("builtins.open", MagicMock(side_effect=OSError("readonly")))
-    result = recon_tools.run_nmap("host", extra_flags=["-p-", "-Pn", "-sT"])
-    assert "Deep Scan" in result
-    assert "8443,8000" in calls[-1][0][-2]
+        outputs = iter(["\n".join(f"{port}/tcp open svc" for port in range(1, 6)), "deep"])
+        monkeypatch.setattr(recon_tools.os.path, "exists", lambda _path: False)
+        monkeypatch.setattr(
+            recon_tools,
+            "run_tool",
+            lambda command, timeout: calls.append((command, timeout)) or next(outputs),
+        )
+        monkeypatch.setattr("builtins.open", MagicMock(side_effect=OSError("readonly")))
+        result = recon_tools.run_nmap("host", extra_flags=["-p-", "-Pn", "-sT"])
+        assert "Deep Scan" in result
+        assert "8443,8000" in calls[-1][0][-2]
 
-    outputs = iter(["80/tcp closed", "deep"])
-    monkeypatch.setattr("builtins.open", mock_open())
-    monkeypatch.setattr(
-        recon_tools,
-        "run_tool",
-        lambda command, timeout: calls.append((command, timeout)) or next(outputs),
-    )
-    assert "Deep Scan" in recon_tools.run_nmap("host", extra_flags=["-p-", "-Pn", "-sT"])
+        outputs = iter(["80/tcp closed", "deep"])
+        monkeypatch.setattr("builtins.open", mock_open())
+        monkeypatch.setattr(
+            recon_tools,
+            "run_tool",
+            lambda command, timeout: calls.append((command, timeout)) or next(outputs),
+        )
+        assert "Deep Scan" in recon_tools.run_nmap("host", extra_flags=["-p-", "-Pn", "-sT"])
 
 
 def test_command_wrappers_are_process_free(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -248,7 +251,8 @@ def test_curl_nuclei_nikto_and_graphql_completion_branches(
         lambda command, timeout: calls.append((command, timeout)) or next(outputs),
     )
     assert "headers-http" in recon_tools.run_curl_headers("x")
-    assert all("-k" not in command for command, _timeout in calls[:2])
+    assert "-k" not in calls[0][0]
+    assert "-k" in calls[1][0]
     assert "No nuclei findings" in recon_tools.run_nuclei_safe("x")
     assert "NUCLEI COMPLETE" not in recon_tools.run_nuclei_safe("x")
     assert "NIKTO COMPLETE" in recon_tools.run_nikto("x")
@@ -279,12 +283,13 @@ def test_openapi_local_yaml_remote_and_failure_paths(tmp_path, monkeypatch: pyte
     yaml_path.write_text("info:\n  title: YAML\npaths:\n  /x:\n    delete: {}\n")
     assert "DELETE /x" in recon_tools.run_openapi_import(str(yaml_path))
 
-    monkeypatch.setattr(
-        "requests.get",
-        lambda *_args, **_kwargs: SimpleNamespace(text=json.dumps({"paths": {}})),
+    session = SimpleNamespace(
+        trust_env=True,
+        get=MagicMock(return_value=SimpleNamespace(text=json.dumps({"paths": {}}))),
     )
+    monkeypatch.setattr("requests.Session", lambda: session)
     assert "OPENAPI IMPORT" in recon_tools.run_openapi_import("https://spec.test")
-    monkeypatch.setattr("requests.get", MagicMock(side_effect=RuntimeError("offline")))
+    session.get = MagicMock(side_effect=RuntimeError("offline"))
     assert "import failed" in recon_tools.run_openapi_import("https://spec.test")
 
 
@@ -305,12 +310,16 @@ def test_session_authenticated_crawl_and_api_auth_paths(tmp_path, monkeypatch: p
             SimpleNamespace(status_code=200, url="https://site.test", text="plain"),
         ]
     )
-    monkeypatch.setattr("requests.get", lambda *_args, **_kwargs: next(responses))
+    session = SimpleNamespace(
+        trust_env=True,
+        get=MagicMock(side_effect=lambda *_args, **_kwargs: next(responses)),
+    )
+    monkeypatch.setattr("requests.Session", lambda: session)
     first = recon_tools.run_authenticated_crawl("site.test", str(profile))
     second = recon_tools.run_authenticated_crawl("site.test")
     assert "Title: Site" in first and "LINK https://site.test/next" in first
     assert "CSRF token observed: no" in second
-    monkeypatch.setattr("requests.get", MagicMock(side_effect=RuntimeError("offline")))
+    session.get = MagicMock(side_effect=RuntimeError("offline"))
     assert "failed" in recon_tools.run_authenticated_crawl("site.test")
 
     def api_responses(*_args, **kwargs):
@@ -318,21 +327,21 @@ def test_session_authenticated_crawl_and_api_auth_paths(tmp_path, monkeypatch: p
             return SimpleNamespace(status_code=200)
         return SimpleNamespace(status_code=200)
 
-    monkeypatch.setattr("requests.get", api_responses)
+    session.get = MagicMock(side_effect=api_responses)
     assert "possible_missing_auth" in recon_tools.run_api_auth_check("api.test", str(profile))
 
     both_denied = iter([SimpleNamespace(status_code=500), SimpleNamespace(status_code=500)])
-    monkeypatch.setattr("requests.get", lambda *_args, **_kwargs: next(both_denied))
+    session.get = MagicMock(side_effect=lambda *_args, **_kwargs: next(both_denied))
     assert "NOTE" not in recon_tools.run_api_auth_check("api.test", str(profile))
 
     status = iter([SimpleNamespace(status_code=401), SimpleNamespace(status_code=200)])
-    monkeypatch.setattr("requests.get", lambda *_args, **_kwargs: next(status))
+    session.get = MagicMock(side_effect=lambda *_args, **_kwargs: next(status))
     assert "auth_required" in recon_tools.run_api_auth_check("api.test", str(profile))
-    monkeypatch.setattr("requests.get", lambda *_args, **_kwargs: SimpleNamespace(status_code=200))
+    session.get = MagicMock(return_value=SimpleNamespace(status_code=200))
     assert "anonymous_accessible" in recon_tools.run_api_auth_check("api.test")
-    monkeypatch.setattr("requests.get", lambda *_args, **_kwargs: SimpleNamespace(status_code=500))
+    session.get = MagicMock(return_value=SimpleNamespace(status_code=500))
     assert "NOTE" not in recon_tools.run_api_auth_check("api.test")
-    monkeypatch.setattr("requests.get", MagicMock(side_effect=RuntimeError("offline")))
+    session.get = MagicMock(side_effect=RuntimeError("offline"))
     assert "failed" in recon_tools.run_api_auth_check("api.test")
 
 
@@ -445,14 +454,14 @@ def test_content_discovery_failure_boundaries(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(recon_tools.shutil, "which", lambda _name: "/bin/ffuf")
     monkeypatch.setattr(recon_tools, "get_tool_config", lambda _name: {"timeout": 0})
     monkeypatch.setattr(recon_tools, "_url_candidates", lambda _target: ["http://x", "https://x"])
-    monkeypatch.setattr(
-        requests,
-        "get",
-        MagicMock(side_effect=requests.RequestException("offline")),
+    session = SimpleNamespace(
+        trust_env=True,
+        get=MagicMock(side_effect=requests.RequestException("offline")),
     )
+    monkeypatch.setattr(requests, "Session", lambda: session)
     assert "no HTTP(S) response" in recon_tools.run_ffuf("site")
 
-    monkeypatch.setattr(requests, "get", MagicMock(side_effect=RuntimeError("unexpected")))
+    session.get = MagicMock(side_effect=RuntimeError("unexpected"))
     monkeypatch.setattr(recon_tools, "find_wordlist", lambda _category: "")
     assert "No common web wordlists" in recon_tools.run_ffuf("site")
     assert "No common web wordlists" in recon_tools.run_gobuster("site")
@@ -541,37 +550,12 @@ class _Page:
         return "Page text"
 
 
-def test_scrapling_fetch_page_html_status_and_alt_ports(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_scrapling_fetch_uses_closed_requests_session_without_alt_ports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class Fetcher:
-        page = _Page()
-        error: Exception | None = None
-
-        def fetch(self, *_args, **_kwargs):
-            if self.error:
-                raise self.error
-            return self.page
-
-    monkeypatch.setattr(recon_tools, "CFG", {"scrapling": {"use_stealth": True}})
-    monkeypatch.setattr(recon_tools, "_SCRAPLING_OK", True)
-    monkeypatch.setattr(recon_tools, "_StealthyFetcher", Fetcher)
-    output = recon_tools.run_scrapling_fetch("site.test")
-    assert "Title: Title" in output and "Forms (1)" in output and "Meta Info" in output
-
-    class BlankPage(_Page):
         def __init__(self):
-            super().__init__(title=False, body=False)
-            self.links = []
-            self.forms = []
-            self.meta = []
-
-        @staticmethod
-        def text(*_args, **_kwargs):
-            return ""
-
-    Fetcher.page = BlankPage()
-    assert "Page Text" not in recon_tools.run_scrapling_fetch("site.test")
-    Fetcher.page = _Page(status=404)
-    assert "HTTP 404" in recon_tools.run_scrapling_fetch("http://site.test")
+            raise AssertionError("browser-backed stealth fetch must stay disabled")
 
     class Response:
         def __init__(self, text, status_code):
@@ -642,51 +626,70 @@ def test_scrapling_fetch_page_html_status_and_alt_ports(monkeypatch: pytest.Monk
 
     monkeypatch.setattr("requests.Session", Session)
     monkeypatch.setitem(sys.modules, "bs4", SimpleNamespace(BeautifulSoup=Soup))
-    monkeypatch.setattr(recon_tools, "_SCRAPLING_OK", False)
+    monkeypatch.setattr(recon_tools, "CFG", {"scrapling": {"use_stealth": True}})
+    monkeypatch.setattr(recon_tools, "_SCRAPLING_OK", True)
+    monkeypatch.setattr(recon_tools, "_StealthyFetcher", Fetcher)
     Session.responses = [
         Response("<title>T</title><a href='/a'>A</a><form><input name='x'></form><meta name='d' content='c'>", 200)
     ]
-    assert "REQUESTS+BS4 RESULT" in recon_tools.run_scrapling_fetch("site.test")
+    output = recon_tools.run_scrapling_fetch("site.test")
+    assert "REQUESTS+BS4 RESULT" in output
+    assert "Title: T" in output and "Forms (1)" in output and "Meta Info" in output
     Session.responses = [Response("plain text", 200)]
     assert "plain text" in recon_tools.run_scrapling_fetch("site.test")
 
-    monkeypatch.setattr(recon_tools, "_SCRAPLING_OK", True)
-    Fetcher.error = RuntimeError("stealth")
-    Session.responses = [Response("", 200)]
-    assert "Status: 200" in recon_tools.run_scrapling_fetch("site.test")
-    Fetcher.error = None
-    monkeypatch.setattr(recon_tools, "_SCRAPLING_OK", False)
+    Session.responses = [Response("", 404)]
+    assert "Status: 404" in recon_tools.run_scrapling_fetch("http://site.test")
 
     Session.responses = [RuntimeError("primary"), Response("no", 500), Response("alt ok", 200)]
-    assert "port 443" in recon_tools.run_scrapling_fetch("http://site.test:8080").lower()
-    Session.responses = [RuntimeError("primary"), *[RuntimeError("alt") for _ in range(6)]]
-    assert "All scrapling/requests attempts failed" in recon_tools.run_scrapling_fetch("site.test")
+    assert "All scrapling/requests attempts failed" in recon_tools.run_scrapling_fetch(
+        "http://site.test:8080"
+    )
+    assert len(Session.responses) == 2
 
 
-def test_scrapling_crawl_stealth_status_links_errors_and_outer_failure(
+def test_scrapling_crawl_disables_stealth_and_keeps_requests_in_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class Link:
-        def __init__(self, href):
-            self.attributes = {"href": href}
-
-    class Page:
-        def __init__(self, status=200, links=(), title=True):
-            self.status = status
-            self.links = [Link(href) for href in links]
-            self.title = _Element("Title") if title else None
-
-        def css_first(self, _selector):
-            return self.title
-
-        def css(self, _selector):
-            return self.links
-
     class Fetcher:
-        pages: ClassVar[list[object]] = []
+        def __init__(self):
+            raise AssertionError("browser-backed stealth fetch must stay disabled")
 
-        def fetch(self, *_args, **_kwargs):
-            item = self.pages.pop(0)
+    class Anchor:
+        def __init__(self, href):
+            self.href = href
+
+        def get(self, _name, _default=""):
+            return self.href
+
+    class Title:
+        @staticmethod
+        def get_text(**_kwargs):
+            return "Title"
+
+    class Soup:
+        def __init__(self, html, _parser):
+            self.html = html
+
+        def find(self, _name):
+            return Title() if self.html == "first" else None
+
+        def find_all(self, _name, **_kwargs):
+            if self.html != "first":
+                return []
+            return [
+                Anchor("/next"),
+                Anchor("/next"),
+                Anchor("https://other.test"),
+                Anchor("#x"),
+                Anchor(""),
+            ]
+
+    class Session:
+        responses: ClassVar[list[object]] = []
+
+        def get(self, *_args, **_kwargs):
+            item = self.responses.pop(0)
             if isinstance(item, Exception):
                 raise item
             return item
@@ -698,22 +701,19 @@ def test_scrapling_crawl_stealth_status_links_errors_and_outer_failure(
     )
     monkeypatch.setattr(recon_tools, "_SCRAPLING_OK", True)
     monkeypatch.setattr(recon_tools, "_StealthyFetcher", Fetcher)
-    Fetcher.pages = [
-        Page(200, ["/next", "/next", "https://other.test", "#x", ""]),
-        Page(404, title=False),
+    monkeypatch.setattr("requests.Session", Session)
+    monkeypatch.setitem(sys.modules, "bs4", SimpleNamespace(BeautifulSoup=Soup))
+    Session.responses = [
+        SimpleNamespace(status_code=200, text="first"),
+        SimpleNamespace(status_code=404, text="second"),
     ]
     output = recon_tools.run_scrapling_crawl("site.test")
     assert "[200]" in output and "[404]" in output
+    assert "requests+bs4 fallback" in output
+    assert "other.test" not in output
 
-    Fetcher.pages = [RuntimeError("page")]
+    Session.responses = [RuntimeError("page")]
     assert "[ERR]" in recon_tools.run_scrapling_crawl("site.test", max_pages=1)
-
-    class BrokenFetcher:
-        def __init__(self):
-            raise RuntimeError("constructor")
-
-    monkeypatch.setattr(recon_tools, "_StealthyFetcher", BrokenFetcher)
-    assert "Crawl failed" in recon_tools.run_scrapling_crawl("site.test")
 
 
 def test_scrapling_crawl_requests_bs4_success(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -745,8 +745,13 @@ def test_scrapling_crawl_requests_bs4_success(monkeypatch: pytest.MonkeyPatch) -
             SimpleNamespace(status_code=200, text="no heading"),
         ]
     )
+
+    class Session:
+        def get(self, *_args, **_kwargs):
+            return next(responses)
+
     monkeypatch.setitem(sys.modules, "bs4", SimpleNamespace(BeautifulSoup=Soup))
-    monkeypatch.setattr("requests.get", lambda *_args, **_kwargs: next(responses))
+    monkeypatch.setattr("requests.Session", Session)
     monkeypatch.setattr(
         recon_tools,
         "CFG",

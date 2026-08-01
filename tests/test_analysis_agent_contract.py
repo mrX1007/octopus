@@ -40,7 +40,6 @@ def test_valid_hypotheses_are_normalized(monkeypatch):
         "hypotheses": [
             {
                 "claim": "  ssh_service_active  ",
-                "required_evidence": ["  port 22 open  ", "OpenSSH banner"],
             }
         ]
     }
@@ -56,11 +55,11 @@ def test_valid_hypotheses_are_normalized(monkeypatch):
         "hypotheses": [
             {
                 "claim": "ssh_service_active",
-                "required_evidence": ["port 22 open", "OpenSSH banner"],
             }
         ],
         "llm_status": "ok",
     }
+    assert "required_evidence" not in _agent().system_prompt
 
 
 @pytest.mark.parametrize(
@@ -72,16 +71,12 @@ def test_valid_hypotheses_are_normalized(monkeypatch):
         ({"hypotheses": {}}, "hypotheses_not_list"),
         ({"hypotheses": ["claim"]}, "hypothesis_not_object"),
         (
-            {"hypotheses": [{"claim": "x"}]},
-            "unexpected_hypothesis_fields",
-        ),
-        (
-            {"hypotheses": [{"claim": "", "required_evidence": []}]},
+            {"hypotheses": [{"claim": ""}]},
             "claim_not_nonempty_string",
         ),
         (
-            {"hypotheses": [{"claim": "x", "required_evidence": [1]}]},
-            "required_evidence_not_string_list",
+            {"hypotheses": [{"claim": "x", "required_evidence": ["port_open"]}]},
+            "unexpected_hypothesis_fields",
         ),
     ],
 )

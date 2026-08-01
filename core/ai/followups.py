@@ -14,6 +14,8 @@ from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from core.ai.evaluated_facts import fact_is_decision_usable
+
 
 @dataclass(frozen=True)
 class FollowupProposal:
@@ -171,6 +173,8 @@ class PostAccessFollowupRules:
         confirmed_evidence = ""
         cached_evidence = ""
         for fact in tuple(facts or ()):
+            if not fact_is_decision_usable(fact):
+                continue
             fact_type = str(fact.get("type", "")).strip().lower()
             value = str(fact.get("value", "")).strip()
             lowered = value.lower()
@@ -234,6 +238,8 @@ class ActivePromotionFollowupRules:
 
         positive_modules: set[str] = set()
         for fact in tuple(verification_facts or ()):
+            if not fact_is_decision_usable(fact):
+                continue
             if str(fact.get("type", "")).strip().lower() != "vulnerability":
                 continue
             value = str(fact.get("value", "")).strip()

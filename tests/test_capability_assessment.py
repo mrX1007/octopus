@@ -556,8 +556,8 @@ def test_supporting_fact_rules_cover_resolved_root_and_internal_recon_evidence()
         facts=[
             {
                 "id": 41,
-                "type": "exploit_success",
-                "value": "pwnkit root shell",
+                "type": "system_access",
+                "value": "uid=0",
                 "timestamp": 10,
                 "confidence": 90,
             },

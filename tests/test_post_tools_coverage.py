@@ -13,6 +13,7 @@ from typing import Any, ClassVar
 import pytest
 
 from core.credentials import CredentialRef
+from core.execution import ExecutionContext, bind_execution_context
 from core.tools import post_tools
 
 pytestmark = [pytest.mark.contract, pytest.mark.security]
@@ -904,7 +905,7 @@ def test_killchain_exploit_and_msf_wrappers(monkeypatch):
     assert "RHOSTS=host" in calls[-1][0][1]
     monkeypatch.setattr(post_tools, "_prepare_msf_login_check", lambda *args: ("RHOSTS=other", None, ""))
     post_tools.ai_msf_check("host", "module")
-    assert calls[-1][0][1] == "RHOSTS=other"
+    assert calls[-1][0][1] == "RHOSTS=host"
 
     credential = _ref()
     monkeypatch.setattr(post_tools, "call_credential_provider", _call_provider)
@@ -1025,7 +1026,7 @@ def test_active_msf_and_killchain_ai_wrappers(monkeypatch):
     assert post_tools.ai_msf_run("host", "module", "RPORT=1") == "run"
     assert "RHOSTS=host" in calls[-1][0][1]
     post_tools.ai_msf_run("host", "module", "RHOSTS=other")
-    assert calls[-1][0][1] == "RHOSTS=other"
+    assert calls[-1][0][1] == "RHOSTS=host"
 
     captured = []
     monkeypatch.setattr(
@@ -1089,10 +1090,20 @@ def test_cpanel_shodan_browser_hash_ai_wrappers(monkeypatch):
         assert "not found" in post_tools.ai_shodan_smart("query")
 
     monkeypatch.setattr(post_tools, "_run_shardbrowser_direct", lambda *args, **kwargs: "rendered")
-    assert post_tools.ai_browser_surface_analysis("host") == "rendered"
-    monkeypatch.setattr(post_tools, "_run_shardbrowser_direct", lambda *args, **kwargs: "[!] failed")
-    monkeypatch.setattr(post_tools, "run_scrapling_fetch", lambda url: "fallback")
-    assert "fallback" in post_tools.ai_browser_surface_analysis("host")
+    context = ExecutionContext.automatic(
+        ("host",),
+        actor="post-tools-browser-contract",
+        origin="tests",
+    )
+    with bind_execution_context(context):
+        assert post_tools.ai_browser_surface_analysis("host") == "rendered"
+        monkeypatch.setattr(
+            post_tools,
+            "_run_shardbrowser_direct",
+            lambda *args, **kwargs: "[!] failed",
+        )
+        monkeypatch.setattr(post_tools, "run_scrapling_fetch", lambda url: "fallback")
+        assert "fallback" in post_tools.ai_browser_surface_analysis("host")
 
     class Browser:
         installed = False

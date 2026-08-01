@@ -10,8 +10,9 @@ class MSFParser(BaseParser):
 
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
         tool = tool_lower(tool_name)
+        identity = tool.split(maxsplit=1)[0]
         raw = raw_lower(raw_output)
-        if "msf" not in tool and "metasploit" not in raw and "msf::" not in raw:
+        if identity not in {"msf_check", "msf_run"}:
             return []
         module_match = (
             re.search(r"\b(?:msf_check|msf_run)\s+\S+\s+(\S+)", tool_name or "", re.IGNORECASE)
@@ -37,9 +38,6 @@ class MSFParser(BaseParser):
                 fact("service_status", "ssh_authenticated" if service == "ssh" else f"{service}_authenticated", 90, session_id),
                 fact("port_open", f"{port}/tcp ({service})", 85, session_id),
             ])
-            if "uid=0" in raw:
-                facts.append(fact("system_access", "uid=0", 100, session_id))
-
         runtime_error = any(marker in raw for marker in (
             "psych/syntax_error",
             "/rubygems/errors.rb",

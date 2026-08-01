@@ -367,12 +367,7 @@ def test_analysis_attempt_links_verified_claim_fact_id(tmp_path):
     )
     pipeline.analysis_agent = SimpleNamespace(
         analyze=lambda _scan_id, _target: {
-            "hypotheses": [
-                {
-                    "claim": "ssh_service_active",
-                    "required_evidence": ["ssh_service_active"],
-                }
-            ]
+            "hypotheses": [{"claim": "ssh_service_active"}]
         }
     )
     pipeline.fact_store.add_fact(
@@ -395,8 +390,18 @@ def test_analysis_attempt_links_verified_claim_fact_id(tmp_path):
         )
         if fact["type"] == "verified_claim"
     )
+    hypothesis = _only(
+        pipeline.fact_store.get_hypotheses(
+            "scan-analysis-provenance",
+            TARGET,
+        )
+    )
     assert attempt.status == "completed"
     assert attempt.fact_ids == (verified_claim["id"],)
+    assert hypothesis["required_evidence"] == [
+        "policy_id:service.active.v1",
+        "typed_service_presence:ssh",
+    ]
 
 
 @pytest.mark.parametrize(

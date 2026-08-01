@@ -92,13 +92,13 @@ def test_base_parser_default_is_empty() -> None:
     assert BaseParser().parse("tool", "output", "session") == []
 
 
-def test_msf_parser_uses_default_ssh_service_and_records_uid_zero() -> None:
+def test_msf_parser_uses_default_ssh_service_without_minting_root_authority() -> None:
     output = "[+] 10.0.0.5:22 - Success: 'root:password'\nuid=0(root)"
 
     facts = MSFParser().parse("msf_run 10.0.0.5 auxiliary/login", output, "session")
 
     assert ("credential", "ssh_login_success:root@10.0.0.5") in _pairs(facts)
-    assert ("system_access", "uid=0") in _pairs(facts)
+    assert ("system_access", "uid=0") not in _pairs(facts)
 
 
 @pytest.mark.parametrize(

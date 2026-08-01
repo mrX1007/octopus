@@ -39,6 +39,7 @@ def _approved_context():
     return ExecutionContext(
         actor="killchain-policy-test",
         origin="operator",
+        target_scope=("10.0.0.5",),
         capabilities=frozenset({CAP_REGISTERED_TOOL, CAP_ACTIVE_TOOL}),
         approved=True,
         approval_id="approved-policy-test",

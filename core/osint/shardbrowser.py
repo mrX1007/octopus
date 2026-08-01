@@ -26,12 +26,29 @@ import os
 import sys
 import time
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 C_GREEN  = "\033[92m"
 C_YELLOW = "\033[93m"
 C_RED    = "\033[91m"
 C_CYAN   = "\033[96m"
 C_RESET  = "\033[0m"
+
+
+def _same_origin(candidate: str, expected: str) -> bool:
+    """Keep browser navigation and subresources on one explicit origin."""
+
+    def origin(value: str) -> tuple[str, str, int | None]:
+        parsed = urlparse(value)
+        port = parsed.port
+        if port is None:
+            port = 443 if parsed.scheme.casefold() == "https" else 80 if parsed.scheme.casefold() == "http" else None
+        return parsed.scheme.casefold(), (parsed.hostname or "").casefold(), port
+
+    try:
+        return origin(candidate) == origin(expected)
+    except ValueError:
+        return False
 
 # ── Add vendor SDK to path ──
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -384,7 +401,12 @@ class ShardBrowser:
         except ImportError:
             # Fallback: httpx
             import httpx
-            async with httpx.AsyncClient(verify=False, timeout=15) as client:
+            async with httpx.AsyncClient(
+                verify=False,
+                timeout=15,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
                 r = await client.get(url)
                 return r.text
 
@@ -392,6 +414,14 @@ class ShardBrowser:
             browser = await pw.chromium.connect_over_cdp(cdp_url)
             ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
             page = await ctx.new_page()
+
+            async def scoped_route(route):
+                if _same_origin(route.request.url, url):
+                    await route.continue_()
+                else:
+                    await route.abort()
+
+            await page.route("**/*", scoped_route)
             await page.goto(url, wait_until="domcontentloaded", timeout=15000)
             await page.wait_for_timeout(int(wait * 1000))
             content = await page.content()
@@ -420,6 +450,13 @@ class ShardBrowser:
             ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
             page = await ctx.new_page()
             if url:
+                async def scoped_route(route):
+                    if _same_origin(route.request.url, url):
+                        await route.continue_()
+                    else:
+                        await route.abort()
+
+                await page.route("**/*", scoped_route)
                 await page.goto(url, wait_until="domcontentloaded", timeout=15000)
                 await page.wait_for_timeout(2000)
             data = await page.screenshot(full_page=True)
@@ -453,7 +490,12 @@ class ShardBrowser:
             from patchright.async_api import async_playwright
         except ImportError:
             import httpx
-            async with httpx.AsyncClient(verify=False, timeout=20) as client:
+            async with httpx.AsyncClient(
+                verify=False,
+                timeout=20,
+                follow_redirects=False,
+                trust_env=False,
+            ) as client:
                 jar_cookies = {c["name"]: c["value"] for c in cookies}
                 r = await client.get(url, cookies=jar_cookies)
                 return {"content": r.text, "title": "", "url_final": str(r.url),
@@ -467,6 +509,14 @@ class ShardBrowser:
             await ctx.add_cookies(cookies)
 
             page = await ctx.new_page()
+
+            async def scoped_route(route):
+                if _same_origin(route.request.url, url):
+                    await route.continue_()
+                else:
+                    await route.abort()
+
+            await page.route("**/*", scoped_route)
             resp = await page.goto(url, wait_until="domcontentloaded", timeout=20000)
             await page.wait_for_timeout(int(wait * 1000))
 

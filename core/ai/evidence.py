@@ -3,10 +3,17 @@ import ipaddress
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlparse, urlunparse
 
 from core.ai.evaluated_facts import EvaluatedFactSnapshot
+from core.ai.evidence_policy import claim_evidence_policy, policy_evidence
+from core.ai.fact_predicates import (
+    TARGET_CONTROLLED,
+    TRUSTED,
+    UNTRUSTED,
+    fact_is_decision_critical,
+)
 from core.ai.parsers import ParserFamilyPipeline
 
 logger = logging.getLogger("octopus.evidence")
@@ -166,10 +173,48 @@ class EvidenceVerifier:
         self.assessment_store = assessment_store or getattr(fact_store, "assessments", None)
         self.graph_projector = graph_projector
 
-    def verify_claim(self, scan_id: str, host: str, claim: str, required_evidence: list[str]) -> dict[str, Any]:
+    def verify_claim(
+        self,
+        scan_id: str,
+        host: str,
+        claim: str,
+        required_evidence: Optional[list[str]] = None,
+    ) -> dict[str, Any]:
+        """Verify a claim using only its code-owned evidence policy.
+
+        ``required_evidence`` remains accepted for API compatibility, but it is
+        intentionally ignored: an AnalysisAgent or legacy caller cannot define
+        what is sufficient to prove its own claim.
         """
-        Verify if a high-level claim is supported by hard evidence in the Fact Store.
-        """
+
+        del required_evidence
+        policy = claim_evidence_policy(claim)
+        policy_fields = {
+            "policy_id": policy.policy_id,
+            "requirement_labels": list(policy.requirement_labels),
+            # Compatibility output; these are code-owned labels, not caller input.
+            "required_evidence": list(policy.requirement_labels),
+            "policy_persistence_labels": list(policy.persistence_labels),
+        }
+        if not str(claim or "").strip():
+            return {
+                "claim": claim,
+                "status": "rejected",
+                "reason": "Claim must not be empty.",
+                **policy_fields,
+            }
+        if not policy.supported:
+            claim_class = "security-impact claim" if policy.security_impact else "claim"
+            return {
+                "claim": claim,
+                "status": "rejected",
+                "reason": (
+                    f"Unsupported {claim_class}: no code-owned evidence policy is available "
+                    f"({policy.policy_id})."
+                ),
+                **policy_fields,
+            }
+
         snapshot = EvaluatedFactSnapshot.build(
             scan_id,
             host,
@@ -177,58 +222,43 @@ class EvidenceVerifier:
         )
         facts = list(snapshot.decision_facts())
         facts_by_id = {int(fact["id"]): fact for fact in facts if fact.get("id") is not None}
-        evidence_terms = self._build_evidence_terms(scan_id, host, facts)
-
-        missing_evidence = []
-        supporting_fact_ids: list[int] = []
-        inferred_requirements: list[str] = []
-        if not str(claim or "").strip():
+        matched = policy_evidence(policy, facts)
+        matched_fact_ids = list(matched.fact_ids)
+        if not matched_fact_ids:
             return {
                 "claim": claim,
                 "status": "rejected",
-                "reason": "Claim must not be empty.",
+                "reason": (
+                    f"Claim evidence policy not satisfied ({policy.policy_id}): "
+                    f"{', '.join(policy.requirement_labels)}."
+                ),
+                **policy_fields,
             }
-        if not required_evidence:
+
+        hard_fact_ids = [
+            fact_id
+            for fact_id in matched_fact_ids
+            if fact_id in facts_by_id and self._fact_is_hard_evidence(facts_by_id[fact_id])
+        ]
+        if policy.requires_hard_evidence and not hard_fact_ids:
             return {
                 "claim": claim,
                 "status": "rejected",
-                "reason": "Explicit required evidence is mandatory for claim assessment.",
-            }
-        for req in required_evidence:
-            req_norm = self._norm(req)
-            if req_norm in {"state", "services", "service", "open_questions", "ports_count"}:
-                missing_evidence.append(req)
-                continue
-            if self._workflow_marker_cannot_prove_claim(req_norm, claim):
-                missing_evidence.append(req)
-                continue
-            found = self._requirement_supported(req, evidence_terms)
-            if not found:
-                missing_evidence.append(req)
-                continue
-            requirement_fact_ids = self._supporting_fact_ids(req, facts)
-            if requirement_fact_ids:
-                supporting_fact_ids.extend(requirement_fact_ids)
-                if not any(self._fact_is_hard_evidence(facts_by_id[fact_id]) for fact_id in requirement_fact_ids):
-                    inferred_requirements.append(req)
-            else:
-                inferred_requirements.append(req)
-
-        if missing_evidence:
-            return {
-                "claim": claim,
-                "status": "rejected",
-                "reason": f"No supporting evidence found for: {', '.join(missing_evidence)}",
+                "reason": (
+                    f"Claim evidence policy requires direct hard evidence ({policy.policy_id}): "
+                    f"{', '.join(policy.requirement_labels)}."
+                ),
+                **policy_fields,
             }
 
-        supporting_fact_ids = list(dict.fromkeys(supporting_fact_ids))
+        if hard_fact_ids and not matched.force_inferred:
+            supporting_fact_ids = hard_fact_ids
+            assessment_status = "verified"
+        else:
+            supporting_fact_ids = matched_fact_ids
+            assessment_status = "inferred"
+
         supporting_by_id = facts_by_id
-        if any(
-            str((supporting_by_id.get(fact_id, {}).get("assessment") or {}).get("status", "observed")) == "inferred"
-            for fact_id in supporting_fact_ids
-        ):
-            inferred_requirements.append("inferred_supporting_fact")
-        assessment_status = "inferred" if inferred_requirements else "verified"
         fact_type = "inferred_claim" if assessment_status == "inferred" else "verified_claim"
         confidence_values = [
             int(supporting_by_id[fact_id].get("confidence", 100) or 100)
@@ -243,6 +273,13 @@ class EvidenceVerifier:
             assessment = supporting_by_id.get(fact_id, {}).get("assessment") or {}
             source_execution_ids.extend(assessment.get("source_execution_ids") or [])
         source_execution_ids = list(dict.fromkeys(source_execution_ids))
+        requirements_text = ", ".join(policy.requirement_labels)
+        assessment_reason = (
+            f"Evidence policy {policy.policy_id} satisfied code-owned requirements: "
+            f"{requirements_text}."
+        )
+        if assessment_status == "inferred":
+            assessment_reason += " Matching evidence is inference-grade and was not promoted to verified."
 
         add_with_status = getattr(self.fact_store, "add_fact_with_status", None)
         if add_with_status:
@@ -276,12 +313,7 @@ class EvidenceVerifier:
                 fact_id,
                 (AssessmentStatus.INFERRED if assessment_status == "inferred" else AssessmentStatus.VERIFIED),
                 confidence=confidence,
-                reason=(
-                    "All requirements matched persisted facts."
-                    if assessment_status == "verified"
-                    else "Requirements matched a derived read model and are not direct proof: "
-                    + ", ".join(dict.fromkeys(inferred_requirements))
-                ),
+                reason=assessment_reason,
                 assessor="evidence_verifier",
                 evidence_fact_ids=supporting_fact_ids,
                 source_execution_ids=source_execution_ids,
@@ -294,17 +326,14 @@ class EvidenceVerifier:
         return {
             "claim": claim,
             "status": "accepted",
-            "reason": (
-                "All required evidence verified."
-                if assessment_status == "verified"
-                else "Requirements are supported by an inferred read model; claim remains inferred."
-            ),
+            "reason": assessment_reason,
             "created": created,
             "fact_id": fact_id,
             "assessment_id": assessment_id,
             "assessment_status": assessment_status,
             "evidence_fact_ids": supporting_fact_ids,
             "source_execution_ids": source_execution_ids,
+            **policy_fields,
         }
 
     def _norm(self, value: str) -> str:
@@ -1147,8 +1176,46 @@ class RegexParser:
                 }
             )
 
-        if "pwnkit" in raw_lower and (
-            "root via" in raw_lower or "uid=0" in raw_lower or "root access confirmed" in raw_lower
+        tool_identity = re.split(r"\s+", tool_name.strip(), maxsplit=1)[0].casefold()
+        inventory_identity_uid0 = (
+            tool_identity in {"ssh_inventory", "ssh_session"}
+            and re.search(
+                r"(?ims)^\[\*\]\s+SSH (?:Controlled Inventory|Post-Exploitation Analysis):[^\n]+$"
+                r".*?^\[\+\]\s+SSH connected as [^\n]+$"
+                r".*?^\[\+\]\s+Identity\s*$"
+                r"\s*^\$\s+id(?:;\s*whoami)?\s*$"
+                r"\s*^uid=0(?:\(root\))?(?:\s|$)",
+                raw_output,
+            )
+            is not None
+        )
+        reported_privesc_uid0 = (
+            tool_identity in {"killchain_full", "killchain_privesc"}
+            and re.search(
+                r"(?im)^\[KILL CHAIN\]\s+Stage 3:\s+Privilege Escalation\b",
+                raw_output,
+            )
+            is not None
+            and re.search(
+                r"(?im)^\s*PwnKit binary output:\s*uid=0(?:\(root\))?(?:\s|$)",
+                raw_output,
+            )
+            is not None
+        )
+        root_confirmation_marker = re.search(
+            r"(?im)^\s*(?:\[\+\]\s*)?(?:[✓+]\s*)?ROOT ACCESS CONFIRMED\s*$",
+            raw_output,
+        ) is not None
+        positive_stage_access = re.search(
+            r"(?im)^\s*(?:\[\+\]\s*)?"
+            r"(?:already root|privilege escalation confirmed|root access obtained)\s*$",
+            raw_output,
+        ) is not None
+
+        if (
+            "pwnkit" in raw_lower
+            and reported_privesc_uid0
+            and root_confirmation_marker
         ):
             facts.append(
                 {
@@ -1163,12 +1230,8 @@ class RegexParser:
             )
 
         # ── Root / UID detection ──
-        if "uid=0" in raw_lower or "root access confirmed" in raw_lower:
+        if inventory_identity_uid0:
             facts.append({"type": "system_access", "value": "uid=0", "confidence": 100, "session_id": session_id})
-        if "root access confirmed" in raw_lower:
-            facts.append(
-                {"type": "system_access", "value": "root_access_confirmed", "confidence": 100, "session_id": session_id}
-            )
 
         # ── SSH-backed killchain stage banners ──
         # A stage banner alone is only an attempt. Confirmed SSH auth requires
@@ -1177,11 +1240,9 @@ class RegexParser:
         stage_has_authenticated_output = (
             re.search(r"^Current:\s*uid=\d+", raw_output, re.MULTILINE) is not None
             or "ssh connected as" in raw_lower
-            or "already root" in raw_lower
-            or "privilege escalation confirmed" in raw_lower
-            or "root access confirmed" in raw_lower
-            or "root access obtained" in raw_lower
-            or "uid=0(root)" in raw_lower
+            or positive_stage_access
+            or (reported_privesc_uid0 and root_confirmation_marker)
+            or inventory_identity_uid0
         )
         for m in re.finditer(
             r"(?:Privilege Escalation|Data Exfiltration|Active Persistence|STEALTH CLEANUP)\s*[—:-]\s*([^\s@]+)@([^\s:]+)",
@@ -1454,7 +1515,7 @@ class RegexParser:
                     }
                 )
 
-            already_root = bool(re.search(r"\buid=0\b|\buid=0\(|\broot_access_confirmed\b", raw_output, re.IGNORECASE))
+            already_root = inventory_identity_uid0
             if already_root:
                 facts.append(
                     {"type": "privilege_context", "value": "already_root", "confidence": 95, "session_id": session_id}
@@ -3252,9 +3313,26 @@ class RegexParser:
 
 
 class StructuredParser:
+    _PLUGIN_COMMAND = re.compile(
+        r"^\s*plugin\s+(?P<name>[a-z0-9_.-]+)(?:\s|$)",
+        re.IGNORECASE,
+    )
+
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[dict[str, Any]]:
-        """Handles tools that output native JSON or XML."""
+        """Parse the bounded, tool-bound portion of a plugin JSON envelope.
+
+        Generic ``facts`` and top-level security assertions are deliberately
+        ignored.  Stdout is controlled by the executed tool and often contains
+        target-controlled data, so it cannot choose canonical fact types.  A
+        plugin envelope contributes only non-decision audit metadata and only
+        when its declared identity matches the invoked plugin command.
+        """
+
         facts: list[dict[str, Any]] = []
+        command_match = self._PLUGIN_COMMAND.match(tool_name or "")
+        if command_match is None:
+            return facts
+        declared_plugin = command_match.group("name").casefold()
         raw_strip = raw_output.strip()
         json_text = raw_strip
         if "--- plugin output ---" in json_text:
@@ -3267,61 +3345,36 @@ class StructuredParser:
                 import json
 
                 data = json.loads(json_text)
-                if isinstance(data.get("facts"), list):
-                    for fact in data["facts"]:
-                        if isinstance(fact, dict) and fact.get("type") and fact.get("value"):
-                            facts.append(
-                                {
-                                    "type": fact.get("type"),
-                                    "value": fact.get("value"),
-                                    "confidence": fact.get("confidence", 80),
-                                    "session_id": fact.get("session_id", session_id),
-                                }
-                            )
-                if "cve" in data:
-                    facts.append(
-                        {"type": "vulnerability", "value": data["cve"], "confidence": 100, "session_id": session_id}
-                    )
-                if "plugin" in data:
-                    plugin_name = str(data.get("plugin", "unknown"))
-                    status = "success" if data.get("success") else "failed"
+                if not isinstance(data, dict):
+                    return facts
+                plugin_name = str(data.get("plugin") or "").strip()
+                if plugin_name.casefold() == declared_plugin:
+                    status = "success" if data.get("success") is True else "failed"
                     facts.append(
                         {
                             "type": "plugin_result",
                             "value": f"{plugin_name}:{status}",
                             "confidence": 85,
                             "session_id": session_id,
+                            "trust_level": TARGET_CONTROLLED,
+                            "observation_method": "target_controlled_stdout",
                         }
                     )
-                    for artifact in data.get("artifacts") or []:
+                    artifacts = data.get("artifacts")
+                    if not isinstance(artifacts, list):
+                        artifacts = []
+                    for artifact in artifacts[:64]:
+                        artifact_value = str(artifact).strip()
+                        if not artifact_value:
+                            continue
                         facts.append(
                             {
                                 "type": "plugin_artifact",
-                                "value": str(artifact),
+                                "value": artifact_value[:500],
                                 "confidence": 85,
                                 "session_id": session_id,
-                            }
-                        )
-                    for session in data.get("sessions") or []:
-                        if isinstance(session, dict):
-                            session_type = session.get("type", plugin_name)
-                            session_value = session.get("session") or session.get("id") or session.get("target")
-                            if session_value:
-                                facts.append(
-                                    {
-                                        "type": "credential",
-                                        "value": f"{session_type}_session:{session_value}",
-                                        "confidence": 90,
-                                        "session_id": session_id,
-                                    }
-                                )
-                    if data.get("success") and plugin_name == "cpanel_auth_bypass":
-                        facts.append(
-                            {
-                                "type": "vulnerability",
-                                "value": "cpanel_auth_bypass_confirmed",
-                                "confidence": 95,
-                                "session_id": session_id,
+                                "trust_level": TARGET_CONTROLLED,
+                                "observation_method": "target_controlled_stdout",
                             }
                         )
             except Exception as _exc:
@@ -3411,7 +3464,6 @@ class WebEndpointParser:
             "wpscan",
             "sqlmap",
             "jmx2rce_scan",
-            "manual_recon",
         }
 
     def _candidate_is_negative(self, raw_output: str, candidate: str) -> bool:
@@ -3476,7 +3528,7 @@ class WebEndpointParser:
 
 
 class LLMExtractor:
-    """Fallback fact extractor using LLM. Only called when regex found ZERO facts."""
+    """Compatibility facade; models are not an evidence-ingress authority."""
 
     def __init__(self):
         self.system_prompt = """You are a FACT EXTRACTION tool.
@@ -3491,34 +3543,155 @@ Do NOT invent facts. If nothing useful is found, return {"facts": []}.
 """
 
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[dict[str, Any]]:
-        try:
-            import json
-
-            from core.ai.ollama_client import ask_ollama
-
-            prompt = f"Tool: {tool_name}\nSession ID: {session_id}\nRaw Output:\n{raw_output[:2000]}\nExtract facts in JSON format."
-            response = ask_ollama(self.system_prompt + "\n\n" + prompt, json_mode=True)
-
-            # v12: check the error contract
-            if response.startswith("[!]"):
-                logger.warning(f"LLM Extractor got error: {response}")
-                return []
-
-            data = json.loads(response)
-            return data.get("facts", [])
-        except Exception as e:
-            logger.debug(f"Extraction LLM Error: {e}")
-            return []
+        del tool_name, raw_output, session_id
+        # Analysis models may propose hypotheses.  They must never mint
+        # observations, select canonical fact types, or assign fact confidence.
+        return []
 
 
 class OutputParser:
     """
     Parses raw tool outputs into basic facts (evidence).
-    Uses a ParserChain: RegexParser -> StructuredParser -> LLMExtractor.
-
-    v12: LLMExtractor is ONLY called when regex+structured produced ZERO facts.
-    This prevents wasting LLM calls when regex already parsed everything.
+    Decision-bearing facts come only from code-owned parsers bound to the
+    invoked tool identity. The legacy LLM extractor remains as an inert
+    compatibility facade and is never part of evidence ingestion.
     """
+
+    _PORT_FACT_TOOLS = frozenset(
+        {
+            "browser_surface_analysis",
+            "curl_headers",
+            "db_inventory",
+            "ftp_anonymous_check",
+            "httpx",
+            "httpx_probe",
+            "internal_service_probe",
+            "manual_recon",
+            "msf_check",
+            "msf_run",
+            "naabu",
+            "network_recon",
+            "nmap",
+            "rustscan",
+            "scrapling",
+            "smtp_probe",
+            "ssh_inventory",
+            "ssh_session",
+        }
+    )
+    _ASM_FACT_TOOLS = frozenset(
+        {
+            "amass_enum",
+            "dnsx",
+            "gau_urls",
+            "httpx_probe",
+            "naabu",
+            "subfinder",
+            "tlsx",
+            "wayback_urls",
+        }
+    )
+    _WEB_FACT_TOOLS = frozenset(
+        {
+            "authenticated_crawl",
+            "browser_surface_analysis",
+            "curl",
+            "curl_headers",
+            "ffuf",
+            "httpx",
+            "nikto",
+            "scrapling",
+            "scrapling_crawl",
+            "security_headers",
+            "security_headers_check",
+        }
+    )
+    _VULNERABILITY_FACT_TOOLS = frozenset(
+        {
+            "ad_security_review",
+            "api_auth_check",
+            "checkov",
+            "cors_check",
+            "ftp_anonymous_check",
+            "killchain_exploit",
+            "killchain_privesc",
+            "killchain_vuln_assess",
+            "jmx2rce_scan",
+            "msf_check",
+            "msf_run",
+            "nikto",
+            "nuclei",
+            "nuclei_safe",
+            "prowler",
+            "prowler_scan",
+            "scoutsuite",
+            "scoutsuite_scan",
+            "semgrep",
+            "semgrep_scan",
+            "sqlmap",
+            "ssh_user_enum",
+            "trivy",
+            "trivy_scan",
+            "wpscan",
+        }
+    )
+    _AUTH_FACT_TOOLS = frozenset(
+        {
+            "bruteforce",
+            "crack_hashes",
+            "db_inventory",
+            "ftp_anonymous_check",
+            "killchain_cleanup",
+            "killchain_exfil",
+            "killchain_full",
+            "killchain_lateral",
+            "killchain_persist",
+            "killchain_privesc",
+            "msf_check",
+            "msf_run",
+            "asrep_roast",
+            "dcsync",
+            "kerberoast",
+            "session_import",
+            "session_profile_import",
+            "ssh_exec",
+            "ssh_inventory",
+            "ssh_session",
+        }
+    )
+    _ROOT_FACT_TOOLS = frozenset(
+        {"ssh_inventory", "ssh_session"}
+    )
+    _NETWORK_FACT_TOOLS = frozenset(
+        {"internal_service_probe", "network_recon", "ssh_inventory"}
+    )
+    _API_FACT_TOOLS = frozenset(
+        {"api_auth_check", "graphql_check", "js_route_extract", "openapi_import"}
+    )
+    _WEB_SECURITY_FACT_TOOLS = frozenset(
+        {
+            "authenticated_crawl",
+            "burp_import",
+            "cors_check",
+            "curl_headers",
+            "js_route_extract",
+            "jwt_analyze",
+            "security_headers_check",
+            "zap_import",
+        }
+    )
+    _AD_FACT_TOOLS = frozenset(
+        {
+            "ad_enum",
+            "ad_security_review",
+            "adcs_review",
+            "asrep_roast",
+            "bloodhound_ingest",
+            "dcsync",
+            "gpo_review",
+            "kerberoast",
+        }
+    )
 
     def __init__(self):
         self.web_endpoint_parser = WebEndpointParser()
@@ -3637,6 +3810,290 @@ class OutputParser:
         ]
         return not any(marker in lower for marker in failure_markers)
 
+    @staticmethod
+    def _tool_identity(tool_name: str) -> str:
+        parts = str(tool_name or "").strip().split()
+        raw = parts[0].casefold() if parts else ""
+        if not raw:
+            return ""
+        try:
+            import core.tools  # noqa: F401
+            from core.tools.registry import get_tool
+
+            tool_def = get_tool(raw)
+            if tool_def is None and len(parts) >= 2:
+                tool_def = get_tool(f"{parts[0]} {parts[1]}")
+            if tool_def is not None:
+                return str(tool_def.name).strip().casefold()
+        except ImportError:
+            pass
+        return raw
+
+    def _tool_can_emit_decision_fact(
+        self,
+        tool_name: str,
+        fact: dict[str, Any],
+    ) -> bool:
+        """Apply the canonical-fact schema bound to the invoked tool identity."""
+
+        tool = self._tool_identity(tool_name)
+        fact_type = str(fact.get("type") or "").strip().casefold()
+        value = str(fact.get("value") or "").strip().casefold()
+        if fact_type == "port_open":
+            return tool in self._PORT_FACT_TOOLS or tool.startswith("killchain_")
+        if fact_type in {
+            "asset_domain",
+            "asset_ip",
+            "asset_service",
+            "asset_url",
+            "dns_record",
+            "domain",
+            "subdomain",
+            "technology",
+        }:
+            return tool in self._ASM_FACT_TOOLS or tool in self._WEB_FACT_TOOLS
+        if fact_type == "web_root" and tool in {"ssh_inventory", "ssh_session"}:
+            return True
+        if fact_type in {"proxy_finding", "web_security_note"}:
+            return tool in self._WEB_SECURITY_FACT_TOOLS
+        if fact_type.startswith("web_") or fact_type in {"browser_rendered", "http_status"}:
+            return tool in self._WEB_FACT_TOOLS
+        if fact_type in {
+            "exploit_attempted",
+            "exploit_success",
+            "nuclei_finding",
+            "potential_vulnerability",
+            "vulnerability",
+            "vulnerability_candidate",
+            "vulnerability_endpoint",
+        }:
+            return tool in self._VULNERABILITY_FACT_TOOLS
+        if fact_type in {"verified_vulnerability", "vulnerability_claim"}:
+            return False
+        if fact_type in {"api_endpoint", "api_security_note"}:
+            return tool in self._API_FACT_TOOLS
+        if fact_type in {"js_route", "jwt_metadata"}:
+            return tool in self._WEB_SECURITY_FACT_TOOLS
+        if fact_type in {
+            "ad_domain",
+            "ad_computers",
+            "ad_enumeration",
+            "ad_graph_data",
+            "ad_groups",
+            "ad_object",
+            "ad_password_policy",
+            "ad_users",
+            "ad_acl_issue",
+            "ad_adcs_issue",
+            "ad_attack_path",
+            "ad_delegation",
+            "ad_gpo_issue",
+            "ad_high_value_object",
+            "ad_local_admin_path",
+        }:
+            return tool in self._AD_FACT_TOOLS
+        if fact_type == "cloud_finding":
+            return tool in {"prowler_scan", "scoutsuite_scan"}
+        if fact_type == "code_finding":
+            return tool in {"checkov_scan", "semgrep_scan", "trivy_scan"}
+        if fact_type == "secret_finding":
+            return tool in {"gitleaks_scan", "trivy_scan", "trufflehog_scan"}
+        if fact_type == "misconfiguration":
+            return False
+        if fact_type == "service_version":
+            return tool in self._PORT_FACT_TOOLS or tool in {"whatweb", "wpscan"}
+        if fact_type in {
+            "app_manifest",
+            "app_stack",
+            "config_candidate",
+            "container_runtime",
+            "database_inventory",
+            "host",
+            "hostname",
+            "kernel_version",
+            "local_listening_port",
+            "os_version",
+            "privilege_context",
+            "scheduled_task_surface",
+        }:
+            if fact_type == "hostname" and tool == "manual_recon":
+                return True
+            if fact_type == "database_inventory" and tool == "db_inventory":
+                return True
+            if fact_type == "config_candidate" and tool in {
+                "killchain_exfil",
+                "killchain_full",
+            }:
+                return True
+            return tool in {"ssh_inventory", "ssh_session"}
+        if fact_type == "internal_service":
+            return tool in {"internal_service_probe", "network_recon"}
+        if fact_type in {"internal_host", "internal_subnet", "network_edge", "network_node"}:
+            return tool in self._NETWORK_FACT_TOOLS
+        if fact_type == "privesc_vector":
+            return tool in {"killchain_privesc", "ssh_inventory", "ssh_session"}
+        if fact_type == "credential_material":
+            if value.startswith("asrep_hash_file:"):
+                return tool == "asrep_roast"
+            if value.startswith("kerberoast_hash_file:"):
+                return tool == "kerberoast"
+            if value in {"shadow_file_extracted", "sensitive_material_observed_in_loot"}:
+                return tool in {"killchain_exfil", "killchain_full", "killchain_privesc"}
+            if value.startswith("ssh_material:"):
+                return tool in {"killchain_exfil", "killchain_full", "ssh_inventory"}
+            return False
+        if fact_type == "credential" and value.startswith("ssh_login_success:root@"):
+            return tool in {"ssh_inventory", "ssh_session"}
+        if fact_type in {"credential", "application_access"}:
+            return tool in self._AUTH_FACT_TOOLS
+        if fact_type == "hash_material":
+            return tool == "crack_hashes"
+        if fact_type == "kerberos_hashes":
+            return tool in {"asrep_roast", "kerberoast"}
+        if fact_type == "domain_hash_dump":
+            return tool == "dcsync"
+        if fact_type in {"lateral_access", "remote_execution"}:
+            return tool in {
+                "dcom_exec",
+                "killchain_lateral",
+                "pass_the_hash",
+                "psexec",
+                "smbexec",
+                "winrm_exec",
+                "wmiexec",
+            }
+        if fact_type == "system_access":
+            return tool in self._ROOT_FACT_TOOLS
+        if fact_type in {"verified_access", "verified_claim", "inferred_claim"}:
+            return False
+        if fact_type == "persistence":
+            return tool in {"killchain_full", "killchain_persist", "killchain_privesc"}
+        if fact_type in {"data_exfiltration", "data_exfiltration_status"}:
+            return tool in {"killchain_exfil", "killchain_full"}
+        if fact_type in {"cleanup", "cleanup_action", "cleanup_outcome", "cleanup_status"}:
+            return tool in {"killchain_cleanup", "killchain_full"}
+        if fact_type == "internal_network":
+            return tool in self._NETWORK_FACT_TOOLS
+        if fact_type == "post_exploit_stage":
+            if value == "post_access_inventory_completed":
+                return tool == "ssh_inventory"
+            if value == "internal_network_recon_completed":
+                return tool in self._NETWORK_FACT_TOOLS
+            if value == "data_exfiltration_completed":
+                return tool in {"killchain_exfil", "killchain_full"}
+            return False
+        if fact_type == "service_status":
+            if value == f"tool_timeout:{tool}":
+                return True
+            if value == "ssh_authenticated":
+                return tool in self._AUTH_FACT_TOOLS
+            if value in {"network_recon_completed", "internal_network_recon_completed"}:
+                return tool in self._NETWORK_FACT_TOOLS
+            status_sources = (
+                (("ssh_user_enum_unreliable_or_patched",), {"ssh_user_enum"}),
+                (("external_intel_no_host_information:shodan",), {"shodan"}),
+                (("web_content_discovery_skipped:", "web_fetch_failed:"), self._WEB_FACT_TOOLS),
+                (("exploit_selection_completed:",), {"exploit_select"}),
+                (("msf_",), {"msf_check", "msf_run"}),
+                (
+                    (
+                        "ssh_stage_attempt:",
+                        "ssh_auth_failed:",
+                        "ssh_inventory_completed",
+                        "internal_services:",
+                    ),
+                    {
+                        "killchain_cleanup",
+                        "killchain_exfil",
+                        "killchain_full",
+                        "killchain_lateral",
+                        "killchain_persist",
+                        "killchain_privesc",
+                        "ssh_inventory",
+                        "ssh_session",
+                    },
+                ),
+                (("sqlmap_",), {"sqlmap"}),
+                (("jmx2rce_",), {"jmx2rce_scan"}),
+                (("web_crawl_completed:",), {"authenticated_crawl", "scrapling_crawl"}),
+                (("ftp_",), {"ftp_anonymous_check"}),
+                (("smtp_",), {"smtp_probe"}),
+                (("db_inventory_",), {"db_inventory"}),
+                (("searchsploit_queried:",), {"searchsploit"}),
+                (("graphql_",), {"graphql_check"}),
+                (("internal_service_probe_completed:",), {"internal_service_probe"}),
+                (("nuclei_scan_completed:",), {"nuclei_safe"}),
+                (("nikto_scan_completed:",), {"nikto"}),
+            )
+            return any(
+                any(value.startswith(prefix) for prefix in prefixes)
+                and tool in allowed_tools
+                for prefixes, allowed_tools in status_sources
+            )
+        if fact_type == "stage_status":
+            return tool.startswith("killchain_")
+        if fact_type == "check_result":
+            try:
+                payload = json.loads(str(fact.get("value") or ""))
+            except (TypeError, ValueError, json.JSONDecodeError):
+                return False
+            return (
+                isinstance(payload, dict)
+                and str(payload.get("tool") or "").strip().casefold() == tool
+                and tool in {"nikto", "nuclei_safe"}
+                and str(payload.get("status") or "").strip().casefold()
+                in {"completed", "timeout"}
+            )
+        if fact_type == "exploit_reference":
+            return tool == "searchsploit"
+        if fact_type == "msf_module":
+            return tool in {"exploit_select", "msf_check", "msf_run"}
+        if fact_type in {
+            "active_command",
+            "exploit_candidate",
+            "payload_recommendation",
+            "verification_command",
+        }:
+            return tool == "exploit_select"
+        return False
+
+    def _stamp_parser_facts(
+        self,
+        tool_name: str,
+        facts: list[dict[str, Any]],
+        *,
+        observation_method: str,
+        default_trust: str = TRUSTED,
+    ) -> list[dict[str, Any]]:
+        stamped: list[dict[str, Any]] = []
+        for raw_fact in facts:
+            if not isinstance(raw_fact, dict):
+                continue
+            fact = dict(raw_fact)
+            trust_level = default_trust
+            method = observation_method
+            if fact_is_decision_critical(fact):
+                schema_allows = self._tool_can_emit_decision_fact(tool_name, fact)
+                if not schema_allows:
+                    trust_level = TARGET_CONTROLLED
+                    method = "target_controlled_stdout"
+                elif (
+                    default_trust == TARGET_CONTROLLED
+                    and self._tool_identity(tool_name) == "manual_recon"
+                    and str(fact.get("type") or "").strip().casefold()
+                    in {"hostname", "port_open", "service_version"}
+                ):
+                    # ``manual_recon`` is an internal aggregate.  Only its
+                    # precise Nmap-style measurement schema is promoted; all
+                    # free-form banner/plugin content remains target-controlled.
+                    trust_level = TRUSTED
+                    method = "deterministic_manual_recon_port_parser"
+                    fact["source_identity"] = "nmap"
+            fact["trust_level"] = trust_level
+            fact["observation_method"] = method
+            stamped.append(fact)
+        return stamped
+
     def _sanitize_facts(self, facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Drop low-value or malformed facts before they enter the fact store."""
         sanitized = []
@@ -3645,6 +4102,16 @@ class OutputParser:
             ftype = str(fact.get("type", "")).strip()
             value = str(fact.get("value", "")).strip()
             if ftype and value:
+                if (
+                    fact_is_decision_critical(fact)
+                    and str(fact.get("trust_level") or UNTRUSTED).strip().casefold()
+                    != TRUSTED
+                ):
+                    logger.debug(
+                        "Rejected decision-critical fact from untrusted stdout: %s",
+                        ftype,
+                    )
+                    continue
                 if ftype == "port_open" and not re.search(r"\b\d+/(?:tcp|udp)\b", value.lower()):
                     continue
                 if ftype in {
@@ -3692,31 +4159,71 @@ class OutputParser:
         Returns a list of dicts: [{"type": "...", "value": "...", "confidence": int, "session_id": "str"}]
         """
         session_id = self._extract_session_id(raw_output)
+        target_controlled_ingress = self._tool_identity(tool_name) in {
+            "manual_recon",
+            "tool",
+        }
+        parser_trust = TARGET_CONTROLLED if target_controlled_ingress else TRUSTED
+
+        def method(name: str) -> str:
+            return "target_controlled_stdout" if target_controlled_ingress else name
 
         facts = []
-        facts.extend(self._parse_negative_status(tool_name, raw_output, session_id))
+        facts.extend(
+            self._stamp_parser_facts(
+                tool_name,
+                self._parse_negative_status(tool_name, raw_output, session_id),
+                observation_method=method("execution_status_parser"),
+                default_trust=parser_trust,
+            )
+        )
 
         # 1. Family parsers for normalized high-value objects.
-        facts.extend(self.family_pipeline.parse(tool_name, raw_output, session_id))
-        facts.extend(self.web_endpoint_parser.parse(tool_name, raw_output, session_id))
+        facts.extend(
+            self._stamp_parser_facts(
+                tool_name,
+                self.family_pipeline.parse(tool_name, raw_output, session_id),
+                observation_method=method("deterministic_family_parser"),
+                default_trust=parser_trust,
+            )
+        )
+        facts.extend(
+            self._stamp_parser_facts(
+                tool_name,
+                self.web_endpoint_parser.parse(tool_name, raw_output, session_id),
+                observation_method=method("deterministic_web_parser"),
+                default_trust=parser_trust,
+            )
+        )
 
         # 2. Regex Parser (legacy broad extractor). Keep it only for legacy
         # killchain/post-access/protocol outputs until those are fully owned by
         # physical parser families.
         if self._should_run_legacy_regex(tool_name, raw_output):
-            facts.extend(self.regex_parser.parse(tool_name, raw_output, session_id))
+            facts.extend(
+                self._stamp_parser_facts(
+                    tool_name,
+                    self.regex_parser.parse(tool_name, raw_output, session_id),
+                    observation_method=method("deterministic_legacy_parser"),
+                    default_trust=parser_trust,
+                )
+            )
 
         # 3. Structured Parser. Run it even when regex found facts; mixed
-        # plugin JSON often contains CVEs that regex sees first, and skipping
-        # structured parsing would lose plugin_result/artifacts/sessions.
-        facts.extend(self.structured_parser.parse(tool_name, raw_output, session_id))
+        # plugin JSON may retain bounded audit metadata, but never caller-chosen
+        # canonical facts, credentials, access state, or vulnerability claims.
+        facts.extend(
+            self._stamp_parser_facts(
+                tool_name,
+                self.structured_parser.parse(tool_name, raw_output, session_id),
+                observation_method="target_controlled_stdout",
+                default_trust=TARGET_CONTROLLED,
+            )
+        )
 
-        # 4. LLM Extractor — ONLY if deterministic parsers found ZERO facts and there's meaningful output
-        family_owned_output = not self._should_run_legacy_regex(tool_name, raw_output)
-        if not facts and not family_owned_output and self._should_try_llm(tool_name, raw_output):
-            logger.info(f"Regex found 0 facts for '{tool_name}', trying LLM extractor...")
-            llm_facts = self.llm_extractor.parse(tool_name, raw_output, session_id)
-            facts.extend(llm_facts)
+        # There is intentionally no LLM fact-extraction fallback.  Models may
+        # propose hypotheses through AnalysisAgent; observations are produced
+        # only by code-owned, tool-bound parsers above.
 
         return self._sanitize_facts(facts)
 

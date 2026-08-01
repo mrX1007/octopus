@@ -7,6 +7,7 @@ from urllib.parse import urlparse, urlunparse
 
 from core.ai.asset_graph import AssetGraph
 from core.ai.evaluated_facts import fact_is_decision_usable
+from core.ai.fact_predicates import confirms_root, fact_type, fact_value
 from core.ai.risk_analysis import RiskAnalyzer
 from core.ai.surface_state import SurfaceState
 from core.knowledge.identity import (
@@ -312,13 +313,19 @@ class TargetModel:
         return buckets
 
     def _access(self) -> dict[str, Any]:
-        values = [str(f.get("value", "")).lower() for f in self.facts]
         return {
-            "ssh_authenticated": any(v.startswith("ssh_login_success:") or v == "ssh_authenticated" for v in values),
-            "root_confirmed": any(
-                v in {"uid=0", "root_access_confirmed"} or v.startswith("ssh_login_success:root@") or "root access" in v
-                for v in values
+            "ssh_authenticated": any(
+                (
+                    fact_type(fact) == "credential"
+                    and fact_value(fact).startswith("ssh_login_success:")
+                )
+                or (
+                    fact_type(fact) == "service_status"
+                    and fact_value(fact) == "ssh_authenticated"
+                )
+                for fact in self.facts
             ),
+            "root_confirmed": any(confirms_root(fact) for fact in self.facts),
             "application_sessions": [
                 str(f.get("value", ""))
                 for f in self.facts

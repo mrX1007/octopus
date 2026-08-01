@@ -103,16 +103,19 @@ def test_exploit_selector_parses_compact_state_context():
 def test_parser_families_extract_without_legacy_dependency():
     from core.ai.parsers import ParserFamilyPipeline
 
-    raw = """
-80/tcp open http nginx
-[API AUTH CHECK - https://app.example.com/api/users]
+    parser = ParserFamilyPipeline()
+    facts = []
+    for tool_name, raw in (
+        ("nmap", "80/tcp open http nginx"),
+        (
+            "api_auth_check",
+            """[API AUTH CHECK - https://app.example.com/api/users]
 Anonymous status: 200
-NOTE anonymous_accessible
-Domain Name: CORP.LOCAL
-ESC1: vulnerable template
-"""
-
-    facts = ParserFamilyPipeline().parse("nmap api_auth_check adcs_review", raw, "sess")
+NOTE anonymous_accessible""",
+        ),
+        ("adcs_review", "Domain Name: CORP.LOCAL\nESC1: vulnerable template"),
+    ):
+        facts.extend(parser.parse(tool_name, raw, "sess"))
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("port_open", "80/tcp (http) [nginx]") in pairs
@@ -124,22 +127,32 @@ ESC1: vulnerable template
 def test_authenticated_web_and_api_facts_are_normalized():
     from core.ai.evidence import OutputParser
 
-    output = """
-[SESSION PROFILE IMPORT - session.json]
+    parser = OutputParser()
+    facts = []
+    for tool_name, output in (
+        (
+            "session_profile_import",
+            """[SESSION PROFILE IMPORT - session.json]
 Headers: 2
-Cookies: 1
-[AUTHENTICATED CRAWL - https://app.example.com/dashboard]
+Cookies: 1""",
+        ),
+        (
+            "authenticated_crawl",
+            """[AUTHENTICATED CRAWL - https://app.example.com/dashboard]
 Status: 200
 Title: Dashboard
 Forms: 1
 CSRF token observed: no
-LINK https://app.example.com/api/users
-[API AUTH CHECK - https://app.example.com/api/users]
+LINK https://app.example.com/api/users""",
+        ),
+        (
+            "api_auth_check",
+            """[API AUTH CHECK - https://app.example.com/api/users]
 Anonymous status: 200
-NOTE anonymous_accessible
-"""
-
-    facts = OutputParser().parse_tool_output("session_profile_import authenticated_crawl api_auth_check", output)
+NOTE anonymous_accessible""",
+        ),
+    ):
+        facts.extend(parser.parse_tool_output(tool_name, output))
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("web_session", "profile_imported:headers=2:cookies=1") in pairs
@@ -162,14 +175,21 @@ def test_asm_parser_normalizes_dns_records_services_and_graph_edges():
         target,
         [
             {
-                "tool": "httpx_probe dnsx tlsx naabu",
-                "output": """
-https://app.example.com [200] [Admin] [nginx,React]
-app.example.com CNAME edge.example.net
-app.example.com:443
-SAN app.example.com api.example.com
-""",
-            }
+                "tool": "httpx_probe",
+                "output": "https://app.example.com [200] [Admin] [nginx,React]",
+            },
+            {
+                "tool": "dnsx",
+                "output": "app.example.com CNAME edge.example.net",
+            },
+            {
+                "tool": "naabu",
+                "output": "app.example.com:443",
+            },
+            {
+                "tool": "tlsx",
+                "output": "SAN app.example.com api.example.com",
+            },
         ],
     )
 
@@ -187,29 +207,47 @@ SAN app.example.com api.example.com
 def test_family_parsers_cover_template_web_api_ad_code_cloud_secrets():
     from core.ai.parsers import ParserFamilyPipeline
 
-    raw = """
-{"template-id":"exposed-panel","info":{"severity":"medium","name":"Panel"},"matched-at":"https://app.example.com/admin"}
-Content-Security-Policy: default-src * 'unsafe-inline'
-Set-Cookie: sid=abc
-alg: none
-/api/users/{id}
-GET /users/{id} auth=unknown_or_none
-PATCH /users/{id} auth=unknown_or_none
-Minimum password length: 8
-Lockout threshold: 0
-Unconstrained delegation: WEB01$
-GenericAll -> CORP\\Helpdesk
-{"RuleID":"generic-api-key","File":"app/.env","Verified":true}
-{"results":[{"check_id":"python.lang.security.audit","path":"app.py","extra":{"severity":"HIGH"}}]}
-{"Results":[{"Target":"requirements.txt","Vulnerabilities":[{"VulnerabilityID":"CVE-2025-0001","Severity":"CRITICAL"}]}]}
-{"Status":"FAIL","Severity":"HIGH","CheckID":"s3_bucket_public_access","ResourceId":"bucket-1"}
-"""
-
-    facts = ParserFamilyPipeline().parse(
-        "nuclei_safe security_headers_check jwt_analyze js_route_extract openapi_import ad_security_review gitleaks_scan semgrep_scan trivy_scan prowler_scan",
-        raw,
-        "sess",
-    )
+    parser = ParserFamilyPipeline()
+    facts = []
+    for tool_name, raw in (
+        (
+            "nuclei_safe",
+            '{"template-id":"exposed-panel","info":{"severity":"medium","name":"Panel"},'
+            '"matched-at":"https://app.example.com/admin"}',
+        ),
+        (
+            "security_headers_check",
+            "Content-Security-Policy: default-src * 'unsafe-inline'\nSet-Cookie: sid=abc",
+        ),
+        ("jwt_analyze", "alg: none"),
+        ("js_route_extract", "/api/users/{id}"),
+        (
+            "openapi_import",
+            "GET /users/{id} auth=unknown_or_none\nPATCH /users/{id} auth=unknown_or_none",
+        ),
+        (
+            "ad_security_review",
+            "Minimum password length: 8\nLockout threshold: 0\n"
+            "Unconstrained delegation: WEB01$\nGenericAll -> CORP\\Helpdesk",
+        ),
+        ("gitleaks_scan", '{"RuleID":"generic-api-key","File":"app/.env","Verified":true}'),
+        (
+            "semgrep_scan",
+            '{"results":[{"check_id":"python.lang.security.audit","path":"app.py",'
+            '"extra":{"severity":"HIGH"}}]}',
+        ),
+        (
+            "trivy_scan",
+            '{"Results":[{"Target":"requirements.txt","Vulnerabilities":['
+            '{"VulnerabilityID":"CVE-2025-0001","Severity":"CRITICAL"}]}]}',
+        ),
+        (
+            "prowler_scan",
+            '{"Status":"FAIL","Severity":"HIGH","CheckID":"s3_bucket_public_access",'
+            '"ResourceId":"bucket-1"}',
+        ),
+    ):
+        facts.extend(parser.parse(tool_name, raw, "sess"))
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert any(ftype == "nuclei_finding" and value.startswith("medium:exposed-panel") for ftype, value in pairs)
@@ -237,19 +275,30 @@ def test_output_parser_skips_legacy_regex_for_family_owned_tools():
         raise AssertionError("legacy RegexParser should not run for family-owned tools")
 
     parser.regex_parser.parse = fail_legacy
-    facts = parser.parse_tool_output(
-        "httpx_probe nuclei_safe security_headers_check openapi_import gitleaks_scan semgrep_scan prowler_scan ad_security_review",
-        """
-https://app.example.com [200] [Admin] [nginx]
-{"template-id":"exposed-panel","info":{"severity":"medium"},"matched-at":"https://app.example.com/admin"}
-Server: nginx
-GET /users/{id} auth=unknown_or_none
-{"RuleID":"generic-api-key","File":"app/.env","Verified":true}
-{"results":[{"check_id":"python.lang.security.audit","path":"app.py","extra":{"severity":"HIGH"}}]}
-{"Status":"FAIL","Severity":"HIGH","CheckID":"s3_bucket_public_access","ResourceId":"bucket-1"}
-Shortest paths to Domain Admins: 1
-""",
-    )
+    facts = []
+    for tool_name, output in (
+        ("httpx_probe", "https://app.example.com [200] [Admin] [nginx]"),
+        (
+            "nuclei_safe",
+            '{"template-id":"exposed-panel","info":{"severity":"medium"},'
+            '"matched-at":"https://app.example.com/admin"}',
+        ),
+        ("security_headers_check", "Server: nginx"),
+        ("openapi_import", "GET /users/{id} auth=unknown_or_none"),
+        ("gitleaks_scan", '{"RuleID":"generic-api-key","File":"app/.env","Verified":true}'),
+        (
+            "semgrep_scan",
+            '{"results":[{"check_id":"python.lang.security.audit","path":"app.py",'
+            '"extra":{"severity":"HIGH"}}]}',
+        ),
+        (
+            "prowler_scan",
+            '{"Status":"FAIL","Severity":"HIGH","CheckID":"s3_bucket_public_access",'
+            '"ResourceId":"bucket-1"}',
+        ),
+        ("ad_security_review", "Shortest paths to Domain Admins: 1"),
+    ):
+        facts.extend(parser.parse_tool_output(tool_name, output))
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("asset_url", "https://app.example.com") in pairs

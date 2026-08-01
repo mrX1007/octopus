@@ -121,7 +121,93 @@ def test_resolve_snapshot_infers_default_port_for_non_browser_web_fact() -> None
     assert state["target"] == ""
     assert state["recon_completed"] is True
     assert state["web_services_found"] is True
-    assert state["open_ports"] == ["80/tcp (http)"]
+    assert state["open_ports"] == ["443/tcp (https)"]
+
+
+def test_port_classification_uses_exact_parsed_port_and_service() -> None:
+    state = StateResolver(None).resolve_snapshot(
+        SnapshotStub(
+            [
+                {"type": "port_open", "value": "8222/tcp (unknown)"},
+                {"type": "port_open", "value": "1800/tcp (unknown)"},
+            ]
+        )
+    )
+
+    assert state["recon_completed"] is True
+    assert state["open_ports"] == ["1800/tcp (unknown)", "8222/tcp (unknown)"]
+    assert state["ssh_service_found"] is False
+    assert state["web_services_found"] is False
+
+
+def test_explicit_https_alt_port_never_synthesizes_port_80() -> None:
+    state = StateResolver(None).resolve_snapshot(
+        SnapshotStub(
+            [{"type": "web_endpoint", "value": "https://example.test:8443/login"}]
+        )
+    )
+
+    assert state["web_services_found"] is True
+    assert state["open_ports"] == ["8443/tcp (https)"]
+
+
+def test_adversarial_substrings_do_not_advance_state() -> None:
+    facts = [
+        {"type": "observation", "value": "notice: not uid=0"},
+        {"type": "noncredential", "value": "ssh_login_success:root@example.test"},
+        {"type": "not_vulnerable", "value": "CVE-2099-0001 is absent"},
+        {"type": "persistence_warning", "value": "mechanism_planted: absent"},
+        {"type": "cleanup_hint", "value": "completed"},
+    ]
+
+    state = StateResolver(None).resolve_snapshot(SnapshotStub(facts))
+
+    assert state["root_access_confirmed"] is False
+    assert state["credentials_found"] is False
+    assert state["vulnerabilities_found"] is False
+    assert state["persistence_established"] is False
+    assert state["cleanup_completed"] is False
+
+
+@pytest.mark.parametrize(
+    ("fact_type", "fact_value"),
+    [
+        ("system_access", "not uid=0"),
+        ("system_access", "uid=0 denied"),
+        ("credential", "ssh_login_success:root@example.test denied"),
+    ],
+)
+def test_negated_or_extended_root_text_is_not_root(
+    fact_type: str,
+    fact_value: str,
+) -> None:
+    state = StateResolver(None).resolve_snapshot(
+        SnapshotStub([{"type": fact_type, "value": fact_value}])
+    )
+
+    assert state["root_access_confirmed"] is False
+
+
+def test_negated_system_exploit_text_does_not_correlate_to_root() -> None:
+    state = StateResolver(None).resolve_snapshot(
+        SnapshotStub(
+            [
+                {
+                    "type": "credential",
+                    "value": "ssh_login_success:operator@example.test",
+                    "session_id": "chain",
+                },
+                {
+                    "type": "exploit_success",
+                    "value": "not pwnkit root shell",
+                    "session_id": "chain",
+                },
+            ]
+        )
+    )
+
+    assert state["credentials_found"] is True
+    assert state["root_access_confirmed"] is False
 
 
 @pytest.mark.parametrize(

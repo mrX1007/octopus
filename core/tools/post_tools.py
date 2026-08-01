@@ -27,6 +27,13 @@ from core.credentials import (
     sanitize_credential_result,
     sanitize_credential_text,
 )
+from core.execution.models import current_execution_context
+from core.execution.policy import (
+    authorize_final_registered_arguments,
+    bind_msf_target_options,
+    remote_command_is_code_owned,
+    validate_registered_arguments,
+)
 from core.runtime_config import effective_parallel_workers
 from core.tools.base import (
     run_tool,
@@ -1313,8 +1320,18 @@ def _register_cracked_pairs_from_output(output: str, target: str) -> int:
 
 def _build_browser_url(target: str, proto: str = "https", port: str = "") -> str:
     target = (target or "").strip()
-    proto = (proto or "https").strip().replace("://", "")
+    proto = (proto or "https").strip().casefold().replace("://", "")
     port = str(port or "").strip()
+    if proto not in {"http", "https"}:
+        raise ValueError("invalid_browser_protocol")
+    if port:
+        try:
+            parsed_port = int(port)
+        except ValueError as exc:
+            raise ValueError("invalid_browser_port") from exc
+        if not 1 <= parsed_port <= 65_535:
+            raise ValueError("invalid_browser_port")
+        port = str(parsed_port)
     if target.startswith(("http://", "https://")):
         return target
     if port:
@@ -1503,8 +1520,7 @@ def ai_msf_check(target_ip: str, module: str = "", options: str = "") -> str:
         return error
     from msf import run_msf_module
 
-    if "RHOSTS=" not in opts.upper():
-        opts = f"RHOSTS={target_ip} {opts}".strip()
+    opts = bind_msf_target_options(opts, target_ip)
     if credential is not None:
         return call_credential_provider(
             credential,
@@ -1608,6 +1624,7 @@ def _run_ssh_credential_provider(
     missing_message: str,
     prefer_privileged: bool = False,
     killchain_stage: str | None = None,
+    provider_kwargs: dict | None = None,
 ) -> str:
     """Reveal one SSH credential only for the immediate provider call."""
 
@@ -1635,6 +1652,7 @@ def _run_ssh_credential_provider(
             target,
             material.username,
             material.password,
+            **dict(provider_kwargs or {}),
         ),
     )
 
@@ -1694,9 +1712,7 @@ def ai_msf_run(target_ip: str, module: str = "", options: str = "") -> str:
         return "[!] msf_run requires target and module."
     from msf import run_msf_module
 
-    opts = options or ""
-    if "RHOSTS=" not in opts.upper():
-        opts = f"RHOSTS={target_ip} {opts}".strip()
+    opts = bind_msf_target_options(options or "", target_ip)
     return run_msf_module(module, opts, mode="run")
 
 
@@ -1727,7 +1743,12 @@ def ai_privesc(target_ip: str, user: str | None = None, pwd: str | None = None) 
     description="Killchain Persistence",
     requires=["python:paramiko"],
 )
-def ai_persist(target_ip: str, user: str | None = None, pwd: str | None = None) -> str:
+def ai_persist(
+    target_ip: str,
+    user: str | None = None,
+    pwd: str | None = None,
+    callback_host: str = "",
+) -> str:
     from core.killchain import plant_persistence
 
     return _run_ssh_credential_provider(
@@ -1738,6 +1759,7 @@ def ai_persist(target_ip: str, user: str | None = None, pwd: str | None = None) 
         missing_message=f"[!] Persistence requires valid SSH credentials for {target_ip}.",
         prefer_privileged=True,
         killchain_stage="persistence",
+        provider_kwargs={"callback_host": callback_host},
     )
 
 
@@ -1830,7 +1852,12 @@ def ai_stealth_cleanup(target_ip: str, user: str | None = None, pwd: str | None 
     description="Deploy C2 Beacon",
     requires=["python:paramiko"],
 )
-def ai_deploy_c2_beacon(target_ip: str, user: str | None = None, pwd: str | None = None) -> str:
+def ai_deploy_c2_beacon(
+    target_ip: str,
+    user: str | None = None,
+    pwd: str | None = None,
+    callback_host: str = "",
+) -> str:
     from core.killchain import deploy_c2_beacon
 
     return _run_ssh_credential_provider(
@@ -1839,6 +1866,7 @@ def ai_deploy_c2_beacon(target_ip: str, user: str | None = None, pwd: str | None
         pwd,
         deploy_c2_beacon,
         missing_message=f"[!] C2 beacon deployment requires valid SSH credentials for {target_ip}.",
+        provider_kwargs={"callback_host": callback_host},
     )
 
 
@@ -1849,6 +1877,11 @@ def ai_deploy_c2_beacon(target_ip: str, user: str | None = None, pwd: str | None
     description="CVE-2026-41940 cPanel Exploit",
 )
 def ai_cpanel_exploit(target: str, action: str = "cmd", cmd_arg: str = "id") -> str:
+    normalized_action = str(action or "cmd").strip().casefold()
+    if normalized_action not in {"check", "cmd", "scan"}:
+        return "[!] cPanel exploit blocked: unsupported action."
+    if normalized_action == "cmd" and not remote_command_is_code_owned("cpanel_exploit", cmd_arg):
+        return "[!] cPanel exploit blocked: command is outside the code-owned operation allowlist."
     try:
         import json as _json
 
@@ -1859,9 +1892,9 @@ def ai_cpanel_exploit(target: str, action: str = "cmd", cmd_arg: str = "id") -> 
             "cpanel_auth_bypass",
             context=PluginContext(target=target),
             target=target,
-            action=action,
+            action=normalized_action,
             cmd=cmd_arg,
-            allow_exploit=action not in {"scan", "check"},
+            allow_exploit=normalized_action not in {"scan", "check"},
             timeout=60,
         )
         payload = {
@@ -1900,7 +1933,18 @@ def ai_shodan_smart(query: str) -> str:
     description="Render and summarize a target page with ShardBrowser, with HTTP fallback.",
 )
 def ai_browser_surface_analysis(target: str, proto: str = "https", port: str = "", wait: float = 5) -> str:
-    url = _build_browser_url(target, proto=proto, port=port)
+    try:
+        url = _build_browser_url(target, proto=proto, port=port)
+        validate_registered_arguments("browser_surface_analysis", (target, proto, port, str(wait)))
+    except ValueError as exc:
+        return f"[!] Browser surface analysis blocked: {exc}"
+    decision = authorize_final_registered_arguments(
+        "browser_surface_analysis",
+        (url,),
+        current_execution_context(),
+    )
+    if not decision.allowed:
+        return f"[!] Browser surface analysis blocked: {decision.reason}"
     rendered = _run_shardbrowser_direct(url, proto=proto, port=port, wait=wait, headless=True)
     if not str(rendered).startswith("[!]"):
         return rendered
@@ -2254,6 +2298,8 @@ def ai_ssh_inventory(host: str, user: str | None = None, pwd: str | None = None,
 )
 def ai_ssh_exec(host: str, user: str | None = None, pwd: str | None = None, command: str = "", port: int = 22) -> str:
     command = _strip_wrapping_quotes(command)
+    if not remote_command_is_code_owned("ssh_exec", command):
+        return "[!] ssh_exec blocked: command is outside the code-owned operation allowlist."
     block_reason = _ssh_exec_block_reason(command)
     if block_reason:
         return (
@@ -2472,6 +2518,9 @@ def ai_psexec(
     domain: str = "",
     command: str = "whoami && hostname && ipconfig",
 ) -> str:
+    command = _strip_wrapping_quotes(command)
+    if not remote_command_is_code_owned("psexec", command):
+        return "[!] PsExec blocked: command is outside the code-owned operation allowlist."
     from core.killchain.ad.lateral import psexec
 
     with _ad_creds_for_execution(target_ip, user, pwd, domain) as (creds, error):
@@ -2484,7 +2533,7 @@ def ai_psexec(
             lambda: psexec(
                 target_ip,
                 creds,
-                command=_strip_wrapping_quotes(command),
+                command=command,
             ),
         )
 
@@ -2503,6 +2552,9 @@ def ai_wmiexec(
     domain: str = "",
     command: str = "whoami && hostname && ipconfig",
 ) -> str:
+    command = _strip_wrapping_quotes(command)
+    if not remote_command_is_code_owned("wmiexec", command):
+        return "[!] WMIExec blocked: command is outside the code-owned operation allowlist."
     from core.killchain.ad.lateral import wmiexec
 
     with _ad_creds_for_execution(target_ip, user, pwd, domain) as (creds, error):
@@ -2515,7 +2567,7 @@ def ai_wmiexec(
             lambda: wmiexec(
                 target_ip,
                 creds,
-                command=_strip_wrapping_quotes(command),
+                command=command,
             ),
         )
 
@@ -2671,6 +2723,10 @@ def ai_build_go_implant(
     c2_url: str = "http://127.0.0.1:8443", os_target: str = "linux", arch_target: str = "amd64"
 ) -> str:
     try:
+        validate_registered_arguments("build_go_implant", (c2_url, os_target, arch_target))
+    except ValueError as exc:
+        return f"[!] Go implant build blocked: {exc}"
+    try:
         from core.c2.builder import build_implant
 
         result = build_implant(os_target=os_target, arch_target=arch_target, c2_urls=c2_url)
@@ -2686,6 +2742,10 @@ def ai_build_go_implant(
     description="Generate the Python C2 implant",
 )
 def ai_build_python_implant(c2_url: str = "http://127.0.0.1:8443", beacon_interval: int = 60) -> str:
+    try:
+        validate_registered_arguments("build_python_implant", (c2_url, str(beacon_interval)))
+    except ValueError as exc:
+        return f"[!] Python implant build blocked: {exc}"
     from core.c2.implants.python_implant import generate_python_implant
 
     code = generate_python_implant(c2_urls=[c2_url], beacon_interval=int(beacon_interval))
@@ -2700,6 +2760,10 @@ def ai_build_python_implant(c2_url: str = "http://127.0.0.1:8443", beacon_interv
     description="Generate a PowerShell C2 stager",
 )
 def ai_build_ps_stager(c2_url: str = "http://127.0.0.1:8443", method: str = "iex") -> str:
+    try:
+        validate_registered_arguments("build_ps_stager", (c2_url, method))
+    except ValueError as exc:
+        return f"[!] PowerShell stager blocked: {exc}"
     from core.c2.implants.powershell_stager import generate_ps_encoded, generate_ps_stager
 
     code = generate_ps_encoded(c2_url) if method == "encoded" else generate_ps_stager(c2_url, method=method)

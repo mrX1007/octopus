@@ -14,12 +14,17 @@ from core.ai.mission_store import (
 )
 from core.ai.outcomes import TaskOutcome
 from core.ai.pipeline import AIPipeline
+from core.execution import ExecutionContext
 from core.tools.registry import get_tool
 
 pytestmark = pytest.mark.contract
 
 TARGET = "10.0.0.5"
 RETRY_COMMAND = f"nuclei_safe http://{TARGET}"
+
+
+def _automatic_context() -> ExecutionContext:
+    return ExecutionContext.automatic((TARGET,), actor="durable-retry-contract", origin="tests")
 
 
 def _make_registered_tools_hermetic(monkeypatch, *names: str) -> None:
@@ -107,12 +112,14 @@ def test_retry_scheduler_bypasses_only_duplicate_and_timeout_degraded_gates():
         RETRY_COMMAND,
         timed_out,
         {key},
+        execution_context=_automatic_context(),
         retry_command_keys={key},
     )
     terminal = scheduler.decide(
         RETRY_COMMAND,
         completed,
         {key},
+        execution_context=_automatic_context(),
         retry_command_keys={key},
     )
 

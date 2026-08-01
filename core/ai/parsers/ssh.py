@@ -9,10 +9,14 @@ class SSHParser(BaseParser):
     family = "ssh"
 
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
-        if "ssh" not in tool_lower(tool_name) and "ssh connected as" not in raw_lower(raw_output):
+        identity = tool_lower(tool_name).split(maxsplit=1)[0]
+        if identity not in {"ssh_inventory", "ssh_session"}:
             return []
         facts: list[Fact] = []
-        for match in re.finditer(r"SSH connected as\s+([^\s@]+)@([^\s:]+)", raw_output or "", re.IGNORECASE):
+        for match in re.finditer(
+            r"(?im)^\[\+\]\s+SSH connected as\s+([^\s@]+)@([^\s:]+)",
+            raw_output or "",
+        ):
             user, host = match.groups()
             facts.append(fact("credential", f"ssh_login_success:{user}@{host}", 100, session_id))
             facts.append(fact("service_status", "ssh_authenticated", 100, session_id))

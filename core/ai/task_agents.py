@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from core.ai.evidence import EvidenceVerifier
 from core.ai.llm_context import compact_context_for_llm
@@ -32,24 +32,14 @@ def _validate_analysis_payload(payload: Any) -> list[dict[str, Any]]:
     for hypothesis in hypotheses:
         if not isinstance(hypothesis, dict):
             raise _AnalysisResponseError("hypothesis_not_object")
-        if set(hypothesis) != {"claim", "required_evidence"}:
+        if set(hypothesis) != {"claim"}:
             raise _AnalysisResponseError("unexpected_hypothesis_fields")
 
         claim = hypothesis["claim"]
-        required_evidence = hypothesis["required_evidence"]
         if not isinstance(claim, str) or not claim.strip():
             raise _AnalysisResponseError("claim_not_nonempty_string")
-        if not isinstance(required_evidence, list) or any(
-            not isinstance(item, str) or not item.strip() for item in required_evidence
-        ):
-            raise _AnalysisResponseError("required_evidence_not_string_list")
 
-        validated.append(
-            {
-                "claim": claim.strip(),
-                "required_evidence": [item.strip() for item in required_evidence],
-            }
-        )
+        validated.append({"claim": claim.strip()})
     return validated
 
 
@@ -81,8 +71,7 @@ Ensure the format matches EXACTLY:
 {
   "hypotheses": [
     {
-      "claim": "The specific claim (e.g. vulnerable_to_cve_2021_4034)",
-      "required_evidence": ["list", "of", "facts", "that", "support", "this"]
+      "claim": "The specific claim (e.g. vulnerable_to_cve_2021_4034)"
     }
   ]
 }
@@ -142,6 +131,12 @@ class VerificationAgent:
         """Returns commands to run to verify a task."""
         return self.tool_registry.get_commands_for_task(task, target)
 
-    def verify_hypothesis(self, scan_id: str, host: str, claim: str, required_evidence: list[str]) -> dict[str, Any]:
+    def verify_hypothesis(
+        self,
+        scan_id: str,
+        host: str,
+        claim: str,
+        required_evidence: Optional[list[str]] = None,
+    ) -> dict[str, Any]:
         """Delegates to the Evidence Verifier."""
         return self.verifier.verify_claim(scan_id, host, claim, required_evidence)

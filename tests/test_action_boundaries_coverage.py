@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 import sqlite3
 import sys
+from dataclasses import replace
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
@@ -12,9 +13,11 @@ import pytest
 
 from core.actions import (
     ActionAdapter,
+    ActionCatalog,
     ActionCleanupResult,
     ActionDescriptor,
     ActionExecutionReport,
+    ActionExecutor,
     ActionKind,
     ActionLifecycle,
     ActionRequest,
@@ -44,7 +47,14 @@ from core.actions import (
     canonical_assessment_applicability,
     target_class,
 )
-from core.execution import ExecutionContext, ExecutionDecision, ExecutionResult, ExecutionStatus
+from core.execution import (
+    ExecutionContext,
+    ExecutionDecision,
+    ExecutionPolicy,
+    ExecutionResult,
+    ExecutionStatus,
+)
+from core.tools.registry import get_tool
 
 pytestmark = [pytest.mark.contract, pytest.mark.security]
 
@@ -441,9 +451,12 @@ def test_exploit_and_metasploit_adapter_boundaries(monkeypatch):
                 parameters={"options": "RHOST=other.example"},
             )
         )
-        == "RHOST=other.example"
+        == "RHOSTS=example.com"
     )
-    assert adapter._options(ActionRequest("", automatic(""), parameters={"options": "THREADS=2"})) == "THREADS=2"
+    with pytest.raises(ValueError, match="invalid_msf_target"):
+        adapter._options(
+            ActionRequest("", automatic(""), parameters={"options": "THREADS=2"})
+        )
 
     unavailable = adapter.check(mapping_options)
     assert unavailable.result["status"] == "unavailable"
@@ -498,20 +511,37 @@ def test_plugin_adapter_actions_execution_and_cleanup():
     applicability = adapter.applicability(ActionRequest("", automatic("")))
     assert applicability.missing_requirements == ("target", "dependency:missing")
     manager.validation = ()
-    request = ActionRequest(
+    undeclared_action = ActionRequest(
         "example.com",
         automatic(),
         parameters={"action": "custom", "timeout": 1, "flag": True},
     )
-    assert adapter._action(request, "check") == "check"
+    assert adapter._action(undeclared_action, "check") == "check"
     assert adapter._action(ActionRequest("example.com", automatic()), "execute") == "scan"
-    assert adapter._action(request, "execute") == "custom"
+    with pytest.raises(ValueError, match="plugin_action_undeclared"):
+        adapter._action(undeclared_action, "execute")
+
+    undeclared_parameter = ActionRequest(
+        "example.com",
+        automatic(),
+        parameters={"action": "scan", "timeout": 1, "flag": True},
+    )
+    denial = adapter.authorize(ExecutionPolicy(), undeclared_parameter, "execute")
+    assert denial.allowed is False
+    assert denial.reason == "plugin_network_parameter_undeclared:flag"
+    with pytest.raises(ValueError, match="plugin_network_parameter_undeclared:flag"):
+        adapter.execute(undeclared_parameter)
+
+    request = ActionRequest(
+        "example.com",
+        automatic(),
+        parameters={"action": "scan", "timeout": 1},
+    )
     assert adapter.invocation(request, "check").registered_name == "plugin"
     assert adapter.check(request).applicable is True
     assert adapter.execute(request) == "executed"
-    assert manager.calls[0]["action"] == "custom"
+    assert manager.calls[0]["action"] == "scan"
     assert "timeout" in manager.calls[0]
-    assert manager.calls[0]["flag"] is True
 
     active_adapter = PluginActionAdapter(PluginManagerFixture(plugin_type="exploit"), "fixture")
     assert active_adapter._action(ActionRequest("example.com", automatic()), "execute") == "run"
@@ -523,6 +553,137 @@ def test_plugin_adapter_actions_execution_and_cleanup():
     )
     assert failed == ActionCleanupResult(False, "plugin_worker_cleanup_failed")
     assert adapter.cleanup(request, ExecutionResult(stdout="complete")).reason == ("plugin_worker_cleanup_succeeded")
+
+
+def test_direct_adapters_bind_single_label_targets_and_block_out_of_scope_before_provider():
+    manager = PluginManagerFixture()
+    plugin = PluginActionAdapter(manager, "fixture")
+    plugin_catalog = ActionCatalog()
+    plugin_catalog.register(plugin)
+    out_of_scope_context = ExecutionContext.operator(
+        actor="action-boundary-test",
+        approval_id="scope-test",
+        target_scope=("approved.example",),
+        allow_active_tools=True,
+    )
+    out_of_scope = ActionRequest("intranet", out_of_scope_context)
+
+    plugin_report = ActionExecutor(plugin_catalog, ExecutionPolicy()).run(
+        plugin.descriptor.action_id,
+        out_of_scope,
+        run_check=False,
+        cleanup=False,
+    )
+
+    assert plugin_report.lifecycle.outcome.value == "blocked"
+    assert plugin_report.policy_denials[0].reason_code == "target_out_of_scope"
+    assert manager.calls == []
+
+    msf_calls = []
+    metasploit = MetasploitActionAdapter(
+        "auxiliary/scanner/ssh/ssh_version",
+        runner=lambda *_args, **_kwargs: msf_calls.append(True) or "unexpected",
+        dependency_check=lambda _name: True,
+    )
+    msf_catalog = ActionCatalog()
+    msf_catalog.register(metasploit)
+    msf_report = ActionExecutor(msf_catalog, ExecutionPolicy()).run(
+        metasploit.descriptor.action_id,
+        out_of_scope,
+        run_check=False,
+        cleanup=False,
+    )
+
+    assert msf_report.lifecycle.outcome.value == "blocked"
+    assert msf_report.policy_denials[0].reason_code == "target_out_of_scope"
+    assert msf_calls == []
+
+    in_scope = ActionRequest(
+        "intranet",
+        ExecutionContext.operator(
+            actor="action-boundary-test",
+            approval_id="scope-test",
+            target_scope=("intranet",),
+            allow_active_tools=True,
+        ),
+    )
+    for adapter in (plugin, metasploit):
+        decision = adapter.authorize(ExecutionPolicy(), in_scope, "execute")
+        assert decision.allowed is True
+        assert decision.invocation is not None
+        assert decision.invocation.targets == ("intranet",)
+
+
+def test_registered_adapter_rejects_provider_command_target_mismatch_before_dispatch():
+    calls = []
+    tool_def = get_tool("bruteforce")
+    assert tool_def is not None
+    adapter = RegisteredToolAdapter(
+        replace(tool_def, requires=[], enabled=True),
+        lambda command, _context: calls.append(command) or "unexpected",
+    )
+    catalog = ActionCatalog()
+    catalog.register(adapter)
+    context = ExecutionContext.operator(
+        actor="action-boundary-test",
+        approval_id="scope-test",
+        target_scope=("approved.example", "intranet"),
+        allow_active_tools=True,
+    )
+    request = ActionRequest(
+        "approved.example",
+        context,
+        provider_commands={"tool:bruteforce": "bruteforce ssh intranet"},
+    )
+
+    report = ActionExecutor(catalog, ExecutionPolicy()).run(
+        adapter.descriptor.action_id,
+        request,
+        run_check=False,
+        cleanup=False,
+    )
+
+    assert report.lifecycle.outcome.value == "blocked"
+    assert report.policy_denials[0].reason_code == "action_target_mismatch"
+    assert calls == []
+
+
+def test_registered_adapter_requires_request_target_to_match_primary_endpoint():
+    calls = []
+    tool_def = get_tool("port_forward")
+    assert tool_def is not None
+    adapter = RegisteredToolAdapter(
+        replace(tool_def, requires=[], enabled=True),
+        lambda command, _context: calls.append(command) or "unexpected",
+    )
+    catalog = ActionCatalog()
+    catalog.register(adapter)
+    context = ExecutionContext.operator(
+        actor="action-boundary-test",
+        approval_id="scope-test",
+        target_scope=("primary.example", "remote.example"),
+        allow_active_tools=True,
+    )
+    request = ActionRequest(
+        "remote.example",
+        context,
+        provider_commands={
+            "tool:port_forward": (
+                "port_forward primary.example 8080 remote.example 80"
+            )
+        },
+    )
+
+    report = ActionExecutor(catalog, ExecutionPolicy()).run(
+        adapter.descriptor.action_id,
+        request,
+        run_check=False,
+        cleanup=False,
+    )
+
+    assert report.lifecycle.outcome.value == "blocked"
+    assert report.policy_denials[0].reason_code == "action_target_mismatch"
+    assert calls == []
 
 
 class BoundaryAdapter(ActionAdapter):

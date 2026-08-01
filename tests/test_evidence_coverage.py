@@ -107,16 +107,29 @@ def test_evidence_verifier_rejections_fallback_and_projection(monkeypatch: pytes
     monkeypatch.setattr(
         evidence_module.EvaluatedFactSnapshot,
         "build",
-        MagicMock(return_value=_Snapshot([])),
+        MagicMock(
+            return_value=_Snapshot(
+                [
+                    {
+                        "id": 3,
+                        "type": "port_open",
+                        "value": "22/tcp (ssh)",
+                        "confidence": 90,
+                        "source": "scanner",
+                        "assessment": {"status": "observed"},
+                    }
+                ]
+            )
+        ),
     )
-    monkeypatch.setattr(verifier, "_build_evidence_terms", MagicMock(return_value={"derived"}))
 
     assert verifier.verify_claim("scan", "host", "", ["derived"])["status"] == "rejected"
     assert verifier.verify_claim("scan", "host", "claim", [])["status"] == "rejected"
     workflow = verifier.verify_claim("scan", "host", "Target is exposed", ["services"])
     assert workflow["status"] == "rejected"
-    accepted = verifier.verify_claim("scan", "host", "Planning assessment", ["derived"])
-    assert accepted["assessment_status"] == "inferred"
+    accepted = verifier.verify_claim("scan", "host", "ssh_service_active", ["derived"])
+    assert accepted["assessment_status"] == "verified"
+    assert accepted["required_evidence"] == ["typed_service_presence:ssh"]
     assert accepted["fact_id"] == 71
     assert accepted["assessment_id"] is None
     store.add_fact.assert_called_once()
@@ -725,15 +738,22 @@ def test_structured_web_llm_and_output_parser_boundaries(
             "bad",
         ],
     }
-    facts = structured.parse("plugin", "prefix\n" + json.dumps(payload), "session")
-    assert {fact["type"] for fact in facts} >= {
-        "observation",
-        "vulnerability",
+    facts = structured.parse(
+        "plugin cpanel_auth_bypass host.test scan",
+        "prefix\n" + json.dumps(payload),
+        "session",
+    )
+    assert {fact["type"] for fact in facts} == {
         "plugin_result",
         "plugin_artifact",
-        "credential",
     }
-    assert structured.parse("plugin", '{"plugin":"x","success":false}', "session")
+    assert {fact["trust_level"] for fact in facts} == {"target_controlled"}
+    assert structured.parse("plugin", '{"plugin":"x","success":false}', "session") == []
+    assert structured.parse(
+        "plugin expected host.test",
+        '{"plugin":"other","success":true}',
+        "session",
+    ) == []
     assert structured.parse("plugin", "{bad}", "session") == []
     assert structured.parse("plugin", "{}\n--- plugin output ---\nignored", "session") == []
 
@@ -770,7 +790,7 @@ def test_structured_web_llm_and_output_parser_boundaries(
         "core.ai.ollama_client.ask_ollama",
         lambda *_args, **_kwargs: '{"facts":[{"type":"x","value":"y"}]}',
     )
-    assert extractor.parse("tool", "raw", "session")[0]["type"] == "x"
+    assert extractor.parse("tool", "raw", "session") == []
     monkeypatch.setattr(
         "core.ai.ollama_client.ask_ollama",
         MagicMock(side_effect=RuntimeError("offline")),
@@ -800,7 +820,8 @@ def test_structured_web_llm_and_output_parser_boundaries(
     output.regex_parser.parse = MagicMock(return_value=[])
     output.structured_parser.parse = MagicMock(return_value=[])
     output.llm_extractor.parse = MagicMock(return_value=[{"type": "observation", "value": "llm", "session_id": "none"}])
-    assert output.parse_tool_output("custom", "meaningful output " * 10)[0]["value"] == "llm"
+    assert output.parse_tool_output("custom", "meaningful output " * 10) == []
+    output.llm_extractor.parse.assert_not_called()
 
     timeout = output._parse_negative_status(
         "manual_recon",

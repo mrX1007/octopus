@@ -355,7 +355,7 @@ def test_ssh_exec_blocks_arbitrary_commands_by_default():
     output = ai_ssh_exec("10.0.0.5", "support", "secret", "cat /etc/passwd")
 
     assert "ssh_exec blocked" in output
-    assert "outside controlled ssh_exec inventory allowlist" in output
+    assert "outside the code-owned operation allowlist" in output
 
 
 def test_tool_ranking_prefers_short_safe_checks_before_long_active_work():

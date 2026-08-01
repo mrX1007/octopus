@@ -83,7 +83,7 @@ def test_finding_groups_cover_all_supported_and_rejected_fact_shapes():
     assert groups[0]["active_commands"] == [f"msf_run host {module}"]
 
 
-def test_contradicted_candidate_finalizes_as_medium_not_verified():
+def test_contradicted_candidate_is_not_a_current_finding():
     groups = reporting.build_finding_groups(
         [
             {
@@ -95,9 +95,29 @@ def test_contradicted_candidate_finalizes_as_medium_not_verified():
         ]
     )
 
-    assert groups[0]["contradicted"] is True
-    assert groups[0]["verified"] is False
-    assert groups[0]["severity"] == "MEDIUM"
+    assert groups == []
+
+
+@pytest.mark.parametrize(
+    "invalidity",
+    [
+        {"freshness_status": "stale"},
+        {"coverage_status": "degraded"},
+        {"trust_level": "target_controlled"},
+    ],
+)
+def test_non_current_candidate_cannot_create_finding_or_remediation(invalidity):
+    fact = {
+        "id": 1,
+        "type": "exploit_candidate",
+        "value": "exploit/test on service:1 [v]",
+        **invalidity,
+    }
+
+    groups = reporting.build_finding_groups([fact])
+
+    assert groups == []
+    assert reporting.build_remediations(groups, [fact]) == []
 
 
 def test_access_findings_cover_legacy_verified_and_rejected_assessments():
@@ -127,7 +147,10 @@ def test_access_findings_cover_legacy_verified_and_rejected_assessments():
         supporting,
         {"root_access_confirmed": True},
     )[0]
-    assert len(finding["evidence"]) == 4
+    assert finding["evidence"] == [
+        "credential: ssh_login_success:root",
+        "system_access: root_access_confirmed",
+    ]
 
 
 def test_access_finding_collects_canonical_assessment_metadata():
@@ -181,13 +204,15 @@ def test_coverage_summary_deduplicates_scopes_and_checked_results():
 
 def test_attack_path_covers_every_stage_and_unconfirmed_variants():
     facts = [
-        {"type": "credential"},
-        {"type": "post_exploit_stage"},
-        {"type": "privesc_vector"},
-        {"type": "note", "value": "persistence candidate"},
-        {"type": "internal_host"},
+        {"type": "credential", "value": "ssh_login_success:user@host"},
+        {
+            "type": "post_exploit_stage",
+            "value": "post_access_inventory_completed",
+        },
+        {"type": "privesc_vector", "value": "sudo_rights_present"},
+        {"type": "internal_host", "value": "10.0.0.8"},
     ]
-    path = reporting.build_attack_path(facts, {})
+    path = reporting.build_attack_path(facts, {"persistence_established": True})
     assert [step["stage"] for step in path] == [
         "Initial access",
         "Host inventory",
@@ -197,7 +222,12 @@ def test_attack_path_covers_every_stage_and_unconfirmed_variants():
         "Cleanup",
     ]
     assert path[2]["status"] == "tested"
-    assert path[3]["status"] == "not_confirmed"
+    assert path[3]["status"] == "completed"
+    mention_only = reporting.build_attack_path(
+        [{"type": "note", "value": "persistence candidate"}],
+        {},
+    )
+    assert not any(step["stage"] == "Persistence" for step in mention_only)
 
     confirmed = reporting.build_attack_path(
         [{"type": "exploit_attempted"}],

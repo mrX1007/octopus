@@ -178,7 +178,7 @@ def test_target_metacharacters_do_not_reach_registered_tool():
     finally:
         tool_def.func = old_func
 
-    assert "invalid_target" in result
+    assert "invalid_nmap_target" in result
     assert called == []
 
 
@@ -242,13 +242,21 @@ def test_registered_dispatch_extracts_targets_from_legacy_cli_flags():
     enum_def.func = lambda target: captured.append(("enum", target)) or "enum-ok"
     try:
         context = ExecutionContext.automatic(("10.0.0.5",), actor="scan:test", origin="ai_pipeline")
-        curl_result = run_tool_by_command("curl -sL http://10.0.0.5/login", context)
+        redirected_curl_result = run_tool_by_command(
+            "curl -sL http://10.0.0.5/login",
+            context,
+        )
+        safe_curl_result = run_tool_by_command(
+            "curl -sI http://10.0.0.5/login",
+            context,
+        )
         enum_result = run_tool_by_command("enum4linux -a 10.0.0.5", context)
     finally:
         curl_def.func = old_curl
         enum_def.func = old_enum
 
-    assert curl_result == "curl-ok"
+    assert "unsupported_curl_indirection:-sL" in redirected_curl_result
+    assert safe_curl_result == "curl-ok"
     assert enum_result == "enum-ok"
     assert captured == [
         ("curl", "http://10.0.0.5/login"),

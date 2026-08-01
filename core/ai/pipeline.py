@@ -14,6 +14,7 @@ from core.ai.capability_assessment import CapabilityResolver
 from core.ai.context_builder import ContextBuilder
 from core.ai.credential_sync import RuntimeCredentialSynchronizer
 from core.ai.director import DirectorLLM
+from core.ai.evaluated_facts import fact_is_decision_usable
 from core.ai.evidence import EvidenceVerifier
 from core.ai.exploit_applicability import assess_exploit_command
 from core.ai.fact_store import CommandCompletionClaim
@@ -434,7 +435,12 @@ class AIPipeline(
             self._active_retry_command_keys,
         )
         if decision.action == "execute":
-            assessment = assess_exploit_command(cmd, current_facts)
+            # Scheduling consumes only current decision facts, but the
+            # applicability gate must also see trusted historical assessment
+            # heads.  Otherwise a contradicted/stale assessment disappears
+            # before it can fail the exploit closed.
+            assessment_facts = self.fact_store.get_facts(scan_id, target)
+            assessment = assess_exploit_command(cmd, assessment_facts)
             if not assessment.applicable:
                 decision.action = "skip"
                 decision.reason = "assessment_blocked:" + ",".join(assessment.missing_requirements)
@@ -710,7 +716,11 @@ class AIPipeline(
                     if snapshot.scan_id != str(scan_id):
                         raise RuntimeError("active task snapshot belongs to a different scan")
                     return list(snapshot.decision_facts())
-        return self.fact_store.get_facts(scan_id, target)
+        return [
+            fact
+            for fact in self.fact_store.get_facts(scan_id, target)
+            if fact_is_decision_usable(fact)
+        ]
 
     def _execute_runtime_compatibly(
         self,
@@ -990,6 +1000,21 @@ class AIPipeline(
             confidence=safe_fact.get("confidence", 100),
             session_id=safe_fact.get("session_id", "none"),
             source_execution_ids=source_execution_ids,
+            source_identity=(
+                str(safe_fact["source_identity"])
+                if safe_fact.get("source_identity")
+                else None
+            ),
+            observation_method=(
+                str(safe_fact["observation_method"])
+                if safe_fact.get("observation_method")
+                else None
+            ),
+            trust_level=(
+                str(safe_fact["trust_level"])
+                if safe_fact.get("trust_level")
+                else None
+            ),
             completion_claim=completion_claim,
         )
         new_facts = 1 if created else 0
@@ -1006,6 +1031,27 @@ class AIPipeline(
                 session_id=fact.get("session_id", "none"),
                 derived_from=[fact_id],
                 source_execution_ids=source_execution_ids,
+                source_identity=(
+                    str(derived.get("source_identity") or safe_fact.get("source_identity"))
+                    if (derived.get("source_identity") or safe_fact.get("source_identity"))
+                    else None
+                ),
+                observation_method=(
+                    str(
+                        derived.get("observation_method")
+                        or safe_fact.get("observation_method")
+                    )
+                    if (
+                        derived.get("observation_method")
+                        or safe_fact.get("observation_method")
+                    )
+                    else None
+                ),
+                trust_level=(
+                    str(derived.get("trust_level") or safe_fact.get("trust_level"))
+                    if (derived.get("trust_level") or safe_fact.get("trust_level"))
+                    else None
+                ),
                 completion_claim=completion_claim,
             )
             fact_ids.append(derived_id)
@@ -1219,6 +1265,8 @@ class AIPipeline(
         allowed_prefixes = ("msf_check ", "searchsploit ", "plugin ")
         limit = self._strategy_limit("verification_followup_commands", None)
         for fact in facts:
+            if not fact_is_decision_usable(fact):
+                continue
             if fact.get("type") != "verification_command":
                 continue
             cmd = str(fact.get("value", "")).strip()
@@ -1373,7 +1421,8 @@ class AIPipeline(
         """Map facts to safe deterministic follow-up actions."""
         from core.ai.followups import FollowupRuleFamilies
 
-        all_facts = self.fact_store.get_facts(scan_id, target)
+        facts = [fact for fact in facts if fact_is_decision_usable(fact)]
+        all_facts = self._accepted_task_decision_facts(scan_id, target)
         all_pairs = {(str(fact.get("type", "")).lower(), str(fact.get("value", "")).lower()) for fact in all_facts}
 
         inventory_seen = self._post_access_inventory_seen(all_pairs)
@@ -1913,6 +1962,8 @@ class AIPipeline(
         """Collect gated active commands for later execution after verification."""
         commands = []
         for fact in facts:
+            if not fact_is_decision_usable(fact):
+                continue
             if fact.get("type") != "active_command":
                 continue
             cmd = str(fact.get("value", "")).strip()
@@ -2027,7 +2078,7 @@ class AIPipeline(
             seen.add(key)
             endpoints.append(endpoint)
 
-        for fact in self.fact_store.get_facts(scan_id, target):
+        for fact in self._accepted_task_decision_facts(scan_id, target):
             ftype = str(fact.get("type", "")).lower()
             value = str(fact.get("value", ""))
             lowered = value.lower()
@@ -2056,7 +2107,7 @@ class AIPipeline(
         return self._web_endpoints_from_facts(scan_id, target) if global_evidence else []
 
     def _has_jmx_or_tomcat_evidence(self, scan_id: str, target: str) -> bool:
-        for fact in self.fact_store.get_facts(scan_id, target):
+        for fact in self._accepted_task_decision_facts(scan_id, target):
             ftype = str(fact.get("type", "")).lower()
             value = str(fact.get("value", "")).lower()
             if ftype in {"service_status", "check_result"} and "jmx2rce_not_vulnerable" in value:
@@ -2083,7 +2134,7 @@ class AIPipeline(
             endpoint_keys.add(key)
             endpoints.append(endpoint)
 
-        for fact in self.fact_store.get_facts(scan_id, target):
+        for fact in self._accepted_task_decision_facts(scan_id, target):
             if fact.get("type") == "web_endpoint":
                 endpoint = self._endpoint_url_from_value(str(fact.get("value", "")))
                 add_endpoint(endpoint)
@@ -2138,7 +2189,7 @@ class AIPipeline(
         if len(parts) != 2 or parts[0] != "exploit_select":
             return cmd
 
-        facts = self.fact_store.get_facts(scan_id, target)
+        facts = self._accepted_task_decision_facts(scan_id, target)
         useful_types = {
             "port_open",
             "service_version",
@@ -2279,7 +2330,7 @@ class AIPipeline(
     def _best_cpanel_port(self, scan_id: str, target: str) -> str:
         preferred = ["2087", "2083", "2086", "2082", "2096", "2095"]
         found = set()
-        for fact in self.fact_store.get_facts(scan_id, target):
+        for fact in self._accepted_task_decision_facts(scan_id, target):
             value = str(fact.get("value", "")).lower()
             if fact.get("type") != "port_open":
                 continue

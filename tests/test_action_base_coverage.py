@@ -160,11 +160,46 @@ def test_authorization_and_registered_invocation_forward_typed_values() -> None:
     assert invocation.executable == "fixture"
     assert invocation.argv == ("fixture", "example.com")
     assert invocation.registered_name == "fixture"
+    assert invocation.targets == ("example.com",)
     assert context is request.execution_context
 
     direct = ActionAdapter.registered_invocation("fixture --safe", "registered")
     assert direct.argv == ("fixture", "--safe")
     assert direct.registered_name == "registered"
+
+
+def test_authorization_requires_and_validates_an_explicit_action_target() -> None:
+    adapter = FixtureAdapter()
+
+    class RejectUnexpectedPolicy:
+        def authorize_registered(self, _invocation, _context):
+            pytest.fail("invalid action target reached execution policy")
+
+    missing = adapter.authorize(RejectUnexpectedPolicy(), _request(""), "execute")
+    invalid = adapter.authorize(
+        RejectUnexpectedPolicy(),
+        _request("bad target"),
+        "execute",
+    )
+
+    assert missing.allowed is False
+    assert missing.reason == "missing_explicit_target"
+    assert invalid.allowed is False
+    assert invalid.reason == "invalid_target:bad target"
+    assert invalid.invocation is not None
+    assert invalid.invocation.targets == ("bad target",)
+
+
+def test_targetless_action_does_not_require_or_validate_request_target() -> None:
+    adapter = FixtureAdapter(ActionRequirements(target_required=False))
+    forwarded = object()
+
+    class PolicySpy:
+        def authorize_registered(self, invocation, _context):
+            assert invocation.targets == ()
+            return forwarded
+
+    assert adapter.authorize(PolicySpy(), _request("not a network target"), "execute") is forwarded
 
 
 def test_normalize_result_forwards_redaction_and_resource_boundaries(

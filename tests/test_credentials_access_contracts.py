@@ -122,7 +122,7 @@ def test_pipeline_marks_missing_credential_stage_as_blocked_not_completed():
         result = pipeline._run_task_commands(
             "scan-blocked",
             "10.0.0.5",
-            ["killchain_persist 10.0.0.5"],
+            ["killchain_persist 10.0.0.5 '' '' 10.0.0.5"],
             fact_label="Fact",
         )
         status = pipeline._classify_task_result(result)

@@ -215,6 +215,123 @@ def test_migration_and_serialization_boundaries(
     assert store.get_facts_by_ids(["bad", 0]) == []
 
 
+def test_observation_trust_is_durable_and_trusted_duplicate_restores_usability(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "trust.db"
+    store = FactStore(str(db_path))
+    fact_id = store.add_fact(
+        "scan",
+        "host.example",
+        "system_access",
+        "root_access_confirmed",
+        "structured-output",
+        trust_level="target_controlled",
+    )
+
+    target_controlled = store.get_facts_by_ids([fact_id])[0]
+    assert target_controlled["trust_level"] == "target_controlled"
+    assert target_controlled["observations"][0]["trust_level"] == "target_controlled"
+
+    reopened = FactStore(str(db_path))
+    persisted = reopened.get_facts_by_ids([fact_id])[0]
+    assert persisted["trust_level"] == "target_controlled"
+
+    reopened.add_fact(
+        "scan",
+        "host.example",
+        "system_access",
+        "root_access_confirmed",
+        "typed-system-check",
+        source_identity="system-check",
+        observation_method="verification-check",
+        trust_level="trusted",
+    )
+    recovered = reopened.get_facts_by_ids([fact_id])[0]
+    assert recovered["trust_level"] == "trusted"
+    assert {item["trust_level"] for item in recovered["observations"]} == {
+        "target_controlled",
+        "trusted",
+    }
+
+
+def test_existing_database_reopens_with_legacy_observation_trust_migration(
+    tmp_path: Path,
+) -> None:
+    db_path = tmp_path / "legacy-trust.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id TEXT NOT NULL,
+                host TEXT NOT NULL,
+                type TEXT NOT NULL,
+                value TEXT NOT NULL,
+                confidence INTEGER NOT NULL DEFAULT 100,
+                source TEXT NOT NULL,
+                session_id TEXT NOT NULL DEFAULT 'none',
+                derived_from TEXT DEFAULT '[]',
+                evidence_hash TEXT DEFAULT '',
+                timestamp REAL NOT NULL,
+                secret_refs TEXT NOT NULL DEFAULT '[]'
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE fact_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fact_id INTEGER NOT NULL,
+                scan_id TEXT NOT NULL,
+                host TEXT NOT NULL,
+                type TEXT NOT NULL,
+                value TEXT NOT NULL,
+                confidence INTEGER NOT NULL DEFAULT 100,
+                source TEXT NOT NULL,
+                source_identity TEXT NOT NULL DEFAULT '',
+                observation_method TEXT NOT NULL DEFAULT '',
+                session_id TEXT NOT NULL DEFAULT 'none',
+                evidence_hash TEXT DEFAULT '',
+                timestamp REAL NOT NULL,
+                secret_refs TEXT NOT NULL DEFAULT '[]'
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO facts(
+                scan_id, host, type, value, confidence, source, session_id,
+                derived_from, evidence_hash, timestamp, secret_refs
+            ) VALUES ('scan', 'host', 'service', 'https', 90, 'legacy',
+                      'none', '[]', 'hash', 1, '[]')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO fact_observations(
+                fact_id, scan_id, host, type, value, confidence, source,
+                source_identity, observation_method, session_id,
+                evidence_hash, timestamp, secret_refs
+            ) VALUES (1, 'scan', 'host', 'service', 'https', 90, 'legacy',
+                      'legacy', 'reported_observation', 'none', 'hash', 1, '[]')
+            """
+        )
+
+    migrated = FactStore(str(db_path))
+    fact = migrated.get_facts("scan", "host")[0]
+    with sqlite3.connect(db_path) as conn:
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(fact_observations)").fetchall()
+        }
+
+    assert "trust_level" in columns
+    assert fact["trust_level"] == "trusted"
+    assert fact["observations"][0]["trust_level"] == "trusted"
+    assert FactStore(str(db_path)).get_facts("scan", "host")[0]["trust_level"] == "trusted"
+
+
 class _ShrinkingDuplicateCursor:
     """Model a duplicate group that disappears between defensive reads."""
 

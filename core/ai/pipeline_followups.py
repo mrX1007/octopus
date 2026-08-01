@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from core.ai.evaluated_facts import fact_is_decision_usable
 from core.ai.pipeline_types import PipelineMixinBase
 
 
@@ -63,6 +64,8 @@ class PipelineFollowupsMixin(PipelineMixinBase):
 
     def _facts_confirm_ssh_access(self, facts: list[dict[str, Any]]) -> bool:
         for fact in facts:
+            if not fact_is_decision_usable(fact):
+                continue
             ftype = str(fact.get("type", "")).lower()
             value = str(fact.get("value", "")).lower()
             if ftype == "credential" and value.startswith("ssh_login_success:"):

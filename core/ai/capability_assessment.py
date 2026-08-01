@@ -15,6 +15,18 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.ai.evaluated_facts import fact_is_decision_usable
+from core.ai.fact_predicates import (
+    confirms_cleanup,
+    confirms_credentials,
+    confirms_exfiltration,
+    confirms_persistence,
+    confirms_root,
+    is_web_fact,
+    parse_port_open,
+    web_fact_port,
+)
+from core.ai.fact_predicates import fact_type as canonical_fact_type
+from core.ai.fact_predicates import fact_value as canonical_fact_value
 from core.ai.tool_registry import ToolRegistry
 from core.execution import ExecutionContext, ExecutionPolicy
 
@@ -55,19 +67,6 @@ TASK_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "exfiltrate_data": ("stage:root", "policy:auto_data_exfil", "killchain:data_exfil"),
     "stealth_cleanup": ("stage:exfiltration", "policy:auto_cleanup", "killchain:cleanup"),
 }
-
-_WEB_FACT_TYPES = {
-    "browser_rendered",
-    "web_endpoint",
-    "web_input",
-    "web_link",
-    "web_powered_by",
-    "web_redirect",
-    "web_server",
-    "web_surface",
-    "web_title",
-}
-
 
 @dataclass(frozen=True)
 class ProviderAssessment:
@@ -519,70 +518,80 @@ class CapabilityResolver:
         ]
 
     def _fact_supports_requirement(self, fact: Mapping[str, Any], requirement: str) -> bool:
-        fact_type = str(fact.get("type", "")).lower()
-        value = str(fact.get("value", "")).lower()
+        fact_type = canonical_fact_type(fact)
+        value = canonical_fact_value(fact)
+        port = parse_port_open(fact)
 
         if requirement.startswith("policy:"):
             return False
         if requirement.startswith("stage:"):
             stage = requirement.split(":", 1)[1]
             if stage == "recon":
-                return fact_type == "port_open" or fact_type in _WEB_FACT_TYPES
+                return port is not None or is_web_fact(fact)
             if stage == "credentials":
-                return "credential" in fact_type or "login_success" in value
+                return confirms_credentials(fact)
             if stage == "root":
-                return (
-                    "uid=0" in value
-                    or "root_access_confirmed" in value
-                    or (fact_type == "credential" and value.startswith("ssh_login_success:root@"))
-                    or ("exploit_success" in fact_type and self._is_system_access_exploit_value(value))
-                )
+                return confirms_root(fact)
             if stage == "post_access_inventory":
                 return fact_type == "post_exploit_stage" and value == "post_access_inventory_completed"
             if stage == "persistence":
-                return "persistence" in fact_type or "mechanism_planted" in value
+                return confirms_persistence(fact)
             if stage == "internal_recon":
                 return (
                     fact_type == "internal_network"
-                    or "internal_network_recon_completed" in value
-                    or (fact_type == "service_status" and value == "network_recon_completed")
+                    or (
+                        fact_type == "post_exploit_stage"
+                        and value == "internal_network_recon_completed"
+                    )
+                    or (
+                        fact_type == "service_status"
+                        and value
+                        in {"network_recon_completed", "internal_network_recon_completed"}
+                    )
                 )
             if stage == "exfiltration":
-                return fact_type in {"data_exfiltration", "data_exfiltration_status"} or (
-                    fact_type == "post_exploit_stage" and value == "data_exfiltration_completed"
-                )
+                return confirms_exfiltration(fact)
             if stage == "cleanup":
-                return "cleanup" in fact_type and value in {"success", "partial", "completed"}
+                return confirms_cleanup(fact)
             return False
         if requirement == "services":
-            return fact_type == "port_open" or fact_type in _WEB_FACT_TYPES
+            return port is not None or is_web_fact(fact)
         if requirement == "web":
-            return fact_type in _WEB_FACT_TYPES or (
-                fact_type == "port_open" and any(marker in value for marker in ("http", "cpanel", "tomcat"))
-            )
+            return is_web_fact(fact) or bool(port and port.is_web)
         if requirement == "tls":
-            return (fact_type == "web_endpoint" and "https" in value) or (
-                fact_type == "port_open" and any(marker in value for marker in ("https", "ssl/http"))
+            web_port = web_fact_port(fact)
+            return bool(
+                (web_port and web_port.service == "https")
+                or (port and port.service in {"https", "ssl/http", "https-alt"})
             )
         if requirement == "domain":
             return fact_type in {"domain", "subdomain", "dns_record"}
         if requirement == "ad_surface":
-            return fact_type == "port_open" and any(
-                marker in value for marker in ("ldap", "kerberos", "winrm", "rdp", "smb", "microsoft-ds")
+            return bool(
+                port
+                and port.service
+                in {"ldap", "kerberos", "winrm", "rdp", "smb", "microsoft-ds"}
             )
         if requirement in {"smb", "ssh"}:
-            return fact_type == "port_open" and requirement in value
+            if port is None:
+                return False
+            if requirement == "ssh":
+                return port.is_ssh
+            return port.service in {"smb", "microsoft-ds", "netbios-ssn"}
         if requirement == "access":
             return (
-                fact_type in {"application_access", "system_access"}
-                or "login_success" in value
-                or "ssh_authenticated" in value
-                or "uid=0" in value
+                confirms_credentials(fact)
+                or confirms_root(fact)
+                or (fact_type == "application_access" and bool(value))
+                or (fact_type == "service_status" and value == "ssh_authenticated")
             )
         if requirement == "internal_hosts":
             return fact_type in {"internal_host", "internal_subnet", "network_node"}
         if requirement == "internal_services":
-            return fact_type == "internal_service" or value.startswith("internal_service_probe_completed")
+            return fact_type == "internal_service" or (
+                fact_type == "service_status"
+                and value.startswith("internal_service_probe_completed:")
+            )
         return False
 
     @staticmethod

@@ -254,6 +254,96 @@ def test_independent_execution_corroboration_promotes_same_scoped_fact(tmp_path)
     assert store.get_facts("scan", "host")[0]["confidence"] == 78
 
 
+def test_corroboration_requires_two_trusted_observations(tmp_path):
+    store = FactStore(str(tmp_path / "trusted-corroboration.db"))
+    fact_id = store.add_fact(
+        "scan",
+        "host",
+        "service_check",
+        "ssh:confirmed_present",
+        "target-output",
+        source_execution_ids=("exec-target",),
+        source_identity="target-a",
+        observation_method="target-controlled-stdout",
+        trust_level="target_controlled",
+    )
+    store.add_fact(
+        "scan",
+        "host",
+        "service_check",
+        "ssh:confirmed_present",
+        "scanner-b",
+        source_execution_ids=("exec-trusted-b",),
+        source_identity="scanner-b",
+        observation_method="tcp-connect",
+        trust_level="trusted",
+    )
+
+    _record_execution(store, "exec-target")
+    _record_execution(store, "exec-trusted-b")
+
+    assessment = store.assessments.current_for_fact(fact_id)
+    assert assessment is not None
+    assert assessment.status is AssessmentStatus.OBSERVED
+
+    store.add_fact(
+        "scan",
+        "host",
+        "service_check",
+        "ssh:confirmed_present",
+        "scanner-c",
+        source_execution_ids=("exec-trusted-c",),
+        source_identity="scanner-c",
+        observation_method="banner-grab",
+        trust_level="trusted",
+    )
+    _record_execution(store, "exec-trusted-c")
+
+    promoted = store.assessments.current_for_fact(fact_id)
+    assert promoted is not None
+    assert promoted.status is AssessmentStatus.VERIFIED
+    assert promoted.rule_id == "fact.corroborated.independent_execution.v1"
+
+
+def test_untrusted_source_diversity_never_promotes_fact(tmp_path):
+    store = FactStore(str(tmp_path / "untrusted-diversity.db"))
+    fact_id = store.add_fact(
+        "scan",
+        "host",
+        "system_access",
+        "root_access_confirmed",
+        "target-a",
+        source_execution_ids=("exec-a",),
+        source_identity="target-a",
+        observation_method="target-controlled-stdout",
+        trust_level="target_controlled",
+    )
+    store.add_fact(
+        "scan",
+        "host",
+        "system_access",
+        "root_access_confirmed",
+        "target-b",
+        source_execution_ids=("exec-b",),
+        source_identity="target-b",
+        observation_method="llm-extracted",
+        trust_level="untrusted",
+    )
+
+    _record_execution(store, "exec-a")
+    _record_execution(store, "exec-b")
+
+    assessment = store.assessments.current_for_fact(fact_id)
+    fact = store.get_facts("scan", "host")[0]
+    assert assessment is not None
+    assert assessment.status is AssessmentStatus.OBSERVED
+    assert fact["trust_level"] == "target_controlled"
+    assert all(
+        item.rule_id != "fact.corroborated.independent_execution.v1"
+        for item in store.assessments.history(fact_id)
+    )
+
+
 def test_distinct_execution_ids_from_same_observation_source_do_not_corroborate(
     tmp_path,
 ):
@@ -660,18 +750,23 @@ def test_exploit_applicability_rejects_only_relevant_unusable_canonical_assessme
     assert expected_missing in result.missing_requirements
 
 
-def test_exploit_applicability_accepts_fresh_non_contradicted_candidate():
+def test_exploit_applicability_accepts_fresh_non_contradicted_candidate(monkeypatch):
     exploit = SimpleNamespace(
         name="Example exploit",
         cve="CVE-2026-1000",
         description="fixture",
         supported_os=(),
     )
+    fixture_handle = object()
+    monkeypatch.setattr(
+        "core.actions.adapters._request_handle_binding",
+        lambda _request: SimpleNamespace(handle=fixture_handle),
+    )
     result = ExploitBaseAdapter(exploit).applicability(
         ActionRequest(
             target="10.0.0.5",
             execution_context=_automatic(),
-            handle=object(),
+            handle=fixture_handle,
             facts=(
                 {
                     "id": 1,

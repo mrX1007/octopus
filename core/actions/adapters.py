@@ -5,11 +5,24 @@ from __future__ import annotations
 import re
 import shlex
 import shutil
+import socket
 from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import Any, ClassVar
+from urllib.parse import urlparse
 
-from core.execution import ExecutionContext, ExecutionResult
-from core.execution.policy import registered_tool_requires_approval
+from core.execution import (
+    ExecutionContext,
+    ExecutionDecision,
+    ExecutionPolicy,
+    ExecutionResult,
+)
+from core.execution.policy import (
+    bind_msf_target_options,
+    registered_tool_requires_approval,
+    registered_tool_uses_network_scope,
+    targets_equivalent,
+)
 
 from .base import ActionAdapter
 from .models import (
@@ -36,6 +49,94 @@ _ASSESSMENT_FACT_TYPES = {
 }
 
 
+@dataclass(frozen=True)
+class _ProviderHandleBinding:
+    """Immutable binding created only from a concrete live transport."""
+
+    handle: Any = field(repr=False, compare=False)
+    requested_target: str
+    connected_peer: str
+    request_id: str
+
+
+def _trusted_handle_peer(handle: Any) -> str:
+    """Read a peer only from concrete socket/Paramiko transport types."""
+
+    candidate = handle if isinstance(handle, socket.socket) else None
+    if candidate is None:
+        try:
+            import paramiko  # type: ignore[import-untyped]
+
+            if isinstance(handle, paramiko.SSHClient):
+                transport = handle.get_transport()
+            elif isinstance(handle, paramiko.Transport):
+                transport = handle
+            else:
+                transport = None
+            sock = getattr(transport, "sock", None)
+            if isinstance(sock, socket.socket):
+                candidate = sock
+        except (ImportError, TypeError):
+            candidate = None
+    if candidate is None:
+        return ""
+    try:
+        peer = candidate.getpeername()
+    except OSError:
+        return ""
+    value = peer[0] if isinstance(peer, (tuple, list)) and peer else peer
+    return str(value or "").strip()
+
+
+def bind_provider_handle(
+    handle: Any,
+    requested_target: str,
+    execution_context: ExecutionContext,
+) -> Any:
+    """Bind a concrete connected provider handle to one authorized request."""
+
+    policy = ExecutionPolicy()
+    allowed, reason = policy._targets_allowed((requested_target,), execution_context)
+    if not allowed:
+        raise ValueError(reason)
+    peer = _trusted_handle_peer(handle)
+    if not peer:
+        raise ValueError("provider_handle_peer_unresolved")
+    parsed = urlparse(
+        requested_target if "://" in requested_target else f"//{requested_target}"
+    )
+    host = parsed.hostname or ""
+    try:
+        resolved = {
+            str(item[4][0])
+            for item in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+            if item[4]
+        }
+    except socket.gaierror as exc:
+        raise ValueError("provider_handle_target_unresolved") from exc
+    if peer not in resolved:
+        raise ValueError("provider_handle_target_mismatch")
+    return _ProviderHandleBinding(
+        handle=handle,
+        requested_target=requested_target,
+        connected_peer=peer,
+        request_id=execution_context.request_id,
+    )
+
+
+def _request_handle_binding(request: ActionRequest) -> _ProviderHandleBinding | None:
+    binding = request.handle
+    if not isinstance(binding, _ProviderHandleBinding):
+        return None
+    if binding.request_id != request.execution_context.request_id:
+        return None
+    if not targets_equivalent(binding.requested_target, request.target):
+        return None
+    if _trusted_handle_peer(binding.handle) != binding.connected_peer:
+        return None
+    return binding
+
+
 def canonical_assessment_applicability(
     facts: Iterable[Mapping[str, Any]],
     aliases: Iterable[str] = (),
@@ -46,9 +147,16 @@ def canonical_assessment_applicability(
     facade while that facade remains a production compatibility path.
     """
 
+    from core.ai.fact_predicates import (
+        NON_DECISION_TRUST_LEVELS,
+        fact_trust_level,
+    )
+
     normalized_aliases = {str(alias or "").strip().casefold() for alias in aliases if str(alias or "").strip()}
     relevant: list[dict[str, Any]] = []
     for fact in facts or ():
+        if fact_trust_level(fact) in NON_DECISION_TRUST_LEVELS:
+            continue
         fact_type = str(fact.get("type") or "").strip().casefold()
         if fact_type not in _ASSESSMENT_FACT_TYPES:
             continue
@@ -172,6 +280,45 @@ class RegisteredToolAdapter(ActionAdapter):
             self.descriptor.name,
         )
 
+    def authorize(
+        self,
+        policy: ExecutionPolicy,
+        request: ActionRequest,
+        phase: str,
+    ) -> ExecutionDecision:
+        """Authorize the exact provider command and its dispatched target."""
+
+        del phase
+        decision = policy.authorize_command(
+            self._command(request),
+            request.execution_context,
+        )
+        if not decision.allowed:
+            return decision
+        if not self.descriptor.requirements.target_required:
+            return decision
+        if not registered_tool_uses_network_scope(self.descriptor.name):
+            return decision
+
+        invocation = decision.invocation
+        actual_targets = invocation.targets if invocation is not None else ()
+        explicit_target = str(request.target or "").strip()
+        if not explicit_target or not actual_targets:
+            return ExecutionDecision(
+                allowed=False,
+                reason="missing_explicit_target",
+                context=request.execution_context,
+                invocation=invocation,
+            )
+        if not targets_equivalent(explicit_target, actual_targets[0]):
+            return ExecutionDecision(
+                allowed=False,
+                reason="action_target_mismatch",
+                context=request.execution_context,
+                invocation=invocation,
+            )
+        return decision
+
     def execute(self, request: ActionRequest) -> Any:
         return self.dispatch(self._command(request), request.execution_context)
 
@@ -211,6 +358,10 @@ class ExploitBaseAdapter(ActionAdapter):
         missing = list(base.missing_requirements)
         if request.handle is None:
             missing.append("provider_handle")
+        else:
+            binding = _request_handle_binding(request)
+            if binding is None:
+                missing.append("provider_handle_binding_required")
         target_os = str(request.parameters.get("target_os") or "").lower()
         supported = [str(item).lower() for item in getattr(self.exploit, "supported_os", ()) or ()]
         if target_os and supported and target_os not in supported:
@@ -239,13 +390,36 @@ class ExploitBaseAdapter(ActionAdapter):
         }
         return canonical_assessment_applicability(facts, aliases)
 
+    def authorize(
+        self,
+        policy: ExecutionPolicy,
+        request: ActionRequest,
+        phase: str,
+    ) -> ExecutionDecision:
+        binding = _request_handle_binding(request)
+        if binding is None:
+            return ExecutionDecision(
+                False,
+                "provider_handle_binding_required",
+                request.execution_context,
+            )
+        return super().authorize(policy, request, phase)
+
+    def _validated_handle(self, request: ActionRequest) -> Any:
+        binding = _request_handle_binding(request)
+        if binding is None:
+            raise ValueError("provider_handle_binding_required")
+        return binding.handle
+
     def invocation(self, request: ActionRequest, phase: str):
         policy_name = "killchain_vuln_assess" if phase == "check" else "killchain_privesc"
         command = shlex.join((policy_name, request.target))
         return self.registered_invocation(command, policy_name)
 
     def check(self, request: ActionRequest) -> ActionCheckResult:
-        normalized = self.exploit.normalize_check_result(self.exploit.check_vulnerable(request.handle))
+        normalized = self.exploit.normalize_check_result(
+            self.exploit.check_vulnerable(self._validated_handle(request))
+        )
         return ActionCheckResult(
             result=normalized,
             applicable=bool(normalized.success),
@@ -253,7 +427,9 @@ class ExploitBaseAdapter(ActionAdapter):
         )
 
     def execute(self, request: ActionRequest) -> Any:
-        return self.exploit.normalize_run_result(self.exploit.run(request.handle))
+        return self.exploit.normalize_run_result(
+            self.exploit.run(self._validated_handle(request))
+        )
 
 
 class MetasploitActionAdapter(ActionAdapter):
@@ -314,13 +490,14 @@ class MetasploitActionAdapter(ActionAdapter):
             options = " ".join(f"{key}={value}" for key, value in sorted(raw.items()))
         else:
             options = str(raw or "")
-        if request.target and not re.search(r"(?i)\bRHOSTS?\s*=", options):
-            options = f"RHOSTS={request.target} {options}".strip()
-        return options
+        return bind_msf_target_options(options, request.target)
 
     def invocation(self, request: ActionRequest, phase: str):
         policy_name = "msf_check" if phase == "check" else "msf_run"
-        command = shlex.join((policy_name, self.module, request.target))
+        options = shlex.split(self._options(request), posix=True)
+        command = shlex.join(
+            (policy_name, request.target, self.module, *options)
+        )
         return self.registered_invocation(command, policy_name)
 
     def check(self, request: ActionRequest) -> ActionCheckResult:
@@ -359,6 +536,24 @@ class PluginActionAdapter(ActionAdapter):
         "evasion",
         "persistence",
         "lateral",
+    }
+    _UNDECLARED_NETWORK_KEYS: ClassVar[set[str]] = {
+        "callback",
+        "callback_host",
+        "c2",
+        "c2_url",
+        "command",
+        "endpoint",
+        "host",
+        "lhost",
+        "proxy",
+        "query",
+        "remote_host",
+        "rhost",
+        "session",
+        "target",
+        "url",
+        "vhost",
     }
 
     def __init__(self, manager: Any, plugin_name: str):
@@ -401,11 +596,42 @@ class PluginActionAdapter(ActionAdapter):
         if phase == "check":
             return "check"
         default = "run" if self.descriptor.requirements.active else "scan"
-        return str(request.parameters.get("action") or default).lower()
+        action = str(request.parameters.get("action") or default).lower()
+        if action not in {"check", "cleanup", "list", "ls", "run", "scan", "summary"}:
+            raise ValueError("plugin_action_undeclared")
+        return action
 
     def invocation(self, request: ActionRequest, phase: str):
         command = shlex.join(("plugin", self.plugin_name, request.target, self._action(request, phase)))
         return self.registered_invocation(command, "plugin")
+
+    @classmethod
+    def _undeclared_network_parameter(cls, parameters: Mapping[str, Any]) -> str:
+        # Plugin descriptors have no code-owned typed parameter schema yet.
+        # Any provider kwarg is therefore opaque; a deny-list cannot cover
+        # single-label or nested endpoints, so only lifecycle metadata passes.
+        for key in parameters:
+            normalized = str(key).strip().casefold()
+            if normalized in {"action", "timeout"}:
+                continue
+            return normalized or "unknown"
+        return ""
+
+    def authorize(
+        self,
+        policy: ExecutionPolicy,
+        request: ActionRequest,
+        phase: str,
+    ) -> ExecutionDecision:
+        parameter = self._undeclared_network_parameter(request.parameters)
+        if parameter:
+            return ExecutionDecision(
+                False,
+                f"plugin_network_parameter_undeclared:{parameter}",
+                request.execution_context,
+                self.invocation(request, phase),
+            )
+        return super().authorize(policy, request, phase)
 
     def check(self, request: ActionRequest) -> ActionCheckResult:
         raw = self.manager.check(
@@ -422,6 +648,9 @@ class PluginActionAdapter(ActionAdapter):
     def execute(self, request: ActionRequest) -> Any:
         from core.plugins.base import PluginContext
 
+        parameter = self._undeclared_network_parameter(request.parameters)
+        if parameter:
+            raise ValueError(f"plugin_network_parameter_undeclared:{parameter}")
         parameters = dict(request.parameters)
         action = parameters.pop("action", self._action(request, "execute"))
         parameters.pop("timeout", None)
@@ -471,6 +700,7 @@ __all__ = [
     "MetasploitActionAdapter",
     "PluginActionAdapter",
     "RegisteredToolAdapter",
+    "bind_provider_handle",
     "canonical_assessment_applicability",
     "register_tool_adapters",
 ]

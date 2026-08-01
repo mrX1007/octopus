@@ -7,7 +7,11 @@ import copy
 import pytest
 
 import core.ai.evaluated_facts as evaluated_module
-from core.ai.evaluated_facts import EvaluatedFact, EvaluatedFactSnapshot
+from core.ai.evaluated_facts import (
+    EvaluatedFact,
+    EvaluatedFactSnapshot,
+    fact_is_decision_usable,
+)
 
 pytestmark = pytest.mark.contract
 
@@ -190,3 +194,46 @@ def test_observation_method_categories(source, expected):
 def test_provenance_token_empty_and_punctuation():
     assert evaluated_module._provenance_token(None) == ""
     assert evaluated_module._provenance_token(" TLS Sensor/A! ") == "tls_sensor/a"
+
+
+@pytest.mark.parametrize("trust_level", ["target_controlled", "untrusted"])
+def test_fact_with_only_non_trusted_observations_is_not_decision_usable(
+    trust_level: str,
+) -> None:
+    fact = {
+        "type": "system_access",
+        "value": "root_access_confirmed",
+        "observations": [{"trust_level": trust_level}],
+    }
+
+    assert fact_is_decision_usable(fact) is False
+    snapshot = EvaluatedFactSnapshot.build("scan", "host", [fact])
+    assert snapshot.historical_facts() == (fact,)
+    assert snapshot.decision_facts() == ()
+    assert snapshot.to_context()["assessment_heads"][0]["trust_level"] == trust_level
+
+
+def test_trusted_observation_keeps_fact_usable_despite_untrusted_duplicate() -> None:
+    fact = {
+        "type": "system_access",
+        "value": "root_access_confirmed",
+        "observations": [
+            {"trust_level": "target_controlled"},
+            {"trust_level": "trusted"},
+        ],
+    }
+
+    assert fact_is_decision_usable(fact) is True
+    snapshot = EvaluatedFactSnapshot.build("scan", "host", [fact])
+    assert len(snapshot.decision_facts()) == 1
+    assert snapshot.to_context()["assessment_heads"][0]["trust_level"] == "trusted"
+
+
+def test_known_untrusted_observation_method_fails_closed_without_explicit_level() -> None:
+    fact = {
+        "type": "credential",
+        "value": "ssh_login_success:root@host",
+        "observations": [{"observation_method": "target-controlled-stdout"}],
+    }
+
+    assert fact_is_decision_usable(fact) is False
