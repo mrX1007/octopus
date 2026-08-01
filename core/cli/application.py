@@ -271,7 +271,7 @@ def preflight_checks() -> bool:
     """Verify critical dependencies before starting."""
     import shutil
 
-    import requests  # type: ignore[import-untyped]
+    import requests
 
     all_ok = True
 

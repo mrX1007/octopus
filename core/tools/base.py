@@ -27,7 +27,7 @@ C_BLUE = "\033[94m"
 C_MAGENTA = "\033[95m"
 
 # TOOL AVAILABILITY CACHE
-_TOOL_AVAILABLE = {}
+_TOOL_AVAILABLE: dict[str, bool] = {}
 
 
 def is_tool_available(name: str) -> bool:
