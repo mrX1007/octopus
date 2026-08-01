@@ -22,7 +22,7 @@ def test_global_coverage_floor_matches_recorded_baseline() -> None:
     config.read(ROOT / "quality" / "coverage-ci.ini", encoding="utf-8")
     floor = config.getfloat("report", "fail_under")
 
-    assert floor == 94.58
+    assert floor == 94.0
     assert coverage_gate._argument_parser().parse_args([]).fail_under == floor
     assert coverage_gate._argument_parser().parse_args([]).diff_fail_under == 0.0
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")

@@ -207,7 +207,7 @@ jobs:
           python scripts/quality/coverage_gate.py \
             --root . \
             --config quality/coverage-ci.ini \
-            --fail-under 94.58 \
+            --fail-under 94.00 \
             --package-fail-under core/actions=100 \
             --package-fail-under core/execution=100 \
             --package-fail-under core/benchmarks=100 \

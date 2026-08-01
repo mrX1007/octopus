@@ -8,6 +8,7 @@ import shutil
 import socket
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
+from importlib import import_module
 from typing import Any, ClassVar
 from urllib.parse import urlparse
 
@@ -65,7 +66,7 @@ def _trusted_handle_peer(handle: Any) -> str:
     candidate = handle if isinstance(handle, socket.socket) else None
     if candidate is None:
         try:
-            import paramiko  # type: ignore[import-untyped]
+            paramiko: Any = import_module("paramiko")
 
             if isinstance(handle, paramiko.SSHClient):
                 transport = handle.get_transport()
