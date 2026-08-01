@@ -38,33 +38,30 @@ class PipelineMissionMixin(PipelineMixinBase):
         self._state_replan_count = mission.state_replan_count
         self._state_replan_signatures = set(mission.state_replan_signatures)
         self._mission_was_completed = mission.status == "completed"
-        self._mission_was_resumed = bool(
-            previous is not None and previous.status != "completed"
-        )
+        self._mission_was_resumed = bool(previous is not None and previous.status != "completed")
         if self._mission_was_resumed:
-            self.decision_trace.record({
-                "event_id": f"resume-start:{mission.mission_id}:{mission.run_count}",
-                "event_type": "mission_resume_started",
-                "mission_id": mission.mission_id,
-                "scan_id": scan_id,
-                "expected_outcome": {"status": "succeeded"},
-                "actual_outcome": {
-                    "status": "started",
-                    "previous_status": previous.status if previous else "unknown",
-                    "run_count": mission.run_count,
-                },
-                "state_from": previous.status if previous else "unknown",
-                "state_to": mission.status,
-            })
+            self.decision_trace.record(
+                {
+                    "event_id": f"resume-start:{mission.mission_id}:{mission.run_count}",
+                    "event_type": "mission_resume_started",
+                    "mission_id": mission.mission_id,
+                    "scan_id": scan_id,
+                    "expected_outcome": {"status": "succeeded"},
+                    "actual_outcome": {
+                        "status": "started",
+                        "previous_status": previous.status if previous else "unknown",
+                        "run_count": mission.run_count,
+                    },
+                    "state_from": previous.status if previous else "unknown",
+                    "state_to": mission.status,
+                }
+            )
         snapshot = self.mission_store.snapshot(mission.mission_id)
 
         for task_record in snapshot.tasks:
             if task_record.attempt_count:
                 self.task_history.append(f"{task_record.agent}:{task_record.task}")
-            if (
-                task_record.retry_count > 0
-                and task_record.status in {"pending", "interrupted"}
-            ):
+            if task_record.retry_count > 0 and task_record.status in {"pending", "interrupted"}:
                 self.retry_scheduled_tasks.add(task_record.task)
             if task_record.status == "blocked":
                 self.blocked_tasks.add(task_record.task)
@@ -84,24 +81,17 @@ class PipelineMissionMixin(PipelineMixinBase):
         command_results = self.fact_store.get_command_results(scan_id, target)
         self.total_new_facts = len(facts)
         durable_execution_ids = {
-            execution_id
-            for attempt in snapshot.attempts
-            for execution_id in attempt.execution_ids
-            if execution_id
+            execution_id for attempt in snapshot.attempts for execution_id in attempt.execution_ids if execution_id
         }
         durable_execution_ids.update(
-            str(result.get("execution_id"))
-            for result in command_results
-            if result.get("execution_id")
+            str(result.get("execution_id")) for result in command_results if result.get("execution_id")
         )
         durable_tool_count = len(durable_execution_ids) + sum(
             1 for result in command_results if not result.get("execution_id")
         )
         self.tools_run_count = max(self.tools_run_count, durable_tool_count)
         self.executed_command_keys.update(
-            str(result.get("command_key"))
-            for result in command_results
-            if result.get("command_key")
+            str(result.get("command_key")) for result in command_results if result.get("command_key")
         )
         for fact in facts:
             if not fact_is_decision_usable(fact):
@@ -135,8 +125,7 @@ class PipelineMissionMixin(PipelineMixinBase):
             for step, task_id in zip(plan, explicit_task_ids):
                 record = records_by_id.get(task_id)
                 if record is None or (
-                    record.agent != str(step.get("agent") or "")
-                    or record.task != str(step.get("task") or "")
+                    record.agent != str(step.get("agent") or "") or record.task != str(step.get("task") or "")
                 ):
                     raise ValueError("ordered mission plan contains an unknown task_id")
             return self._ordered_mission_plan(task_ids=explicit_task_ids)
@@ -159,10 +148,7 @@ class PipelineMissionMixin(PipelineMixinBase):
             if not agent or not task:
                 continue
             requested_scope = self._mission_task_scope(step)
-            requested_version = str(
-                step.get("task_definition_version")
-                or TASK_DEFINITION_SCHEMA_VERSION
-            )
+            requested_version = str(step.get("task_definition_version") or TASK_DEFINITION_SCHEMA_VERSION)
             requested_task_id = str(step.get("task_id") or "")
             identity: tuple[Any, ...]
             if requested_task_id:
@@ -190,9 +176,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                 )
             if identity in selected_identities:
                 continue
-            effective = (
-                (existing.agent, existing.task) if existing else (agent, task)
-            )
+            effective = (existing.agent, existing.task) if existing else (agent, task)
             selected_identities.add(identity)
             selected.append(
                 (
@@ -202,11 +186,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                     step,
                     existing,
                     existing.task_scope if existing is not None else requested_scope,
-                    (
-                        existing.task_definition_version
-                        if existing is not None
-                        else requested_version
-                    ),
+                    (existing.task_definition_version if existing is not None else requested_version),
                 )
             )
 
@@ -221,11 +201,7 @@ class PipelineMissionMixin(PipelineMixinBase):
             for record in snapshot.tasks
         }
         for identity, agent, task, _, existing, scope, version in selected:
-            token = (
-                ("task_id", existing.task_id)
-                if existing is not None
-                else identity
-            )
+            token = ("task_id", existing.task_id) if existing is not None else identity
             available_entries[token] = TaskDependencyRef(
                 agent=agent,
                 task=task,
@@ -242,9 +218,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                 [],
             ).append(reference)
 
-        dependencies_by_identity: dict[
-            tuple[Any, ...], list[TaskDependencyRef]
-        ] = {}
+        dependencies_by_identity: dict[tuple[Any, ...], list[TaskDependencyRef]] = {}
         invalid_reasons: dict[tuple[Any, ...], list[str]] = {}
         for identity, _, _task, step, existing, scope, version in selected:
             raw_dependencies = step.get("depends_on") or ()
@@ -256,9 +230,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                         agent=records_by_id[dependency_id].agent,
                         task=records_by_id[dependency_id].task,
                         scope=records_by_id[dependency_id].task_scope,
-                        task_definition_version=(
-                            records_by_id[dependency_id].task_definition_version
-                        ),
+                        task_definition_version=(records_by_id[dependency_id].task_definition_version),
                         task_id=dependency_id,
                     )
                     for dependency_id in existing.depends_on
@@ -285,11 +257,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                 same_definition = [
                     candidate
                     for candidate in same_scope
-                    if (
-                        candidate.task_definition_version
-                        or TASK_DEFINITION_SCHEMA_VERSION
-                    )
-                    == current_version
+                    if (candidate.task_definition_version or TASK_DEFINITION_SCHEMA_VERSION) == current_version
                 ]
                 if len(same_definition) == 1:
                     return same_definition[0]
@@ -311,9 +279,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                         agent=str(dependency.get("agent") or ""),
                         task=str(dependency.get("task") or ""),
                         scope=(
-                            self._mission_task_scope(
-                                {"task_scope": raw_dependency_scope}
-                            )
+                            self._mission_task_scope({"task_scope": raw_dependency_scope})
                             if raw_dependency_scope is not None
                             else None
                         ),
@@ -324,10 +290,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                         ),
                         task_id=str(dependency.get("task_id") or ""),
                     )
-                elif (
-                    isinstance(dependency, (list, tuple))
-                    and len(dependency) == 2
-                ):
+                elif isinstance(dependency, (list, tuple)) and len(dependency) == 2:
                     dep_agent, dep_task = dependency
                     dependency_identity = select_reference(
                         identities_by_key.get(
@@ -336,18 +299,12 @@ class PipelineMissionMixin(PipelineMixinBase):
                         )
                     )
                 elif dependency_text in records_by_id:
-                    dependency_identity = available_entries.get(
-                        ("task_id", dependency_text)
-                    )
+                    dependency_identity = available_entries.get(("task_id", dependency_text))
                 else:
-                    dependency_identity = select_reference(
-                        identities_by_name.get(dependency_text, [])
-                    )
+                    dependency_identity = select_reference(identities_by_name.get(dependency_text, []))
                     if dependency_identity is None and ":" in dependency_text:
                         dep_agent, dep_task = dependency_text.split(":", 1)
-                        dependency_identity = select_reference(
-                            identities_by_key.get((dep_agent, dep_task), [])
-                        )
+                        dependency_identity = select_reference(identities_by_key.get((dep_agent, dep_task), []))
                 if dependency_identity is None:
                     invalid_reasons.setdefault(identity, []).append(dependency_text)
                 else:
@@ -355,9 +312,7 @@ class PipelineMissionMixin(PipelineMixinBase):
             dependencies_by_identity[identity] = resolved_dependencies
 
         selected_by_task_id = {
-            existing.task_id: identity
-            for identity, _, _, _, existing, _, _ in selected
-            if existing is not None
+            existing.task_id: identity for identity, _, _, _, existing, _, _ in selected if existing is not None
         }
         selected_by_definition = {
             (
@@ -386,10 +341,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                     dependency.agent,
                     dependency.task,
                     self._mission_task_scope_identity(dependency_scope),
-                    (
-                        dependency.task_definition_version
-                        or TASK_DEFINITION_SCHEMA_VERSION
-                    ),
+                    (dependency.task_definition_version or TASK_DEFINITION_SCHEMA_VERSION),
                 )
             )
 
@@ -412,11 +364,7 @@ class PipelineMissionMixin(PipelineMixinBase):
         blocked_reasons_by_position: dict[int, str] = {}
         default_retry_policy = self._mission_task_retry_policy()
         for identity, agent, task, step, existing, scope, version in selected:
-            capability = (
-                existing.capability
-                if existing is not None
-                else str(step.get("capability") or task)
-            )
+            capability = existing.capability if existing is not None else str(step.get("capability") or task)
             retry_policy = (
                 TaskRetryPolicy(
                     retry_budget=existing.retry_budget,
@@ -426,9 +374,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                 else default_retry_policy
             )
             if identity in invalid_reasons:
-                reason = "unknown_dependencies:" + ",".join(
-                    sorted(dict.fromkeys(invalid_reasons[identity]))
-                )
+                reason = "unknown_dependencies:" + ",".join(sorted(dict.fromkeys(invalid_reasons[identity])))
                 definitions.append(
                     MissionTaskDefinition(
                         agent=agent,
@@ -436,24 +382,12 @@ class PipelineMissionMixin(PipelineMixinBase):
                         scope=scope,
                         capability=capability,
                         capability_id=(
-                            existing.capability_id
-                            if existing is not None
-                            else str(step.get("capability_id") or "")
+                            existing.capability_id if existing is not None else str(step.get("capability_id") or "")
                         ),
-                        task_definition_version=(
-                            existing.task_definition_version if existing is not None else version
-                        ),
+                        task_definition_version=(existing.task_definition_version if existing is not None else version),
                         retry_policy=TaskRetryPolicy(),
-                        not_before=(
-                            existing.not_before
-                            if existing is not None
-                            else step.get("not_before")
-                        ),
-                        backoff=(
-                            existing.backoff
-                            if existing is not None
-                            else self._mission_task_backoff(step)
-                        ),
+                        not_before=(existing.not_before if existing is not None else step.get("not_before")),
+                        backoff=(existing.backoff if existing is not None else self._mission_task_backoff(step)),
                         provider_circuit_ref=(
                             existing.provider_circuit_ref
                             if existing is not None
@@ -463,9 +397,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                             existing.evaluated_snapshot_ref
                             if existing is not None
                             else str(
-                                step.get("evaluated_snapshot_ref")
-                                or step.get("evaluated_fact_snapshot_ref")
-                                or ""
+                                step.get("evaluated_snapshot_ref") or step.get("evaluated_fact_snapshot_ref") or ""
                             )
                         ),
                     )
@@ -480,24 +412,12 @@ class PipelineMissionMixin(PipelineMixinBase):
                         scope=scope,
                         capability=capability,
                         capability_id=(
-                            existing.capability_id
-                            if existing is not None
-                            else str(step.get("capability_id") or "")
+                            existing.capability_id if existing is not None else str(step.get("capability_id") or "")
                         ),
-                        task_definition_version=(
-                            existing.task_definition_version if existing is not None else version
-                        ),
+                        task_definition_version=(existing.task_definition_version if existing is not None else version),
                         retry_policy=retry_policy,
-                        not_before=(
-                            existing.not_before
-                            if existing is not None
-                            else step.get("not_before")
-                        ),
-                        backoff=(
-                            existing.backoff
-                            if existing is not None
-                            else self._mission_task_backoff(step)
-                        ),
+                        not_before=(existing.not_before if existing is not None else step.get("not_before")),
+                        backoff=(existing.backoff if existing is not None else self._mission_task_backoff(step)),
                         provider_circuit_ref=(
                             existing.provider_circuit_ref
                             if existing is not None
@@ -507,9 +427,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                             existing.evaluated_snapshot_ref
                             if existing is not None
                             else str(
-                                step.get("evaluated_snapshot_ref")
-                                or step.get("evaluated_fact_snapshot_ref")
-                                or ""
+                                step.get("evaluated_snapshot_ref") or step.get("evaluated_fact_snapshot_ref") or ""
                             )
                         ),
                     )
@@ -527,9 +445,7 @@ class PipelineMissionMixin(PipelineMixinBase):
             records_by_id = {record.task_id: record for record in persisted.tasks}
             records = [records_by_id[record.task_id] for record in records]
             attempts_by_task_id = {
-                attempt.task_id: attempt
-                for attempt in persisted.attempts
-                if attempt.status == "blocked"
+                attempt.task_id: attempt for attempt in persisted.attempts if attempt.status == "blocked"
             }
             for record in records:
                 if record.status != "blocked":
@@ -538,9 +454,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                 attempt = attempts_by_task_id.get(record.task_id)
                 if attempt is not None and attempt.outcome is not None:
                     self.task_outcome_store.record(attempt.outcome)
-        return self._ordered_mission_plan(
-            task_ids=[record.task_id for record in records]
-        )
+        return self._ordered_mission_plan(task_ids=[record.task_id for record in records])
 
     def _mission_task_scope(self, step: dict[str, Any]) -> TaskScope:
         raw_scope = step.get("task_scope", step.get("scope"))
@@ -548,11 +462,7 @@ class PipelineMissionMixin(PipelineMixinBase):
             return raw_scope
         raw_entity_ids = step.get("entity_ids") or step.get("canonical_entity_ids")
         if raw_entity_ids:
-            values = (
-                (raw_entity_ids,)
-                if isinstance(raw_entity_ids, str)
-                else tuple(raw_entity_ids)
-            )
+            values = (raw_entity_ids,) if isinstance(raw_entity_ids, str) else tuple(raw_entity_ids)
             return TaskScope(
                 entity_ids=tuple(str(item) for item in values),
                 legacy_scope=self._legacy_scope_text(raw_scope),
@@ -566,23 +476,13 @@ class PipelineMissionMixin(PipelineMixinBase):
                 )
             except (TypeError, ValueError):
                 return TaskScope.from_legacy(legacy_scope)
-        if isinstance(raw_scope, dict) and (
-            raw_scope.get("entity_ids") or raw_scope.get("canonical_entity_ids")
-        ):
-            raw_ids = raw_scope.get("entity_ids") or raw_scope.get(
-                "canonical_entity_ids"
-            )
-            values = (
-                (raw_ids,)
-                if isinstance(raw_ids, str)
-                else tuple(raw_ids or ())
-            )
+        if isinstance(raw_scope, dict) and (raw_scope.get("entity_ids") or raw_scope.get("canonical_entity_ids")):
+            raw_ids = raw_scope.get("entity_ids") or raw_scope.get("canonical_entity_ids")
+            values = (raw_ids,) if isinstance(raw_ids, str) else tuple(raw_ids or ())
             return TaskScope(
                 entity_ids=tuple(str(item) for item in values),
                 legacy_scope=str(raw_scope.get("legacy_scope") or ""),
-                schema_version=str(
-                    raw_scope.get("schema_version") or TaskScope().schema_version
-                ),
+                schema_version=str(raw_scope.get("schema_version") or TaskScope().schema_version),
             )
         return TaskScope.from_legacy(self._legacy_scope_text(raw_scope))
 
@@ -620,11 +520,7 @@ class PipelineMissionMixin(PipelineMixinBase):
     def _mission_task_retry_policy(self) -> TaskRetryPolicy:
         from config import CFG
 
-        mission_config = (
-            ((CFG.get("strategy") or {}).get("mission") or {})
-            if isinstance(CFG, dict)
-            else {}
-        )
+        mission_config = ((CFG.get("strategy") or {}).get("mission") or {}) if isinstance(CFG, dict) else {}
         raw_budget = mission_config.get("task_retry_budget", 0)
         try:
             budget = int(raw_budget)
@@ -635,9 +531,7 @@ class PipelineMissionMixin(PipelineMixinBase):
             raw_classes = [raw_classes]
         return TaskRetryPolicy(
             retry_budget=budget,
-            retryable_error_classes=tuple(
-                RetryErrorClass(str(item)) for item in raw_classes
-            ),
+            retryable_error_classes=tuple(RetryErrorClass(str(item)) for item in raw_classes),
         )
 
     def _max_state_replans(self) -> int:
@@ -662,19 +556,14 @@ class PipelineMissionMixin(PipelineMixinBase):
         stage_gates = context.get("stage_gates") or {}
         fact_assessments = context.get("fact_assessments") or {}
         assessment_counts = (
-            fact_assessments.get("counts")
-            if isinstance(fact_assessments, dict)
-            else None
-        ) or context.get("fact_assessment_counts") or {}
+            (fact_assessments.get("counts") if isinstance(fact_assessments, dict) else None)
+            or context.get("fact_assessment_counts")
+            or {}
+        )
         payload = {
             "state": str(context.get("state") or "unknown"),
-            "next_required_capability": str(
-                context.get("next_required_capability") or ""
-            ),
-            "stage_gates": {
-                str(key): bool(value)
-                for key, value in sorted(stage_gates.items())
-            },
+            "next_required_capability": str(context.get("next_required_capability") or ""),
+            "stage_gates": {str(key): bool(value) for key, value in sorted(stage_gates.items())},
             "fact_assessment_counts": {
                 str(key): int(value)
                 for key, value in sorted(assessment_counts.items())
@@ -766,20 +655,15 @@ class PipelineMissionMixin(PipelineMixinBase):
         self.decision_trace.record(
             {
                 "event_id": (
-                    f"state-replan:{self.mission_id or scan_id}:"
-                    f"{self._state_replan_count}:{current_signature}"
+                    f"state-replan:{self.mission_id or scan_id}:{self._state_replan_count}:{current_signature}"
                 ),
                 "event_type": "state_replan_requested",
                 "mission_id": self.mission_id or "",
                 "scan_id": scan_id,
                 "candidates": ["continue_plan", "replan"],
                 "chosen_action": "replan",
-                "capability_ref": str(
-                    current_context.get("next_required_capability") or ""
-                ),
-                "supporting_fact_ids": (
-                    current_context.get("supporting_fact_ids") or []
-                ),
+                "capability_ref": str(current_context.get("next_required_capability") or ""),
+                "supporting_fact_ids": (current_context.get("supporting_fact_ids") or []),
                 "expected_outcome": {
                     "max_state_replans": maximum,
                     "remaining": maximum - self._state_replan_count,
@@ -813,21 +697,14 @@ class PipelineMissionMixin(PipelineMixinBase):
                 record.task_id
                 for record in records
                 if record.status in {"pending", "interrupted"}
-                and (
-                    record.not_before is None
-                    or record.not_before <= now
-                )
+                and (record.not_before is None or record.not_before <= now)
             }
         elif task_ids is not None:
             requested_ids = set(task_ids)
             selected = {
                 record.task_id
                 for record in records
-                if record.task_id in requested_ids
-                and (
-                    record.not_before is None
-                    or record.not_before <= now
-                )
+                if record.task_id in requested_ids and (record.not_before is None or record.not_before <= now)
             }
         else:
             assert task_names is not None
@@ -835,11 +712,7 @@ class PipelineMissionMixin(PipelineMixinBase):
             selected = {
                 record.task_id
                 for record in records
-                if record.task in requested
-                and (
-                    record.not_before is None
-                    or record.not_before <= now
-                )
+                if record.task in requested and (record.not_before is None or record.not_before <= now)
             }
         # A task with live prerequisite work is deferred to a later durable
         # drain pass.  Terminally unsatisfied prerequisites remain selected so
@@ -856,10 +729,7 @@ class PipelineMissionMixin(PipelineMixinBase):
         }
         order = {record.task_id: index for index, record in enumerate(records)}
         indegree = {
-            task_id: sum(
-                1 for dependency_id in by_id[task_id].depends_on
-                if dependency_id in selected
-            )
+            task_id: sum(1 for dependency_id in by_id[task_id].depends_on if dependency_id in selected)
             for task_id in selected
         }
         dependents: dict[str, list[str]] = {task_id: [] for task_id in selected}
@@ -904,9 +774,7 @@ class PipelineMissionMixin(PipelineMixinBase):
         deferred = [
             record.not_before
             for record in self.mission_store.snapshot(self.mission_id).tasks
-            if record.status in {"pending", "interrupted"}
-            and record.not_before is not None
-            and record.not_before > now
+            if record.status in {"pending", "interrupted"} and record.not_before is not None and record.not_before > now
         ]
         return min(deferred) if deferred else None
 
@@ -915,11 +783,7 @@ class PipelineMissionMixin(PipelineMixinBase):
         task_id = str(step.get("task_id") or "")
         if self.mission_id and task_id:
             record = next(
-                (
-                    item
-                    for item in self.mission_store.snapshot(self.mission_id).tasks
-                    if item.task_id == task_id
-                ),
+                (item for item in self.mission_store.snapshot(self.mission_id).tasks if item.task_id == task_id),
                 None,
             )
             if record is not None:
@@ -978,7 +842,8 @@ class PipelineMissionMixin(PipelineMixinBase):
         persisted = self.mission_store.snapshot(self.mission_id)
         attempt = next(
             (
-                item for item in reversed(persisted.attempts)
+                item
+                for item in reversed(persisted.attempts)
                 if item.task_id == blocked.task_id and item.status == "blocked"
             ),
             None,
@@ -1008,9 +873,7 @@ class PipelineMissionMixin(PipelineMixinBase):
                 # A legacy name-only completion marker cannot identify which
                 # typed scope it intended to terminalize.
                 continue
-            record = by_id.get(task_id) if task_id else (
-                same_name_records[0] if len(same_name_records) == 1 else None
-            )
+            record = by_id.get(task_id) if task_id else (same_name_records[0] if len(same_name_records) == 1 else None)
             if record is None or record.status not in {"pending", "interrupted"}:
                 continue
             if task in self.blocked_tasks:
@@ -1053,14 +916,9 @@ class PipelineMissionMixin(PipelineMixinBase):
                 scope=scope,
             )
         except TaskDependenciesIncomplete as exc:
-            if all(
-                status in {"pending", "running", "interrupted"}
-                for _, status in exc.incomplete
-            ):
+            if all(status in {"pending", "running", "interrupted"} for _, status in exc.incomplete):
                 return None
-            details = ",".join(
-                f"{task_id}:{status}" for task_id, status in exc.incomplete
-            )
+            details = ",".join(f"{task_id}:{status}" for task_id, status in exc.incomplete)
             return self._block_registered_task(
                 agent,
                 task,
@@ -1086,20 +944,20 @@ class PipelineMissionMixin(PipelineMixinBase):
         if self.mission_id and not self._mission_was_completed:
             interrupted = self.mission_store.interrupt_mission(self.mission_id, reason)
             if self._mission_was_resumed:
-                self.decision_trace.record({
-                    "event_id": (
-                        f"resume-outcome:{self.mission_id}:{interrupted.run_count}"
-                    ),
-                    "event_type": "mission_resume_outcome",
-                    "mission_id": self.mission_id,
-                    "scan_id": self._current_scan_id,
-                    "expected_outcome": {"status": "succeeded"},
-                    "actual_outcome": {
-                        "status": "interrupted",
-                        "reason": reason,
-                    },
-                    "state_transition": {"from": "running", "to": "interrupted"},
-                })
+                self.decision_trace.record(
+                    {
+                        "event_id": (f"resume-outcome:{self.mission_id}:{interrupted.run_count}"),
+                        "event_type": "mission_resume_outcome",
+                        "mission_id": self.mission_id,
+                        "scan_id": self._current_scan_id,
+                        "expected_outcome": {"status": "succeeded"},
+                        "actual_outcome": {
+                            "status": "interrupted",
+                            "reason": reason,
+                        },
+                        "state_transition": {"from": "running", "to": "interrupted"},
+                    }
+                )
         self._active_task_attempt_id = None
         self._active_task_id = None
         self._active_task_name = ""
@@ -1110,18 +968,20 @@ class PipelineMissionMixin(PipelineMixinBase):
         if self.mission_id and not self._mission_was_completed:
             completed = self.mission_store.complete_mission(self.mission_id, reason)
             if self._mission_was_resumed:
-                self.decision_trace.record({
-                    "event_id": f"resume-outcome:{self.mission_id}:{completed.run_count}",
-                    "event_type": "mission_resume_outcome",
-                    "mission_id": self.mission_id,
-                    "scan_id": self._current_scan_id,
-                    "expected_outcome": {"status": "succeeded"},
-                    "actual_outcome": {
-                        "status": "succeeded",
-                        "reason": reason,
-                    },
-                    "state_transition": {"from": "running", "to": "completed"},
-                })
+                self.decision_trace.record(
+                    {
+                        "event_id": f"resume-outcome:{self.mission_id}:{completed.run_count}",
+                        "event_type": "mission_resume_outcome",
+                        "mission_id": self.mission_id,
+                        "scan_id": self._current_scan_id,
+                        "expected_outcome": {"status": "succeeded"},
+                        "actual_outcome": {
+                            "status": "succeeded",
+                            "reason": reason,
+                        },
+                        "state_transition": {"from": "running", "to": "completed"},
+                    }
+                )
             self._mission_was_completed = True
         self._active_task_attempt_id = None
         self._active_task_id = None

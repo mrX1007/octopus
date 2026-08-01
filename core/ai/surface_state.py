@@ -45,9 +45,7 @@ class SurfaceState:
     }
 
     def __init__(self, facts: Iterable[dict[str, Any]]):
-        self.facts = [
-            fact for fact in (facts or []) if fact_is_decision_usable(fact)
-        ]
+        self.facts = [fact for fact in (facts or []) if fact_is_decision_usable(fact)]
 
     def to_dict(self) -> dict[str, str]:
         return {surface: self.state(surface) for surface in self.SURFACES}

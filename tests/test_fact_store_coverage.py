@@ -321,10 +321,7 @@ def test_existing_database_reopens_with_legacy_observation_trust_migration(
     migrated = FactStore(str(db_path))
     fact = migrated.get_facts("scan", "host")[0]
     with sqlite3.connect(db_path) as conn:
-        columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(fact_observations)").fetchall()
-        }
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(fact_observations)").fetchall()}
 
     assert "trust_level" in columns
     assert fact["trust_level"] == "trusted"

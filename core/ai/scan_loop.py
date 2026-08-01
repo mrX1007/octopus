@@ -475,9 +475,7 @@ class ScanLifecycle:
                             policy_requirements,
                             "AnalysisAgent",
                         )
-                        verify_res = pipeline.verification_agent.verify_hypothesis(
-                            scan_id, target, claim
-                        )
+                        verify_res = pipeline.verification_agent.verify_hypothesis(scan_id, target, claim)
                         print(f"         Status: {verify_res.get('status')} - {verify_res.get('reason')}")
                         if verify_res.get("status") == "accepted":
                             accepted_count += 1

@@ -32,9 +32,7 @@ def fact_is_decision_usable(fact: Mapping[str, Any]) -> bool:
 
     assessment = fact.get("assessment")
     assessment = assessment if isinstance(assessment, Mapping) else {}
-    assessment_status = str(
-        assessment.get("status") or fact.get("assessment_status") or "observed"
-    ).strip().casefold()
+    assessment_status = str(assessment.get("status") or fact.get("assessment_status") or "observed").strip().casefold()
     freshness_status = str(fact.get("freshness_status") or "").strip().casefold()
     coverage_status = str(fact.get("coverage_status") or "").strip().casefold()
     return (
@@ -70,20 +68,12 @@ class EvaluatedFact:
             fact_id = None
         return cls(
             fact_id=fact_id,
-            assessment_id=str(
-                assessment.get("assessment_id") or payload.get("assessment_id") or ""
-            ),
-            assessment_status=str(
-                assessment.get("status")
-                or payload.get("assessment_status")
-                or "observed"
-            ).strip().casefold(),
-            freshness_status=str(payload.get("freshness_status") or "unknown")
+            assessment_id=str(assessment.get("assessment_id") or payload.get("assessment_id") or ""),
+            assessment_status=str(assessment.get("status") or payload.get("assessment_status") or "observed")
             .strip()
             .casefold(),
-            coverage_status=str(payload.get("coverage_status") or "unknown")
-            .strip()
-            .casefold(),
+            freshness_status=str(payload.get("freshness_status") or "unknown").strip().casefold(),
+            coverage_status=str(payload.get("coverage_status") or "unknown").strip().casefold(),
             trust_level=fact_trust_level(payload),
             decision_usable=fact_is_decision_usable(payload),
             payload_json=json.dumps(
@@ -124,11 +114,7 @@ class EvaluatedFactSnapshot:
         *,
         evaluated_at: float | None = None,
     ) -> EvaluatedFactSnapshot:
-        fact_items = tuple(
-            EvaluatedFact.from_mapping(item)
-            for item in facts
-            if isinstance(item, Mapping)
-        )
+        fact_items = tuple(EvaluatedFact.from_mapping(item) for item in facts if isinstance(item, Mapping))
         fact_dicts = tuple(item.to_dict() for item in fact_items)
         scope_items = (scope,) if isinstance(scope, str) else tuple(scope)
         canonical_scope = canonicalize_scope_values(scope_items)
@@ -141,9 +127,7 @@ class EvaluatedFactSnapshot:
             if timestamp is not None:
                 evaluation_times.append(timestamp)
         snapshot_time = float(
-            evaluated_at
-            if evaluated_at is not None
-            else (max(evaluation_times) if evaluation_times else time.time())
+            evaluated_at if evaluated_at is not None else (max(evaluation_times) if evaluation_times else time.time())
         )
         policy_versions = {
             str((fact.get("freshness") or {}).get("policy_version") or "").strip()
@@ -152,9 +136,7 @@ class EvaluatedFactSnapshot:
         }
         policy_versions.discard("")
         freshness_policy_version = (
-            next(iter(policy_versions))
-            if len(policy_versions) == 1
-            else ("mixed" if policy_versions else "unknown")
+            next(iter(policy_versions)) if len(policy_versions) == 1 else ("mixed" if policy_versions else "unknown")
         )
         coverage_states = {item.coverage_status for item in fact_items}
         if "degraded" in coverage_states:
@@ -171,17 +153,13 @@ class EvaluatedFactSnapshot:
             assessment = fact.get("assessment")
             assessment = assessment if isinstance(assessment, Mapping) else {}
             execution_ids.update(
-                str(item).strip()
-                for item in assessment.get("source_execution_ids") or ()
-                if str(item).strip()
+                str(item).strip() for item in assessment.get("source_execution_ids") or () if str(item).strip()
             )
             observation_provenance = False
             for observation in fact.get("observations") or ():
                 if not isinstance(observation, Mapping):
                     continue
-                identity = _provenance_token(
-                    observation.get("source_identity")
-                ) or _source_identity(
+                identity = _provenance_token(observation.get("source_identity")) or _source_identity(
                     observation.get("source")
                 )
                 method = _provenance_token(observation.get("observation_method"))
@@ -291,9 +269,7 @@ class EvaluatedFactSnapshot:
             raise ValueError("evaluated fact snapshot payload must be an object")
         schema_version = str(payload.get("schema_version") or "")
         if schema_version != EVALUATED_FACT_SNAPSHOT_SCHEMA_VERSION:
-            raise ValueError(
-                f"unsupported evaluated fact snapshot schema: {schema_version!r}"
-            )
+            raise ValueError(f"unsupported evaluated fact snapshot schema: {schema_version!r}")
         scope = payload.get("canonical_scope")
         facts = payload.get("facts")
         if not isinstance(scope, (list, tuple)) or not isinstance(facts, (list, tuple)):

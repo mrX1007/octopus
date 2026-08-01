@@ -110,6 +110,7 @@ def test_ffuf_uses_configured_flags_and_limits(monkeypatch):
             else {}
         ),
     )
+
     class FakeSession:
         def __init__(self):
             self.trust_env = True
@@ -306,6 +307,7 @@ def test_scrapling_crawl_caps_pages_and_uses_requests_timeout_when_stealth_is_of
         },
     )
     monkeypatch.setattr(recon_tools, "_SCRAPLING_OK", True)
+
     class FakeSession:
         def __init__(self):
             self.trust_env = True

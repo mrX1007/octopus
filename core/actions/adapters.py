@@ -102,16 +102,10 @@ def bind_provider_handle(
     peer = _trusted_handle_peer(handle)
     if not peer:
         raise ValueError("provider_handle_peer_unresolved")
-    parsed = urlparse(
-        requested_target if "://" in requested_target else f"//{requested_target}"
-    )
+    parsed = urlparse(requested_target if "://" in requested_target else f"//{requested_target}")
     host = parsed.hostname or ""
     try:
-        resolved = {
-            str(item[4][0])
-            for item in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-            if item[4]
-        }
+        resolved = {str(item[4][0]) for item in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM) if item[4]}
     except socket.gaierror as exc:
         raise ValueError("provider_handle_target_unresolved") from exc
     if peer not in resolved:
@@ -417,9 +411,7 @@ class ExploitBaseAdapter(ActionAdapter):
         return self.registered_invocation(command, policy_name)
 
     def check(self, request: ActionRequest) -> ActionCheckResult:
-        normalized = self.exploit.normalize_check_result(
-            self.exploit.check_vulnerable(self._validated_handle(request))
-        )
+        normalized = self.exploit.normalize_check_result(self.exploit.check_vulnerable(self._validated_handle(request)))
         return ActionCheckResult(
             result=normalized,
             applicable=bool(normalized.success),
@@ -427,9 +419,7 @@ class ExploitBaseAdapter(ActionAdapter):
         )
 
     def execute(self, request: ActionRequest) -> Any:
-        return self.exploit.normalize_run_result(
-            self.exploit.run(self._validated_handle(request))
-        )
+        return self.exploit.normalize_run_result(self.exploit.run(self._validated_handle(request)))
 
 
 class MetasploitActionAdapter(ActionAdapter):
@@ -495,9 +485,7 @@ class MetasploitActionAdapter(ActionAdapter):
     def invocation(self, request: ActionRequest, phase: str):
         policy_name = "msf_check" if phase == "check" else "msf_run"
         options = shlex.split(self._options(request), posix=True)
-        command = shlex.join(
-            (policy_name, request.target, self.module, *options)
-        )
+        command = shlex.join((policy_name, request.target, self.module, *options))
         return self.registered_invocation(command, policy_name)
 
     def check(self, request: ActionRequest) -> ActionCheckResult:

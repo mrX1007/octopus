@@ -128,7 +128,16 @@ class AssetGraph:
         port, proto, service, banner = match.groups()
         service_id = f"{host}:{port}/{proto.lower()}"
         self._node("host", host, state="confirmed_present")
-        self._node("service", service_id, host=host, port=int(port), proto=proto.lower(), service=service.lower(), banner=banner or "", scope=scope)
+        self._node(
+            "service",
+            service_id,
+            host=host,
+            port=int(port),
+            proto=proto.lower(),
+            service=service.lower(),
+            banner=banner or "",
+            scope=scope,
+        )
         self._edge(host, service_id, "listens_on")
 
     def _add_asset_service(self, value: str) -> None:
@@ -138,7 +147,15 @@ class AssetGraph:
         host, port, proto = match.groups()
         service_id = f"{host}:{port}/{proto.lower()}"
         self._node("host", host, state="confirmed_present")
-        self._node("service", service_id, host=host, port=int(port), proto=proto.lower(), service="unknown", scope="asset_inventory")
+        self._node(
+            "service",
+            service_id,
+            host=host,
+            port=int(port),
+            proto=proto.lower(),
+            service="unknown",
+            scope="asset_inventory",
+        )
         self._edge(host, service_id, "owns_service")
 
     def _add_dns_record(self, value: str) -> None:
@@ -262,9 +279,7 @@ class AssetGraph:
         return {
             "fact_ids": [int(fact_id)] if fact_id is not None else [],
             "assessment_refs": [str(assessment_id)] if assessment_id else [],
-            "assessment_status": str(
-                assessment.get("status") or fact.get("assessment_status") or "observed"
-            ),
+            "assessment_status": str(assessment.get("status") or fact.get("assessment_status") or "observed"),
             "evidence_fact_ids": list(assessment.get("evidence_fact_ids") or []),
             "source_execution_ids": list(assessment.get("source_execution_ids") or []),
         }

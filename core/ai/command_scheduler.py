@@ -169,7 +169,9 @@ class CommandScheduler:
                 if value not in {"tool_timeout:nuclei", "tool_timeout:nuclei_safe"}:
                     continue
                 sources = [str(fact.get("source", ""))]
-                sources.extend(str(item.get("source", "")) for item in fact.get("observations", []) if isinstance(item, dict))
+                sources.extend(
+                    str(item.get("source", "")) for item in fact.get("observations", []) if isinstance(item, dict)
+                )
                 if any(endpoint_l in source.lower().rstrip("/") for source in sources):
                     return "already_degraded:nuclei_timeout"
 
@@ -184,7 +186,9 @@ class CommandScheduler:
                 if value != "tool_timeout:nikto":
                     continue
                 sources = [str(fact.get("source", ""))]
-                sources.extend(str(item.get("source", "")) for item in fact.get("observations", []) if isinstance(item, dict))
+                sources.extend(
+                    str(item.get("source", "")) for item in fact.get("observations", []) if isinstance(item, dict)
+                )
                 if any(endpoint_l in source.lower().rstrip("/") for source in sources):
                     return "already_degraded:nikto_timeout"
 
@@ -196,16 +200,33 @@ class CommandScheduler:
                 if str(fact.get("value", "")).lower() != "sqlmap_no_get_parameters_found":
                     continue
                 sources = [str(fact.get("source", ""))]
-                sources.extend(str(item.get("source", "")) for item in fact.get("observations", []) if isinstance(item, dict))
+                sources.extend(
+                    str(item.get("source", "")) for item in fact.get("observations", []) if isinstance(item, dict)
+                )
                 if any(endpoint_l in source.lower().rstrip("/") for source in sources):
                     return "already_checked:sqlmap_no_input_surface"
 
-        if tool in {
-            "ffuf", "scrapling_crawl", "scrapling", "browser_surface_analysis",
-            "curl_headers", "security_headers_check", "cors_check", "nuclei_safe",
-            "nuclei", "katana_crawl", "wpscan", "sqlmap", "nikto",
-            "graphql_check", "api_auth_check",
-        } and canonical:
+        if (
+            tool
+            in {
+                "ffuf",
+                "scrapling_crawl",
+                "scrapling",
+                "browser_surface_analysis",
+                "curl_headers",
+                "security_headers_check",
+                "cors_check",
+                "nuclei_safe",
+                "nuclei",
+                "katana_crawl",
+                "wpscan",
+                "sqlmap",
+                "nikto",
+                "graphql_check",
+                "api_auth_check",
+            }
+            and canonical
+        ):
             for fact in facts:
                 if str(fact.get("type", "")) != "service_status":
                     continue
@@ -250,9 +271,20 @@ class CommandScheduler:
     def _extract_nuclei_target(self, parts: list[str]) -> str:
         target_flags = {"-u", "-url", "-target"}
         value_flags = {
-            "-severity", "-exclude-tags", "-tags", "-t", "-templates",
-            "-timeout", "-retries", "-rl", "-rate-limit", "-c", "-bs",
-            "-headless-bulk-size", "-page-timeout", "-proxy",
+            "-severity",
+            "-exclude-tags",
+            "-tags",
+            "-t",
+            "-templates",
+            "-timeout",
+            "-retries",
+            "-rl",
+            "-rate-limit",
+            "-c",
+            "-bs",
+            "-headless-bulk-size",
+            "-page-timeout",
+            "-proxy",
         }
         skip_next = False
         for idx, part in enumerate(parts[1:], start=1):
@@ -283,8 +315,10 @@ class CommandScheduler:
             return raw
         path = parsed.path or "/"
         netloc = parsed.hostname.lower()
-        if parsed.port and not ((parsed.scheme.lower() == "http" and parsed.port == 80)
-                                or (parsed.scheme.lower() == "https" and parsed.port == 443)):
+        if parsed.port and not (
+            (parsed.scheme.lower() == "http" and parsed.port == 80)
+            or (parsed.scheme.lower() == "https" and parsed.port == 443)
+        ):
             netloc = f"{netloc}:{parsed.port}"
         return urlunparse((parsed.scheme.lower(), netloc, path, "", parsed.query, "")).rstrip("/")
 

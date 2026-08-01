@@ -37,9 +37,7 @@ class PipelineFollowupsMixin(PipelineMixinBase):
             "facts": result_facts,
         }
 
-    def _controlled_post_access_commands_from_facts(
-        self, target: str, facts: list[dict[str, Any]]
-    ) -> list[str]:
+    def _controlled_post_access_commands_from_facts(self, target: str, facts: list[dict[str, Any]]) -> list[str]:
         """Run read-only SSH inventory once after confirmed SSH authentication."""
         from core.ai.followups import PostAccessFollowupRules
 
@@ -47,9 +45,7 @@ class PipelineFollowupsMixin(PipelineMixinBase):
         # proposal owner. Cached credentials are intentionally insufficient on
         # this controlled, post-verification path.
         enabled = self._auto_ssh_inventory_enabled()
-        confirmed_facts = (
-            facts if enabled and self._facts_confirm_ssh_access(facts) else []
-        )
+        confirmed_facts = facts if enabled and self._facts_confirm_ssh_access(facts) else []
         proposals = PostAccessFollowupRules().propose(
             target,
             confirmed_facts,

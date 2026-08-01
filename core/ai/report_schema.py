@@ -68,9 +68,7 @@ _MISCONFIGURATION_TYPES = frozenset(
         "web_security_note",
     }
 )
-_ATTEMPT_TYPES = frozenset(
-    {"active_command", "exploit_attempted", "verification_command"}
-)
+_ATTEMPT_TYPES = frozenset({"active_command", "exploit_attempted", "verification_command"})
 _INTERNAL_FACT_TYPES = frozenset(
     {
         "check_result",
@@ -81,9 +79,7 @@ _INTERNAL_FACT_TYPES = frozenset(
         "payload_recommendation",
     }
 )
-_DEGRADED_STATUSES = frozenset(
-    {"blocked", "cancelled", "failed", "partial", "timeout", "unavailable"}
-)
+_DEGRADED_STATUSES = frozenset({"blocked", "cancelled", "failed", "partial", "timeout", "unavailable"})
 
 RedactCallable = Callable[[Any], Any]
 
@@ -115,13 +111,9 @@ def build_evidence_report(
     fact_list = [dict(item) for item in facts if isinstance(item, Mapping)]
     evidence = _canonical_evidence_index(fact_list, evidence_index)
     evidence_by_fact = {
-        _positive_int(item.get("fact_id")): item
-        for item in evidence
-        if _positive_int(item.get("fact_id")) is not None
+        _positive_int(item.get("fact_id")): item for item in evidence if _positive_int(item.get("fact_id")) is not None
     }
-    raw_sections: dict[str, list[dict[str, Any]]] = {
-        name: [] for name in EVIDENCE_REPORT_SECTION_ORDER
-    }
+    raw_sections: dict[str, list[dict[str, Any]]] = {name: [] for name in EVIDENCE_REPORT_SECTION_ORDER}
     seen: dict[str, set[str]] = {name: set() for name in EVIDENCE_REPORT_SECTION_ORDER}
     verified_access: list[dict[str, Any]] = []
 
@@ -235,16 +227,12 @@ def build_evidence_report(
         "scan_id": _text(scan_id, 512),
         "target": _text(target, 2_048),
         "section_item_ids": {
-            name: [item["item_id"] for item in sections[name]]
-            for name in EVIDENCE_REPORT_SECTION_ORDER
+            name: [item["item_id"] for item in sections[name]] for name in EVIDENCE_REPORT_SECTION_ORDER
         },
     }
     report_id = _stable_id("evidence-report", report_identity)
     verified_items = [
-        item
-        for name in EVIDENCE_REPORT_SECTION_ORDER
-        for item in sections[name]
-        if item.get("status") == "verified"
+        item for name in EVIDENCE_REPORT_SECTION_ORDER for item in sections[name] if item.get("status") == "verified"
     ]
     complete_verified = [item for item in verified_items if _item_evidence_complete(item)]
     bounded_evidence = evidence[:_MAX_EVIDENCE_ITEMS]
@@ -262,9 +250,7 @@ def build_evidence_report(
             "verified_items": len(verified_items),
             "evidence_complete_verified_items": len(complete_verified),
             "evidence_completeness": (
-                round(len(complete_verified) / len(verified_items), 6)
-                if verified_items
-                else 1.0
+                round(len(complete_verified) / len(verified_items), 6) if verified_items else 1.0
             ),
             "evidence_records": len(bounded_evidence),
         },
@@ -345,8 +331,7 @@ def _canonical_evidence_index(
                 "assessment_reason": _text(assessment.get("reason"), _MAX_TEXT_BYTES),
                 "trust_level": _text(fact.get("trust_level") or "trusted", 64),
                 "source_execution_ids": _refs(
-                    assessment.get("source_execution_ids")
-                    or fact.get("source_execution_ids")
+                    assessment.get("source_execution_ids") or fact.get("source_execution_ids")
                 ),
             }
         )
@@ -362,9 +347,7 @@ def _fact_item(
     assessment = _assessment(fact)
     chain = _evidence_chain(fact, evidence_by_fact)
     status = _assessment_status(fact)
-    source_execution_ids = _refs(
-        assessment.get("source_execution_ids") or fact.get("source_execution_ids")
-    )
+    source_execution_ids = _refs(assessment.get("source_execution_ids") or fact.get("source_execution_ids"))
     reasons = _refs(
         [assessment.get("reason") or fact.get("assessment_reason")],
         text_limit=_MAX_TEXT_BYTES,
@@ -400,10 +383,7 @@ def _fact_item(
         "source_execution_ids": source_execution_ids,
         "assessment_refs": assessment_refs,
         "assessment_reasons": reasons,
-        "sources": _refs(
-            fact.get("sources")
-            or ([fact.get("source")] if fact.get("source") else [])
-        ),
+        "sources": _refs(fact.get("sources") or ([fact.get("source")] if fact.get("source") else [])),
         "timestamp": _number(fact.get("timestamp")),
     }
 
@@ -417,30 +397,17 @@ def _access_item(
     # root severity.  Severity is derived again from the exact supporting facts
     # that passed the report-verification boundary.
     root = any(_is_root_access_fact(fact) for fact in facts)
-    fact_items = [
-        _fact_item("access_findings", fact, evidence_by_fact) for fact in facts
-    ]
-    chain = _dedupe_dicts(
-        link for item in fact_items for link in item["evidence_chain"]
-    )[:_MAX_CHAIN_ITEMS]
-    source_ids = _refs(
-        value for item in fact_items for value in item["source_execution_ids"]
-    )
-    assessment_refs = _refs(
-        value for item in fact_items for value in item["assessment_refs"]
-    )
+    fact_items = [_fact_item("access_findings", fact, evidence_by_fact) for fact in facts]
+    chain = _dedupe_dicts(link for item in fact_items for link in item["evidence_chain"])[:_MAX_CHAIN_ITEMS]
+    source_ids = _refs(value for item in fact_items for value in item["source_execution_ids"])
+    assessment_refs = _refs(value for item in fact_items for value in item["assessment_refs"])
     reasons = _refs(
         (value for item in fact_items for value in item["assessment_reasons"]),
         text_limit=_MAX_TEXT_BYTES,
     )
-    fact_ids = sorted(
-        {
-            fact_id
-            for item in fact_items
-            for fact_id in item["fact_ids"]
-            if fact_id is not None
-        }
-    )[:_MAX_REFS]
+    fact_ids = sorted({fact_id for item in fact_items for fact_id in item["fact_ids"] if fact_id is not None})[
+        :_MAX_REFS
+    ]
     return {
         "item_id": _stable_id("access_findings", {"root": root, "facts": fact_ids}),
         "kind": "root_access" if root else "authenticated_access",
@@ -481,9 +448,7 @@ def _hypothesis_item(hypothesis: Mapping[str, Any]) -> dict[str, Any]:
         "source_execution_ids": [],
         "assessment_refs": [],
         "assessment_reasons": [],
-        "required_evidence": _refs(
-            hypothesis.get("required_evidence") or [], text_limit=_MAX_TEXT_BYTES
-        ),
+        "required_evidence": _refs(hypothesis.get("required_evidence") or [], text_limit=_MAX_TEXT_BYTES),
         "sources": _refs([hypothesis.get("source")]),
         "timestamp": _number(hypothesis.get("timestamp")),
     }
@@ -502,10 +467,7 @@ def _add_coverage_items(
     for candidate in candidates:
         payload = dict(candidate) if isinstance(candidate, Mapping) else {"status": candidate}
         detail = _text(
-            payload.get("reason")
-            or payload.get("status")
-            or payload.get("gap")
-            or payload,
+            payload.get("reason") or payload.get("status") or payload.get("gap") or payload,
             _MAX_TEXT_BYTES,
         )
         item = _operational_item(
@@ -602,22 +564,17 @@ def _add_action_report_items(
             result = report.get("execution_result") or {}
             verification_result = report.get("verification_result") or {}
             item["source_execution_ids"] = _refs(
-                verification_result.get("source_execution_ids")
-                or [result.get("execution_id")]
+                verification_result.get("source_execution_ids") or [result.get("execution_id")]
             )
             item["assessment_refs"] = _refs(verification_result.get("assessment_refs") or [])
-            item["assessment_reasons"] = _refs(
-                [verification_result.get("reason")], text_limit=_MAX_TEXT_BYTES
-            )
+            item["assessment_reasons"] = _refs([verification_result.get("reason")], text_limit=_MAX_TEXT_BYTES)
             item["evidence_chain"] = [
                 {
                     "evidence_ref": f"evidence://fact/{fact_id}",
                     "fact_id": fact_id,
                     "relation": "verification",
                 }
-                for fact_id in _positive_ints(
-                    verification_result.get("evidence_fact_ids") or []
-                )[:_MAX_CHAIN_ITEMS]
+                for fact_id in _positive_ints(verification_result.get("evidence_fact_ids") or [])[:_MAX_CHAIN_ITEMS]
             ]
             _append(sections, seen, "attempted_unverified", item)
         cleanup = _text(lifecycle.get("cleanup"), 128).lower()
@@ -688,9 +645,7 @@ def _evidence_chain(
 ) -> list[dict[str, Any]]:
     assessment = _assessment(fact)
     subject_id = _positive_int(fact.get("id"))
-    supporting = _positive_ints(
-        assessment.get("evidence_fact_ids") or fact.get("derived_from") or []
-    )
+    supporting = _positive_ints(assessment.get("evidence_fact_ids") or fact.get("derived_from") or [])
     ordered = _positive_ints([subject_id, *supporting])
     chain = []
     for fact_id in ordered[:_MAX_CHAIN_ITEMS]:
@@ -765,10 +720,13 @@ def _is_access_fact(fact_type: str, fact: Mapping[str, Any]) -> bool:
             "root_access_confirmed",
         }
     if fact_type == "credential":
-        return re.fullmatch(
-            r"ssh_login_success:[^\s@:]+(?:@[^\s:]+(?::\d{1,5})?)?",
-            value,
-        ) is not None
+        return (
+            re.fullmatch(
+                r"ssh_login_success:[^\s@:]+(?:@[^\s:]+(?::\d{1,5})?)?",
+                value,
+            )
+            is not None
+        )
     if fact_type == "service_status":
         return value == "ssh_authenticated"
     return False
@@ -782,10 +740,13 @@ def _is_root_access_fact(fact: Mapping[str, Any]) -> bool:
     if fact_type == "verified_access":
         return value == "root_access_confirmed"
     if fact_type == "credential":
-        return re.fullmatch(
-            r"ssh_login_success:root(?:@[^\s:]+(?::\d{1,5})?)?",
-            value,
-        ) is not None
+        return (
+            re.fullmatch(
+                r"ssh_login_success:root(?:@[^\s:]+(?::\d{1,5})?)?",
+                value,
+            )
+            is not None
+        )
     return False
 
 
@@ -845,11 +806,7 @@ def _severity(fact: Mapping[str, Any]) -> str:
 
 
 def _item_evidence_complete(item: Mapping[str, Any]) -> bool:
-    return bool(
-        item.get("evidence_chain")
-        and item.get("source_execution_ids")
-        and item.get("assessment_reasons")
-    )
+    return bool(item.get("evidence_chain") and item.get("source_execution_ids") and item.get("assessment_reasons"))
 
 
 def _append(
@@ -870,9 +827,7 @@ def _item_sort_key(item: Mapping[str, Any]) -> tuple[float, str]:
 
 
 def _stable_id(namespace: str, payload: Any) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode(
-        "utf-8", "replace"
-    )
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8", "replace")
     return f"{namespace}://sha256/{hashlib.sha256(encoded).hexdigest()}"
 
 
@@ -941,11 +896,7 @@ def _number(value: Any) -> float:
 def _text(value: Any, max_bytes: int) -> str:
     if value is None:
         return ""
-    raw = (
-        json.dumps(value, sort_keys=True, default=str)
-        if isinstance(value, (dict, list, tuple))
-        else str(value)
-    )
+    raw = json.dumps(value, sort_keys=True, default=str) if isinstance(value, (dict, list, tuple)) else str(value)
     encoded = raw.encode("utf-8", "replace")
     if len(encoded) <= max_bytes:
         return raw

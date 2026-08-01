@@ -716,11 +716,7 @@ class AIPipeline(
                     if snapshot.scan_id != str(scan_id):
                         raise RuntimeError("active task snapshot belongs to a different scan")
                     return list(snapshot.decision_facts())
-        return [
-            fact
-            for fact in self.fact_store.get_facts(scan_id, target)
-            if fact_is_decision_usable(fact)
-        ]
+        return [fact for fact in self.fact_store.get_facts(scan_id, target) if fact_is_decision_usable(fact)]
 
     def _execute_runtime_compatibly(
         self,
@@ -1000,21 +996,9 @@ class AIPipeline(
             confidence=safe_fact.get("confidence", 100),
             session_id=safe_fact.get("session_id", "none"),
             source_execution_ids=source_execution_ids,
-            source_identity=(
-                str(safe_fact["source_identity"])
-                if safe_fact.get("source_identity")
-                else None
-            ),
-            observation_method=(
-                str(safe_fact["observation_method"])
-                if safe_fact.get("observation_method")
-                else None
-            ),
-            trust_level=(
-                str(safe_fact["trust_level"])
-                if safe_fact.get("trust_level")
-                else None
-            ),
+            source_identity=(str(safe_fact["source_identity"]) if safe_fact.get("source_identity") else None),
+            observation_method=(str(safe_fact["observation_method"]) if safe_fact.get("observation_method") else None),
+            trust_level=(str(safe_fact["trust_level"]) if safe_fact.get("trust_level") else None),
             completion_claim=completion_claim,
         )
         new_facts = 1 if created else 0
@@ -1037,14 +1021,8 @@ class AIPipeline(
                     else None
                 ),
                 observation_method=(
-                    str(
-                        derived.get("observation_method")
-                        or safe_fact.get("observation_method")
-                    )
-                    if (
-                        derived.get("observation_method")
-                        or safe_fact.get("observation_method")
-                    )
+                    str(derived.get("observation_method") or safe_fact.get("observation_method"))
+                    if (derived.get("observation_method") or safe_fact.get("observation_method"))
                     else None
                 ),
                 trust_level=(

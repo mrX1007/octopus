@@ -5,6 +5,7 @@ import pytest
 
 pytestmark = pytest.mark.replay
 
+
 def test_replay_outputs_builds_target_model_and_snapshot_actions():
     import uuid
 
@@ -15,19 +16,22 @@ def test_replay_outputs_builds_target_model_and_snapshot_actions():
     scan_id = "scan-replay"
     target = "10.0.0.5"
 
-    result = pipeline.replay_outputs(scan_id, target, [
-        {
-            "tool": "nmap",
-            "output": """
+    result = pipeline.replay_outputs(
+        scan_id,
+        target,
+        [
+            {
+                "tool": "nmap",
+                "output": """
 Nmap scan report for 10.0.0.5
 PORT      STATE SERVICE VERSION
 43117/tcp open  ssl/http Golang net/http server
 49153/tcp open  redis    Redis key-value store 6.2
 """,
-        },
-        {
-            "tool": "scrapling https://10.0.0.5:43117/",
-            "output": """
+            },
+            {
+                "tool": "scrapling https://10.0.0.5:43117/",
+                "output": """
 URL: https://10.0.0.5:43117/
 Status: 200
 Title: Admin
@@ -35,8 +39,9 @@ Forms: 1
 Links:
   /login
 """,
-        },
-    ])
+            },
+        ],
+    )
 
     model = result["context"]["target_model"]
     actions = [item["command"] for item in result["snapshot_actions"]]
@@ -92,22 +97,28 @@ def test_target_model_exposes_typed_check_results_and_endpoint_coverage():
     store = FactStore(f"/tmp/octopus_typed_coverage_{uuid.uuid4().hex}.db")
     scan_id = "scan-typed"
     target = "10.0.0.5"
-    endpoint = json.dumps({
-        "url": "http://10.0.0.5/",
-        "scheme": "http",
-        "host": "10.0.0.5",
-        "port": "80",
-        "path": "/",
-    }, sort_keys=True)
-    check = json.dumps({
-        "tool": "nuclei_safe",
-        "command_key": "nuclei_safe:http://10.0.0.5",
-        "command": "nuclei_safe http://10.0.0.5",
-        "kind": "template_verification",
-        "mode": "check_only",
-        "scope": {"type": "endpoint", "value": "http://10.0.0.5"},
-        "status": "timeout",
-    }, sort_keys=True)
+    endpoint = json.dumps(
+        {
+            "url": "http://10.0.0.5/",
+            "scheme": "http",
+            "host": "10.0.0.5",
+            "port": "80",
+            "path": "/",
+        },
+        sort_keys=True,
+    )
+    check = json.dumps(
+        {
+            "tool": "nuclei_safe",
+            "command_key": "nuclei_safe:http://10.0.0.5",
+            "command": "nuclei_safe http://10.0.0.5",
+            "kind": "template_verification",
+            "mode": "check_only",
+            "scope": {"type": "endpoint", "value": "http://10.0.0.5"},
+            "status": "timeout",
+        },
+        sort_keys=True,
+    )
     store.add_fact(scan_id, target, "web_endpoint", endpoint, "derived:nmap")
     store.add_fact(scan_id, target, "check_result", check, "nuclei_safe http://10.0.0.5")
 
@@ -118,9 +129,7 @@ def test_target_model_exposes_typed_check_results_and_endpoint_coverage():
     assert model["typed_facts"]["CheckResult"][0]["kind"] == "template_verification"
     assert endpoint_coverage["checks"]["template_verification"]["status"] == "timeout"
     assert any(
-        gap["surface"] == "endpoint"
-        and gap["check"] == "template_verification"
-        and gap["status"] == "timeout"
+        gap["surface"] == "endpoint" and gap["check"] == "template_verification" and gap["status"] == "timeout"
         for gap in model["coverage"]["gaps"]
     )
 
@@ -281,34 +290,36 @@ def test_replay_snapshot_asserts_facts_actions_and_surface_states():
     from core.ai.replay_snapshot import ReplaySnapshot
 
     snapshot = ReplaySnapshot(f"/tmp/octopus_replay_snapshot_{uuid.uuid4().hex}.db")
-    result = snapshot.assert_ok({
-        "scan_id": "scan-snapshot",
-        "target": "10.0.0.5",
-        "outputs": [
-            {
-                "tool": "nmap",
-                "output": "80/tcp open http nginx",
+    result = snapshot.assert_ok(
+        {
+            "scan_id": "scan-snapshot",
+            "target": "10.0.0.5",
+            "outputs": [
+                {
+                    "tool": "nmap",
+                    "output": "80/tcp open http nginx",
+                },
+                {
+                    "tool": "scrapling http://10.0.0.5",
+                    "output": "URL: http://10.0.0.5/\nTitle: Home\nLinks:\n  /api/users\n",
+                },
+            ],
+            "expected_facts": [
+                ("port_open", "80/tcp (http) [nginx]"),
+                ("web_title", "Home"),
+            ],
+            "expected_fact_prefixes": [
+                ("web_endpoint", '{"host": "10.0.0.5"'),
+            ],
+            "expected_actions": [
+                "scrapling http://10.0.0.5/api/users",
+                "exploit_select 10.0.0.5",
+            ],
+            "expected_surface_states": {
+                "web": "confirmed_present",
             },
-            {
-                "tool": "scrapling http://10.0.0.5",
-                "output": "URL: http://10.0.0.5/\nTitle: Home\nLinks:\n  /api/users\n",
-            },
-        ],
-        "expected_facts": [
-            ("port_open", "80/tcp (http) [nginx]"),
-            ("web_title", "Home"),
-        ],
-        "expected_fact_prefixes": [
-            ("web_endpoint", "{\"host\": \"10.0.0.5\""),
-        ],
-        "expected_actions": [
-            "scrapling http://10.0.0.5/api/users",
-            "exploit_select 10.0.0.5",
-        ],
-        "expected_surface_states": {
-            "web": "confirmed_present",
-        },
-    })
+        }
+    )
 
     assert result["ok"]
     assert any(action.startswith("exploit_select 10.0.0.5") for action in result["actions"])

@@ -366,9 +366,7 @@ def test_analysis_attempt_links_verified_claim_fact_id(tmp_path):
         }
     )
     pipeline.analysis_agent = SimpleNamespace(
-        analyze=lambda _scan_id, _target: {
-            "hypotheses": [{"claim": "ssh_service_active"}]
-        }
+        analyze=lambda _scan_id, _target: {"hypotheses": [{"claim": "ssh_service_active"}]}
     )
     pipeline.fact_store.add_fact(
         "scan-analysis-provenance",

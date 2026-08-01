@@ -749,11 +749,14 @@ def test_structured_web_llm_and_output_parser_boundaries(
     }
     assert {fact["trust_level"] for fact in facts} == {"target_controlled"}
     assert structured.parse("plugin", '{"plugin":"x","success":false}', "session") == []
-    assert structured.parse(
-        "plugin expected host.test",
-        '{"plugin":"other","success":true}',
-        "session",
-    ) == []
+    assert (
+        structured.parse(
+            "plugin expected host.test",
+            '{"plugin":"other","success":true}',
+            "session",
+        )
+        == []
+    )
     assert structured.parse("plugin", "{bad}", "session") == []
     assert structured.parse("plugin", "{}\n--- plugin output ---\nignored", "session") == []
 

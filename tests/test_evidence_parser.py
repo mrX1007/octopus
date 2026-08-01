@@ -1058,11 +1058,7 @@ No nuclei findings detected.
         output,
     )
     pairs = {(fact["type"], fact["value"]) for fact in facts}
-    checks = [
-        json.loads(fact["value"])
-        for fact in facts
-        if fact["type"] == "check_result"
-    ]
+    checks = [json.loads(fact["value"]) for fact in facts if fact["type"] == "check_result"]
 
     assert ("service_status", "tool_timeout:nikto") in pairs
     assert ("service_status", "nikto_scan_completed:http://10.0.0.5:8080") in pairs
@@ -1309,15 +1305,14 @@ ALERT Medium Cookie No HttpOnly Flag
     assert ("web_security_note", "cookie_missing_httponly:sid") in pairs
     assert ("web_security_note", "cors_reflective_or_wildcard_origin") in pairs
     assert ("web_security_note", "cors_credentials_allowed") in pairs
-    assert not any(
-        ftype == "web_endpoint" and "octopus.invalid" in value
-        for ftype, value in pairs
-    )
+    assert not any(ftype == "web_endpoint" and "octopus.invalid" in value for ftype, value in pairs)
     assert ("jwt_metadata", "alg:none") in pairs
     assert ("web_security_note", "jwt_review_required_alg:none") in pairs
     assert ("js_route", "/api/users/{id}") in pairs
     assert ("api_endpoint", "UNKNOWN:/graphql:source=js") in pairs
-    assert any(ftype == "api_security_note" and value.startswith("idor_candidate:UNKNOWN:/api/users") for ftype, value in pairs)
+    assert any(
+        ftype == "api_security_note" and value.startswith("idor_candidate:UNKNOWN:/api/users") for ftype, value in pairs
+    )
     assert ("asset_url", "https://app.example.com/admin") in pairs
     assert any(ftype == "proxy_finding" and "Cookie No HttpOnly" in value for ftype, value in pairs)
 

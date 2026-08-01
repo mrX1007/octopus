@@ -209,8 +209,7 @@ class EvidenceVerifier:
                 "claim": claim,
                 "status": "rejected",
                 "reason": (
-                    f"Unsupported {claim_class}: no code-owned evidence policy is available "
-                    f"({policy.policy_id})."
+                    f"Unsupported {claim_class}: no code-owned evidence policy is available ({policy.policy_id})."
                 ),
                 **policy_fields,
             }
@@ -229,8 +228,7 @@ class EvidenceVerifier:
                 "claim": claim,
                 "status": "rejected",
                 "reason": (
-                    f"Claim evidence policy not satisfied ({policy.policy_id}): "
-                    f"{', '.join(policy.requirement_labels)}."
+                    f"Claim evidence policy not satisfied ({policy.policy_id}): {', '.join(policy.requirement_labels)}."
                 ),
                 **policy_fields,
             }
@@ -275,8 +273,7 @@ class EvidenceVerifier:
         source_execution_ids = list(dict.fromkeys(source_execution_ids))
         requirements_text = ", ".join(policy.requirement_labels)
         assessment_reason = (
-            f"Evidence policy {policy.policy_id} satisfied code-owned requirements: "
-            f"{requirements_text}."
+            f"Evidence policy {policy.policy_id} satisfied code-owned requirements: {requirements_text}."
         )
         if assessment_status == "inferred":
             assessment_reason += " Matching evidence is inference-grade and was not promoted to verified."
@@ -1202,21 +1199,23 @@ class RegexParser:
             )
             is not None
         )
-        root_confirmation_marker = re.search(
-            r"(?im)^\s*(?:\[\+\]\s*)?(?:[✓+]\s*)?ROOT ACCESS CONFIRMED\s*$",
-            raw_output,
-        ) is not None
-        positive_stage_access = re.search(
-            r"(?im)^\s*(?:\[\+\]\s*)?"
-            r"(?:already root|privilege escalation confirmed|root access obtained)\s*$",
-            raw_output,
-        ) is not None
+        root_confirmation_marker = (
+            re.search(
+                r"(?im)^\s*(?:\[\+\]\s*)?(?:[✓+]\s*)?ROOT ACCESS CONFIRMED\s*$",
+                raw_output,
+            )
+            is not None
+        )
+        positive_stage_access = (
+            re.search(
+                r"(?im)^\s*(?:\[\+\]\s*)?"
+                r"(?:already root|privilege escalation confirmed|root access obtained)\s*$",
+                raw_output,
+            )
+            is not None
+        )
 
-        if (
-            "pwnkit" in raw_lower
-            and reported_privesc_uid0
-            and root_confirmation_marker
-        ):
+        if "pwnkit" in raw_lower and reported_privesc_uid0 and root_confirmation_marker:
             facts.append(
                 {
                     "type": "exploit_success",
@@ -3659,15 +3658,9 @@ class OutputParser:
             "ssh_session",
         }
     )
-    _ROOT_FACT_TOOLS = frozenset(
-        {"ssh_inventory", "ssh_session"}
-    )
-    _NETWORK_FACT_TOOLS = frozenset(
-        {"internal_service_probe", "network_recon", "ssh_inventory"}
-    )
-    _API_FACT_TOOLS = frozenset(
-        {"api_auth_check", "graphql_check", "js_route_extract", "openapi_import"}
-    )
+    _ROOT_FACT_TOOLS = frozenset({"ssh_inventory", "ssh_session"})
+    _NETWORK_FACT_TOOLS = frozenset({"internal_service_probe", "network_recon", "ssh_inventory"})
+    _API_FACT_TOOLS = frozenset({"api_auth_check", "graphql_check", "js_route_extract", "openapi_import"})
     _WEB_SECURITY_FACT_TOOLS = frozenset(
         {
             "authenticated_crawl",
@@ -4026,8 +4019,7 @@ class OutputParser:
                 (("nikto_scan_completed:",), {"nikto"}),
             )
             return any(
-                any(value.startswith(prefix) for prefix in prefixes)
-                and tool in allowed_tools
+                any(value.startswith(prefix) for prefix in prefixes) and tool in allowed_tools
                 for prefixes, allowed_tools in status_sources
             )
         if fact_type == "stage_status":
@@ -4041,8 +4033,7 @@ class OutputParser:
                 isinstance(payload, dict)
                 and str(payload.get("tool") or "").strip().casefold() == tool
                 and tool in {"nikto", "nuclei_safe"}
-                and str(payload.get("status") or "").strip().casefold()
-                in {"completed", "timeout"}
+                and str(payload.get("status") or "").strip().casefold() in {"completed", "timeout"}
             )
         if fact_type == "exploit_reference":
             return tool == "searchsploit"
@@ -4080,8 +4071,7 @@ class OutputParser:
                 elif (
                     default_trust == TARGET_CONTROLLED
                     and self._tool_identity(tool_name) == "manual_recon"
-                    and str(fact.get("type") or "").strip().casefold()
-                    in {"hostname", "port_open", "service_version"}
+                    and str(fact.get("type") or "").strip().casefold() in {"hostname", "port_open", "service_version"}
                 ):
                     # ``manual_recon`` is an internal aggregate.  Only its
                     # precise Nmap-style measurement schema is promoted; all
@@ -4104,8 +4094,7 @@ class OutputParser:
             if ftype and value:
                 if (
                     fact_is_decision_critical(fact)
-                    and str(fact.get("trust_level") or UNTRUSTED).strip().casefold()
-                    != TRUSTED
+                    and str(fact.get("trust_level") or UNTRUSTED).strip().casefold() != TRUSTED
                 ):
                     logger.debug(
                         "Rejected decision-critical fact from untrusted stdout: %s",

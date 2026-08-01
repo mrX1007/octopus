@@ -233,8 +233,7 @@ def test_family_parsers_cover_template_web_api_ad_code_cloud_secrets():
         ("gitleaks_scan", '{"RuleID":"generic-api-key","File":"app/.env","Verified":true}'),
         (
             "semgrep_scan",
-            '{"results":[{"check_id":"python.lang.security.audit","path":"app.py",'
-            '"extra":{"severity":"HIGH"}}]}',
+            '{"results":[{"check_id":"python.lang.security.audit","path":"app.py","extra":{"severity":"HIGH"}}]}',
         ),
         (
             "trivy_scan",
@@ -243,8 +242,7 @@ def test_family_parsers_cover_template_web_api_ad_code_cloud_secrets():
         ),
         (
             "prowler_scan",
-            '{"Status":"FAIL","Severity":"HIGH","CheckID":"s3_bucket_public_access",'
-            '"ResourceId":"bucket-1"}',
+            '{"Status":"FAIL","Severity":"HIGH","CheckID":"s3_bucket_public_access","ResourceId":"bucket-1"}',
         ),
     ):
         facts.extend(parser.parse(tool_name, raw, "sess"))
@@ -280,21 +278,18 @@ def test_output_parser_skips_legacy_regex_for_family_owned_tools():
         ("httpx_probe", "https://app.example.com [200] [Admin] [nginx]"),
         (
             "nuclei_safe",
-            '{"template-id":"exposed-panel","info":{"severity":"medium"},'
-            '"matched-at":"https://app.example.com/admin"}',
+            '{"template-id":"exposed-panel","info":{"severity":"medium"},"matched-at":"https://app.example.com/admin"}',
         ),
         ("security_headers_check", "Server: nginx"),
         ("openapi_import", "GET /users/{id} auth=unknown_or_none"),
         ("gitleaks_scan", '{"RuleID":"generic-api-key","File":"app/.env","Verified":true}'),
         (
             "semgrep_scan",
-            '{"results":[{"check_id":"python.lang.security.audit","path":"app.py",'
-            '"extra":{"severity":"HIGH"}}]}',
+            '{"results":[{"check_id":"python.lang.security.audit","path":"app.py","extra":{"severity":"HIGH"}}]}',
         ),
         (
             "prowler_scan",
-            '{"Status":"FAIL","Severity":"HIGH","CheckID":"s3_bucket_public_access",'
-            '"ResourceId":"bucket-1"}',
+            '{"Status":"FAIL","Severity":"HIGH","CheckID":"s3_bucket_public_access","ResourceId":"bucket-1"}',
         ),
         ("ad_security_review", "Shortest paths to Domain Admins: 1"),
     ):

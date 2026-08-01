@@ -142,9 +142,7 @@ def test_port_classification_uses_exact_parsed_port_and_service() -> None:
 
 def test_explicit_https_alt_port_never_synthesizes_port_80() -> None:
     state = StateResolver(None).resolve_snapshot(
-        SnapshotStub(
-            [{"type": "web_endpoint", "value": "https://example.test:8443/login"}]
-        )
+        SnapshotStub([{"type": "web_endpoint", "value": "https://example.test:8443/login"}])
     )
 
     assert state["web_services_found"] is True
@@ -181,9 +179,7 @@ def test_negated_or_extended_root_text_is_not_root(
     fact_type: str,
     fact_value: str,
 ) -> None:
-    state = StateResolver(None).resolve_snapshot(
-        SnapshotStub([{"type": fact_type, "value": fact_value}])
-    )
+    state = StateResolver(None).resolve_snapshot(SnapshotStub([{"type": fact_type, "value": fact_value}]))
 
     assert state["root_access_confirmed"] is False
 

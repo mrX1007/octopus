@@ -368,10 +368,7 @@ def test_store_fact_preserves_secret_refs_and_deduplicates_derived_facts() -> No
     assert result["fact"]["secret_refs"] == ["secret-ref"]
     assert result["new_facts"] == 1
     assert all(item["source_identity"] == "manual_recon" for item in stored_kwargs)
-    assert all(
-        item["observation_method"] == "target_controlled_stdout"
-        for item in stored_kwargs
-    )
+    assert all(item["observation_method"] == "target_controlled_stdout" for item in stored_kwargs)
     assert all(item["trust_level"] == "target_controlled" for item in stored_kwargs)
 
 

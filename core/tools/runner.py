@@ -764,6 +764,8 @@ def format_recon_for_llm(results: dict) -> str:
 
 
 _EXECUTION_POLICY = ExecutionPolicy()
+
+
 def _execution_context_or_current(
     execution_context: Optional[ExecutionContext] = None,
 ) -> ExecutionContext:

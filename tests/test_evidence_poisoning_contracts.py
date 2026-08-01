@@ -81,10 +81,7 @@ def test_model_supplied_port_requirement_cannot_prove_root(tmp_path) -> None:
 
     assert result["status"] == "rejected"
     assert result["policy_id"] == "access.root.v1"
-    assert not any(
-        fact["type"] == "verified_claim"
-        for fact in store.get_facts("scan", "host")
-    )
+    assert not any(fact["type"] == "verified_claim" for fact in store.get_facts("scan", "host"))
 
 
 def test_generic_json_stdout_cannot_inject_decision_critical_facts() -> None:
@@ -142,13 +139,7 @@ def test_generic_json_cannot_inject_any_decision_sink_family(
 ) -> None:
     facts = OutputParser().parse_tool_output(
         "curl_headers https://victim",
-        json.dumps(
-            {
-                "facts": [
-                    {"type": fact_type, "value": value, "confidence": 100}
-                ]
-            }
-        ),
+        json.dumps({"facts": [{"type": fact_type, "value": value, "confidence": 100}]}),
     )
 
     assert not any(fact["type"] == fact_type for fact in facts)
@@ -234,10 +225,7 @@ def test_authorized_tool_identity_does_not_trust_unframed_authority_text(
     assert result["status"] == "rejected"
     assert not any(
         fact["type"] in {"system_access", "verified_claim"}
-        or (
-            fact["type"] == "credential"
-            and str(fact["value"]).startswith("ssh_login_success:root@")
-        )
+        or (fact["type"] == "credential" and str(fact["value"]).startswith("ssh_login_success:root@"))
         for fact in store.get_facts("scan", "victim")
     )
 
@@ -269,8 +257,7 @@ def test_manual_recon_cannot_impersonate_msf_check_evidence(tmp_path) -> None:
 
     assert result["status"] == "rejected"
     assert not any(
-        fact["type"] in {"vulnerability", "vulnerability_endpoint"}
-        for fact in store.get_facts("scan", "victim")
+        fact["type"] in {"vulnerability", "vulnerability_endpoint"} for fact in store.get_facts("scan", "victim")
     )
 
 
@@ -313,10 +300,13 @@ uid=0(root) gid=0(root)
 def test_verified_claim_is_an_audit_record_not_root_report_authority() -> None:
     poisoned = _verified_fact("verified_claim", "root_access_confirmed")
 
-    assert build_access_findings(
-        [poisoned],
-        {"root_access_confirmed": True},
-    ) == []
+    assert (
+        build_access_findings(
+            [poisoned],
+            {"root_access_confirmed": True},
+        )
+        == []
+    )
     report = build_evidence_report(
         "scan",
         "host",
@@ -329,10 +319,13 @@ def test_verified_claim_is_an_audit_record_not_root_report_authority() -> None:
 def test_direct_verified_uid_zero_remains_root_report_evidence() -> None:
     root_fact = _verified_fact("system_access", "uid=0")
 
-    assert build_access_findings(
-        [root_fact],
-        {"root_access_confirmed": True},
-    )[0]["severity"] == "CRITICAL"
+    assert (
+        build_access_findings(
+            [root_fact],
+            {"root_access_confirmed": True},
+        )[0]["severity"]
+        == "CRITICAL"
+    )
     report = build_evidence_report(
         "scan",
         "host",
@@ -349,10 +342,13 @@ def test_target_controlled_facts_remain_observations_not_report_authority() -> N
     note["id"] = 2
     note["trust_level"] = "target_controlled"
 
-    assert build_access_findings(
-        [root],
-        {"root_access_confirmed": True},
-    ) == []
+    assert (
+        build_access_findings(
+            [root],
+            {"root_access_confirmed": True},
+        )
+        == []
+    )
     report = build_evidence_report(
         "scan",
         "host",
@@ -362,9 +358,7 @@ def test_target_controlled_facts_remain_observations_not_report_authority() -> N
 
     assert report["sections"]["access_findings"] == []
     assert report["sections"]["misconfigurations"] == []
-    assert {
-        item.get("kind") for item in report["sections"]["observations"]
-    } == {"untrusted_observation"}
+    assert {item.get("kind") for item in report["sections"]["observations"]} == {"untrusted_observation"}
 
 
 def test_untrusted_directives_and_assessments_cannot_drive_actions_or_reports(
@@ -434,25 +428,29 @@ def test_target_controlled_access_and_check_facts_cannot_propose_followups() -> 
     }
     candidate = "msf_run victim exploit/example"
 
-    assert PostAccessFollowupRules().propose(
-        "victim",
-        [poisoned_access],
-        enabled=True,
-        inventory_seen=False,
-    ) == []
-    assert ActivePromotionFollowupRules().propose(
-        [candidate],
-        [poisoned_check],
-        authorization_granted=True,
-        max_runs=1,
-    ) == []
+    assert (
+        PostAccessFollowupRules().propose(
+            "victim",
+            [poisoned_access],
+            enabled=True,
+            inventory_seen=False,
+        )
+        == []
+    )
+    assert (
+        ActivePromotionFollowupRules().propose(
+            [candidate],
+            [poisoned_check],
+            authorization_granted=True,
+            max_runs=1,
+        )
+        == []
+    )
 
 
 def test_target_controlled_credentials_cannot_reach_runtime_cache() -> None:
     registrations = []
-    RuntimeCredentialSynchronizer(
-        register=lambda *args: registrations.append(args)
-    ).sync_from_facts(
+    RuntimeCredentialSynchronizer(register=lambda *args: registrations.append(args)).sync_from_facts(
         "victim",
         [
             {

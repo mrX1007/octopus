@@ -5,6 +5,7 @@ import pytest
 
 pytestmark = pytest.mark.contract
 
+
 def test_fact_store_preserves_duplicate_fact_observations():
     import uuid
 
@@ -138,12 +139,28 @@ def test_vulnerability_metadata_uses_endpoint_facts_for_confirmed_findings():
     fake_export.export_menu = lambda *args, **kwargs: None
     fake_db = types.ModuleType("db")
     for name in [
-        "get_connection", "create_session", "update_session_status",
-        "save_vulnerability", "save_fix", "save_exploit", "save_summary",
-        "get_all_history", "get_session", "get_vulnerabilities", "get_fixes",
-        "get_exploits", "edit_vulnerability", "edit_fix", "edit_exploit",
-        "edit_summary_risk", "delete_vulnerability", "delete_exploit",
-        "delete_fix", "delete_full_session", "print_history", "print_session",
+        "get_connection",
+        "create_session",
+        "update_session_status",
+        "save_vulnerability",
+        "save_fix",
+        "save_exploit",
+        "save_summary",
+        "get_all_history",
+        "get_session",
+        "get_vulnerabilities",
+        "get_fixes",
+        "get_exploits",
+        "edit_vulnerability",
+        "edit_fix",
+        "edit_exploit",
+        "edit_summary_risk",
+        "delete_vulnerability",
+        "delete_exploit",
+        "delete_fix",
+        "delete_full_session",
+        "print_history",
+        "print_session",
     ]:
         setattr(fake_db, name, lambda *args, **kwargs: None)
     old_export = sys.modules.get("export")
@@ -228,6 +245,7 @@ def test_scrapling_crawl_uses_requests_fallback_when_scrapling_missing(monkeypat
         return FakeResponse()
 
     import requests
+
     class FakeSession:
         def __init__(self):
             self.trust_env = True
@@ -275,10 +293,7 @@ def test_pipeline_llm_dead_uses_fallback_without_new_llm_calls():
 
     pipeline.run_scan("scan-llm-dead", "10.0.0.5", max_iterations=1)
 
-    analysis_outcomes = [
-        item for item in pipeline.task_outcomes
-        if item["agent"] == "AnalysisAgent"
-    ]
+    analysis_outcomes = [item for item in pipeline.task_outcomes if item["agent"] == "AnalysisAgent"]
     llm_health = pipeline.fact_store.get_facts("scan-llm-dead", "10.0.0.5", fact_type="llm_health")
 
     assert analysis_outcomes[0]["status"] == "no_new_facts"

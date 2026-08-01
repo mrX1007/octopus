@@ -28,11 +28,11 @@ import time
 from typing import Any, Optional
 from urllib.parse import urlparse
 
-C_GREEN  = "\033[92m"
+C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
-C_RED    = "\033[91m"
-C_CYAN   = "\033[96m"
-C_RESET  = "\033[0m"
+C_RED = "\033[91m"
+C_CYAN = "\033[96m"
+C_RESET = "\033[0m"
 
 
 def _same_origin(candidate: str, expected: str) -> bool:
@@ -50,6 +50,7 @@ def _same_origin(candidate: str, expected: str) -> bool:
     except ValueError:
         return False
 
+
 # ── Add vendor SDK to path ──
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _SDK_PATH = os.path.join(_PROJECT_ROOT, "vendor", "shardbrowser", "sdks", "python")
@@ -60,6 +61,7 @@ if _SDK_PATH not in sys.path:
 class ShardBrowserError(Exception):
     pass
 
+
 class ShardBrowserNotInstalled(Exception):
     pass
 
@@ -68,6 +70,7 @@ def _get_sdk():
     """Import ShardX SDK lazily."""
     try:
         from shardx import ShardX
+
         return ShardX
     except ImportError as e:
         raise ShardBrowserNotInstalled(
@@ -103,9 +106,7 @@ class ShardBrowser:
     def __init__(self, cache_dir: Optional[str] = None, profiles_dir: Optional[str] = None):
         self._sdk = None
         self._cache_dir = cache_dir
-        self._profiles_dir = profiles_dir or os.path.join(
-            _PROJECT_ROOT, "data", "shardx-profiles"
-        )
+        self._profiles_dir = profiles_dir or os.path.join(_PROJECT_ROOT, "data", "shardx-profiles")
         self._sessions: dict[str, Any] = {}  # track active sessions
 
     def _ensure_sdk(self):
@@ -136,7 +137,7 @@ class ShardBrowser:
         """Check if ShardX SDK is importable and engine is installed."""
         try:
             sdk = self._ensure_sdk()
-            return sdk.runtime.is_installed() if hasattr(sdk.runtime, 'is_installed') else True
+            return sdk.runtime.is_installed() if hasattr(sdk.runtime, "is_installed") else True
         except Exception:
             return False
 
@@ -154,10 +155,18 @@ class ShardBrowser:
 
     # LAUNCH
 
-    def launch_profile(self, fingerprint=None, *, platform: str = "Windows",
-                       proxy: Optional[str] = None, headless: bool = False,
-                       randomize: bool = True, cdp: bool = True,
-                       webrtc: str = "auto", **kwargs) -> Any:
+    def launch_profile(
+        self,
+        fingerprint=None,
+        *,
+        platform: str = "Windows",
+        proxy: Optional[str] = None,
+        headless: bool = False,
+        randomize: bool = True,
+        cdp: bool = True,
+        webrtc: str = "auto",
+        **kwargs,
+    ) -> Any:
         """
         Launch an isolated browser profile.
 
@@ -208,8 +217,9 @@ class ShardBrowser:
 
     # MULTI-SESSION (multi-account)
 
-    def multi_session(self, count: int = 3, proxy_list: Optional[list[str]] = None,
-                      platform: str = "Windows", **kwargs) -> list[Any]:
+    def multi_session(
+        self, count: int = 3, proxy_list: Optional[list[str]] = None, platform: str = "Windows", **kwargs
+    ) -> list[Any]:
         """
         Launch multiple isolated browser sessions.
         Each gets a unique fingerprint + optional unique proxy.
@@ -233,9 +243,9 @@ class ShardBrowser:
                     **kwargs,
                 )
                 sessions.append(sess)
-                print(f"  {C_GREEN}[+] Session {i+1}/{count} launched{C_RESET}")
+                print(f"  {C_GREEN}[+] Session {i + 1}/{count} launched{C_RESET}")
             except Exception as e:
-                print(f"  {C_RED}[!] Session {i+1}/{count} failed: {e}{C_RESET}")
+                print(f"  {C_RED}[!] Session {i + 1}/{count} failed: {e}{C_RESET}")
         return sessions
 
     # PROXY VALIDATION
@@ -253,8 +263,9 @@ class ShardBrowser:
 
     # OSINT WORKFLOWS
 
-    def osint_target(self, target: str, engines: Optional[list[str]] = None,
-                     proxy: Optional[str] = None, headless: bool = True) -> dict:
+    def osint_target(
+        self, target: str, engines: Optional[list[str]] = None, proxy: Optional[str] = None, headless: bool = True
+    ) -> dict:
         """
         OSINT research with isolated browser profiles per search engine.
         Prevents fingerprint correlation between searches.
@@ -297,18 +308,15 @@ class ShardBrowser:
 
                 # Use patchright via CDP
                 import asyncio
+
                 try:
-                    content = asyncio.run(
-                        self._browse_async(session.cdp_url, url)
-                    )
+                    content = asyncio.run(self._browse_async(session.cdp_url, url))
                 except RuntimeError:
                     # Fallback if already in async context
                     import concurrent.futures
+
                     with concurrent.futures.ThreadPoolExecutor() as pool:
-                        content = pool.submit(
-                            asyncio.run,
-                            self._browse_async(session.cdp_url, url)
-                        ).result(timeout=30)
+                        content = pool.submit(asyncio.run, self._browse_async(session.cdp_url, url)).result(timeout=30)
 
                 results[engine] = {
                     "url": url,
@@ -329,8 +337,7 @@ class ShardBrowser:
 
         return results
 
-    def social_recon(self, name: str, platforms: Optional[list[str]] = None,
-                     proxy: Optional[str] = None) -> dict:
+    def social_recon(self, name: str, platforms: Optional[list[str]] = None, proxy: Optional[str] = None) -> dict:
         """
         Social media recon with isolated profiles per platform.
 
@@ -361,21 +368,22 @@ class ShardBrowser:
             session = None
             try:
                 session = self.launch_profile(
-                    platform="Windows", proxy=proxy,
-                    headless=True, randomize=True,
+                    platform="Windows",
+                    proxy=proxy,
+                    headless=True,
+                    randomize=True,
                 )
                 import asyncio
+
                 try:
-                    content = asyncio.run(
-                        self._browse_async(session.cdp_url, url, wait=4)
-                    )
+                    content = asyncio.run(self._browse_async(session.cdp_url, url, wait=4))
                 except RuntimeError:
                     import concurrent.futures
+
                     with concurrent.futures.ThreadPoolExecutor() as pool:
-                        content = pool.submit(
-                            asyncio.run,
-                            self._browse_async(session.cdp_url, url, wait=4)
-                        ).result(timeout=30)
+                        content = pool.submit(asyncio.run, self._browse_async(session.cdp_url, url, wait=4)).result(
+                            timeout=30
+                        )
                 results[plat] = {
                     "url": url,
                     "content_length": len(content),
@@ -401,6 +409,7 @@ class ShardBrowser:
         except ImportError:
             # Fallback: httpx
             import httpx
+
             async with httpx.AsyncClient(
                 verify=False,
                 timeout=15,
@@ -432,24 +441,25 @@ class ShardBrowser:
     def browse_sync(self, session, url: str, wait: float = 3) -> str:
         """Synchronous browse using an active session."""
         import asyncio
+
         try:
             return asyncio.run(self._browse_async(session.cdp_url, url, wait))
         except RuntimeError:
             import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                return pool.submit(
-                    asyncio.run, self._browse_async(session.cdp_url, url, wait)
-                ).result(timeout=30)
 
-    async def screenshot_async(self, cdp_url: str, url: str,
-                                output: Optional[str] = None) -> bytes:
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                return pool.submit(asyncio.run, self._browse_async(session.cdp_url, url, wait)).result(timeout=30)
+
+    async def screenshot_async(self, cdp_url: str, url: str, output: Optional[str] = None) -> bytes:
         """Take a full-page screenshot."""
         from patchright.async_api import async_playwright
+
         async with async_playwright() as pw:
             browser = await pw.chromium.connect_over_cdp(cdp_url)
             ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
             page = await ctx.new_page()
             if url:
+
                 async def scoped_route(route):
                     if _same_origin(route.request.url, url):
                         await route.continue_()
@@ -470,8 +480,11 @@ class ShardBrowser:
     # AUTHENTICATED BROWSE (cookie injection)
 
     async def _browse_with_cookies_async(
-        self, cdp_url: str, url: str,
-        cookies: list, wait: float = 5,
+        self,
+        cdp_url: str,
+        url: str,
+        cookies: list,
+        wait: float = 5,
         screenshot_path: Optional[str] = None,
     ) -> dict:
         """Navigate to URL with pre-injected cookies via CDP.
@@ -490,6 +503,7 @@ class ShardBrowser:
             from patchright.async_api import async_playwright
         except ImportError:
             import httpx
+
             async with httpx.AsyncClient(
                 verify=False,
                 timeout=20,
@@ -498,8 +512,7 @@ class ShardBrowser:
             ) as client:
                 jar_cookies = {c["name"]: c["value"] for c in cookies}
                 r = await client.get(url, cookies=jar_cookies)
-                return {"content": r.text, "title": "", "url_final": str(r.url),
-                        "status_code": r.status_code}
+                return {"content": r.text, "title": "", "url_final": str(r.url), "status_code": r.status_code}
 
         async with async_playwright() as pw:
             browser = await pw.chromium.connect_over_cdp(cdp_url)
@@ -533,8 +546,7 @@ class ShardBrowser:
                 "url_final": final_url,
                 "status_code": resp.status if resp else 0,
                 "cookies_after": [
-                    {"name": c["name"], "value": c["value"][:40],
-                     "domain": c.get("domain", "")}
+                    {"name": c["name"], "value": c["value"][:40], "domain": c.get("domain", "")}
                     for c in cookies_after[:20]
                 ],
             }
@@ -550,9 +562,13 @@ class ShardBrowser:
             return result
 
     def browse_with_cookies(
-        self, url: str, cookies: list,
-        proxy: Optional[str] = None, headless: bool = True,
-        screenshot_path: Optional[str] = None, wait: float = 5,
+        self,
+        url: str,
+        cookies: list,
+        proxy: Optional[str] = None,
+        headless: bool = True,
+        screenshot_path: Optional[str] = None,
+        wait: float = 5,
     ) -> dict:
         """
         Open URL in anti-detect browser with injected cookies.
@@ -573,27 +589,36 @@ class ShardBrowser:
         import asyncio
 
         session = self.launch_profile(
-            platform="Windows", proxy=proxy,
-            headless=headless, randomize=True,
+            platform="Windows",
+            proxy=proxy,
+            headless=headless,
+            randomize=True,
         )
 
         try:
             try:
                 result = asyncio.run(
                     self._browse_with_cookies_async(
-                        session.cdp_url, url, cookies,
-                        wait=wait, screenshot_path=screenshot_path,
+                        session.cdp_url,
+                        url,
+                        cookies,
+                        wait=wait,
+                        screenshot_path=screenshot_path,
                     )
                 )
             except RuntimeError:
                 import concurrent.futures
+
                 with concurrent.futures.ThreadPoolExecutor() as pool:
                     result = pool.submit(
                         asyncio.run,
                         self._browse_with_cookies_async(
-                            session.cdp_url, url, cookies,
-                            wait=wait, screenshot_path=screenshot_path,
-                        )
+                            session.cdp_url,
+                            url,
+                            cookies,
+                            wait=wait,
+                            screenshot_path=screenshot_path,
+                        ),
                     ).result(timeout=60)
             return result
         finally:

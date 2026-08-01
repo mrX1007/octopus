@@ -5,6 +5,7 @@ import pytest
 
 pytestmark = pytest.mark.contract
 
+
 def test_evidence_verifier_accepts_ssh_access_aliases_from_real_facts():
     import uuid
 
@@ -70,10 +71,12 @@ $ ip -o addr show 2>/dev/null || ip addr show 2>/dev/null
 """
         return ""
 
-    config.CFG.setdefault("strategy", {}).update({
-        "active_authorized": True,
-        "authorized_targets": ["10.0.0.0/24"],
-    })
+    config.CFG.setdefault("strategy", {}).update(
+        {
+            "active_authorized": True,
+            "authorized_targets": ["10.0.0.0/24"],
+        }
+    )
     pipeline_mod.run_arbitrary_cmd = fake_runner
     try:
         db_path = f"/tmp/octopus_pipeline_ssh_inventory_{uuid.uuid4().hex}.db"
@@ -111,10 +114,12 @@ def test_pipeline_marks_missing_credential_stage_as_blocked_not_completed():
     def fake_runner(cmd):
         return "[!] Persistence requires valid SSH credentials for 10.0.0.5."
 
-    config.CFG.setdefault("strategy", {}).update({
-        "active_authorized": True,
-        "authorized_targets": ["10.0.0.0/24"],
-    })
+    config.CFG.setdefault("strategy", {}).update(
+        {
+            "active_authorized": True,
+            "authorized_targets": ["10.0.0.0/24"],
+        }
+    )
     pipeline_mod.run_arbitrary_cmd = fake_runner
     try:
         db_path = f"/tmp/octopus_pipeline_blocked_{uuid.uuid4().hex}.db"
@@ -285,10 +290,9 @@ def test_credential_ranking_prefers_password_login_over_root_key_marker(
         assert material.password == password
         assert password not in repr(material)
     assert material.password == ""
-    with pytest.raises(
-        KeyError, match="unknown credential handle"
-    ), reference_credential_store.material_for_execution(
-        replace(selected, target="192.0.2.254")
+    with (
+        pytest.raises(KeyError, match="unknown credential handle"),
+        reference_credential_store.material_for_execution(replace(selected, target="192.0.2.254")),
     ):
         pass
 
@@ -390,11 +394,7 @@ def test_get_all_known_creds_returns_grouped_references_only(
 
     assert [item.username for item in credentials["ssh"]] == ["support", "root"]
     assert [item.username for item in credentials["postgres"]] == ["app"]
-    assert all(
-        isinstance(item, CredentialRef)
-        for grouped in credentials.values()
-        for item in grouped
-    )
+    assert all(isinstance(item, CredentialRef) for grouped in credentials.values() for item in grouped)
     assert ssh_password not in repr(credentials)
     assert db_password not in repr(credentials)
     assert not hasattr(exploit_tools, "_KNOWN_CREDS")

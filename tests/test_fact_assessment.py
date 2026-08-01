@@ -279,17 +279,17 @@ def test_legacy_duplicate_fact_migration_preserves_provenance(tmp_path):
     assert derived["derived_from"] == [keeper_id]
     assert derived["assessment"]["evidence_fact_ids"] == [keeper_id]
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute(
-            """
+        assert (
+            conn.execute(
+                """
             SELECT COUNT(*) FROM facts
             WHERE scan_id = 'scan' AND host = 'host'
               AND type = 'port_open' AND value = '22/tcp (ssh)'
             """
-        ).fetchone()[0] == 1
-        indexes = {
-            row[1]
-            for row in conn.execute("PRAGMA index_list(facts)").fetchall()
-        }
+            ).fetchone()[0]
+            == 1
+        )
+        indexes = {row[1] for row in conn.execute("PRAGMA index_list(facts)").fetchall()}
     assert "idx_fact_identity_unique" in indexes
 
 
@@ -450,10 +450,7 @@ def test_evidence_verifier_rejects_non_current_service_evidence(
     else:
         assert source["coverage_status"] == "degraded"
     assert result["status"] == "rejected"
-    assert all(
-        fact["type"] not in {"verified_claim", "inferred_claim"}
-        for fact in store.get_facts("scan", "host")
-    )
+    assert all(fact["type"] not in {"verified_claim", "inferred_claim"} for fact in store.get_facts("scan", "host"))
 
 
 def test_candidate_fact_cannot_promote_itself_to_verified(tmp_path):
@@ -476,11 +473,7 @@ def test_candidate_fact_cannot_promote_itself_to_verified(tmp_path):
     assert result["status"] == "accepted"
     assert result["assessment_status"] == "inferred"
     assert result["evidence_fact_ids"] == [candidate_id]
-    claim = next(
-        fact
-        for fact in store.get_facts("scan", "host")
-        if fact["id"] == result["fact_id"]
-    )
+    claim = next(fact for fact in store.get_facts("scan", "host") if fact["id"] == result["fact_id"])
     assert claim["type"] == "inferred_claim"
     assert claim["assessment_status"] == "inferred"
 

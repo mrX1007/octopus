@@ -148,9 +148,7 @@ def test_opaque_handle_cannot_self_assert_its_peer() -> None:
         description="fixture",
         supported_os=(),
     )
-    result = ExploitBaseAdapter(exploit).applicability(
-        ActionRequest(INSIDE, _approved(), handle=FakeHandle())
-    )
+    result = ExploitBaseAdapter(exploit).applicability(ActionRequest(INSIDE, _approved(), handle=FakeHandle()))
 
     assert result.applicable is False
     assert "provider_handle_binding_required" in result.missing_requirements

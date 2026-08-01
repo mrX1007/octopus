@@ -92,14 +92,9 @@ class FactStore:
         self._assessment_clock = assessment_clock or time.time
         self._completion_clock = completion_clock or time.time
         self._completion_lease_seconds = float(completion_lease_seconds)
-        if (
-            not math.isfinite(self._completion_lease_seconds)
-            or self._completion_lease_seconds <= 0
-        ):
+        if not math.isfinite(self._completion_lease_seconds) or self._completion_lease_seconds <= 0:
             raise ValueError("completion_lease_seconds must be finite and positive")
-        self._assessment_projection_handlers: list[
-            Callable[[Sequence[int]], Any]
-        ] = []
+        self._assessment_projection_handlers: list[Callable[[Sequence[int]], Any]] = []
         self._init_db()
         self.assessments = FactAssessmentStore(
             self.db_path,
@@ -227,9 +222,7 @@ class FactStore:
                 "assessment_id": str(row[1]),
                 "enqueued_at": float(row[2]),
                 "attempt_count": int(row[3]),
-                "last_attempt_at": (
-                    None if row[4] is None else float(row[4])
-                ),
+                "last_attempt_at": (None if row[4] is None else float(row[4])),
             }
             for row in rows
         ]
@@ -247,10 +240,7 @@ class FactStore:
                 SET attempt_count = attempt_count + 1, last_attempt_at = ?
                 WHERE fact_id = ? AND assessment_id = ?
                 """,
-                (
-                    (attempted_at, int(fact_id), str(assessment_id))
-                    for fact_id, assessment_id in events
-                ),
+                ((attempted_at, int(fact_id), str(assessment_id)) for fact_id, assessment_id in events),
             )
             conn.commit()
 
@@ -292,10 +282,7 @@ class FactStore:
             )
             if not pending:
                 break
-            events = tuple(
-                (int(item["fact_id"]), str(item["assessment_id"]))
-                for item in pending
-            )
+            events = tuple((int(item["fact_id"]), str(item["assessment_id"])) for item in pending)
             self._mark_assessment_projection_attempts(events)
             projected = True
             event_fact_ids = tuple(dict.fromkeys(item[0] for item in events))
@@ -337,7 +324,7 @@ class FactStore:
             conn.execute("BEGIN IMMEDIATE")
             cursor = conn.cursor()
             # Facts Table
-            cursor.execute('''
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS facts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     scan_id TEXT NOT NULL,
@@ -352,9 +339,9 @@ class FactStore:
                     timestamp REAL NOT NULL,
                     secret_refs TEXT NOT NULL DEFAULT '[]'
                 )
-            ''')
+            """)
             # Hypotheses Table
-            cursor.execute('''
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS hypotheses (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     scan_id TEXT NOT NULL,
@@ -364,8 +351,8 @@ class FactStore:
                     source TEXT NOT NULL,
                     timestamp REAL NOT NULL
                 )
-            ''')
-            cursor.execute('''
+            """)
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS fact_observations (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     fact_id INTEGER NOT NULL,
@@ -384,8 +371,8 @@ class FactStore:
                     secret_refs TEXT NOT NULL DEFAULT '[]',
                     FOREIGN KEY(fact_id) REFERENCES facts(id)
                 )
-            ''')
-            cursor.execute('''
+            """)
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS fact_observation_executions (
                     observation_id INTEGER NOT NULL,
                     execution_key TEXT NOT NULL,
@@ -393,8 +380,8 @@ class FactStore:
                     FOREIGN KEY(observation_id)
                         REFERENCES fact_observations(id) ON DELETE CASCADE
                 )
-            ''')
-            cursor.execute('''
+            """)
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS command_results (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     scan_id TEXT NOT NULL,
@@ -423,15 +410,15 @@ class FactStore:
                     completion_fingerprint TEXT NOT NULL DEFAULT '',
                     timestamp REAL NOT NULL
                 )
-            ''')
-            cursor.execute('''
+            """)
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS scan_completion_generations (
                     scan_key TEXT PRIMARY KEY,
                     generation INTEGER NOT NULL DEFAULT 0,
                     updated_at REAL NOT NULL
                 )
-            ''')
-            cursor.execute('''
+            """)
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS command_completion_claims (
                     idempotency_key TEXT PRIMARY KEY,
                     scan_id TEXT NOT NULL,
@@ -450,8 +437,8 @@ class FactStore:
                     FOREIGN KEY(command_result_id)
                         REFERENCES command_results(id) ON DELETE SET NULL
                 )
-            ''')
-            cursor.execute('''
+            """)
+            cursor.execute("""
                 CREATE TABLE IF NOT EXISTS fact_assessment_projection_outbox (
                     fact_id INTEGER PRIMARY KEY,
                     assessment_id TEXT NOT NULL,
@@ -460,19 +447,23 @@ class FactStore:
                     last_attempt_at REAL,
                     FOREIGN KEY(fact_id) REFERENCES facts(id) ON DELETE CASCADE
                 )
-            ''')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_scan_host ON facts (scan_id, host)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_type ON facts (type)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_obs_fact ON fact_observations (fact_id)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_obs_scan_host ON fact_observations (scan_id, host)')
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_scan_host ON facts (scan_id, host)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_type ON facts (type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_obs_fact ON fact_observations (fact_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_obs_scan_host ON fact_observations (scan_id, host)")
             cursor.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_obs_execution_key
                 ON fact_observation_executions(execution_key, observation_id)
                 """
             )
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_command_result_hash ON command_results (scan_id, host, output_hash)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_command_result_key ON command_results (scan_id, host, command_key)')
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_command_result_hash ON command_results (scan_id, host, output_hash)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_command_result_key ON command_results (scan_id, host, command_key)"
+            )
             cursor.execute(
                 """
                 CREATE INDEX IF NOT EXISTS idx_assessment_projection_outbox_order
@@ -647,11 +638,7 @@ class FactStore:
                 observation_method=method,
                 default=TRUSTED,
             )
-            if (
-                identity != source_identity
-                or method != observation_method
-                or canonical_trust != trust_level
-            ):
+            if identity != source_identity or method != observation_method or canonical_trust != trust_level:
                 cursor.execute(
                     """
                     UPDATE fact_observations
@@ -770,13 +757,7 @@ class FactStore:
             keeper_id = int(rows[0][0])
             merged_confidence = max(int(row[1] or 0) for row in rows)
             merged_timestamp = max(float(row[2] or 0.0) for row in rows)
-            merged_refs = tuple(
-                dict.fromkeys(
-                    ref
-                    for row in rows
-                    for ref in self._load_refs(row[4])
-                )
-            )
+            merged_refs = tuple(dict.fromkeys(ref for row in rows for ref in self._load_refs(row[4])))
             for row in rows[1:]:
                 duplicate_id = int(row[0])
                 replacements[duplicate_id] = keeper_id
@@ -802,9 +783,7 @@ class FactStore:
 
         if not replacements:
             return
-        for fact_id, derived_json in cursor.execute(
-            "SELECT id, derived_from FROM facts"
-        ).fetchall():
+        for fact_id, derived_json in cursor.execute("SELECT id, derived_from FROM facts").fetchall():
             derived = []
             for raw_id in self._load_json_list(derived_json):
                 try:
@@ -906,13 +885,16 @@ class FactStore:
 
     @staticmethod
     def _table_exists(cursor: sqlite3.Cursor, table: str) -> bool:
-        return cursor.execute(
-            """
+        return (
+            cursor.execute(
+                """
             SELECT 1 FROM sqlite_master
             WHERE type = 'table' AND name = ?
             """,
-            (table,),
-        ).fetchone() is not None
+                (table,),
+            ).fetchone()
+            is not None
+        )
 
     @staticmethod
     def _load_json_list(value: Any) -> list[Any]:
@@ -1030,13 +1012,22 @@ class FactStore:
             return "authenticated_observation"
         return "reported_observation"
 
-    def add_fact(self, scan_id: str, host: str, fact_type: str, value: str, source: str,
-                 confidence: int = 100, session_id: str = 'none',
-                 derived_from: list[int] | None = None, evidence_hash: str = "",
-                 source_execution_ids: Sequence[str] | None = None,
-                 source_identity: str | None = None,
-                 observation_method: str | None = None,
-                 trust_level: str | None = None) -> int:
+    def add_fact(
+        self,
+        scan_id: str,
+        host: str,
+        fact_type: str,
+        value: str,
+        source: str,
+        confidence: int = 100,
+        session_id: str = "none",
+        derived_from: list[int] | None = None,
+        evidence_hash: str = "",
+        source_execution_ids: Sequence[str] | None = None,
+        source_identity: str | None = None,
+        observation_method: str | None = None,
+        trust_level: str | None = None,
+    ) -> int:
         """Add a fact and return its row id.
 
         For backward compatibility this returns the existing id when the fact is
@@ -1060,15 +1051,23 @@ class FactStore:
         )
         return fact_id
 
-    def add_fact_with_status(self, scan_id: str, host: str, fact_type: str, value: str, source: str,
-                             confidence: int = 100, session_id: str = 'none',
-                             derived_from: list[int] | None = None, evidence_hash: str = "",
-                             source_execution_ids: Sequence[str] | None = None,
-                             source_identity: str | None = None,
-                             observation_method: str | None = None,
-                             trust_level: str | None = None,
-                             completion_claim: CommandCompletionClaim | None = None,
-                             ) -> tuple[int, bool]:
+    def add_fact_with_status(
+        self,
+        scan_id: str,
+        host: str,
+        fact_type: str,
+        value: str,
+        source: str,
+        confidence: int = 100,
+        session_id: str = "none",
+        derived_from: list[int] | None = None,
+        evidence_hash: str = "",
+        source_execution_ids: Sequence[str] | None = None,
+        source_identity: str | None = None,
+        observation_method: str | None = None,
+        trust_level: str | None = None,
+        completion_claim: CommandCompletionClaim | None = None,
+    ) -> tuple[int, bool]:
         """Add a fact and return (row_id, created).
 
         The AI pipeline uses the created flag for anti-loop accounting. Without
@@ -1086,9 +1085,7 @@ class FactStore:
                 source_identity,
                 kind="fact_source_identity",
             )
-            canonical_source_identity = self._canonical_source_identity(
-                raw_source_identity
-            )
+            canonical_source_identity = self._canonical_source_identity(raw_source_identity)
         raw_observation_method = self.redactor.redact_text(
             observation_method or "",
             kind="fact_observation_method",
@@ -1106,29 +1103,25 @@ class FactStore:
         derived_json = json.dumps(derived_from)
         refs_json = json.dumps(secret_refs)
         now = time.time()
-        evidence_hash = evidence_hash or self._evidence_hash(
-            scan_id, host, fact_type, value, source, session_id
-        )
+        evidence_hash = evidence_hash or self._evidence_hash(scan_id, host, fact_type, value, source, session_id)
 
         with self._get_conn() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            if (
-                completion_claim is not None
-                and completion_claim.scan_key != self._completion_scan_key(scan_id)
-            ):
-                raise CommandCompletionConflictError(
-                    "Execution completion claim belongs to a different scan"
-                )
+            if completion_claim is not None and completion_claim.scan_key != self._completion_scan_key(scan_id):
+                raise CommandCompletionConflictError("Execution completion claim belongs to a different scan")
             self._renew_command_completion_claim_in_connection(
                 conn,
                 completion_claim,
             )
             cursor = conn.cursor()
-            cursor.execute('''
+            cursor.execute(
+                """
                 SELECT id, confidence FROM facts
                 WHERE scan_id = ? AND host = ? AND type = ? AND value = ?
                 LIMIT 1
-            ''', (scan_id, host, fact_type, value))
+            """,
+                (scan_id, host, fact_type, value),
+            )
             existing = cursor.fetchone()
             if existing:
                 fact_id, old_confidence = existing
@@ -1155,15 +1148,29 @@ class FactStore:
                     )
                     conn.commit()
                     return fact_id, False
-                cursor.execute('''
+                cursor.execute(
+                    """
                     UPDATE facts
                     SET confidence = ?, timestamp = ?
                     WHERE id = ?
-                ''', (max(int(old_confidence or 0), int(confidence or 0)), now, fact_id))
+                """,
+                    (max(int(old_confidence or 0), int(confidence or 0)), now, fact_id),
+                )
                 self._insert_observation(
-                    cursor, fact_id, scan_id, host, fact_type, value,
-                    confidence, source, session_id, evidence_hash, now, secret_refs,
-                    canonical_source_identity, canonical_observation_method,
+                    cursor,
+                    fact_id,
+                    scan_id,
+                    host,
+                    fact_type,
+                    value,
+                    confidence,
+                    source,
+                    session_id,
+                    evidence_hash,
+                    now,
+                    secret_refs,
+                    canonical_source_identity,
+                    canonical_observation_method,
                     canonical_trust,
                     source_execution_ids or (),
                 )
@@ -1177,21 +1184,44 @@ class FactStore:
                 conn.commit()
                 return fact_id, False
 
-            cursor.execute('''
+            cursor.execute(
+                """
                 INSERT INTO facts (
                     scan_id, host, type, value, confidence, source, session_id,
                     derived_from, evidence_hash, timestamp, secret_refs
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                scan_id, host, fact_type, value, confidence, source, session_id,
-                derived_json, evidence_hash, now, refs_json,
-            ))
+            """,
+                (
+                    scan_id,
+                    host,
+                    fact_type,
+                    value,
+                    confidence,
+                    source,
+                    session_id,
+                    derived_json,
+                    evidence_hash,
+                    now,
+                    refs_json,
+                ),
+            )
             fact_id = cursor.lastrowid
             self._insert_observation(
-                cursor, fact_id, scan_id, host, fact_type, value,
-                confidence, source, session_id, evidence_hash, now, secret_refs,
-                canonical_source_identity, canonical_observation_method,
+                cursor,
+                fact_id,
+                scan_id,
+                host,
+                fact_type,
+                value,
+                confidence,
+                source,
+                session_id,
+                evidence_hash,
+                now,
+                secret_refs,
+                canonical_source_identity,
+                canonical_observation_method,
                 canonical_trust,
                 source_execution_ids or (),
             )
@@ -1258,32 +1288,54 @@ class FactStore:
         ).fetchone()
         return row is not None
 
-    def _insert_observation(self, cursor, fact_id: int, scan_id: str, host: str,
-                            fact_type: str, value: str, confidence: int, source: str,
-                            session_id: str, evidence_hash: str, timestamp: float,
-                            secret_refs: tuple[str, ...], source_identity: str,
-                            observation_method: str,
-                            trust_level: str,
-                            source_execution_ids: Sequence[str]) -> None:
-        cursor.execute('''
+    def _insert_observation(
+        self,
+        cursor,
+        fact_id: int,
+        scan_id: str,
+        host: str,
+        fact_type: str,
+        value: str,
+        confidence: int,
+        source: str,
+        session_id: str,
+        evidence_hash: str,
+        timestamp: float,
+        secret_refs: tuple[str, ...],
+        source_identity: str,
+        observation_method: str,
+        trust_level: str,
+        source_execution_ids: Sequence[str],
+    ) -> None:
+        cursor.execute(
+            """
             INSERT INTO fact_observations (
                 fact_id, scan_id, host, type, value, confidence, source,
                 source_identity, observation_method, trust_level, session_id,
                 evidence_hash, timestamp, secret_refs
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            fact_id, scan_id, host, fact_type, value, confidence, source,
-            source_identity, observation_method, trust_level, session_id,
-            evidence_hash, timestamp, json.dumps(secret_refs),
-        ))
+        """,
+            (
+                fact_id,
+                scan_id,
+                host,
+                fact_type,
+                value,
+                confidence,
+                source,
+                source_identity,
+                observation_method,
+                trust_level,
+                session_id,
+                evidence_hash,
+                timestamp,
+                json.dumps(secret_refs),
+            ),
+        )
         observation_id = int(cursor.lastrowid)
         execution_ids = tuple(
-            dict.fromkeys(
-                str(item or "").strip()
-                for item in source_execution_ids
-                if str(item or "").strip()
-            )
+            dict.fromkeys(str(item or "").strip() for item in source_execution_ids if str(item or "").strip())
         )
         cursor.executemany(
             """
@@ -1303,13 +1355,20 @@ class FactStore:
             ),
         )
 
-    def _evidence_hash(self, scan_id: str, host: str, fact_type: str, value: str,
-                       source: str, session_id: str) -> str:
-        payload = "\x1f".join(str(part or "") for part in (
-            scan_id, host, fact_type, value, source, session_id,
-        ))
+    def _evidence_hash(self, scan_id: str, host: str, fact_type: str, value: str, source: str, session_id: str) -> str:
+        payload = "\x1f".join(
+            str(part or "")
+            for part in (
+                scan_id,
+                host,
+                fact_type,
+                value,
+                source,
+                session_id,
+            )
+        )
         return hashlib.sha256(payload.encode("utf-8", errors="replace")).hexdigest()
-            
+
     def add_hypothesis(self, scan_id: str, host: str, claim: str, required_evidence: list[str], source: str) -> int:
         """Add a hypothesis to the hypotheses table."""
         claim = self.redactor.redact_text(claim, kind="hypothesis")
@@ -1318,14 +1377,19 @@ class FactStore:
         req_json = json.dumps(required_evidence)
         with self._get_conn() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
+            cursor.execute(
+                """
                 INSERT INTO hypotheses (scan_id, host, claim, required_evidence, source, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?)
-            ''', (scan_id, host, claim, req_json, source, time.time()))
+            """,
+                (scan_id, host, claim, req_json, source, time.time()),
+            )
             conn.commit()
             return cursor.lastrowid
 
-    def get_facts(self, scan_id: str, host: str | None = None, fact_type: str | None = None, session_id: str | None = None) -> list[dict[str, Any]]:
+    def get_facts(
+        self, scan_id: str, host: str | None = None, fact_type: str | None = None, session_id: str | None = None
+    ) -> list[dict[str, Any]]:
         """Retrieve facts matching the given criteria."""
         query = "SELECT id, scan_id, host, type, value, confidence, source, session_id, derived_from, evidence_hash, timestamp, secret_refs FROM facts WHERE scan_id = ?"
         params = [scan_id]
@@ -1418,55 +1482,57 @@ class FactStore:
             freshness = self.assessments.freshness_for(
                 str(row[3]),
                 row[10],
-                execution_statuses=(
-                    (latest_execution_status,) if latest_execution_status else ()
-                ),
+                execution_statuses=((latest_execution_status,) if latest_execution_status else ()),
                 now=evaluated_at,
             )
             if not observations:
-                observations = [{
-                    "id": None,
-                    "confidence": row[5],
-                    "source": row[6],
-                    "source_identity": self._source_identity_from_source(row[6]),
-                    "observation_method": self._canonical_observation_method(
-                        "",
-                        source_identity=self._source_identity_from_source(row[6]),
-                    ),
-                    "trust_level": TRUSTED,
-                    "session_id": row[7],
-                    "evidence_hash": row[9],
-                    "timestamp": row[10],
-                    "secret_refs": list(self._load_refs(row[11])),
-                }]
+                observations = [
+                    {
+                        "id": None,
+                        "confidence": row[5],
+                        "source": row[6],
+                        "source_identity": self._source_identity_from_source(row[6]),
+                        "observation_method": self._canonical_observation_method(
+                            "",
+                            source_identity=self._source_identity_from_source(row[6]),
+                        ),
+                        "trust_level": TRUSTED,
+                        "session_id": row[7],
+                        "evidence_hash": row[9],
+                        "timestamp": row[10],
+                        "secret_refs": list(self._load_refs(row[11])),
+                    }
+                ]
             sources = sorted({obs["source"] for obs in observations if obs.get("source")})
             sessions = sorted({obs["session_id"] for obs in observations if obs.get("session_id")})
             aggregate_trust = aggregate_observation_trust(observations)
-            results.append({
-                "id": row[0],
-                "scan_id": row[1],
-                "host": row[2],
-                "type": row[3],
-                "value": row[4],
-                "confidence": row[5],
-                "source": row[6],
-                "session_id": row[7],
-                "derived_from": json.loads(row[8]),
-                "evidence_hash": row[9],
-                "timestamp": row[10],
-                "secret_refs": list(self._load_refs(row[11])),
-                "observations": observations,
-                "trust_level": aggregate_trust,
-                "sources": sources,
-                "sessions": sessions,
-                "assessment": assessment.to_dict() if assessment else None,
-                "assessment_id": assessment.assessment_id if assessment else None,
-                "assessment_status": assessment.status.value if assessment else "observed",
-                "assessment_rule_id": assessment.rule_id if assessment else None,
-                "freshness": freshness.to_dict(),
-                "freshness_status": freshness.status.value,
-                "coverage_status": freshness.coverage.value,
-            })
+            results.append(
+                {
+                    "id": row[0],
+                    "scan_id": row[1],
+                    "host": row[2],
+                    "type": row[3],
+                    "value": row[4],
+                    "confidence": row[5],
+                    "source": row[6],
+                    "session_id": row[7],
+                    "derived_from": json.loads(row[8]),
+                    "evidence_hash": row[9],
+                    "timestamp": row[10],
+                    "secret_refs": list(self._load_refs(row[11])),
+                    "observations": observations,
+                    "trust_level": aggregate_trust,
+                    "sources": sources,
+                    "sessions": sessions,
+                    "assessment": assessment.to_dict() if assessment else None,
+                    "assessment_id": assessment.assessment_id if assessment else None,
+                    "assessment_status": assessment.status.value if assessment else "observed",
+                    "assessment_rule_id": assessment.rule_id if assessment else None,
+                    "freshness": freshness.to_dict(),
+                    "freshness_status": freshness.status.value,
+                    "coverage_status": freshness.coverage.value,
+                }
+            )
         return results
 
     def _latest_execution_statuses_for_assessments(
@@ -1474,9 +1540,7 @@ class FactStore:
         conn: sqlite3.Connection,
         assessments: Iterable[FactAssessment],
     ) -> dict[int, str]:
-        assessment_ids = tuple(
-            assessment.assessment_id for assessment in assessments
-        )
+        assessment_ids = tuple(assessment.assessment_id for assessment in assessments)
         if not assessment_ids:
             return {}
         placeholders = ",".join("?" for _ in assessment_ids)
@@ -1497,41 +1561,43 @@ class FactStore:
             """,
             assessment_ids,
         ).fetchall()
-        return {
-            int(fact_id): str(status)
-            for fact_id, status, _timestamp, _result_id in rows
-        }
+        return {int(fact_id): str(status) for fact_id, status, _timestamp, _result_id in rows}
 
     def _get_observations_for_facts(self, cursor, fact_ids: list[int]) -> dict[int, list[dict[str, Any]]]:
         if not fact_ids:
             return {}
         placeholders = ",".join("?" for _ in fact_ids)
-        cursor.execute(f'''
+        cursor.execute(
+            f"""
             SELECT id, fact_id, confidence, source, source_identity,
                    observation_method, trust_level, session_id, evidence_hash,
                    timestamp, secret_refs
             FROM fact_observations
             WHERE fact_id IN ({placeholders})
             ORDER BY timestamp ASC
-        ''', fact_ids)
+        """,
+            fact_ids,
+        )
         grouped: dict[int, list[dict[str, Any]]] = {}
         for row in cursor.fetchall():
-            grouped.setdefault(row[1], []).append({
-                "id": row[0],
-                "confidence": row[2],
-                "source": row[3],
-                "source_identity": row[4],
-                "observation_method": row[5],
-                "trust_level": canonical_trust_level(
-                    row[6],
-                    observation_method=row[5],
-                    default=TRUSTED,
-                ),
-                "session_id": row[7],
-                "evidence_hash": row[8],
-                "timestamp": row[9],
-                "secret_refs": list(self._load_refs(row[10])),
-            })
+            grouped.setdefault(row[1], []).append(
+                {
+                    "id": row[0],
+                    "confidence": row[2],
+                    "source": row[3],
+                    "source_identity": row[4],
+                    "observation_method": row[5],
+                    "trust_level": canonical_trust_level(
+                        row[6],
+                        observation_method=row[5],
+                        default=TRUSTED,
+                    ),
+                    "session_id": row[7],
+                    "evidence_hash": row[8],
+                    "timestamp": row[9],
+                    "secret_refs": list(self._load_refs(row[10])),
+                }
+            )
         return grouped
 
     @staticmethod
@@ -1593,9 +1659,7 @@ class FactStore:
     ) -> None:
         current = self._scan_completion_generation_in_connection(conn, scan_key)
         if current != int(expected_generation):
-            raise CommandCompletionConflictError(
-                "Scan generation changed before execution completion"
-            )
+            raise CommandCompletionConflictError("Scan generation changed before execution completion")
 
     def _completion_now(self) -> float:
         try:
@@ -1624,13 +1688,7 @@ class FactStore:
 
     @staticmethod
     def _idempotency_digest(idempotency_key: str) -> str:
-        return (
-            hashlib.sha256(
-                str(idempotency_key).encode("utf-8", "replace")
-            ).hexdigest()
-            if idempotency_key
-            else ""
-        )
+        return hashlib.sha256(str(idempotency_key).encode("utf-8", "replace")).hexdigest() if idempotency_key else ""
 
     def _completion_request_fingerprint(
         self,
@@ -1685,9 +1743,7 @@ class FactStore:
         request_fingerprint: str,
     ) -> None:
         if existing_scan_id != scan_id or existing_host_key != host_key:
-            raise CommandCompletionConflictError(
-                "Execution completion idempotency key belongs to a different scope"
-            )
+            raise CommandCompletionConflictError("Execution completion idempotency key belongs to a different scope")
         if existing_fingerprint != request_fingerprint:
             raise CommandCompletionConflictError(
                 "Execution completion idempotency key was reused with a different payload"
@@ -1823,9 +1879,7 @@ class FactStore:
         """Reserve an idempotent completion before parsing or evidence writes."""
 
         safe_idempotency_key = self._idempotency_digest(idempotency_key)
-        normalized_status = (
-            status.value if isinstance(status, ExecutionStatus) else str(status).lower()
-        )
+        normalized_status = status.value if isinstance(status, ExecutionStatus) else str(status).lower()
         if normalized_status not in _COMMAND_RESULT_STATUSES:
             raise ValueError(f"Unsupported command result status: {normalized_status}")
         effective_failed = bool(failed) or normalized_status in _FAILED_STATUSES
@@ -1863,17 +1917,10 @@ class FactStore:
             conn.execute("BEGIN IMMEDIATE")
             if completion_fence is not None:
                 if completion_fence.scan_key != scan_key:
-                    raise CommandCompletionConflictError(
-                        "Execution completion fence belongs to a different scan"
-                    )
+                    raise CommandCompletionConflictError("Execution completion fence belongs to a different scan")
                 expected_generation = int(completion_fence.scan_generation)
-                if (
-                    scan_generation is not None
-                    and int(scan_generation) != expected_generation
-                ):
-                    raise CommandCompletionConflictError(
-                        "Execution completion generation inputs disagree"
-                    )
+                if scan_generation is not None and int(scan_generation) != expected_generation:
+                    raise CommandCompletionConflictError("Execution completion generation inputs disagree")
             else:
                 expected_generation = (
                     self._scan_completion_generation_in_connection(conn, scan_key)
@@ -1901,9 +1948,7 @@ class FactStore:
                 (safe_idempotency_key,),
             ).fetchone()
             if claim_row is not None and int(claim_row[1]) != expected_generation:
-                raise CommandCompletionConflictError(
-                    "Execution completion belongs to a different scan generation"
-                )
+                raise CommandCompletionConflictError("Execution completion belongs to a different scan generation")
             if claim_row is None:
                 existing = conn.execute(
                     """
@@ -1924,9 +1969,7 @@ class FactStore:
                     self._validate_completion_identity(
                         existing_scan_id=str(existing[1]),
                         existing_host_key=existing_host_key,
-                        existing_fingerprint=(
-                            existing_fingerprint or request_fingerprint
-                        ),
+                        existing_fingerprint=(existing_fingerprint or request_fingerprint),
                         scan_id=str(scan_id),
                         host_key=host_key,
                         request_fingerprint=request_fingerprint,
@@ -1943,11 +1986,7 @@ class FactStore:
                             existing_command=str(existing[4]),
                             existing_request_id=str(existing[13]),
                             existing_policy_decision_ref=str(existing[14]),
-                            existing_exit_code=(
-                                int(existing[15])
-                                if existing[15] is not None
-                                else None
-                            ),
+                            existing_exit_code=(int(existing[15]) if existing[15] is not None else None),
                             existing_error_class=str(existing[16]),
                             existing_artifact_count=self._bounded_count(existing[17]),
                             output_hash=safe_output_hash,
@@ -2070,9 +2109,7 @@ class FactStore:
                 except (TypeError, ValueError):
                     existing_lease = 0.0
                 if existing_lease > claimed_at:
-                    raise CommandCompletionInProgressError(
-                        "Execution completion is already in progress"
-                    )
+                    raise CommandCompletionInProgressError("Execution completion is already in progress")
                 conn.execute(
                     """
                     UPDATE command_completion_claims
@@ -2148,10 +2185,7 @@ class FactStore:
         conn: sqlite3.Connection,
         claim: CommandCompletionClaim | None,
     ) -> None:
-        if (
-            claim is None
-            or claim.replayed
-        ):
+        if claim is None or claim.replayed:
             return
         self._validate_scan_completion_generation_in_connection(
             conn,
@@ -2177,35 +2211,37 @@ class FactStore:
             ),
         )
         if updated.rowcount != 1:
-            raise CommandCompletionInProgressError(
-                "Execution completion lease ownership was lost"
-            )
+            raise CommandCompletionInProgressError("Execution completion lease ownership was lost")
 
     def get_hypotheses(self, scan_id: str, host: str | None = None) -> list[dict[str, Any]]:
         """Retrieve hypotheses matching criteria."""
-        query = "SELECT id, scan_id, host, claim, required_evidence, source, timestamp FROM hypotheses WHERE scan_id = ?"
+        query = (
+            "SELECT id, scan_id, host, claim, required_evidence, source, timestamp FROM hypotheses WHERE scan_id = ?"
+        )
         params = [scan_id]
 
         if host:
             query += " AND host = ?"
             params.append(host)
-            
+
         with self._get_conn() as conn:
             cursor = conn.cursor()
             cursor.execute(query, params)
             rows = cursor.fetchall()
-            
+
         results = []
         for row in rows:
-            results.append({
-                "id": row[0],
-                "scan_id": row[1],
-                "host": row[2],
-                "claim": row[3],
-                "required_evidence": json.loads(row[4]),
-                "source": row[5],
-                "timestamp": row[6]
-            })
+            results.append(
+                {
+                    "id": row[0],
+                    "scan_id": row[1],
+                    "host": row[2],
+                    "claim": row[3],
+                    "required_evidence": json.loads(row[4]),
+                    "source": row[5],
+                    "timestamp": row[6],
+                }
+            )
         return results
 
     def add_command_result(
@@ -2343,9 +2379,7 @@ class FactStore:
             scan_key = self._completion_scan_key(scan_id)
             if completion_claim is not None:
                 if completion_claim.scan_key != scan_key:
-                    raise CommandCompletionConflictError(
-                        "Execution completion claim belongs to a different scan"
-                    )
+                    raise CommandCompletionConflictError("Execution completion claim belongs to a different scan")
                 self._renew_command_completion_claim_in_connection(
                     conn,
                     completion_claim,
@@ -2386,9 +2420,7 @@ class FactStore:
                         or completion_claim.idempotency_key != safe_idempotency_key
                         or completion_claim.owner_token != str(claim_row[4])
                     ):
-                        raise CommandCompletionInProgressError(
-                            "Execution completion is already in progress"
-                        )
+                        raise CommandCompletionInProgressError("Execution completion is already in progress")
                 elif completion_claim is not None:
                     raise RuntimeError("Execution completion claim was lost")
             idempotent = None
@@ -2412,9 +2444,7 @@ class FactStore:
                     self._validate_completion_identity(
                         existing_scan_id=str(idempotent[1]),
                         existing_host_key=self._completion_host_key(idempotent[2]),
-                        existing_fingerprint=(
-                            existing_fingerprint or request_fingerprint
-                        ),
+                        existing_fingerprint=(existing_fingerprint or request_fingerprint),
                         scan_id=str(scan_id),
                         host_key=self._completion_host_key(host),
                         request_fingerprint=request_fingerprint,
@@ -2431,11 +2461,7 @@ class FactStore:
                             existing_command=str(idempotent[4]),
                             existing_request_id=str(idempotent[11]),
                             existing_policy_decision_ref=str(idempotent[12]),
-                            existing_exit_code=(
-                                int(idempotent[13])
-                                if idempotent[13] is not None
-                                else None
-                            ),
+                            existing_exit_code=(int(idempotent[13]) if idempotent[13] is not None else None),
                             existing_error_class=str(idempotent[14]),
                             existing_artifact_count=self._bounded_count(idempotent[15]),
                             output_hash=output_hash,
@@ -2456,13 +2482,17 @@ class FactStore:
                 result_is_unique = False
                 projection_execution_key = str(idempotent[9] or "")
             else:
-                cursor.execute('''
+                cursor.execute(
+                    """
                     SELECT id FROM command_results
                     WHERE scan_id = ? AND host = ? AND output_hash = ?
                     LIMIT 1
-                ''', (scan_id, host, output_hash))
+                """,
+                    (scan_id, host, output_hash),
+                )
                 existing = cursor.fetchone()
-                cursor.execute('''
+                cursor.execute(
+                    """
                     INSERT INTO command_results (
                         scan_id, host, command_key, command, output_hash, output_bytes,
                         parsed_facts, new_facts, failed, schema_version, status, partial,
@@ -2472,33 +2502,35 @@ class FactStore:
                         idempotency_key, completion_fingerprint, timestamp
                     )
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (
-                    scan_id,
-                    host,
-                    command_key,
-                    command,
-                    output_hash,
-                    self._bounded_count(output_bytes),
-                    self._bounded_count(parsed_facts),
-                    self._bounded_count(new_facts),
-                    1 if failed else 0,
-                    schema_version,
-                    normalized_status,
-                    1 if partial else 0,
-                    execution_id,
-                    execution_key,
-                    request_id,
-                    policy_decision_ref,
-                    safe_exit_code,
-                    safe_duration,
-                    self._bounded_count(stderr_bytes),
-                    error_class,
-                    safe_artifact_count,
-                    metadata_json,
-                    safe_idempotency_key,
-                    request_fingerprint,
-                    now,
-                ))
+                """,
+                    (
+                        scan_id,
+                        host,
+                        command_key,
+                        command,
+                        output_hash,
+                        self._bounded_count(output_bytes),
+                        self._bounded_count(parsed_facts),
+                        self._bounded_count(new_facts),
+                        1 if failed else 0,
+                        schema_version,
+                        normalized_status,
+                        1 if partial else 0,
+                        execution_id,
+                        execution_key,
+                        request_id,
+                        policy_decision_ref,
+                        safe_exit_code,
+                        safe_duration,
+                        self._bounded_count(stderr_bytes),
+                        error_class,
+                        safe_artifact_count,
+                        metadata_json,
+                        safe_idempotency_key,
+                        request_fingerprint,
+                        now,
+                    ),
+                )
                 result_id = int(cursor.lastrowid)
                 result_is_unique = existing is None
                 projection_execution_key = execution_key
@@ -2508,13 +2540,11 @@ class FactStore:
                 scan_id=scan_id,
                 host=host,
             )
-            projection_fact_ids = (
-                self.assessments.automatic_rule_fact_ids_for_execution_in_connection(
-                    conn,
-                    execution_key=projection_execution_key,
-                    scan_id=scan_id,
-                    host=host,
-                )
+            projection_fact_ids = self.assessments.automatic_rule_fact_ids_for_execution_in_connection(
+                conn,
+                execution_key=projection_execution_key,
+                scan_id=scan_id,
+                host=host,
             )
             self._enqueue_assessment_projections_in_connection(
                 conn,
@@ -2575,7 +2605,7 @@ class FactStore:
         return result_id, result_is_unique
 
     def get_command_results(self, scan_id: str, host: str | None = None) -> list[dict[str, Any]]:
-        query = '''
+        query = """
             SELECT id, scan_id, host, command_key, command, output_hash, output_bytes,
                    parsed_facts, new_facts, failed, timestamp, schema_version, status,
                    partial, execution_id, request_id, policy_decision_ref, exit_code,
@@ -2583,7 +2613,7 @@ class FactStore:
                    idempotency_key
             FROM command_results
             WHERE scan_id = ?
-        '''
+        """
         params = [scan_id]
         if host:
             query += " AND host = ?"
@@ -2647,17 +2677,19 @@ class FactStore:
         # Strip internal DB fields to save tokens
         clean_facts = []
         for f in facts:
-            clean_facts.append({
-                "type": f["type"],
-                "value": f["value"],
-                "source": f["source"],
-                "sources": f.get("sources", []),
-                "observations": len(f.get("observations", [])),
-                "session_id": f["session_id"],
-                "confidence": f["confidence"],
-                "assessment_id": f.get("assessment_id"),
-                "assessment_status": f.get("assessment_status", "observed"),
-            })
+            clean_facts.append(
+                {
+                    "type": f["type"],
+                    "value": f["value"],
+                    "source": f["source"],
+                    "sources": f.get("sources", []),
+                    "observations": len(f.get("observations", [])),
+                    "session_id": f["session_id"],
+                    "confidence": f["confidence"],
+                    "assessment_id": f.get("assessment_id"),
+                    "assessment_status": f.get("assessment_status", "observed"),
+                }
+            )
         return json.dumps(clean_facts, indent=2)
 
     def get_history(self, scan_id: str) -> list[dict[str, Any]]:
@@ -2679,9 +2711,7 @@ class FactStore:
                 (scan_id, self._completion_now()),
             ).fetchone()
             if live_claim is not None:
-                raise CommandCompletionInProgressError(
-                    "Cannot clear a scan with an active execution completion"
-                )
+                raise CommandCompletionInProgressError("Cannot clear a scan with an active execution completion")
             cursor.execute(
                 """
                 INSERT INTO scan_completion_generations(

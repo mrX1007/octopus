@@ -11,6 +11,7 @@ pytestmark = pytest.mark.contract
 def _automatic_context() -> ExecutionContext:
     return ExecutionContext.automatic(("10.0.0.5",), actor="scheduler-contract", origin="tests")
 
+
 def test_command_scheduler_skips_duplicate_and_negative_http_surface():
     import uuid
 
@@ -148,7 +149,9 @@ def test_execute_pipeline_command_records_trace_and_blocks_repeat(monkeypatch=No
     assert second["command_result"]["skipped"] is True
     assert second["command_result"]["skip_reason"] == "duplicate_command_key"
     assert any(item["action"] == "execute" and item["new_facts"] > 0 for item in pipeline.command_trace)
-    assert any(item["action"] == "skip" and item["reason"] == "duplicate_command_key" for item in pipeline.command_trace)
+    assert any(
+        item["action"] == "skip" and item["reason"] == "duplicate_command_key" for item in pipeline.command_trace
+    )
 
 
 def test_task_result_with_only_skipped_commands_is_skipped_not_no_fact():
@@ -157,8 +160,18 @@ def test_task_result_with_only_skipped_commands_is_skipped_not_no_fact():
     pipeline = AIPipeline("/tmp/octopus_skipped_task_result.db")
     task_result = {
         "commands": [
-            {"command": "nuclei_safe 10.0.0.5", "failed": False, "skipped": True, "skip_reason": "already_completed:nuclei_scan"},
-            {"command": "sqlmap http://10.0.0.5", "failed": False, "skipped": True, "skip_reason": "duplicate_command_key"},
+            {
+                "command": "nuclei_safe 10.0.0.5",
+                "failed": False,
+                "skipped": True,
+                "skip_reason": "already_completed:nuclei_scan",
+            },
+            {
+                "command": "sqlmap http://10.0.0.5",
+                "failed": False,
+                "skipped": True,
+                "skip_reason": "duplicate_command_key",
+            },
         ],
         "parsed_facts": 0,
         "new_facts": 0,

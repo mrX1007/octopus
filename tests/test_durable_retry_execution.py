@@ -83,11 +83,14 @@ def test_attempt_terminalization_and_retry_grant_rollback_together(
     assert snapshot.tasks[0].status == "running"
     assert snapshot.tasks[0].retry_count == 0
     assert snapshot.attempts[0].status == "running"
-    assert store.pending_retry_command_keys(
-        mission.mission_id,
-        task.agent,
-        task.task,
-    ) == ()
+    assert (
+        store.pending_retry_command_keys(
+            mission.mission_id,
+            task.agent,
+            task.task,
+        )
+        == ()
+    )
 
 
 def test_retry_scheduler_bypasses_only_duplicate_and_timeout_degraded_gates():
@@ -225,42 +228,36 @@ def test_timeout_retry_allowlist_survives_restart_and_executes_command_once(
 
     def success_runner(command):
         calls.append(command)
-        return (
-            f"[NUCLEI SAFE - http://{TARGET}]\n"
-            "No nuclei findings detected.\n"
-            f"[NUCLEI COMPLETE - http://{TARGET}]"
-        )
+        return f"[NUCLEI SAFE - http://{TARGET}]\nNo nuclei findings detected.\n[NUCLEI COMPLETE - http://{TARGET}]"
 
     resumed = AIPipeline(str(db_path))
     resumed.runtime._runner = success_runner
     resumed._reset_runtime_state()
     resumed._start_mission("scan-restart-retry", TARGET)
     resume_plan = resumed._resumable_mission_plan()
-    assert [
-        {"agent": step["agent"], "task": step["task"]}
-        for step in resume_plan
-    ] == [{"agent": "DiscoveryAgent", "task": "service_verification"}]
+    assert [{"agent": step["agent"], "task": step["task"]} for step in resume_plan] == [
+        {"agent": "DiscoveryAgent", "task": "service_verification"}
+    ]
     assert resume_plan[0]["task_id"] == pending.task_id
     assert resume_plan[0]["task_scope"] == pending.task_scope
     resumed._register_mission_plan(resume_plan)
 
     hydrated = next(
-        task
-        for task in resumed.mission_store.snapshot(resumed.mission_id).tasks
-        if task.task_id == pending.task_id
+        task for task in resumed.mission_store.snapshot(resumed.mission_id).tasks if task.task_id == pending.task_id
     )
     assert hydrated.scope == "service:https"
     assert hydrated.capability == "service.verification"
     assert hydrated.retry_budget == 2
-    assert resumed._begin_task_attempt(
-        "DiscoveryAgent",
-        "service_verification",
-        task_id=hydrated.task_id,
-    ).attempt_number == 2
+    assert (
+        resumed._begin_task_attempt(
+            "DiscoveryAgent",
+            "service_verification",
+            task_id=hydrated.task_id,
+        ).attempt_number
+        == 2
+    )
     assert resumed._active_task_id == hydrated.task_id
-    assert resumed._active_retry_command_keys == {
-        resumed.command_scheduler.command_key(RETRY_COMMAND)
-    }
+    assert resumed._active_retry_command_keys == {resumed.command_scheduler.command_key(RETRY_COMMAND)}
 
     succeeded = resumed._execute_pipeline_command(
         "scan-restart-retry",
@@ -293,14 +290,11 @@ def test_timeout_retry_allowlist_survives_restart_and_executes_command_once(
     assert repeated["command_result"]["skipped"] is True
     assert repeated["command_result"]["skip_reason"] == "duplicate_command_key"
     final = resumed.mission_store.snapshot(resumed.mission_id)
-    assert next(
-        task for task in final.tasks if task.task_id == pending.task_id
-    ).status == "completed"
-    assert [
-        attempt.status
-        for attempt in final.attempts
-        if attempt.task_id == pending.task_id
-    ] == ["failed", "completed"]
+    assert next(task for task in final.tasks if task.task_id == pending.task_id).status == "completed"
+    assert [attempt.status for attempt in final.attempts if attempt.task_id == pending.task_id] == [
+        "failed",
+        "completed",
+    ]
     assert resumed._active_task_id is None
 
 
@@ -356,9 +350,7 @@ def test_retrying_prerequisite_defers_then_releases_dependent_task(
     pipeline.runtime._runner = runner
     pipeline.tool_registry = _Registry()
     pipeline.discovery_agent = SimpleNamespace(
-        execute_task=lambda task, _target: (
-            [RETRY_COMMAND] if task == "parent" else [f"nmap {TARGET}"]
-        )
+        execute_task=lambda task, _target: [RETRY_COMMAND] if task == "parent" else [f"nmap {TARGET}"]
     )
     context = {
         "state": "unknown",
@@ -367,12 +359,8 @@ def test_retrying_prerequisite_defers_then_releases_dependent_task(
         "stage_gates": {},
         "next_required_capability": "service_discovery",
     }
-    pipeline.state_resolver = SimpleNamespace(
-        resolve_state=lambda _scan, _target: context
-    )
-    pipeline.context_builder = SimpleNamespace(
-        build_context=lambda _scan, _target: dict(context)
-    )
+    pipeline.state_resolver = SimpleNamespace(resolve_state=lambda _scan, _target: context)
+    pipeline.context_builder = SimpleNamespace(build_context=lambda _scan, _target: dict(context))
     goals = iter(("work", "conclude"))
     pipeline.director = SimpleNamespace(
         decide_goal=lambda _context, _history: {
@@ -415,14 +403,8 @@ def test_retrying_prerequisite_defers_then_releases_dependent_task(
 
     snapshot = pipeline.mission_store.snapshot(pipeline.mission_id)
     tasks = {task.task: task for task in snapshot.tasks}
-    parent_attempts = [
-        attempt for attempt in snapshot.attempts
-        if attempt.task_id == tasks["parent"].task_id
-    ]
-    child_attempts = [
-        attempt for attempt in snapshot.attempts
-        if attempt.task_id == tasks["child"].task_id
-    ]
+    parent_attempts = [attempt for attempt in snapshot.attempts if attempt.task_id == tasks["parent"].task_id]
+    child_attempts = [attempt for attempt in snapshot.attempts if attempt.task_id == tasks["child"].task_id]
     assert calls == [RETRY_COMMAND, RETRY_COMMAND, f"nmap {TARGET}"]
     assert [attempt.status for attempt in parent_attempts] == ["failed", "completed"]
     assert [attempt.status for attempt in child_attempts] == ["completed"]

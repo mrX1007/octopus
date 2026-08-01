@@ -86,9 +86,7 @@ _NON_NETWORK_TARGET_TOOLS = {
     "zap_import",
 }
 
-_NETWORK_PARAMETER_NAMES = frozenset(
-    {"callback_host", "target", "target_ip", "host", "url", "remote_host"}
-)
+_NETWORK_PARAMETER_NAMES = frozenset({"callback_host", "target", "target_ip", "host", "url", "remote_host"})
 
 # Registered callables whose network endpoint is intentionally named after the
 # produced/query artifact rather than ``target``.  This is a closed, code-owned
@@ -297,9 +295,7 @@ def _declared_network_targets(
         arguments,
     )
     if special is not None:
-        return tuple(
-            dict.fromkeys(candidate for candidate in special if validate_target(candidate))
-        )
+        return tuple(dict.fromkeys(candidate for candidate in special if validate_target(candidate)))
     targets: list[str] = []
     for position in _network_parameter_positions(tool_def):
         if position >= len(arguments):
@@ -343,9 +339,7 @@ def _special_registered_targets(
                 raise InvalidInvocation("unsupported_nmap_script_args")
             if option == "--script":
                 script_value = (
-                    argument.split("=", 1)[1]
-                    if "=" in argument
-                    else (args[index + 1] if index + 1 < len(args) else "")
+                    argument.split("=", 1)[1] if "=" in argument else (args[index + 1] if index + 1 < len(args) else "")
                 )
                 if script_value.strip().casefold() != "vuln":
                     raise InvalidInvocation("unsupported_nmap_script_source")
@@ -416,9 +410,8 @@ def _special_registered_targets(
         rustscan_args = args[:separator]
         for argument in rustscan_args:
             option = argument.split("=", 1)[0]
-            if (
-                option in {"-c", "--config-path", "--resolver", "--scripts"}
-                or (argument.startswith("-c") and argument != "-c")
+            if option in {"-c", "--config-path", "--resolver", "--scripts"} or (
+                argument.startswith("-c") and argument != "-c"
             ):
                 raise InvalidInvocation(f"unsupported_rustscan_indirection:{option}")
         target = ""
@@ -468,11 +461,7 @@ def _special_registered_targets(
                 raise InvalidInvocation(f"unbound_msf_option:{option_name}")
             match = re.match(r"(?i)^(?:RHOSTS?|VHOST)=(.+)$", argument)
             candidate = match.group(1).strip() if match else ""
-            if (
-                not candidate
-                and argument.upper() in {"RHOST", "RHOSTS", "VHOST"}
-                and index + 1 < len(flattened)
-            ):
+            if not candidate and argument.upper() in {"RHOST", "RHOSTS", "VHOST"} and index + 1 < len(flattened):
                 candidate = flattened[index + 1].strip()
             for item in re.split(r"[,\s]+", candidate):
                 if item and validate_target(item) and item not in msf_targets:
@@ -544,24 +533,25 @@ def _special_registered_targets(
         for argument in args:
             option = argument.split("=", 1)[0]
             if (
-                option in {
-                "-L",
-                "-K",
-                "-x",
-                "--abstract-unix-socket",
-                "--alt-svc",
-                "--config",
-                "--connect-to",
-                "--dns-servers",
-                "--doh-url",
-                "--location",
-                "--location-trusted",
-                "--next",
-                "--preproxy",
-                "--proxy",
-                "--resolve",
-                "--unix-socket",
-                "--url",
+                option
+                in {
+                    "-L",
+                    "-K",
+                    "-x",
+                    "--abstract-unix-socket",
+                    "--alt-svc",
+                    "--config",
+                    "--connect-to",
+                    "--dns-servers",
+                    "--doh-url",
+                    "--location",
+                    "--location-trusted",
+                    "--next",
+                    "--preproxy",
+                    "--proxy",
+                    "--resolve",
+                    "--unix-socket",
+                    "--url",
                 }
                 or option.startswith(("--proxy-", "--socks"))
                 or (
@@ -841,7 +831,8 @@ def validate_msf_options(options: str) -> tuple[str, ...]:
         if not normalized:
             continue
         if (
-            normalized in {
+            normalized
+            in {
                 "AUTORUNSCRIPT",
                 "CMD",
                 "COMMAND",
@@ -853,10 +844,7 @@ def validate_msf_options(options: str) -> tuple[str, ...]:
                 "RHOSTS_FILE",
             }
             or normalized.startswith("SESSION")
-            or (
-                normalized.endswith(("HOST", "HOSTS"))
-                and normalized not in {"RHOST", "RHOSTS"}
-            )
+            or (normalized.endswith(("HOST", "HOSTS")) and normalized not in {"RHOST", "RHOSTS"})
         ):
             raise ValueError(f"unbound_msf_option:{normalized}")
         if normalized == "PAYLOAD" and separator and "reverse" in value.casefold():
@@ -1043,7 +1031,19 @@ def _command_text_network_targets(command: str) -> tuple[str, ...]:
         for argument in positional:
             if validate_target(argument) or "@" in argument:
                 add(argument)
-                if executable in {"ping", "nc", "ncat", "netcat", "ssh", "scp", "sftp", "ftp", "telnet", "dig", "nslookup"}:
+                if executable in {
+                    "ping",
+                    "nc",
+                    "ncat",
+                    "netcat",
+                    "ssh",
+                    "scp",
+                    "sftp",
+                    "ftp",
+                    "telnet",
+                    "dig",
+                    "nslookup",
+                }:
                     break
         if len(targets) == starting_target_count:
             raise InvalidInvocation(f"unresolved_network_target:{executable}")
@@ -1211,9 +1211,7 @@ class ExecutionPolicy:
             )
         except InvalidInvocation as exc:
             return self._decision(False, str(exc), context, invocation)
-        effective_targets = tuple(
-            dict.fromkeys((*declared_targets, *invocation.targets))
-        )
+        effective_targets = tuple(dict.fromkeys((*declared_targets, *invocation.targets)))
         if effective_targets != invocation.targets:
             invocation = ToolInvocation(
                 executable=invocation.executable,
@@ -1347,10 +1345,7 @@ class ExecutionPolicy:
                     alias_tokens = 2
             if tool_def:
                 parameter_positions = _network_parameter_positions(tool_def)
-                if (
-                    not _registered_tool_uses_network_scope(tool_def)
-                    and bool(getattr(tool_def, "needs_target", True))
-                ):
+                if not _registered_tool_uses_network_scope(tool_def) and bool(getattr(tool_def, "needs_target", True)):
                     action_arguments = invocation.argv[alias_tokens:]
                     candidates = action_arguments[:1]
                 elif parameter_positions:
@@ -1363,9 +1358,7 @@ class ExecutionPolicy:
                     except InvalidInvocation as exc:
                         return self._decision(False, str(exc), context, invocation)
                 else:
-                    candidates = extract_network_targets(
-                        invocation.argv[alias_tokens:]
-                    )
+                    candidates = extract_network_targets(invocation.argv[alias_tokens:])
                 # The callable's typed target position is authoritative.  The
                 # generic network-token fallback is used only for legacy
                 # callables without a typed position, so an earlier URL/IP

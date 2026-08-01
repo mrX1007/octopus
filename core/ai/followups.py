@@ -178,13 +178,12 @@ class PostAccessFollowupRules:
             fact_type = str(fact.get("type", "")).strip().lower()
             value = str(fact.get("value", "")).strip()
             lowered = value.lower()
-            if (
-                fact_type == "credential" and lowered.startswith("ssh_login_success:")
-            ) or (fact_type == "service_status" and lowered == "ssh_authenticated"):
+            if (fact_type == "credential" and lowered.startswith("ssh_login_success:")) or (
+                fact_type == "service_status" and lowered == "ssh_authenticated"
+            ):
                 confirmed_evidence = confirmed_evidence or value
             elif fact_type == "credential" and (
-                lowered.startswith("ssh_key_available:")
-                or self._CACHED_CREDENTIAL.fullmatch(value) is not None
+                lowered.startswith("ssh_key_available:") or self._CACHED_CREDENTIAL.fullmatch(value) is not None
             ):
                 cached_evidence = cached_evidence or value
 

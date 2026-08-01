@@ -18,15 +18,9 @@ from core.ai.fact_predicates import parse_port_open
 _CLAIM_NORMALIZER = re.compile(r"[^a-z0-9]+")
 _CVE_IN_CLAIM = re.compile(r"(?:^|_)cve_(?P<year>\d{4})_(?P<sequence>\d{4,})(?:_|$)")
 _CVE_IN_VALUE = re.compile(r"(?i)(?<![a-z0-9])cve[-_](?P<year>\d{4})[-_](?P<sequence>\d{4,})(?![a-z0-9])")
-_SERVICE_ACTIVE_CLAIM = re.compile(
-    r"^(?P<service>[a-z][a-z0-9_]*)_service_(?:active|running)$"
-)
-_SERVICE_VERSION_CLAIM = re.compile(
-    r"^(?P<service>[a-z][a-z0-9_]*)_version_observed$"
-)
-_SERVICE_WORKFLOW_CLAIM = re.compile(
-    r"^(?P<service>[a-z][a-z0-9_]*)_service_needs_exploit_selection$"
-)
+_SERVICE_ACTIVE_CLAIM = re.compile(r"^(?P<service>[a-z][a-z0-9_]*)_service_(?:active|running)$")
+_SERVICE_VERSION_CLAIM = re.compile(r"^(?P<service>[a-z][a-z0-9_]*)_version_observed$")
+_SERVICE_WORKFLOW_CLAIM = re.compile(r"^(?P<service>[a-z][a-z0-9_]*)_service_needs_exploit_selection$")
 _SSH_LOGIN = re.compile(r"(?i)^ssh_login_success:(?P<user>[^@\s:]+)@(?P<target>\S+)$")
 
 _AUTHENTICATED_ACCESS_CLAIMS = {
@@ -195,9 +189,7 @@ def policy_evidence(
     if policy.claim_kind == "authenticated_access":
         return PolicyEvidence(_matching_ids(facts, _fact_proves_authenticated_access))
     if policy.claim_kind == "service_active":
-        return PolicyEvidence(
-            _matching_ids(facts, lambda fact: _fact_proves_service(fact, policy.service))
-        )
+        return PolicyEvidence(_matching_ids(facts, lambda fact: _fact_proves_service(fact, policy.service)))
     if policy.claim_kind == "service_version":
         return PolicyEvidence(
             _matching_ids(
@@ -243,17 +235,12 @@ def _fact_proves_root_access(fact: Mapping[str, Any]) -> bool:
     value = str(fact.get("value", "")).strip()
     lowered = value.lower()
     if fact_type == "system_access":
-        return (
-            lowered in {"uid=0", "root_access_confirmed"}
-            and _source_tool(fact) in {"ssh_inventory", "ssh_session"}
-        )
+        return lowered in {"uid=0", "root_access_confirmed"} and _source_tool(fact) in {"ssh_inventory", "ssh_session"}
     if fact_type != "credential":
         return False
     match = _SSH_LOGIN.fullmatch(value)
     return bool(
-        match
-        and match.group("user").lower() == "root"
-        and _source_tool(fact) in {"ssh_inventory", "ssh_session"}
+        match and match.group("user").lower() == "root" and _source_tool(fact) in {"ssh_inventory", "ssh_session"}
     )
 
 
@@ -308,11 +295,7 @@ def _typed_service_names(fact_type: str, value: str) -> set[str]:
         return set()
 
     names = {normalize_claim(raw_name)}
-    names.update(
-        normalize_claim(part)
-        for part in re.split(r"[/,+\s]+", raw_name)
-        if normalize_claim(part)
-    )
+    names.update(normalize_claim(part) for part in re.split(r"[/,+\s]+", raw_name) if normalize_claim(part))
     if "ssl" in names and "http" in names:
         names.add("https")
     return names
@@ -337,10 +320,7 @@ def _fact_proves_same_cve(
 
 
 def _cves_in_value(value: str) -> set[str]:
-    return {
-        f"CVE-{match.group('year')}-{match.group('sequence')}".upper()
-        for match in _CVE_IN_VALUE.finditer(value)
-    }
+    return {f"CVE-{match.group('year')}-{match.group('sequence')}".upper() for match in _CVE_IN_VALUE.finditer(value)}
 
 
 def _positive_check_result(value: str) -> bool:
@@ -348,10 +328,7 @@ def _positive_check_result(value: str) -> bool:
         payload = json.loads(value)
     except (TypeError, ValueError, json.JSONDecodeError):
         normalized = normalize_claim(value)
-        return any(
-            marker in normalized.split("_")
-            for marker in ("confirmed", "positive", "success", "vulnerable")
-        )
+        return any(marker in normalized.split("_") for marker in ("confirmed", "positive", "success", "vulnerable"))
     if not isinstance(payload, Mapping):
         return False
     status = normalize_claim(str(payload.get("status") or (payload.get("data") or {}).get("status") or ""))

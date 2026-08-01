@@ -274,11 +274,7 @@ def aggregate_observation_trust(
 def fact_trust_level(fact: Mapping[str, Any]) -> str:
     """Resolve a fact's trust from durable observations when available."""
 
-    observations = tuple(
-        item
-        for item in (fact.get("observations") or ())
-        if isinstance(item, Mapping)
-    )
+    observations = tuple(item for item in (fact.get("observations") or ()) if isinstance(item, Mapping))
     if observations:
         return aggregate_observation_trust(observations)
     return canonical_trust_level(
@@ -362,11 +358,7 @@ def web_fact_port(fact: Mapping[str, Any]) -> PortObservation | None:
             explicit_port = None
         if explicit_port is not None and 1 <= explicit_port <= 65535:
             service = "https" if scheme == "https" else "http" if scheme == "http" else ""
-            rendered = (
-                f"{explicit_port}/tcp ({service})"
-                if service
-                else f"{explicit_port}/tcp"
-            )
+            rendered = f"{explicit_port}/tcp ({service})" if service else f"{explicit_port}/tcp"
             return PortObservation(explicit_port, "tcp", service, rendered)
     if not isinstance(candidate, str):
         return None

@@ -49,11 +49,7 @@ def build_evidence_index(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def build_finding_groups(facts: list[dict[str, Any]], state: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
     """Group repeated facts into finding records with clear proof state."""
-    facts = [
-        fact
-        for fact in facts
-        if fact_is_decision_usable(fact)
-    ]
+    facts = [fact for fact in facts if fact_is_decision_usable(fact)]
     state = state or {}
     evidence_by_fact_id = {fact.get("id"): f"E-{idx:03d}" for idx, fact in enumerate(facts, 1)}
     groups: dict[str, dict[str, Any]] = {}
@@ -277,8 +273,7 @@ def build_attack_path(facts: list[dict[str, Any]], state: dict[str, Any]) -> lis
         )
     if any(
         f.get("type") == "post_exploit_stage"
-        and str(f.get("value", "")).casefold()
-        == "post_access_inventory_completed"
+        and str(f.get("value", "")).casefold() == "post_access_inventory_completed"
         for f in facts
     ):
         steps.append({"stage": "Host inventory", "status": "completed", "detail": "Post-access inventory collected"})

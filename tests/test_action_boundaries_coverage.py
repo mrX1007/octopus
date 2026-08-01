@@ -454,9 +454,7 @@ def test_exploit_and_metasploit_adapter_boundaries(monkeypatch):
         == "RHOSTS=example.com"
     )
     with pytest.raises(ValueError, match="invalid_msf_target"):
-        adapter._options(
-            ActionRequest("", automatic(""), parameters={"options": "THREADS=2"})
-        )
+        adapter._options(ActionRequest("", automatic(""), parameters={"options": "THREADS=2"}))
 
     unavailable = adapter.check(mapping_options)
     assert unavailable.result["status"] == "unavailable"
@@ -667,11 +665,7 @@ def test_registered_adapter_requires_request_target_to_match_primary_endpoint():
     request = ActionRequest(
         "remote.example",
         context,
-        provider_commands={
-            "tool:port_forward": (
-                "port_forward primary.example 8080 remote.example 80"
-            )
-        },
+        provider_commands={"tool:port_forward": ("port_forward primary.example 8080 remote.example 80")},
     )
 
     report = ActionExecutor(catalog, ExecutionPolicy()).run(

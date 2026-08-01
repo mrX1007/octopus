@@ -642,9 +642,7 @@ def test_scrapling_fetch_uses_closed_requests_session_without_alt_ports(
     assert "Status: 404" in recon_tools.run_scrapling_fetch("http://site.test")
 
     Session.responses = [RuntimeError("primary"), Response("no", 500), Response("alt ok", 200)]
-    assert "All scrapling/requests attempts failed" in recon_tools.run_scrapling_fetch(
-        "http://site.test:8080"
-    )
+    assert "All scrapling/requests attempts failed" in recon_tools.run_scrapling_fetch("http://site.test:8080")
     assert len(Session.responses) == 2
 
 

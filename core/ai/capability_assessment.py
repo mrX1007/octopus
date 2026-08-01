@@ -68,6 +68,7 @@ TASK_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "stealth_cleanup": ("stage:exfiltration", "policy:auto_cleanup", "killchain:cleanup"),
 }
 
+
 @dataclass(frozen=True)
 class ProviderAssessment:
     """One concrete provider's dependency and preflight-policy state."""
@@ -539,14 +540,10 @@ class CapabilityResolver:
             if stage == "internal_recon":
                 return (
                     fact_type == "internal_network"
-                    or (
-                        fact_type == "post_exploit_stage"
-                        and value == "internal_network_recon_completed"
-                    )
+                    or (fact_type == "post_exploit_stage" and value == "internal_network_recon_completed")
                     or (
                         fact_type == "service_status"
-                        and value
-                        in {"network_recon_completed", "internal_network_recon_completed"}
+                        and value in {"network_recon_completed", "internal_network_recon_completed"}
                     )
                 )
             if stage == "exfiltration":
@@ -567,11 +564,7 @@ class CapabilityResolver:
         if requirement == "domain":
             return fact_type in {"domain", "subdomain", "dns_record"}
         if requirement == "ad_surface":
-            return bool(
-                port
-                and port.service
-                in {"ldap", "kerberos", "winrm", "rdp", "smb", "microsoft-ds"}
-            )
+            return bool(port and port.service in {"ldap", "kerberos", "winrm", "rdp", "smb", "microsoft-ds"})
         if requirement in {"smb", "ssh"}:
             if port is None:
                 return False
@@ -589,8 +582,7 @@ class CapabilityResolver:
             return fact_type in {"internal_host", "internal_subnet", "network_node"}
         if requirement == "internal_services":
             return fact_type == "internal_service" or (
-                fact_type == "service_status"
-                and value.startswith("internal_service_probe_completed:")
+                fact_type == "service_status" and value.startswith("internal_service_probe_completed:")
             )
         return False
 

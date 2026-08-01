@@ -822,12 +822,14 @@ class FactAssessmentStore:
                 str(observation_method or "").strip().casefold(),
             )
             for execution_key, source_identity, observation_method, trust_level in rows
-            if str(source_identity or "").strip() and str(observation_method or "").strip()
+            if str(source_identity or "").strip()
+            and str(observation_method or "").strip()
             and canonical_trust_level(
                 trust_level,
                 observation_method=observation_method,
                 default=TRUSTED,
-            ) == TRUSTED
+            )
+            == TRUSTED
         ]
         return any(
             left[0] != right[0] and left[1:] != right[1:]

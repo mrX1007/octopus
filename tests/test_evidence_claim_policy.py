@@ -42,10 +42,7 @@ def test_open_ssh_cannot_prove_root_even_with_caller_selected_evidence(
     assert result["policy_id"] == "access.root.v1"
     assert result["requirement_labels"] == ["direct_root_access_fact"]
     assert result["required_evidence"] == ["direct_root_access_fact"]
-    assert all(
-        fact["type"] not in {"verified_claim", "inferred_claim"}
-        for fact in store.get_facts("scan", "host")
-    )
+    assert all(fact["type"] not in {"verified_claim", "inferred_claim"} for fact in store.get_facts("scan", "host"))
 
 
 @pytest.mark.parametrize(
@@ -165,9 +162,7 @@ def test_same_cve_policy_rejects_banner_and_mismatched_cve(tmp_path):
 
     assert result["status"] == "rejected"
     assert result["policy_id"] == "vulnerability.same_cve.v1"
-    assert result["requirement_labels"] == [
-        "same_cve_compatible_fact:CVE-2026-4242"
-    ]
+    assert result["requirement_labels"] == ["same_cve_compatible_fact:CVE-2026-4242"]
 
 
 def test_same_cve_direct_fact_verifies_and_candidate_remains_inferred(tmp_path):

@@ -149,6 +149,7 @@ def _assert_scoped_route(
     # callback there despite the helper's ``int | None`` nested annotation.
     with monkeypatch.context() as runtime_patch:
         if sys.version_info < (3, 10):
+
             class _AnnotationInt:
                 def __or__(self, _other):
                     return object

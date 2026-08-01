@@ -85,9 +85,7 @@ def test_v1_assessment_store_migrates_rule_ids_forward_on_restart(tmp_path):
     with sqlite3.connect(db_path) as conn:
         conn.execute("ALTER TABLE fact_assessments DROP COLUMN rule_id")
         conn.execute("DELETE FROM fact_assessment_schema")
-        conn.execute(
-            "INSERT INTO fact_assessment_schema(schema_version, applied_at) VALUES ('1.0', 1)"
-        )
+        conn.execute("INSERT INTO fact_assessment_schema(schema_version, applied_at) VALUES ('1.0', 1)")
         conn.commit()
 
     migrated = FactStore(str(db_path))
@@ -96,16 +94,8 @@ def test_v1_assessment_store_migrates_rule_ids_forward_on_restart(tmp_path):
     assert assessment is not None
     assert assessment.rule_id == "fact.assessment.legacy.v1"
     with sqlite3.connect(db_path) as conn:
-        versions = {
-            row[0]
-            for row in conn.execute(
-                "SELECT schema_version FROM fact_assessment_schema"
-            ).fetchall()
-        }
-        columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(fact_assessments)").fetchall()
-        }
+        versions = {row[0] for row in conn.execute("SELECT schema_version FROM fact_assessment_schema").fetchall()}
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(fact_assessments)").fetchall()}
     assert FACT_ASSESSMENT_SCHEMA_VERSION in versions
     assert "rule_id" in columns
 
@@ -339,8 +329,7 @@ def test_untrusted_source_diversity_never_promotes_fact(tmp_path):
     assert assessment.status is AssessmentStatus.OBSERVED
     assert fact["trust_level"] == "target_controlled"
     assert all(
-        item.rule_id != "fact.corroborated.independent_execution.v1"
-        for item in store.assessments.history(fact_id)
+        item.rule_id != "fact.corroborated.independent_execution.v1" for item in store.assessments.history(fact_id)
     )
 
 
@@ -377,13 +366,11 @@ def test_distinct_execution_ids_from_same_observation_source_do_not_corroborate(
     assert duplicate_id == fact_id
     assert assessment is not None
     assert assessment.status is AssessmentStatus.OBSERVED
-    assert {
-        (item["source_identity"], item["observation_method"])
-        for item in observations
-    } == {("scanner-a", "tcp-connect")}
+    assert {(item["source_identity"], item["observation_method"]) for item in observations} == {
+        ("scanner-a", "tcp-connect")
+    }
     assert all(
-        item.rule_id != "fact.corroborated.independent_execution.v1"
-        for item in store.assessments.history(fact_id)
+        item.rule_id != "fact.corroborated.independent_execution.v1" for item in store.assessments.history(fact_id)
     )
 
 
@@ -481,8 +468,7 @@ def test_unsuccessful_persisted_execution_cannot_corroborate(
     assert assessment is not None
     assert assessment.status is AssessmentStatus.OBSERVED
     assert all(
-        item.rule_id != "fact.corroborated.independent_execution.v1"
-        for item in store.assessments.history(fact_id)
+        item.rule_id != "fact.corroborated.independent_execution.v1" for item in store.assessments.history(fact_id)
     )
 
 
@@ -590,10 +576,7 @@ def test_contradicted_duplicate_and_idempotent_attach_cannot_resurrect_fact(tmp_
     )
     _record_execution(store, "exec-positive")
     _record_execution(store, "exec-negative")
-    assert (
-        store.assessments.current_for_fact(positive_id).status
-        is AssessmentStatus.CONTRADICTED
-    )
+    assert store.assessments.current_for_fact(positive_id).status is AssessmentStatus.CONTRADICTED
 
     duplicate_id = store.add_fact(
         "scan",
@@ -619,18 +602,9 @@ def test_contradicted_duplicate_and_idempotent_attach_cannot_resurrect_fact(tmp_
 
     assert duplicate_id == repeated_id == positive_id
     assert attached.status is AssessmentStatus.CONTRADICTED
-    assert (
-        store.assessments.current_for_fact(positive_id).status
-        is AssessmentStatus.CONTRADICTED
-    )
-    assert (
-        store.assessments.current_for_fact(negative_id).status
-        is AssessmentStatus.OBSERVED
-    )
-    assert all(
-        item.status is not AssessmentStatus.VERIFIED
-        for item in store.assessments.history(positive_id)
-    )
+    assert store.assessments.current_for_fact(positive_id).status is AssessmentStatus.CONTRADICTED
+    assert store.assessments.current_for_fact(negative_id).status is AssessmentStatus.OBSERVED
+    assert all(item.status is not AssessmentStatus.VERIFIED for item in store.assessments.history(positive_id))
 
 
 def test_same_execution_or_expired_observation_is_not_independent_contradiction(tmp_path):
@@ -684,10 +658,7 @@ def test_same_execution_or_expired_observation_is_not_independent_contradiction(
     _record_execution(expired_store, "exec-a")
     _record_execution(expired_store, "exec-b")
 
-    assert (
-        expired_store.assessments.current_for_fact(expired_id).status
-        is AssessmentStatus.OBSERVED
-    )
+    assert expired_store.assessments.current_for_fact(expired_id).status is AssessmentStatus.OBSERVED
 
 
 @pytest.mark.parametrize(

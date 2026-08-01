@@ -315,14 +315,8 @@ class TargetModel:
     def _access(self) -> dict[str, Any]:
         return {
             "ssh_authenticated": any(
-                (
-                    fact_type(fact) == "credential"
-                    and fact_value(fact).startswith("ssh_login_success:")
-                )
-                or (
-                    fact_type(fact) == "service_status"
-                    and fact_value(fact) == "ssh_authenticated"
-                )
+                (fact_type(fact) == "credential" and fact_value(fact).startswith("ssh_login_success:"))
+                or (fact_type(fact) == "service_status" and fact_value(fact) == "ssh_authenticated")
                 for fact in self.facts
             ),
             "root_confirmed": any(confirms_root(fact) for fact in self.facts),

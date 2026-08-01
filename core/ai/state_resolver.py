@@ -64,10 +64,7 @@ class StateResolver:
                 status: sum(
                     1
                     for fact in all_facts
-                    if str(fact.get("assessment_status") or "observed")
-                    .strip()
-                    .casefold()
-                    == status
+                    if str(fact.get("assessment_status") or "observed").strip().casefold() == status
                 )
                 for status in ("observed", "inferred", "verified", "contradicted")
             },
@@ -77,7 +74,7 @@ class StateResolver:
         # outcomes.  Free-form text never participates in the predicates.
         session_facts: dict[Any, list[dict[str, Any]]] = {}
         for f in facts:
-            sid = f.get('session_id', 'none')
+            sid = f.get("session_id", "none")
             if sid not in session_facts:
                 session_facts[sid] = []
             session_facts[sid].append(f)
@@ -106,10 +103,7 @@ class StateResolver:
         if vulnerability_facts:
             state["vulnerability_candidates_found"] = True
             state["vulnerabilities_found"] = True
-        if any(
-            str(fact.get("assessment_status") or "observed") == "verified"
-            for fact in vulnerability_facts
-        ):
+        if any(str(fact.get("assessment_status") or "observed") == "verified" for fact in vulnerability_facts):
             state["verified_vulnerabilities_found"] = True
 
         state["credentials_found"] = any(confirms_credentials(fact) for fact in facts)
@@ -123,8 +117,7 @@ class StateResolver:
                 state["credentials_found"] = True
 
         if any(
-            fact_type(fact) == "post_exploit_stage"
-            and fact_value(fact) == "post_access_inventory_completed"
+            fact_type(fact) == "post_exploit_stage" and fact_value(fact) == "post_access_inventory_completed"
             for fact in facts
         ):
             state["post_access_inventory_completed"] = True
@@ -139,15 +132,13 @@ class StateResolver:
         if any(fact_type(fact) == "internal_network" for fact in facts):
             state["internal_recon_completed"] = True
         if any(
-            fact_type(fact) == "post_exploit_stage"
-            and fact_value(fact) == "internal_network_recon_completed"
+            fact_type(fact) == "post_exploit_stage" and fact_value(fact) == "internal_network_recon_completed"
             for fact in facts
         ):
             state["internal_recon_completed"] = True
         if any(
             fact_type(fact) == "service_status"
-            and fact_value(fact)
-            in {"network_recon_completed", "internal_network_recon_completed"}
+            and fact_value(fact) in {"network_recon_completed", "internal_network_recon_completed"}
             for fact in facts
         ):
             state["internal_recon_completed"] = True

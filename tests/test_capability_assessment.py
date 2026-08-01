@@ -78,9 +78,7 @@ class MutablePolicy:
 
 
 def _execution_context():
-    return ExecutionContext.automatic(
-        (TARGET,), actor="scan:phase3", origin="ai_pipeline"
-    )
+    return ExecutionContext.automatic((TARGET,), actor="scan:phase3", origin="ai_pipeline")
 
 
 def _provider_record(provider="stub_provider", *, available=True, command=None, **extra):
@@ -105,11 +103,7 @@ def _assessment(
     if provider_availability == "no_provider":
         providers = ()
     else:
-        status = (
-            "not_applicable"
-            if provider_availability == "not_applicable"
-            else provider_availability
-        )
+        status = "not_applicable" if provider_availability == "not_applicable" else provider_availability
         providers = (
             ProviderAssessment(
                 task=capability,
@@ -262,11 +256,7 @@ def test_resolver_distinguishes_all_provider_availability_states(
     expected_provider_statuses,
     expected_hard_unavailable,
 ):
-    capability = (
-        "analyze_vulnerabilities"
-        if expected_availability == "not_applicable"
-        else "custom_capability"
-    )
+    capability = "analyze_vulnerabilities" if expected_availability == "not_applicable" else "custom_capability"
     registry = StubRegistry({capability: records})
     resolver = CapabilityResolver(registry, MutablePolicy())
 
@@ -281,24 +271,16 @@ def test_resolver_distinguishes_all_provider_availability_states(
 
     assert assessment.provider_availability == expected_availability
     assert assessment.authorization_decision == expected_authorization
-    assert tuple(provider.status for provider in assessment.providers) == (
-        expected_provider_statuses
-    )
+    assert tuple(provider.status for provider in assessment.providers) == (expected_provider_statuses)
     assert assessment.hard_unavailable is expected_hard_unavailable
     assert assessment.ready is (not expected_hard_unavailable)
 
 
 @pytest.mark.parametrize(("capability", "expected_tasks"), tuple(STRATEGIC_TASKS.items()))
-def test_strategic_capabilities_expand_to_their_concrete_task_mapping(
-    capability, expected_tasks
-):
+def test_strategic_capabilities_expand_to_their_concrete_task_mapping(capability, expected_tasks):
     registry = StubRegistry(
         {
-            task: [
-                _provider_record(
-                    f"provider_for_{task}", command=f"provider_for_{task} {{target}}"
-                )
-            ]
+            task: [_provider_record(f"provider_for_{task}", command=f"provider_for_{task} {{target}}")]
             for task in expected_tasks
         }
     )
@@ -315,9 +297,7 @@ def test_strategic_capabilities_expand_to_their_concrete_task_mapping(
     assert tuple(registry.status_requests) == expected_tasks
     if capability == "conclude":
         assert assessment.provider_availability == "not_applicable"
-        assert tuple(provider.provider for provider in assessment.providers) == (
-            "control_plane",
-        )
+        assert tuple(provider.provider for provider in assessment.providers) == ("control_plane",)
     else:
         assert tuple(provider.task for provider in assessment.providers) == expected_tasks
         assert assessment.provider_availability == "available"
@@ -325,9 +305,7 @@ def test_strategic_capabilities_expand_to_their_concrete_task_mapping(
 
 
 def test_supporting_fact_ids_and_observation_bounds_are_evidence_derived():
-    registry = StubRegistry(
-        {"vulnerability_assessment": [_provider_record("vuln_probe")]}
-    )
+    registry = StubRegistry({"vulnerability_assessment": [_provider_record("vuln_probe")]})
     resolver = CapabilityResolver(registry, MutablePolicy())
     facts = [
         {
@@ -383,12 +361,8 @@ def test_supporting_fact_ids_and_observation_bounds_are_evidence_derived():
 
 
 def test_missing_requirements_and_authorization_denial_have_distinct_blockers():
-    registry = StubRegistry(
-        {"establish_persistence": [_provider_record("stub_persistence")]}
-    )
-    resolver = CapabilityResolver(
-        registry, MutablePolicy(allowed=False, reason="approval_revoked")
-    )
+    registry = StubRegistry({"establish_persistence": [_provider_record("stub_persistence")]})
+    resolver = CapabilityResolver(registry, MutablePolicy(allowed=False, reason="approval_revoked"))
 
     assessment = resolver.resolve(
         "persistence",
@@ -427,13 +401,7 @@ def test_resolver_reads_provider_metadata_without_invoking_provider_callable():
         provider_calls.append((args, kwargs))
         raise AssertionError("provider execution escaped the read-only facade")
 
-    registry = StubRegistry(
-        {
-            "read_only_check": [
-                _provider_record("safe_probe", callable=provider_callable)
-            ]
-        }
-    )
+    registry = StubRegistry({"read_only_check": [_provider_record("safe_probe", callable=provider_callable)]})
     resolver = CapabilityResolver(registry, MutablePolicy())
 
     assessment = resolver.resolve(
@@ -471,9 +439,7 @@ def test_tool_registry_provider_description_expands_nested_tasks_read_only():
 
 
 def test_analysis_provider_exemption_requires_exact_agent_task_pair():
-    registry = StubRegistry(
-        {"service_discovery": [_provider_record("service_probe")]}
-    )
+    registry = StubRegistry({"service_discovery": [_provider_record("service_probe")]})
     resolver = CapabilityResolver(registry, MutablePolicy())
     execution_context = _execution_context()
 
@@ -517,9 +483,7 @@ def test_analysis_provider_exemption_requires_exact_agent_task_pair():
 
 
 def test_unknown_authorization_is_not_reported_as_ready():
-    registry = StubRegistry(
-        {"contextless_task": [_provider_record("contextless_probe")]}
-    )
+    registry = StubRegistry({"contextless_task": [_provider_record("contextless_probe")]})
     resolver = CapabilityResolver(registry, MutablePolicy())
 
     assessment = resolver.resolve(
@@ -532,9 +496,7 @@ def test_unknown_authorization_is_not_reported_as_ready():
 
     assert assessment.provider_availability == "available"
     assert assessment.authorization_decision == "unknown"
-    assert assessment.blocking_reasons == (
-        "authorization:unknown:execution_context_not_supplied",
-    )
+    assert assessment.blocking_reasons == ("authorization:unknown:execution_context_not_supplied",)
     assert assessment.hard_unavailable is False
     assert assessment.ready is False
 
@@ -670,17 +632,13 @@ def test_context_builder_exposes_assessment_with_exact_supplied_execution_contex
 def test_context_builder_exposes_assessment_with_exact_factory_execution_context():
     capability_resolver = RecordingCapabilityResolver()
     factory_calls = []
-    produced = ExecutionContext.automatic(
-        (TARGET,), actor="factory:phase3", origin="factory"
-    )
+    produced = ExecutionContext.automatic((TARGET,), actor="factory:phase3", origin="factory")
 
     def factory(scan_id, host):
         factory_calls.append((scan_id, host))
         return produced
 
-    builder = ContextBuilder(
-        StubFactStore(), StubStateResolver(), capability_resolver, factory
-    )
+    builder = ContextBuilder(StubFactStore(), StubStateResolver(), capability_resolver, factory)
 
     context = builder.build_context("scan-factory", TARGET)
 
@@ -711,9 +669,7 @@ def test_plan_compiler_rejects_only_hard_provider_failures():
         {
             "available_task": [_provider_record("available_tool")],
             "denied_task": [_provider_record("denied_tool")],
-            "unavailable_task": [
-                _provider_record("missing_tool", available=False)
-            ],
+            "unavailable_task": [_provider_record("missing_tool", available=False)],
         }
     )
     policy = MutablePolicy(denied_markers=("denied_tool",))
@@ -767,9 +723,7 @@ def test_plan_compiler_rejects_only_hard_provider_failures():
 
 
 def test_scheduler_rechecks_policy_after_an_allowed_capability_assessment():
-    registry = StubRegistry(
-        {"policy_sensitive_task": [_provider_record("policy_probe")]}
-    )
+    registry = StubRegistry({"policy_sensitive_task": [_provider_record("policy_probe")]})
     policy = MutablePolicy(allowed=True, reason="initially_allowed")
     resolver = CapabilityResolver(registry, policy)
     execution_context = _execution_context()
@@ -804,10 +758,7 @@ def test_pipeline_composition_shares_registry_and_execution_policy(tmp_path):
     pipeline = AIPipeline(str(tmp_path / "capability-composition.db"))
 
     assert pipeline.capability_resolver.tool_registry is pipeline.tool_registry
-    assert (
-        pipeline.capability_resolver.execution_policy
-        is pipeline.command_scheduler.execution_policy
-    )
+    assert pipeline.capability_resolver.execution_policy is pipeline.command_scheduler.execution_policy
     assert pipeline.context_builder.capability_resolver is pipeline.capability_resolver
     assert pipeline.plan_compiler.capability_resolver is pipeline.capability_resolver
 

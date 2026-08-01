@@ -239,9 +239,7 @@ def test_registered_network_tool_requires_nonempty_scope_and_checks_secondary_ho
     policy = ExecutionPolicy()
     no_scope = _context(CAP_REGISTERED_TOOL)
 
-    assert policy.authorize_command("nmap intranet", no_scope).reason == (
-        "missing_target_scope"
-    )
+    assert policy.authorize_command("nmap intranet", no_scope).reason == ("missing_target_scope")
 
     scoped = _context(
         CAP_REGISTERED_TOOL,
