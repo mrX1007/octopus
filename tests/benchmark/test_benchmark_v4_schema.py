@@ -56,25 +56,15 @@ def test_efficiency_plan_is_isolated_frozen_and_position_balanced(tmp_path: Path
     assert plan.methodology["automatic_winner"] is False
     assert plan.methodology["resource_direction"] == "lower_is_better"
     assert plan.methodology["resource_pair_population"] == "both_task_status_completed"
-    assert (
-        plan.methodology["multiple_testing"]
-        == "bonferroni_comparison_pairs_x_primary_resources"
-    )
+    assert plan.methodology["multiple_testing"] == "bonferroni_comparison_pairs_x_primary_resources"
     assert len(plan.schedule) == len(source.scenario_ids) * source.repetitions
-    assert {
-        (block.scenario_id, block.repetition, block.matched_fixture_seed)
-        for block in plan.schedule
-    } == {
+    assert {(block.scenario_id, block.repetition, block.matched_fixture_seed) for block in plan.schedule} == {
         (scenario_id, repetition, source.fixture_seeds[scenario_id][repetition - 1])
         for scenario_id in source.scenario_ids
         for repetition in range(1, source.repetitions + 1)
     }
     for scenario_id in source.scenario_ids:
-        first_positions = [
-            block.system_order[0]
-            for block in plan.schedule
-            if block.scenario_id == scenario_id
-        ]
+        first_positions = [block.system_order[0] for block in plan.schedule if block.scenario_id == scenario_id]
         assert first_positions.count("alpha") == first_positions.count("beta")
 
     destination = freeze_efficiency_plan(plan, tmp_path / "efficiency-plan.json")
@@ -156,18 +146,21 @@ def test_v4_cli_prepares_a_frozen_diagnostic_plan(
     source_path = freeze_analysis_plan(_source_plan(), tmp_path / "analysis-plan.json")
     output = tmp_path / "efficiency-plan.json"
 
-    assert v4_main(
-        [
-            "prepare",
-            "--source-analysis-plan",
-            str(source_path),
-            "--output",
-            str(output),
-            "--efficiency-track-id",
-            "small-model-efficiency-v4-diagnostic",
-            "--diagnostic",
-        ]
-    ) == 0
+    assert (
+        v4_main(
+            [
+                "prepare",
+                "--source-analysis-plan",
+                str(source_path),
+                "--output",
+                str(output),
+                "--efficiency-track-id",
+                "small-model-efficiency-v4-diagnostic",
+                "--diagnostic",
+            ]
+        )
+        == 0
+    )
 
     plan = load_efficiency_plan(output)
     assert plan.publication_tier == "diagnostic"
@@ -241,12 +234,8 @@ def test_v4_plan_and_run_payloads_validate_against_published_json_schemas() -> N
         resources=resources,
     )
 
-    plan_schema = json.loads(
-        (SCHEMA_ROOT / "benchmark-efficiency-plan-v4.schema.json").read_text(encoding="utf-8")
-    )
-    run_schema = json.loads(
-        (SCHEMA_ROOT / "benchmark-efficiency-run-v4.schema.json").read_text(encoding="utf-8")
-    )
+    plan_schema = json.loads((SCHEMA_ROOT / "benchmark-efficiency-plan-v4.schema.json").read_text(encoding="utf-8"))
+    run_schema = json.loads((SCHEMA_ROOT / "benchmark-efficiency-run-v4.schema.json").read_text(encoding="utf-8"))
     jsonschema.Draft202012Validator.check_schema(plan_schema)
     jsonschema.Draft202012Validator.check_schema(run_schema)
     jsonschema.validate(plan.to_dict(), plan_schema)

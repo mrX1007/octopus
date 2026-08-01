@@ -45,17 +45,12 @@ def test_v4_companion_round_trip_is_deterministic_and_schema_valid(tmp_path: Pat
     companion = publish_v4_results(efficiency_plan, source, tmp_path / "companion-v4")
 
     verification = verify_v4_results(companion, source_v3_directory=source)
-    statistics_payload = json.loads(
-        (companion / "efficiency-statistics.json").read_text(encoding="utf-8")
-    )
+    statistics_payload = json.loads((companion / "efficiency-statistics.json").read_text(encoding="utf-8"))
     statistics_schema = json.loads(
-        (SCHEMA_ROOT / "benchmark-efficiency-statistics-v4.schema.json").read_text(
-            encoding="utf-8"
-        )
+        (SCHEMA_ROOT / "benchmark-efficiency-statistics-v4.schema.json").read_text(encoding="utf-8")
     )
     run_records = [
-        json.loads(line)
-        for line in (companion / "efficiency-runs.jsonl").read_text(encoding="utf-8").splitlines()
+        json.loads(line) for line in (companion / "efficiency-runs.jsonl").read_text(encoding="utf-8").splitlines()
     ]
 
     assert verification["status"] == "verified"
@@ -68,8 +63,7 @@ def test_v4_companion_round_trip_is_deterministic_and_schema_valid(tmp_path: Pat
         if effect["resource"] in {"wall_time_seconds", "fixture_http_requests"}
     } == {"left_more_efficient"}
     assert all(
-        record["resources"][name]["available"] is False
-        and record["resources"][name]["value"] is None
+        record["resources"][name]["available"] is False and record["resources"][name]["value"] is None
         for record in run_records
         for name in ("model_tokens", "api_cost_usd")
     )
@@ -95,19 +89,13 @@ def test_fast_failure_cannot_become_an_efficiency_win() -> None:
 
     assert statistics_payload["systems"]["beta"]["stability"]["task_completion_rate"] == 0.5
     assert all(
-        detail["directional_claims"]["right_more_efficient"] is False
-        for detail in comparison["resources"].values()
+        detail["directional_claims"]["right_more_efficient"] is False for detail in comparison["resources"].values()
     )
     assert all(
-        comparison["resources"][name]["exclusions"]["reason_counts"]
-        == {"right_task_not_completed": 1}
+        comparison["resources"][name]["exclusions"]["reason_counts"] == {"right_task_not_completed": 1}
         for name in ("wall_time_seconds", "fixture_http_requests")
     )
-    failed_projection = next(
-        item
-        for item in projections
-        if item.system_id == "beta" and item.repetition == 2
-    )
+    failed_projection = next(item for item in projections if item.system_id == "beta" and item.repetition == 2)
     assert failed_projection.resources["wall_time_seconds"].value == 0.1
     assert failed_projection.resources["fixture_http_requests"].value == 0.0
 
@@ -120,15 +108,11 @@ def test_missing_quality_cannot_select_a_favorable_subset() -> None:
         metrics=tuple(
             metric
             for metric in target.evaluation.metrics
-            if not (
-                metric.name == "verified_recall"
-                and metric.population == "all_scheduled"
-            )
+            if not (metric.name == "verified_recall" and metric.population == "all_scheduled")
         ),
     )
     incomplete_runs = tuple(
-        replace(run, evaluation=incomplete_evaluation) if run.run_id == target.run_id else run
-        for run in runs
+        replace(run, evaluation=incomplete_evaluation) if run.run_id == target.run_id else run for run in runs
     )
 
     statistics_payload = analyze_efficiency(
@@ -141,9 +125,7 @@ def test_missing_quality_cannot_select_a_favorable_subset() -> None:
     comparison = statistics_payload["comparisons"][0]
 
     assert all(
-        statistics_payload["systems"][target.system_id]["completed_yield_per_resource"][name][
-            "verified_f1_per_unit"
-        ]
+        statistics_payload["systems"][target.system_id]["completed_yield_per_resource"][name]["verified_f1_per_unit"]
         is None
         for name in ("wall_time_seconds", "fixture_http_requests")
     )
@@ -152,8 +134,7 @@ def test_missing_quality_cannot_select_a_favorable_subset() -> None:
         for name in ("wall_time_seconds", "fixture_http_requests")
     )
     assert all(
-        comparison["resources"][name]["exclusions"]["reason_counts"]
-        == {"quality_unavailable": 1}
+        comparison["resources"][name]["exclusions"]["reason_counts"] == {"quality_unavailable": 1}
         for name in ("wall_time_seconds", "fixture_http_requests")
     )
 
@@ -162,9 +143,7 @@ def test_nonpositive_primary_resource_cannot_be_silently_dropped() -> None:
     source_plan, efficiency_plan, runs, context, ledgers = _canary_inputs()
     target = next(run for run in runs if run.system_id == "alpha")
     zero_duration_runs = tuple(
-        replace(run, duration_seconds=0.0, finished_at=run.started_at)
-        if run.run_id == target.run_id
-        else run
+        replace(run, duration_seconds=0.0, finished_at=run.started_at) if run.run_id == target.run_id else run
         for run in runs
     )
 
@@ -292,19 +271,13 @@ def _canary_inputs(
                     target=variant.entry_target,
                     route_id=variant.routes[-1].route_id,
                     status=200,
-                    evidence_ids=(
-                        ()
-                        if failed
-                        else variant.truth_claims[0].required_evidence_ids
-                    ),
+                    evidence_ids=(() if failed else variant.truth_claims[0].required_evidence_ids),
                 )
             snapshot = ledger.snapshot()
             execution_status = "failed" if failed else "succeeded"
             evaluation = evaluate_claims(
                 execution_status=execution_status,
-                reported_claims=(
-                    () if failed else (variant.truth_claims[0].canonical_text,)
-                ),
+                reported_claims=(() if failed else (variant.truth_claims[0].canonical_text,)),
                 truth_claims=variant.truth_claims,
                 completion_rule=variant.completion_rule,
                 observed_evidence_ids=snapshot.observed_evidence_ids,

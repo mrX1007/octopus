@@ -203,6 +203,29 @@ class _FakeSerializedV3Run:
         return {"schema_version": "fake-v3"}
 
 
+class _FakeBenchmarkV4Config:
+    def __init__(self, efficiency_plan: Any, *, public_digest: str | None = None) -> None:
+        self._efficiency_plan = efficiency_plan
+        self._public_digest = public_digest or efficiency_plan.digest
+
+    def efficiency_plan(self) -> Any:
+        return self._efficiency_plan
+
+    def fingerprint_payload(self) -> dict[str, str]:
+        return {
+            "efficiency_plan_digest": self._efficiency_plan.digest,
+            "efficiency_track_id": self._efficiency_plan.efficiency_track_id,
+            "track": "fake-v3",
+        }
+
+    def public_payload(self) -> dict[str, str]:
+        return {
+            "efficiency_plan_digest": self._public_digest,
+            "efficiency_track_id": self._efficiency_plan.efficiency_track_id,
+            "track": "fake-v3",
+        }
+
+
 def _fake_v3_campaign(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -247,6 +270,57 @@ def _fake_v3_campaign(
         lambda: {"campaign.py": "a" * 64},
     )
     return config
+
+
+def _fake_v4_campaign(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    *,
+    public_digest: str | None = None,
+) -> tuple[campaign.CampaignConfig, Any]:
+    config = _fake_v3_campaign(tmp_path, monkeypatch, name)
+    efficiency_plan = SimpleNamespace(
+        digest="b" * 64,
+        efficiency_track_id="fake-efficiency-v4",
+        plan_id="fake-plan-v4",
+        source_analysis_plan_digest="a" * 64,
+        source_track_id="fake-v3",
+    )
+    config = replace(
+        config,
+        benchmark_v3=_FakeBenchmarkV4Config(
+            efficiency_plan,
+            public_digest=public_digest,
+        ),
+    )
+    original_build_schedule = campaign._build_schedule
+
+    def legacy_schedule(resolved: Any, manifests: Any, scenarios: Any, **kwargs: Any):
+        return original_build_schedule(
+            SimpleNamespace(repetitions=resolved.repetitions),
+            manifests,
+            scenarios,
+            v3_plan=kwargs.get("v3_plan"),
+            efficiency_plan=None,
+        )
+
+    monkeypatch.setattr(campaign, "_build_schedule", legacy_schedule)
+    monkeypatch.setattr(
+        campaign,
+        "validate_efficiency_campaign_plan",
+        lambda *_args, **_kwargs: efficiency_plan,
+    )
+    return config, efficiency_plan
+
+
+def _attested_v4_run(efficiency_plan: Any, *, digest: str | None = None) -> Any:
+    return SimpleNamespace(
+        execution_status="succeeded",
+        task_status="completed",
+        policy_violations=(),
+        environment={"efficiency_plan_digest": digest or efficiency_plan.digest},
+    )
 
 
 def test_v3_context_secret_guard_fails_closed(
@@ -297,6 +371,79 @@ def test_v3_plan_without_config_defensive_guard(
         )
 
 
+def test_v4_run_attestation_mismatch_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, efficiency_plan = _fake_v4_campaign(tmp_path, monkeypatch, "v4-run-attestation")
+    monkeypatch.setattr(
+        campaign,
+        "_journal_v3_runs",
+        lambda *_args, **_kwargs: (_attested_v4_run(efficiency_plan, digest="wrong"),),
+    )
+    with pytest.raises(BenchmarkV3SchemaError, match="efficiency_run_attestation_mismatch"):
+        campaign.run_campaign(
+            config,
+            environment={"CAMPAIGN_TEST_TOKEN": "configured"},
+            runner_factory=lifecycle._successful_runner_factory([]),
+            lab_controller=lifecycle.RecordingLab(),
+            clock=lambda: 100.0,
+            monotonic=lambda: 1.0,
+        )
+
+
+def test_v4_public_plan_attestation_mismatch_fails_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, efficiency_plan = _fake_v4_campaign(
+        tmp_path,
+        monkeypatch,
+        "v4-public-attestation",
+        public_digest="wrong",
+    )
+    monkeypatch.setattr(
+        campaign,
+        "_journal_v3_runs",
+        lambda *_args, **_kwargs: (_attested_v4_run(efficiency_plan),),
+    )
+    with pytest.raises(BenchmarkV3SchemaError, match="efficiency_plan_digest_mismatch"):
+        campaign.run_campaign(
+            config,
+            environment={"CAMPAIGN_TEST_TOKEN": "configured"},
+            runner_factory=lifecycle._successful_runner_factory([]),
+            lab_controller=lifecycle.RecordingLab(),
+            clock=lambda: 100.0,
+            monotonic=lambda: 1.0,
+        )
+
+
+def test_v4_context_includes_plan_attestation_before_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, efficiency_plan = _fake_v4_campaign(tmp_path, monkeypatch, "v4-context")
+    monkeypatch.setattr(
+        campaign,
+        "_journal_v3_runs",
+        lambda *_args, **_kwargs: (_attested_v4_run(efficiency_plan),),
+    )
+    monkeypatch.setattr(
+        campaign,
+        "_contains_secret_canary",
+        lambda value, _canaries: isinstance(value, Mapping) and "efficiency_plan_attestation" in value,
+    )
+    with pytest.raises(campaign.CampaignConfigError, match="secret_canary_detected"):
+        campaign.run_campaign(
+            config,
+            environment={"CAMPAIGN_TEST_TOKEN": "configured"},
+            runner_factory=lifecycle._successful_runner_factory([]),
+            lab_controller=lifecycle.RecordingLab(),
+            clock=lambda: 100.0,
+            monotonic=lambda: 1.0,
+        )
+
+
 def test_main_maps_each_outcome_and_failure(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -321,6 +468,9 @@ def test_main_maps_each_outcome_and_failure(
 def test_schedule_journal_and_environment_helper_guards(
     tmp_path: Path,
 ) -> None:
+    protocol_instance = object()
+    assert campaign.LabController.reset_and_health(protocol_instance, SimpleNamespace()) is None
+    assert campaign.LabController.cleanup(protocol_instance, SimpleNamespace()) is None
     assert campaign._counterbalanced_order((), 1) == ()
 
     missing_journal = SimpleNamespace(read_run=lambda _key: None)
@@ -355,6 +505,101 @@ def test_schedule_journal_and_environment_helper_guards(
         invalid.write_text(contents, encoding="utf-8")
         with pytest.raises(campaign.CampaignConfigError, match=expected):
             campaign._load_environment_file(invalid)
+
+
+def test_efficiency_schedule_and_configuration_guards() -> None:
+    manifests = (SimpleNamespace(system_id="alpha"), SimpleNamespace(system_id="beta"))
+    scenarios = (SimpleNamespace(scenario_id="scenario-v4"),)
+    block = SimpleNamespace(
+        scenario_id="scenario-v4",
+        repetition=1,
+        matched_fixture_seed=7,
+        system_order=("alpha", "beta"),
+    )
+
+    def efficiency_plan(**updates: Any) -> Any:
+        values = {
+            "system_ids": ("alpha", "beta"),
+            "scenario_ids": ("scenario-v4",),
+            "schedule": (block,),
+            "digest": "b" * 64,
+            "efficiency_track_id": "efficiency-v4",
+            "plan_id": "plan-v4",
+            "source_analysis_plan_digest": "a" * 64,
+            "source_track_id": "source-v3",
+        }
+        values.update(updates)
+        return SimpleNamespace(**values)
+
+    configured = SimpleNamespace(
+        repetitions=1,
+        benchmark_v3=SimpleNamespace(efficiency_plan=lambda: efficiency_plan()),
+    )
+    with pytest.raises(BenchmarkV3SchemaError, match="efficiency_plan_requires_v3_plan"):
+        campaign._build_schedule(configured, manifests, scenarios)
+
+    with pytest.raises(BenchmarkV3SchemaError, match="efficiency_plan_schedule_mismatch"):
+        campaign._build_efficiency_schedule(
+            (manifests[0], manifests[0]),
+            scenarios,
+            efficiency_plan(),
+        )
+
+    unknown_scenario = SimpleNamespace(**{**vars(block), "scenario_id": "missing-v4"})
+    with pytest.raises(BenchmarkV3SchemaError, match="efficiency_plan_schedule_mismatch"):
+        campaign._build_efficiency_schedule(
+            manifests,
+            scenarios,
+            efficiency_plan(schedule=(unknown_scenario,)),
+        )
+
+    unknown_system = SimpleNamespace(**{**vars(block), "system_order": ("alpha", "missing")})
+    with pytest.raises(BenchmarkV3SchemaError, match="efficiency_plan_schedule_mismatch"):
+        campaign._build_efficiency_schedule(
+            manifests,
+            scenarios,
+            efficiency_plan(schedule=(unknown_system,)),
+        )
+
+    with pytest.raises(BenchmarkV3SchemaError, match="efficiency_plan_schedule_mismatch"):
+        campaign._build_efficiency_schedule(
+            manifests,
+            scenarios,
+            efficiency_plan(schedule=(block, block)),
+        )
+
+    assert (
+        campaign._configured_analysis_plan(SimpleNamespace(benchmark_v3=SimpleNamespace(plan=lambda: "source-plan")))
+        == "source-plan"
+    )
+    assert campaign._efficiency_plan_attestation(efficiency_plan()) == {
+        "efficiency_track_id": "efficiency-v4",
+        "plan_digest": "b" * 64,
+        "plan_id": "plan-v4",
+        "source_analysis_plan_digest": "a" * 64,
+        "source_track_id": "source-v3",
+    }
+
+
+def test_campaign_rejects_efficiency_plan_without_validated_v3_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifests = (SimpleNamespace(system_id="alpha"), SimpleNamespace(system_id="beta"))
+    scenarios = (SimpleNamespace(scenario_id="scenario-v4"),)
+    efficiency_plan = SimpleNamespace(digest="b" * 64)
+    config = SimpleNamespace(
+        system_manifest_paths=(Path("alpha.json"), Path("beta.json")),
+        scenario_directory=Path("scenarios"),
+        benchmark_v3=SimpleNamespace(efficiency_plan=lambda: efficiency_plan),
+        repetitions=1,
+    )
+    loaded_manifests = iter(manifests)
+    monkeypatch.setattr(campaign, "load_system_manifest", lambda _path: next(loaded_manifests))
+    monkeypatch.setattr(campaign, "load_scenarios", lambda _path: scenarios)
+    monkeypatch.setattr(campaign, "validate_campaign_plan", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(BenchmarkV3SchemaError, match="efficiency_plan_requires_v3_plan"):
+        campaign.run_campaign(config)
 
 
 def test_repository_result_duration_and_diagnostic_guards(

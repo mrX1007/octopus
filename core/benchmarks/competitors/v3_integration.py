@@ -205,27 +205,16 @@ def validate_efficiency_campaign_plan(
     _validate_efficiency_plan_source(efficiency_plan, source_plan)
     expected_systems = tuple(system_ids)
     expected_scenarios = tuple(scenario_ids)
-    if (
-        efficiency_plan.system_ids != expected_systems
-        or expected_systems != source_plan.system_ids
-    ):
+    if efficiency_plan.system_ids != expected_systems or expected_systems != source_plan.system_ids:
         raise BenchmarkV3SchemaError("efficiency_plan_system_mismatch")
-    if (
-        efficiency_plan.scenario_ids != expected_scenarios
-        or expected_scenarios != source_plan.scenario_ids
-    ):
+    if efficiency_plan.scenario_ids != expected_scenarios or expected_scenarios != source_plan.scenario_ids:
         raise BenchmarkV3SchemaError("efficiency_plan_scenario_mismatch")
 
     expected_repetitions = int(repetitions)
-    if (
-        efficiency_plan.repetitions != expected_repetitions
-        or expected_repetitions != source_plan.repetitions
-    ):
+    if efficiency_plan.repetitions != expected_repetitions or expected_repetitions != source_plan.repetitions:
         raise BenchmarkV3SchemaError("efficiency_plan_repetition_mismatch")
     expected_blocks = {
-        (scenario_id, repetition): int(
-            source_plan.fixture_seeds[scenario_id][repetition - 1]
-        )
+        (scenario_id, repetition): int(source_plan.fixture_seeds[scenario_id][repetition - 1])
         for scenario_id in expected_scenarios
         for repetition in range(1, expected_repetitions + 1)
     }
@@ -406,10 +395,7 @@ def build_v3_run(
         sorted(
             {
                 *(_policy_identifier(item) for item in snapshot.violations),
-                *(
-                    _policy_identifier(item)
-                    for item in result.get("policy_violations") or []
-                ),
+                *(_policy_identifier(item) for item in result.get("policy_violations") or []),
             }
             - {""}
         )
@@ -447,8 +433,7 @@ def build_v3_run(
     policy = scenario.budgets.get("policy")
     policy_mapping = policy if isinstance(policy, Mapping) else {}
     enforcement_modes = {
-        name: _enforcement_mode(policy_mapping.get(name), measured=name in observed_usage)
-        for name in declared_budgets
+        name: _enforcement_mode(policy_mapping.get(name), measured=name in observed_usage) for name in declared_budgets
     }
     budgets = build_budget_enforcement(
         system_id=system_id,
@@ -475,8 +460,7 @@ def build_v3_run(
     }
     configured_efficiency_plan = _configured_efficiency_plan(config)
     if efficiency_plan is not None and (
-        configured_efficiency_plan is None
-        or configured_efficiency_plan.digest != efficiency_plan.digest
+        configured_efficiency_plan is None or configured_efficiency_plan.digest != efficiency_plan.digest
     ):
         raise BenchmarkV3SchemaError("efficiency_plan_digest_mismatch")
     selected_efficiency_plan = configured_efficiency_plan or efficiency_plan
@@ -491,8 +475,7 @@ def build_v3_run(
         matching_blocks = tuple(
             block
             for block in selected_efficiency_plan.schedule
-            if block.scenario_id == scenario.scenario_id
-            and block.repetition == repetition
+            if block.scenario_id == scenario.scenario_id and block.repetition == repetition
         )
         if (
             len(matching_blocks) != 1
@@ -548,10 +531,7 @@ def fixture_reveals(
                 seed=seed,
             )
             variant = load_private_fixture(artifacts.private_manifest)
-            if (
-                variant.scenario_id != scenario_id
-                or variant.matched_fixture_seed != seed
-            ):
+            if variant.scenario_id != scenario_id or variant.matched_fixture_seed != seed:
                 raise BenchmarkV3SchemaError("v3_fixture_reveal_mismatch")
             reveals.append(variant.reveal_manifest(campaign_closed=True))
     return tuple(reveals)
@@ -580,10 +560,7 @@ def controller_ledger_records(
             variant_digest=run.fixture_variant_digest,
         )
         root_digest = entries[-1].entry_digest if entries else "0" * 64
-        if (
-            len(entries) != len(run.action_telemetry)
-            or f"sha256:{root_digest}" not in run.artifact_refs
-        ):
+        if len(entries) != len(run.action_telemetry) or f"sha256:{root_digest}" not in run.artifact_refs:
             raise BenchmarkV3SchemaError("v3_public_ledger_run_mismatch")
         records.append(
             {

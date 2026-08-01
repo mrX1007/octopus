@@ -62,9 +62,7 @@ _V3_BASE_FIXTURE_SEED_ENVIRONMENT = "OCTOBENCH_V3_BASE_FIXTURE_SEED"
 _V3_BATCH_ID_ENVIRONMENT = "OCTOBENCH_V3_BATCH_ID"
 _V3_HOST_ID_ENVIRONMENT = "OCTOBENCH_V3_HOST_ID"
 _SMALL_MODEL_CAMPAIGN_OLLAMA_MODEL = "huihui_ai/qwen3.5-abliterated:9b"
-_SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST = (
-    "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600"
-)
+_SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST = "sha256:92a443adb124f5e805bbdee23fdb38fcd22a7bf00a1016b53f764e741369c600"
 _SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH = 65_536
 _SMALL_MODEL_CAMPAIGN_OLLAMA_SERVER_VERSION = "0.18.3"
 _SMALL_MODEL_REQUIRED_ENVIRONMENT = (
@@ -72,10 +70,7 @@ _SMALL_MODEL_REQUIRED_ENVIRONMENT = (
     "OCTOBENCH_OLLAMA_KV_CACHE_TYPE",
 )
 _STRIX_REVISION = "91d9a847166fe2f82125643d13e099b0d989bbe4"
-_STRIX_IMAGE = (
-    "ghcr.io/usestrix/strix-sandbox@"
-    "sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c"
-)
+_STRIX_IMAGE = "ghcr.io/usestrix/strix-sandbox@sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c"
 _PENTAGI_REVIEWED_REVISION = "a112db206b2fb7866c367c33348f52f5cdc207d0"
 _PENTAGI_RUNTIME_SOURCE = "not-attested:service-release-v2.1.0"
 _PRIVATE_BIND_NETWORKS = tuple(
@@ -200,9 +195,7 @@ _CAMPAIGN_DEFINITIONS = {
         ollama_digest=_SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST,
         ollama_context_length=_SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH,
         ollama_server_version=_SMALL_MODEL_CAMPAIGN_OLLAMA_SERVER_VERSION,
-        fairness_profile_id=(
-            "linux-blackbox-shared-ollama-altered-small-model-v1"
-        ),
+        fairness_profile_id=("linux-blackbox-shared-ollama-altered-small-model-v1"),
         evaluation_scope="altered-small-model-stress",
     ),
     _SMALL_MODEL_CAMPAIGN_V2_DEFINITION_ID: _CampaignDefinition(
@@ -212,9 +205,7 @@ _CAMPAIGN_DEFINITIONS = {
         ollama_digest=_SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST,
         ollama_context_length=_SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH,
         ollama_server_version=_SMALL_MODEL_CAMPAIGN_OLLAMA_SERVER_VERSION,
-        fairness_profile_id=(
-            "linux-blackbox-shared-ollama-altered-small-model-v2"
-        ),
+        fairness_profile_id=("linux-blackbox-shared-ollama-altered-small-model-v2"),
         evaluation_scope="altered-small-model-multi-surface-v2",
         lab_definition_id="discovery-lab-v2",
     ),
@@ -305,9 +296,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.prepare_only and args.diagnostic_pilot:
             raise LaunchError("campaign_failed")
         if not args.diagnostic_pilot and (
-            args.pilot_seconds is not None
-            or args.pilot_system is not None
-            or args.pilot_scenario is not None
+            args.pilot_seconds is not None or args.pilot_system is not None or args.pilot_scenario is not None
         ):
             raise LaunchError("campaign_failed")
         campaign_id = _campaign_id(args.campaign_id)
@@ -357,10 +346,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 )
             ):
                 raise LaunchError("output_exists")
-        elif any(
-            path.exists() or path.is_symlink()
-            for path in (output_directory, diagnostic_directory)
-        ):
+        elif any(path.exists() or path.is_symlink() for path in (output_directory, diagnostic_directory)):
             raise LaunchError("output_exists")
         runtime_environment = _runtime_lab_environment(environment)
         runtime_attestations = _validate_runtime_prerequisites(
@@ -385,11 +371,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 config_path,
                 environment=runtime_environment,
                 root=_diagnostic_root(),
-                budget_seconds=(
-                    args.pilot_seconds
-                    if args.pilot_seconds is not None
-                    else DEFAULT_PILOT_SECONDS
-                ),
+                budget_seconds=(args.pilot_seconds if args.pilot_seconds is not None else DEFAULT_PILOT_SECONDS),
                 selected_system=args.pilot_system,
                 selected_scenario=args.pilot_scenario,
             )
@@ -422,10 +404,7 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--campaign-definition",
         default=_DEFAULT_CAMPAIGN_DEFINITION_ID,
-        help=(
-            "checked-in scenario contract; campaign-id remains the unique run "
-            "and artifact identifier"
-        ),
+        help=("checked-in scenario contract; campaign-id remains the unique run and artifact identifier"),
     )
     parser.add_argument(
         "--profile",
@@ -478,9 +457,7 @@ def _prepare_generated_campaign(
             profile=profile,
             environment=environment,
             runtime_attestation=(
-                runtime_attestations.get(system.system_id)
-                if runtime_attestations is not None
-                else None
+                runtime_attestations.get(system.system_id) if runtime_attestations is not None else None
             ),
             actual_run=runtime_attestations is not None,
             campaign_definition=campaign_definition,
@@ -495,10 +472,7 @@ def _prepare_generated_campaign(
     analysis_plan: AnalysisPlan | None = None
     efficiency_plan: EfficiencyPlan | None = None
     if campaign_definition.benchmark_v3_track_id is not None:
-        scenario_ids = tuple(
-            str(payload["scenario_id"])
-            for _name, payload in sorted(scenario_payloads.items())
-        )
+        scenario_ids = tuple(str(payload["scenario_id"]) for _name, payload in sorted(scenario_payloads.items()))
         analysis_plan = build_analysis_plan(
             track_id=campaign_definition.benchmark_v3_track_id,
             system_ids=tuple(item.system_id for item in systems),
@@ -606,9 +580,7 @@ def _manifest_payload(
     actual_run: bool,
     campaign_definition: _CampaignDefinition | None = None,
 ) -> dict[str, Any]:
-    selected_definition = campaign_definition or _CAMPAIGN_DEFINITIONS[
-        _DEFAULT_CAMPAIGN_DEFINITION_ID
-    ]
+    selected_definition = campaign_definition or _CAMPAIGN_DEFINITIONS[_DEFAULT_CAMPAIGN_DEFINITION_ID]
     provider = (
         str(environment[system.model_provider_environment])
         if system.model_provider_environment is not None
@@ -617,9 +589,7 @@ def _manifest_payload(
             "strix": "ollama",
         }[system.system_id]
     )
-    adapter_environment = tuple(
-        dict.fromkeys((*_COMMON_ADAPTER_ENVIRONMENT, *system.adapter_environment))
-    )
+    adapter_environment = tuple(dict.fromkeys((*_COMMON_ADAPTER_ENVIRONMENT, *system.adapter_environment)))
     if system.system_id == "octopus":
         adapter_environment = (
             *adapter_environment,
@@ -655,13 +625,9 @@ def _manifest_payload(
         if pentagi_ca_file:
             runtime_provenance["custom_ca_configured"] = True
             if actual_run:
-                runtime_provenance["ca_file_sha256"] = _sha256_file(
-                    Path(pentagi_ca_file)
-                )
+                runtime_provenance["ca_file_sha256"] = _sha256_file(Path(pentagi_ca_file))
             else:
-                runtime_provenance["ca_file_attestation"] = (
-                    "deferred-to-actual-launch"
-                )
+                runtime_provenance["ca_file_attestation"] = "deferred-to-actual-launch"
     elif runtime_attestation is not None:
         runtime_provenance = dict(runtime_attestation)
     elif actual_run:
@@ -678,9 +644,7 @@ def _manifest_payload(
         runtime_provenance["sandbox_image"] = _STRIX_IMAGE
     tool_versions = {
         "command-adapter-protocol": (
-            "1.1-v3-claims"
-            if selected_definition.benchmark_v3_track_id is not None
-            else "1.0"
+            "1.1-v3-claims" if selected_definition.benchmark_v3_track_id is not None else "1.0"
         ),
         system.system_id: system.version,
     }
@@ -704,11 +668,7 @@ def _manifest_payload(
             "provider": provider,
             "name": str(environment[system.model_name_environment]),
             "parameters": (
-                {
-                    "context_length": _configured_ollama_context_length(
-                        environment
-                    )
-                }
+                {"context_length": _configured_ollama_context_length(environment)}
                 if system.system_id in {"octopus", "strix"}
                 else {}
             ),
@@ -759,11 +719,7 @@ def _manifest_payload(
                 if selected_definition.efficiency_track_id is not None
                 else {}
             ),
-            **(
-                {"scan_mode": STRIX_BENCHMARK_SCAN_MODE}
-                if system.system_id == "strix"
-                else {}
-            ),
+            **({"scan_mode": STRIX_BENCHMARK_SCAN_MODE} if system.system_id == "strix" else {}),
             "runtime_provenance": runtime_provenance,
         },
     }
@@ -801,10 +757,7 @@ def _campaign_payload(
             )
             if action in {"reset", "health"}:
                 argv.extend(("--scenario-id", "{scenario_id}"))
-            if (
-                action == "reset"
-                and campaign_definition.benchmark_v3_track_id is not None
-            ):
+            if action == "reset" and campaign_definition.benchmark_v3_track_id is not None:
                 argv.extend(
                     (
                         "--campaign-id",
@@ -825,6 +778,7 @@ def _campaign_payload(
             "timeout_seconds": timeout,
             "environment_passthrough": list(lab_environment),
         }
+
     required = tuple(
         dict.fromkeys(
             (
@@ -845,10 +799,7 @@ def _campaign_payload(
         "schema_version": GENERATED_SCHEMA_VERSION,
         "campaign_id": campaign_id,
         "campaign_definition": campaign_definition.definition_id,
-        "system_manifests": [
-            str(_generated_directory(campaign_id) / f"{item.system_id}.json")
-            for item in systems
-        ],
+        "system_manifests": [str(_generated_directory(campaign_id) / f"{item.system_id}.json") for item in systems],
         "scenario_directory": str(_generated_directory(campaign_id) / "scenarios"),
         "output_directory": str(_output_directory(campaign_id)),
         "state_directory": str(ROOT / ".benchmark-state" / "journal"),
@@ -876,9 +827,7 @@ def _campaign_payload(
         if analysis_plan is None:
             raise LaunchError("campaign_definition_mismatch")
         payload["benchmark_v3"] = {
-            "analysis_plan": str(
-                _generated_directory(campaign_id) / "analysis-plan.json"
-            ),
+            "analysis_plan": str(_generated_directory(campaign_id) / "analysis-plan.json"),
             "batch_id": _configured_v3_design_id(
                 environment,
                 _V3_BATCH_ID_ENVIRONMENT,
@@ -895,9 +844,7 @@ def _campaign_payload(
         if campaign_definition.efficiency_track_id is not None:
             if efficiency_plan is None:
                 raise LaunchError("campaign_definition_mismatch")
-            payload["benchmark_v3"]["efficiency_plan"] = str(
-                _generated_directory(campaign_id) / "efficiency-plan.json"
-            )
+            payload["benchmark_v3"]["efficiency_plan"] = str(_generated_directory(campaign_id) / "efficiency-plan.json")
         elif efficiency_plan is not None:
             raise LaunchError("campaign_definition_mismatch")
     return payload
@@ -1108,9 +1055,7 @@ def _required_environment(
     *,
     campaign_definition: _CampaignDefinition | None = None,
 ) -> tuple[str, ...]:
-    selected_definition = campaign_definition or _CAMPAIGN_DEFINITIONS[
-        _DEFAULT_CAMPAIGN_DEFINITION_ID
-    ]
+    selected_definition = campaign_definition or _CAMPAIGN_DEFINITIONS[_DEFAULT_CAMPAIGN_DEFINITION_ID]
     required: tuple[str, ...] = _BASE_REQUIRED_ENVIRONMENT
     if profile == "extended":
         required = (*required, *_EXTENDED_REQUIRED_ENVIRONMENT)
@@ -1126,28 +1071,19 @@ def _fairness_profile(
     *,
     campaign_definition: _CampaignDefinition | None = None,
 ) -> dict[str, Any]:
-    selected_definition = campaign_definition or _CAMPAIGN_DEFINITIONS[
-        _DEFAULT_CAMPAIGN_DEFINITION_ID
-    ]
+    selected_definition = campaign_definition or _CAMPAIGN_DEFINITIONS[_DEFAULT_CAMPAIGN_DEFINITION_ID]
     shared_model = profile == "core"
     small_model_stress = selected_definition.ollama_model is not None
-    multi_surface = (
-        selected_definition.definition_id
-        in {
-            _SMALL_MODEL_CAMPAIGN_V2_DEFINITION_ID,
-            _SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID,
-            _SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID,
-        }
-    )
+    multi_surface = selected_definition.definition_id in {
+        _SMALL_MODEL_CAMPAIGN_V2_DEFINITION_ID,
+        _SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID,
+        _SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID,
+    }
     return {
         "profile_id": (
             selected_definition.fairness_profile_id
             if small_model_stress
-            else (
-                "linux-blackbox-shared-ollama-v1"
-                if shared_model
-                else "linux-blackbox-shared-ollama-plus-pentagi-v1"
-            )
+            else ("linux-blackbox-shared-ollama-v1" if shared_model else "linux-blackbox-shared-ollama-plus-pentagi-v1")
         ),
         "same_model": shared_model,
         "notes": (
@@ -1195,15 +1131,10 @@ def _secret_environment(
     *,
     campaign_definition: _CampaignDefinition | None = None,
 ) -> tuple[str, ...]:
-    names = list(
-        _configured_optional_environment(environment, ("LLM_API_KEY",))
-    )
+    names = list(_configured_optional_environment(environment, ("LLM_API_KEY",)))
     if profile == "extended":
         names.extend(_EXTENDED_SECRET_ENVIRONMENT)
-    if (
-        campaign_definition is not None
-        and campaign_definition.benchmark_v3_track_id is not None
-    ):
+    if campaign_definition is not None and campaign_definition.benchmark_v3_track_id is not None:
         names.append(_V3_BASE_FIXTURE_SEED_ENVIRONMENT)
     return tuple(names)
 
@@ -1300,10 +1231,7 @@ def _load_environment_file(path: Path) -> dict[str, str]:
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
             value = value[1:-1]
-        if (
-            "\x00" in value
-            or len(value.encode("utf-8", "replace")) > _MAX_ENVIRONMENT_VALUE_BYTES
-        ):
+        if "\x00" in value or len(value.encode("utf-8", "replace")) > _MAX_ENVIRONMENT_VALUE_BYTES:
             raise LaunchError("environment_file_invalid")
         values[name] = value
     return values
@@ -1349,16 +1277,11 @@ def _validate_campaign_definition_configuration(
     if definition.ollama_model is None:
         return
     if (
-        str(environment.get("OCTOPUS_OLLAMA_MODEL") or "").strip()
-        != definition.ollama_model
-        or _configured_ollama_context_length(environment)
-        != definition.ollama_context_length
-        or _configured_ollama_server_version(environment)
-        != definition.ollama_server_version
-        or str(environment.get("OCTOBENCH_OLLAMA_FLASH_ATTENTION") or "").strip()
-        != "1"
-        or str(environment.get("OCTOBENCH_OLLAMA_KV_CACHE_TYPE") or "").strip()
-        != "q8_0"
+        str(environment.get("OCTOPUS_OLLAMA_MODEL") or "").strip() != definition.ollama_model
+        or _configured_ollama_context_length(environment) != definition.ollama_context_length
+        or _configured_ollama_server_version(environment) != definition.ollama_server_version
+        or str(environment.get("OCTOBENCH_OLLAMA_FLASH_ATTENTION") or "").strip() != "1"
+        or str(environment.get("OCTOBENCH_OLLAMA_KV_CACHE_TYPE") or "").strip() != "q8_0"
     ):
         raise LaunchError("campaign_definition_mismatch")
     if definition.benchmark_v3_track_id is not None:
@@ -1375,8 +1298,7 @@ def _validate_campaign_definition_runtime(
         provenance = attestations.get(system_id)
         if (
             not isinstance(provenance, Mapping)
-            or str(provenance.get("ollama_model_digest") or "").strip().lower()
-            != definition.ollama_digest
+            or str(provenance.get("ollama_model_digest") or "").strip().lower() != definition.ollama_digest
         ):
             raise LaunchError("campaign_definition_mismatch")
 
@@ -1397,15 +1319,9 @@ def _validate_shared_ollama_configuration(
     ):
         raise LaunchError("invalid_shared_ollama_configuration")
 
-    octopus_origin, octopus_path = _ollama_url_parts(
-        environment.get("OCTOPUS_OLLAMA_URL")
-    )
+    octopus_origin, octopus_path = _ollama_url_parts(environment.get("OCTOPUS_OLLAMA_URL"))
     strix_origin, strix_path = _ollama_url_parts(environment.get("LLM_API_BASE"))
-    if (
-        octopus_origin != strix_origin
-        or octopus_path.rstrip("/") != "/api/generate"
-        or strix_path not in {"", "/"}
-    ):
+    if octopus_origin != strix_origin or octopus_path.rstrip("/") != "/api/generate" or strix_path not in {"", "/"}:
         raise LaunchError("invalid_shared_ollama_configuration")
 
 
@@ -1509,9 +1425,7 @@ def _validated_lab_bind(value: Any) -> str | None:
 def _private_bind_address(
     address: ipaddress.IPv4Address | ipaddress.IPv6Address,
 ) -> bool:
-    return not address.is_unspecified and any(
-        address in network for network in _PRIVATE_BIND_NETWORKS
-    )
+    return not address.is_unspecified and any(address in network for network in _PRIVATE_BIND_NETWORKS)
 
 
 def _compose_bind(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str:
@@ -1549,9 +1463,7 @@ def _validate_runtime_prerequisites(
             tools_root=tools_root,
             environment=environment,
         )
-    attestations["strix"].update(
-        _attest_strix_sandbox_image(docker, environment=environment)
-    )
+    attestations["strix"].update(_attest_strix_sandbox_image(docker, environment=environment))
     shared_ollama = _attest_shared_ollama_runtime(environment)
     for system_id in ("octopus", "strix"):
         attestations[system_id].update(shared_ollama)
@@ -1608,17 +1520,12 @@ def _attest_shared_ollama_runtime(
     matches = [
         entry
         for entry in tags["models"]
-        if isinstance(entry, Mapping)
-        and (entry.get("name") == model or entry.get("model") == model)
+        if isinstance(entry, Mapping) and (entry.get("name") == model or entry.get("model") == model)
     ]
     if len(matches) != 1:
         raise LaunchError("runtime_unavailable")
     reported_digest = str(matches[0].get("digest") or "").strip().lower()
-    raw_digest = (
-        reported_digest[len("sha256:") :]
-        if reported_digest.startswith("sha256:")
-        else reported_digest
-    )
+    raw_digest = reported_digest[len("sha256:") :] if reported_digest.startswith("sha256:") else reported_digest
     size = matches[0].get("size")
     if (
         re.fullmatch(r"[0-9a-f]{64}", raw_digest) is None
@@ -1673,18 +1580,13 @@ def _attest_shared_ollama_runtime(
     process_matches = [
         entry
         for entry in processes["models"]
-        if isinstance(entry, Mapping)
-        and (entry.get("name") == model or entry.get("model") == model)
+        if isinstance(entry, Mapping) and (entry.get("name") == model or entry.get("model") == model)
     ]
     if len(process_matches) != 1:
         raise LaunchError("runtime_unavailable")
     process = process_matches[0]
     process_digest = str(process.get("digest") or "").strip().lower()
-    process_raw_digest = (
-        process_digest[len("sha256:") :]
-        if process_digest.startswith("sha256:")
-        else process_digest
-    )
+    process_raw_digest = process_digest[len("sha256:") :] if process_digest.startswith("sha256:") else process_digest
     context_length = process.get("context_length")
     size_vram = process.get("size_vram")
     if (
@@ -1699,12 +1601,8 @@ def _attest_shared_ollama_runtime(
         raise LaunchError("runtime_unavailable")
     if context_length != expected_context:
         raise LaunchError("ollama_context_mismatch")
-    declared_flash_attention = str(
-        environment.get("OCTOBENCH_OLLAMA_FLASH_ATTENTION") or ""
-    ).strip()
-    declared_kv_cache_type = str(
-        environment.get("OCTOBENCH_OLLAMA_KV_CACHE_TYPE") or ""
-    ).strip()
+    declared_flash_attention = str(environment.get("OCTOBENCH_OLLAMA_FLASH_ATTENTION") or "").strip()
+    declared_kv_cache_type = str(environment.get("OCTOBENCH_OLLAMA_KV_CACHE_TYPE") or "").strip()
     return {
         "ollama_model_attestation": "api-tags",
         "ollama_model_digest": f"sha256:{raw_digest}",
@@ -1716,16 +1614,8 @@ def _attest_shared_ollama_runtime(
         "ollama_num_parallel_declared": 1,
         "ollama_max_loaded_models_declared": 1,
         "ollama_server_policy_attestation": "operator-declared-api-not-exposed",
-        **(
-            {"ollama_flash_attention_declared": declared_flash_attention == "1"}
-            if declared_flash_attention
-            else {}
-        ),
-        **(
-            {"ollama_kv_cache_type_declared": declared_kv_cache_type}
-            if declared_kv_cache_type
-            else {}
-        ),
+        **({"ollama_flash_attention_declared": declared_flash_attention == "1"} if declared_flash_attention else {}),
+        **({"ollama_kv_cache_type_declared": declared_kv_cache_type} if declared_kv_cache_type else {}),
     }
 
 
@@ -1852,9 +1742,7 @@ def _attest_local_runtime(
     # its normal symlink to the system interpreter and bypasses the venv where
     # the competitor distribution is installed.
     interpreter = tools_root / spec.interpreter_layout
-    configured = Path(
-        str(environment.get(spec.executable_environment) or "")
-    ).expanduser().resolve()
+    configured = Path(str(environment.get(spec.executable_environment) or "")).expanduser().resolve()
     if configured != executable:
         raise LaunchError("runtime_unavailable")
     if (
@@ -1934,10 +1822,7 @@ def _git_output(path: Path, *arguments: str) -> bytes:
 
 
 def _installed_distribution_version(interpreter: Path, distribution: str) -> str:
-    script = (
-        "import importlib.metadata as m,sys;"
-        "sys.stdout.write(m.version(sys.argv[1]))"
-    )
+    script = "import importlib.metadata as m,sys;sys.stdout.write(m.version(sys.argv[1]))"
     try:
         completed = subprocess.run(
             [str(interpreter), "-I", "-c", script, distribution],
@@ -2043,11 +1928,7 @@ def _atomic_generated_directory(
             )
             path.chmod(0o600)
         if destination.exists() or destination.is_symlink():
-            if (
-                destination.is_symlink()
-                or not destination.is_dir()
-                or not _directories_equal(destination, temporary)
-            ):
+            if destination.is_symlink() or not destination.is_dir() or not _directories_equal(destination, temporary):
                 raise LaunchError("generated_state_conflict")
             return
         os.replace(temporary, destination)
@@ -2106,8 +1987,7 @@ def _scenario_directory(definition: _CampaignDefinition) -> Path:
     if (
         stat.S_ISLNK(campaign_root_metadata.st_mode)
         or not stat.S_ISDIR(campaign_root_metadata.st_mode)
-        or resolved_root
-        != resolved_repository_root / "benchmarks" / "competitors" / "campaigns"
+        or resolved_root != resolved_repository_root / "benchmarks" / "competitors" / "campaigns"
         or stat.S_ISLNK(definition_metadata.st_mode)
         or not stat.S_ISDIR(definition_metadata.st_mode)
         or stat.S_ISLNK(scenario_metadata.st_mode)

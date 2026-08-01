@@ -155,6 +155,31 @@ def test_manifest_and_campaign_payload_guards() -> None:
             campaign_definition=v3,
             analysis_plan=None,
         )
+
+    v4 = launch._CAMPAIGN_DEFINITIONS[launch._SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID]
+    with pytest.raises(launch.LaunchError, match="campaign_definition_mismatch"):
+        launch._campaign_payload(
+            "campaign-v4",
+            systems=launch._system_pins("core", octopus_revision=REVISION),
+            environment={},
+            environment_file=None,
+            repetitions=20,
+            campaign_definition=v4,
+            analysis_plan=SimpleNamespace(),
+            efficiency_plan=None,
+        )
+
+    with pytest.raises(launch.LaunchError, match="campaign_definition_mismatch"):
+        launch._campaign_payload(
+            "campaign-v3",
+            systems=launch._system_pins("core", octopus_revision=REVISION),
+            environment={},
+            environment_file=None,
+            repetitions=12,
+            campaign_definition=v3,
+            analysis_plan=SimpleNamespace(),
+            efficiency_plan=SimpleNamespace(),
+        )
     with pytest.raises(launch.LaunchError, match="campaign_failed"):
         launch._profile_repetitions(())
 

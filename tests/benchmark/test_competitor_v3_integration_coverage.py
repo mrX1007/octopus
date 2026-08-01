@@ -51,6 +51,28 @@ def _plan(**overrides):
     return SimpleNamespace(**values)
 
 
+def _efficiency_plan(**overrides):
+    source = _plan()
+    values = {
+        "source_analysis_plan_digest": source.digest,
+        "source_track_id": source.track_id,
+        "system_ids": source.system_ids,
+        "scenario_ids": source.scenario_ids,
+        "repetitions": source.repetitions,
+        "schedule": (
+            SimpleNamespace(
+                scenario_id="deep-navigation-v3",
+                repetition=1,
+                matched_fixture_seed=7,
+                system_order=("alpha", "beta"),
+            ),
+        ),
+        "digest": "b" * 64,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 def test_config_scenario_and_plan_validation_errors(tmp_path: Path) -> None:
     with pytest.raises(
         BenchmarkV3SchemaError,
@@ -106,6 +128,134 @@ def test_config_scenario_and_plan_validation_errors(tmp_path: Path) -> None:
             system_ids=plan.system_ids,
             scenarios=(_scenario(),),
             repetitions=2,
+        )
+
+
+def test_efficiency_config_load_and_campaign_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = integration.BenchmarkV3CampaignConfig(
+        analysis_plan_path=tmp_path / "analysis-plan.json",
+        state_directory=tmp_path,
+        batch_id="batch",
+        host_id="host",
+        efficiency_plan_path=tmp_path / "efficiency-plan.json",
+    )
+    monkeypatch.setattr(
+        integration,
+        "load_efficiency_plan",
+        lambda _path: (_ for _ in ()).throw(integration.BenchmarkV4SchemaError("schema")),
+    )
+    with pytest.raises(BenchmarkV3SchemaError, match="schema"):
+        config.efficiency_plan()
+
+    monkeypatch.setattr(
+        integration,
+        "load_efficiency_plan",
+        lambda _path: (_ for _ in ()).throw(ValueError("broken")),
+    )
+    with pytest.raises(BenchmarkV3SchemaError, match="efficiency_plan_load_failed"):
+        config.efficiency_plan()
+
+    source = _plan()
+    efficiency = _efficiency_plan()
+    validated = integration.validate_campaign_plan(
+        SimpleNamespace(plan=lambda: source, efficiency_plan=lambda: efficiency),
+        system_ids=source.system_ids,
+        scenarios=(_scenario(),),
+        repetitions=source.repetitions,
+    )
+    assert validated is source
+
+
+@pytest.mark.parametrize(
+    ("plan_updates", "source_updates", "expected"),
+    (
+        ({"system_ids": ("alpha", "other")}, {}, "efficiency_plan_system_mismatch"),
+        ({"scenario_ids": ("clean-negative-v3",)}, {}, "efficiency_plan_scenario_mismatch"),
+        ({"repetitions": 2}, {}, "efficiency_plan_repetition_mismatch"),
+        ({"schedule": ()}, {}, "efficiency_plan_repetition_mismatch"),
+        (
+            {
+                "schedule": (
+                    SimpleNamespace(
+                        scenario_id="deep-navigation-v3",
+                        repetition=1,
+                        matched_fixture_seed=8,
+                        system_order=("alpha", "beta"),
+                    ),
+                ),
+            },
+            {},
+            "efficiency_plan_schedule_mismatch",
+        ),
+        (
+            {
+                "schedule": (
+                    SimpleNamespace(
+                        scenario_id="deep-navigation-v3",
+                        repetition=1,
+                        matched_fixture_seed=7,
+                        system_order=("alpha", "beta"),
+                    ),
+                    SimpleNamespace(
+                        scenario_id="deep-navigation-v3",
+                        repetition=1,
+                        matched_fixture_seed=7,
+                        system_order=("alpha", "beta"),
+                    ),
+                ),
+            },
+            {},
+            "efficiency_plan_schedule_mismatch",
+        ),
+        (
+            {
+                "schedule": (
+                    SimpleNamespace(
+                        scenario_id="deep-navigation-v3",
+                        repetition=1,
+                        matched_fixture_seed=7,
+                        system_order=("alpha", "alpha"),
+                    ),
+                ),
+            },
+            {},
+            "efficiency_plan_schedule_mismatch",
+        ),
+        (
+            {
+                "schedule": (
+                    SimpleNamespace(
+                        scenario_id="deep-navigation-v3",
+                        repetition=1,
+                        matched_fixture_seed=7,
+                        system_order=("alpha",),
+                    ),
+                ),
+            },
+            {},
+            "efficiency_plan_schedule_mismatch",
+        ),
+        ({"source_analysis_plan_digest": "c" * 64}, {}, "efficiency_plan_source_digest_mismatch"),
+        ({"source_track_id": "other-track"}, {}, "efficiency_plan_source_track_mismatch"),
+    ),
+)
+def test_efficiency_campaign_validation_rejects_each_mismatch(
+    plan_updates: dict[str, object],
+    source_updates: dict[str, object],
+    expected: str,
+) -> None:
+    source = _plan(**source_updates)
+    efficiency = _efficiency_plan(**plan_updates)
+    with pytest.raises(BenchmarkV3SchemaError, match=expected):
+        integration.validate_efficiency_campaign_plan(
+            efficiency,
+            source_plan=source,
+            system_ids=source.system_ids,
+            scenario_ids=source.scenario_ids,
+            repetitions=source.repetitions,
         )
 
 
@@ -185,6 +335,81 @@ def test_fixture_and_run_attestation_errors(
         match="v3_fixture_attestation_mismatch",
     ):
         integration.build_v3_run(seed=7, **common)
+
+
+def test_efficiency_run_attestation_and_schedule_guards(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = _plan()
+    efficiency = _efficiency_plan()
+    variant = SimpleNamespace(
+        scenario_id="deep-navigation-v3",
+        matched_fixture_seed=7,
+        lab_version=LAB_V3_VERSION,
+        scenario_family="deep_navigation",
+        variant_digest="c" * 64,
+        truth_claims=(),
+        completion_rule="all_required_truths",
+    )
+    snapshot = SimpleNamespace(
+        violations=(),
+        observed_evidence_ids=(),
+        root_digest="d" * 64,
+        entry_count=0,
+    )
+    ledger = SimpleNamespace(snapshot=lambda: snapshot, action_events=lambda: ())
+    monkeypatch.setattr(integration, "load_private_fixture", lambda _path: variant)
+    monkeypatch.setattr(integration, "ControlPlaneLedger", lambda **_kwargs: ledger)
+    monkeypatch.setattr(integration, "evaluate_claims", lambda **_kwargs: SimpleNamespace())
+    monkeypatch.setattr(integration, "make_run", lambda **kwargs: kwargs)
+
+    common = {
+        "plan": source,
+        "scenario": _scenario(),
+        "system_id": "alpha",
+        "repetition": 1,
+        "seed": 7,
+        "result": {"status": "succeeded"},
+        "started_at": 1.0,
+        "finished_at": 2.0,
+        "reset_attestation": {"campaign_id": "campaign"},
+    }
+    without_efficiency = SimpleNamespace(
+        state_directory=tmp_path,
+        batch_id="batch",
+        host_id="host",
+    )
+    with pytest.raises(BenchmarkV3SchemaError, match="efficiency_plan_digest_mismatch"):
+        integration.build_v3_run(
+            config=without_efficiency,
+            efficiency_plan=efficiency,
+            **common,
+        )
+
+    configured = SimpleNamespace(
+        state_directory=tmp_path,
+        batch_id="batch",
+        host_id="host",
+        efficiency_plan=lambda: efficiency,
+    )
+    run = integration.build_v3_run(config=configured, **common)
+    assert run["environment"]["efficiency_plan_digest"] == efficiency.digest
+
+    invalid = _efficiency_plan(schedule=())
+    invalid_config = SimpleNamespace(
+        state_directory=tmp_path,
+        batch_id="batch",
+        host_id="host",
+        efficiency_plan=lambda: invalid,
+    )
+    monkeypatch.setattr(
+        integration,
+        "validate_efficiency_campaign_plan",
+        lambda *_args, **_kwargs: invalid,
+    )
+    with pytest.raises(BenchmarkV3SchemaError, match="efficiency_plan_schedule_mismatch"):
+        integration.build_v3_run(config=invalid_config, **common)
 
 
 def test_reveal_and_public_ledger_attestation_errors(

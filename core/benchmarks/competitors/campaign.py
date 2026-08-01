@@ -584,9 +584,7 @@ def run_campaign(
         )
         v3_runs = _journal_v3_runs(journal, schedule) if v3_plan is not None else ()
         if efficiency_plan is not None and any(
-            run.environment.get("efficiency_plan_digest")
-            != efficiency_plan.digest
-            for run in v3_runs
+            run.environment.get("efficiency_plan_digest") != efficiency_plan.digest for run in v3_runs
         ):
             raise BenchmarkV3SchemaError("efficiency_run_attestation_mismatch")
         if v3_runs:
@@ -635,14 +633,10 @@ def run_campaign(
                 if efficiency_plan is not None:
                     public_v3 = public_campaign.get("benchmark_v3")
                     if not isinstance(public_v3, Mapping) or (
-                        public_v3.get("efficiency_plan_digest")
-                        != efficiency_plan.digest
-                        or public_v3.get("efficiency_track_id")
-                        != efficiency_plan.efficiency_track_id
+                        public_v3.get("efficiency_plan_digest") != efficiency_plan.digest
+                        or public_v3.get("efficiency_track_id") != efficiency_plan.efficiency_track_id
                     ):
-                        raise BenchmarkV3SchemaError(
-                            "efficiency_plan_digest_mismatch"
-                        )
+                        raise BenchmarkV3SchemaError("efficiency_plan_digest_mismatch")
                 campaign_context = {
                     "attestations": journal.read_attestations(),
                     "campaign": public_campaign,
@@ -661,9 +655,7 @@ def run_campaign(
                     "systems": [item.to_dict() for item in manifests],
                 }
                 if efficiency_plan is not None:
-                    campaign_context["efficiency_plan_attestation"] = (
-                        _efficiency_plan_attestation(efficiency_plan)
-                    )
+                    campaign_context["efficiency_plan_attestation"] = _efficiency_plan_attestation(efficiency_plan)
                 if _contains_secret_canary(campaign_context, secret_canaries):
                     raise CampaignConfigError("secret_canary_detected")
                 bundle = publish_v3_results(
@@ -758,11 +750,7 @@ def _build_schedule(
     v3_plan: AnalysisPlan | None = None,
     efficiency_plan: EfficiencyPlan | None = None,
 ) -> tuple[dict[str, Any], ...]:
-    selected_efficiency_plan = (
-        efficiency_plan
-        if efficiency_plan is not None
-        else _configured_efficiency_plan(config)
-    )
+    selected_efficiency_plan = efficiency_plan if efficiency_plan is not None else _configured_efficiency_plan(config)
     if selected_efficiency_plan is not None:
         source_plan = v3_plan or _configured_analysis_plan(config)
         if source_plan is None:

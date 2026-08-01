@@ -346,9 +346,7 @@ def _verify_v4_results(root: Path, source: VerifiedV3Evidence) -> dict[str, Any]
     }
     if actual != required:
         raise BenchmarkV4SchemaError("v4_publication_file_set_mismatch")
-    canonical_checksums = "".join(
-        f"{expected[name]}  {name}\n" for name in sorted(expected)
-    )
+    canonical_checksums = "".join(f"{expected[name]}  {name}\n" for name in sorted(expected))
     if (root / "SHA256SUMS").read_text(encoding="utf-8") != canonical_checksums:
         raise BenchmarkV4SchemaError("v4_publication_checksums_invalid")
     plan = load_efficiency_plan(root / "efficiency-plan.json")
@@ -473,9 +471,7 @@ def _artifact_names(value: Any, *, prefix: str) -> tuple[str, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)) or not value:
         raise BenchmarkV4SchemaError("v4_source_publication_invalid")
     names = tuple(str(item) for item in value)
-    if len(set(names)) != len(names) or any(
-        name != f"{prefix}-{index:04d}.jsonl" for index, name in enumerate(names)
-    ):
+    if len(set(names)) != len(names) or any(name != f"{prefix}-{index:04d}.jsonl" for index, name in enumerate(names)):
         raise BenchmarkV4SchemaError("v4_source_publication_invalid")
     return names
 
@@ -636,11 +632,7 @@ def _render_effect_panel(
         right = html.escape(str(effect.get("right_system_id") or "right"))
         claim = html.escape(str(effect.get("directional_claim") or "inconclusive"))
         qualified_raw = effect.get("quality_qualified_pairs")
-        if (
-            isinstance(qualified_raw, bool)
-            or not isinstance(qualified_raw, int)
-            or qualified_raw < 0
-        ):
+        if isinstance(qualified_raw, bool) or not isinstance(qualified_raw, int) or qualified_raw < 0:
             raise BenchmarkV4SchemaError("v4_statistics_effect_count_invalid")
         qualified = qualified_raw
         result.append(
@@ -695,13 +687,16 @@ def _display_number(value: float | None, *, percent: bool = False) -> str:
 
 
 def _pretty_json(payload: Mapping[str, Any]) -> str:
-    return json.dumps(
-        payload,
-        allow_nan=False,
-        ensure_ascii=False,
-        indent=2,
-        sort_keys=True,
-    ) + "\n"
+    return (
+        json.dumps(
+            payload,
+            allow_nan=False,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
 
 
 def _sha256(path: Path) -> str:

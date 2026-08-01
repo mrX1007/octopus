@@ -176,9 +176,7 @@ class EfficiencyPlan:
     quality_metric: str = QUALITY_METRIC
     noninferiority_margin: float = 0.02
     completion_noninferiority_margin: float = 0.02
-    coverage_gates: Mapping[str, float] = field(
-        default_factory=lambda: dict.fromkeys(PRIMARY_RESOURCES, 1.0)
-    )
+    coverage_gates: Mapping[str, float] = field(default_factory=lambda: dict.fromkeys(PRIMARY_RESOURCES, 1.0))
     methodology: Mapping[str, Any] = field(default_factory=lambda: dict(EFFICIENCY_METHODOLOGY))
     alpha: float = 0.05
     bootstrap_samples: int = 10_000
@@ -268,11 +266,7 @@ class EfficiencyPlan:
                 or not 0.0 <= margin <= 1.0
             ):
                 raise BenchmarkV4SchemaError(f"invalid:efficiency_plan.{margin_name}")
-        if (
-            isinstance(self.alpha, bool)
-            or not isinstance(self.alpha, (int, float))
-            or not 0.0 < self.alpha < 1.0
-        ):
+        if isinstance(self.alpha, bool) or not isinstance(self.alpha, (int, float)) or not 0.0 < self.alpha < 1.0:
             raise BenchmarkV4SchemaError("invalid:efficiency_plan.alpha")
         if (
             isinstance(self.bootstrap_samples, bool)
@@ -280,11 +274,7 @@ class EfficiencyPlan:
             or not 100 <= self.bootstrap_samples <= MAX_BOOTSTRAP_SAMPLES
         ):
             raise BenchmarkV4SchemaError("invalid_efficiency_plan_bootstrap_samples")
-        if (
-            isinstance(self.bootstrap_seed, bool)
-            or not isinstance(self.bootstrap_seed, int)
-            or self.bootstrap_seed < 0
-        ):
+        if isinstance(self.bootstrap_seed, bool) or not isinstance(self.bootstrap_seed, int) or self.bootstrap_seed < 0:
             raise BenchmarkV4SchemaError("invalid:efficiency_plan.bootstrap_seed")
         if self.publication_tier not in _PUBLICATION_TIERS:
             raise BenchmarkV4SchemaError("invalid_efficiency_publication_tier")
@@ -383,8 +373,7 @@ class EfficiencyPlan:
             not _sequence(raw_schedule)
             or not _sequence(raw_pairs)
             or any(
-                not _sequence(item) or len(cast(Sequence[Any], item)) != 2
-                for item in cast(Sequence[Any], raw_pairs)
+                not _sequence(item) or len(cast(Sequence[Any], item)) != 2 for item in cast(Sequence[Any], raw_pairs)
             )
             or not isinstance(raw_gates, Mapping)
             or not isinstance(raw_methodology, Mapping)
@@ -620,11 +609,7 @@ class EfficiencyRunProjection:
             raise BenchmarkV4SchemaError("invalid:efficiency_run.task_status")
         if self.quality.name != QUALITY_METRIC:
             raise BenchmarkV4SchemaError("efficiency_run_quality_metric_mismatch")
-        if (
-            self.quality.available
-            and self.quality.value is not None
-            and not 0.0 <= self.quality.value <= 1.0
-        ):
+        if self.quality.available and self.quality.value is not None and not 0.0 <= self.quality.value <= 1.0:
             raise BenchmarkV4SchemaError("efficiency_run_quality_out_of_range")
         try:
             normalized = {str(key): value for key, value in sorted(self.resources.items())}
@@ -747,10 +732,7 @@ def build_efficiency_plan(
     selected_tier = str(publication_tier or source_analysis_plan.publication_tier)
     systems = tuple(source_analysis_plan.system_ids)
     scenarios = tuple(source_analysis_plan.scenario_ids)
-    seeds = {
-        scenario_id: tuple(source_analysis_plan.fixture_seeds[scenario_id])
-        for scenario_id in scenarios
-    }
+    seeds = {scenario_id: tuple(source_analysis_plan.fixture_seeds[scenario_id]) for scenario_id in scenarios}
     schedule = _build_schedule(
         system_ids=systems,
         scenario_ids=scenarios,
@@ -758,11 +740,7 @@ def build_efficiency_plan(
         fixture_seeds=seeds,
         schedule_seed=schedule_seed,
     )
-    gates = (
-        dict.fromkeys(PRIMARY_RESOURCES, 1.0)
-        if coverage_gates is None
-        else dict(coverage_gates)
-    )
+    gates = dict.fromkeys(PRIMARY_RESOURCES, 1.0) if coverage_gates is None else dict(coverage_gates)
     return EfficiencyPlan(
         efficiency_track_id=(efficiency_track_id or f"{source_analysis_plan.track_id}-efficiency-v4"),
         source_analysis_plan_digest=source_analysis_plan.digest,
@@ -890,16 +868,10 @@ def _build_schedule(
 
 def _validate_schedule_contract(plan: EfficiencyPlan) -> None:
     expected_block_count = len(plan.scenario_ids) * plan.repetitions
-    if (
-        not plan.schedule
-        or expected_block_count > _MAX_BLOCKS
-        or len(plan.schedule) != expected_block_count
-    ):
+    if not plan.schedule or expected_block_count > _MAX_BLOCKS or len(plan.schedule) != expected_block_count:
         raise BenchmarkV4SchemaError("invalid:efficiency_plan.schedule")
     expected_keys = {
-        (scenario_id, repetition)
-        for scenario_id in plan.scenario_ids
-        for repetition in range(1, plan.repetitions + 1)
+        (scenario_id, repetition) for scenario_id in plan.scenario_ids for repetition in range(1, plan.repetitions + 1)
     }
     actual_keys = {(item.scenario_id, item.repetition) for item in plan.schedule}
     if len(actual_keys) != len(plan.schedule):
@@ -971,8 +943,7 @@ def _identifier(value: Any, name: str) -> str:
     lowered = raw.lower()
     if (
         original != raw
-        or
-        raw != lowered
+        or raw != lowered
         or not lowered
         or len(lowered) > 160
         or lowered[0] not in "abcdefghijklmnopqrstuvwxyz0123456789"

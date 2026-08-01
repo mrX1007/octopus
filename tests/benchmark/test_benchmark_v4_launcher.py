@@ -45,9 +45,7 @@ def test_v4_launcher_freezes_twenty_repetition_efficiency_schedule(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(launch, "ROOT", tmp_path)
-    definition = launch._CAMPAIGN_DEFINITIONS[
-        launch._SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID
-    ]
+    definition = launch._CAMPAIGN_DEFINITIONS[launch._SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID]
 
     config_path = launch._prepare_generated_campaign(
         "v4-generated-test",
@@ -77,22 +75,16 @@ def test_v4_launcher_freezes_twenty_repetition_efficiency_schedule(
     assert efficiency_plan.efficiency_track_id == "small-model-efficiency-v4"
     assert len(efficiency_plan.schedule) == 12 * 20
     assert len(schedule) == 12 * 20 * 2
-    assert [
-        (item["scenario_id"], item["repetition"], item["seed"], item["system_id"])
-        for item in schedule
-    ] == [
+    assert [(item["scenario_id"], item["repetition"], item["seed"], item["system_id"]) for item in schedule] == [
         (block.scenario_id, block.repetition, block.matched_fixture_seed, system_id)
         for block in efficiency_plan.schedule
         for system_id in block.system_order
     ]
-    assert config_payload["benchmark_v3"]["efficiency_plan"] == str(
-        config_path.parent / "efficiency-plan.json"
-    )
+    assert config_payload["benchmark_v3"]["efficiency_plan"] == str(config_path.parent / "efficiency-plan.json")
     assert config.benchmark_v3 is not None
     assert config.benchmark_v3.public_payload()["efficiency_plan_digest"] == efficiency_plan.digest
     assert "8f" * 32 not in "".join(
-        path.read_text(encoding="utf-8")
-        for path in sorted(config_path.parent.rglob("*.json"))
+        path.read_text(encoding="utf-8") for path in sorted(config_path.parent.rglob("*.json"))
     )
 
     with pytest.raises(launch.LaunchError, match="campaign_definition_mismatch"):
@@ -107,9 +99,7 @@ def test_v3_launcher_contract_does_not_gain_v4_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(launch, "ROOT", tmp_path)
-    definition = launch._CAMPAIGN_DEFINITIONS[
-        launch._SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID
-    ]
+    definition = launch._CAMPAIGN_DEFINITIONS[launch._SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID]
 
     config_path = launch._prepare_generated_campaign(
         "v3-compatibility-test",
@@ -124,7 +114,5 @@ def test_v3_launcher_contract_does_not_gain_v4_fields(
     assert "efficiency_plan" not in config_payload["benchmark_v3"]
     assert not (config_path.parent / "efficiency-plan.json").exists()
     for system_id in ("octopus", "strix"):
-        manifest = json.loads(
-            (config_path.parent / f"{system_id}.json").read_text(encoding="utf-8")
-        )
+        manifest = json.loads((config_path.parent / f"{system_id}.json").read_text(encoding="utf-8"))
         assert "benchmark_v4_efficiency_track_id" not in manifest["metadata"]

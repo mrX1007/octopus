@@ -60,9 +60,7 @@ def extract_efficiency_runs(
     # This is deliberately a validation call.  Its aggregate is not published
     # because a verified publisher may supply compact runs without action rows.
     _validate_v3_schedule_once(source_analysis_plan, items)
-    by_key = {
-        (run.scenario_id, run.repetition, run.matched_fixture_seed, run.system_id): run for run in items
-    }
+    by_key = {(run.scenario_id, run.repetition, run.matched_fixture_seed, run.system_id): run for run in items}
     if len(by_key) != len(items):
         raise BenchmarkV4SchemaError("duplicate_efficiency_source_run")
     expected_keys = _scheduled_run_keys(plan)
@@ -88,9 +86,7 @@ def extract_efficiency_runs(
                 unit=RESOURCE_UNITS["wall_time_seconds"],
                 value=float(run.duration_seconds),
             ),
-            "fixture_http_requests": _ledger_observation(
-                "fixture_http_requests", ledger_summary["entry_count"]
-            ),
+            "fixture_http_requests": _ledger_observation("fixture_http_requests", ledger_summary["entry_count"]),
             "unique_fixture_targets": _ledger_observation(
                 "unique_fixture_targets", ledger_summary["unique_target_count"]
             ),
@@ -121,9 +117,7 @@ def extract_efficiency_runs(
                 finished_at=float(run.finished_at),
                 batch_id=str(run.environment.get("batch_id") or ""),
                 host_id=str(run.environment.get("host_id") or ""),
-                efficiency_plan_attested=(
-                    str(run.environment.get("efficiency_plan_digest") or "") == plan.digest
-                ),
+                efficiency_plan_attested=(str(run.environment.get("efficiency_plan_digest") or "") == plan.digest),
                 quality=quality,
                 resources=resources,
             )
@@ -176,8 +170,7 @@ def hierarchical_paired_bootstrap(
         return math.log(right / left) if estimand == "geometric_ratio" else right - left
 
     scenario_points = {
-        scenario_id: statistics.fmean(pair_effect(pair) for pair in groups[scenario_id])
-        for scenario_id in scenario_ids
+        scenario_id: statistics.fmean(pair_effect(pair) for pair in groups[scenario_id]) for scenario_id in scenario_ids
     }
     point = statistics.fmean(scenario_points.values())
     rng = random.Random(seed)
@@ -187,9 +180,7 @@ def hierarchical_paired_bootstrap(
         scenario_effects: list[float] = []
         for scenario_id in selected_scenarios:
             pairs = groups[scenario_id]
-            scenario_effects.append(
-                statistics.fmean(pair_effect(pairs[rng.randrange(len(pairs))]) for _ in pairs)
-            )
+            scenario_effects.append(statistics.fmean(pair_effect(pairs[rng.randrange(len(pairs))]) for _ in pairs))
         sampled_effects.append(statistics.fmean(scenario_effects))
     sampled_effects.sort()
     lower = _percentile(sampled_effects, alpha / 2.0)
@@ -210,9 +201,7 @@ def hierarchical_paired_bootstrap(
         "sample_size": sum(len(pairs) for pairs in groups.values()),
         "scenario_count": len(groups),
         "scenario_estimates": {
-            scenario_id: _round(
-                math.exp(value) if estimand == "geometric_ratio" else value
-            )
+            scenario_id: _round(math.exp(value) if estimand == "geometric_ratio" else value)
             for scenario_id, value in sorted(scenario_points.items())
         },
         "upper": _round(upper),
@@ -250,14 +239,10 @@ def analyze_efficiency(
         for comparison_index, (left_id, right_id) in enumerate(plan.comparison_pairs)
     ]
     paired_effects = [
-        effect
-        for comparison in comparisons
-        for effect in cast(Sequence[dict[str, Any]], comparison["paired_effects"])
+        effect for comparison in comparisons for effect in cast(Sequence[dict[str, Any]], comparison["paired_effects"])
     ]
     fairness["primary_metric_gates"] = {
-        _comparison_key(str(item["left_system_id"]), str(item["right_system_id"])): item[
-            "primary_metric_gates"
-        ]
+        _comparison_key(str(item["left_system_id"]), str(item["right_system_id"])): item["primary_metric_gates"]
         for item in comparisons
     }
     fairness["eligible"] = bool(
@@ -305,9 +290,7 @@ def _validate_source_plan(plan: EfficiencyPlan, source: AnalysisPlan) -> None:
         raise BenchmarkV4SchemaError("efficiency_plan_source_design_mismatch")
     if plan.publication_tier != "diagnostic" and plan.publication_tier != source.publication_tier:
         raise BenchmarkV4SchemaError("efficiency_source_publication_tier_mismatch")
-    observed = {
-        (block.scenario_id, block.repetition): block.matched_fixture_seed for block in plan.schedule
-    }
+    observed = {(block.scenario_id, block.repetition): block.matched_fixture_seed for block in plan.schedule}
     expected = {
         (scenario_id, repetition): source.fixture_seeds[scenario_id][repetition - 1]
         for scenario_id in source.scenario_ids
@@ -317,9 +300,7 @@ def _validate_source_plan(plan: EfficiencyPlan, source: AnalysisPlan) -> None:
         raise BenchmarkV4SchemaError("efficiency_schedule_source_seed_mismatch")
 
 
-def _validate_v3_schedule_once(
-    source: AnalysisPlan, runs: Sequence[BenchmarkRunV3]
-) -> None:
+def _validate_v3_schedule_once(source: AnalysisPlan, runs: Sequence[BenchmarkRunV3]) -> None:
     """Memoize exact immutable schedule validation, never v3 aggregate output."""
 
     # A cache hit stands for a complete ``analyze_runs`` validation, so bind
@@ -519,14 +500,10 @@ def _system_statistics(
 ) -> dict[str, Any]:
     execution_successes = sum(item.execution_status == "succeeded" for item in projections)
     completions = sum(item.task_status == "completed" for item in projections)
-    resources = {
-        name: _observation_summary([item.resources[name] for item in projections]) for name in ALL_RESOURCES
-    }
+    resources = {name: _observation_summary([item.resources[name] for item in projections]) for name in ALL_RESOURCES}
     quality = _quality_summary(projections, runs)
     return {
-        "completed_yield_per_resource": {
-            name: _yield_summary(projections, name) for name in ALL_RESOURCES
-        },
+        "completed_yield_per_resource": {name: _yield_summary(projections, name) for name in ALL_RESOURCES},
         "quality": quality,
         "resources": resources,
         "run_count": len(projections),
@@ -538,11 +515,7 @@ def _system_statistics(
                 ),
                 "resources": {
                     name: _observation_summary(
-                        [
-                            item.resources[name]
-                            for item in projections
-                            if item.scenario_id == scenario_id
-                        ]
+                        [item.resources[name] for item in projections if item.scenario_id == scenario_id]
                     )
                     for name in ALL_RESOURCES
                 },
@@ -551,18 +524,12 @@ def _system_statistics(
             for scenario_id in plan.scenario_ids
         },
         "stability": {
-            "execution_outcome_counts": dict(
-                sorted(Counter(item.execution_status for item in projections).items())
-            ),
+            "execution_outcome_counts": dict(sorted(Counter(item.execution_status for item in projections).items())),
             "execution_success_rate": _round(execution_successes / len(projections)),
-            "execution_success_wilson": wilson_interval(
-                execution_successes, len(projections), alpha=plan.alpha
-            ),
+            "execution_success_wilson": wilson_interval(execution_successes, len(projections), alpha=plan.alpha),
             "task_completion_rate": _round(completions / len(projections)),
             "task_completion_wilson": wilson_interval(completions, len(projections), alpha=plan.alpha),
-            "task_outcome_counts": dict(
-                sorted(Counter(item.task_status for item in projections).items())
-            ),
+            "task_outcome_counts": dict(sorted(Counter(item.task_status for item in projections).items())),
         },
     }
 
@@ -603,31 +570,24 @@ def _observation_summary(observations: Sequence[ResourceObservation]) -> dict[st
         "mean": _round(statistics.fmean(values)) if values else None,
         "median": _round(statistics.median(values)) if values else None,
         "minimum": _round(min(values)) if values else None,
-        "reliability_counts": dict(
-            sorted(Counter(item.reliability for item in observations).items())
-        ),
+        "reliability_counts": dict(sorted(Counter(item.reliability for item in observations).items())),
         "scheduled": len(observations),
         "total": _round(sum(values)) if values else None,
     }
 
 
-def _yield_summary(
-    projections: Sequence[EfficiencyRunProjection], resource_name: str
-) -> dict[str, Any]:
+def _yield_summary(projections: Sequence[EfficiencyRunProjection], resource_name: str) -> dict[str, Any]:
     usable = [
         item
         for item in projections
-        if item.resources[resource_name].available
-        and item.resources[resource_name].value is not None
+        if item.resources[resource_name].available and item.resources[resource_name].value is not None
     ]
     denominator = sum(float(item.resources[resource_name].value or 0.0) for item in usable)
     quality_items = [item for item in usable if item.quality.available and item.quality.value is not None]
     return {
         "available": denominator > 0,
         "completed_tasks_per_unit": (
-            _round(sum(item.task_status == "completed" for item in usable) / denominator)
-            if denominator > 0
-            else None
+            _round(sum(item.task_status == "completed" for item in usable) / denominator) if denominator > 0 else None
         ),
         "reason": "" if denominator > 0 else "no_positive_resource_observations",
         "resource_total": _round(denominator) if denominator > 0 else None,
@@ -649,8 +609,7 @@ def _comparison_statistics(
     comparison_index: int,
 ) -> dict[str, Any]:
     indexed = {
-        (item.system_id, item.scenario_id, item.repetition, item.matched_fixture_seed): item
-        for item in projections
+        (item.system_id, item.scenario_id, item.repetition, item.matched_fixture_seed): item for item in projections
     }
     paired = [
         (
@@ -668,9 +627,7 @@ def _comparison_statistics(
     )
     quality_pairs = _group_pairs(paired, lambda item: item.quality, require_available=True)
     jointly_completed = [(left, right) for left, right in paired if _both_completed(left, right)]
-    paired_quality_pairs = _group_pairs(
-        jointly_completed, lambda item: item.quality, require_available=True
-    )
+    paired_quality_pairs = _group_pairs(jointly_completed, lambda item: item.quality, require_available=True)
     completion_effect = hierarchical_paired_bootstrap(
         completion_pairs,
         samples=plan.bootstrap_samples,
@@ -690,13 +647,9 @@ def _comparison_statistics(
         seed=_stream_seed(plan, comparison_index, "paired-quality"),
     )
     noninferiority = {
-        "task_completion_rate": _noninferiority_gate(
-            completion_effect, plan.completion_noninferiority_margin
-        ),
+        "task_completion_rate": _noninferiority_gate(completion_effect, plan.completion_noninferiority_margin),
         "verified_f1": _noninferiority_gate(quality_effect, plan.noninferiority_margin),
-        "verified_f1_both_completed": _noninferiority_gate(
-            paired_quality_effect, plan.noninferiority_margin
-        ),
+        "verified_f1_both_completed": _noninferiority_gate(paired_quality_effect, plan.noninferiority_margin),
     }
     primary_metric_gates: dict[str, Any] = {}
     paired_effects: list[dict[str, Any]] = []
@@ -779,12 +732,14 @@ def _resource_effect(
         if left.quality.available and right.quality.available:
             if left.quality.value is None or right.quality.value is None:
                 raise BenchmarkV4SchemaError("available_quality_missing_value")
-            pareto[_pareto_class(
-                float(left.quality.value),
-                float(right.quality.value),
-                float(left_resource.value),
-                float(right_resource.value),
-            )] += 1
+            pareto[
+                _pareto_class(
+                    float(left.quality.value),
+                    float(right.quality.value),
+                    float(left_resource.value),
+                    float(right_resource.value),
+                )
+            ] += 1
         else:
             exclusions["quality_unavailable"] += 1
             continue
@@ -792,9 +747,7 @@ def _resource_effect(
             exclusions["nonpositive_resource"] += 1
             continue
         scenario_id = left.scenario_id
-        ratio_by_scenario[scenario_id].append(
-            (float(left_resource.value), float(right_resource.value))
-        )
+        ratio_by_scenario[scenario_id].append((float(left_resource.value), float(right_resource.value)))
         qpr_by_scenario[scenario_id].append(
             (
                 float(left.quality.value) / float(left_resource.value),
@@ -833,9 +786,7 @@ def _resource_effect(
     ratio_available = bool(ratio.get("available"))
     qpr_available = bool(quality_per_resource.get("available"))
     all_scheduled_quality_complete = quality_gate["effect"].get("sample_size") == len(paired)
-    completed_quality_complete = (
-        paired_quality_gate["effect"].get("sample_size") == jointly_completed_count
-    )
+    completed_quality_complete = paired_quality_gate["effect"].get("sample_size") == jointly_completed_count
     resource_claim_population_complete = eligible_pairs == jointly_completed_count
     right_supported = bool(
         resource_name in PRIMARY_RESOURCES
@@ -913,9 +864,7 @@ def _noninferiority_gate(effect: Mapping[str, Any], margin: float) -> dict[str, 
         "effect": dict(effect),
         "left_noninferior": bool(available and isinstance(upper, (int, float)) and upper <= margin),
         "margin": margin,
-        "right_noninferior": bool(
-            available and isinstance(lower, (int, float)) and lower >= -margin
-        ),
+        "right_noninferior": bool(available and isinstance(lower, (int, float)) and lower >= -margin),
     }
 
 
@@ -930,9 +879,7 @@ def _group_pairs(
         left_value = extractor(left)
         right_value = extractor(right)
         if require_available:
-            if not isinstance(left_value, ResourceObservation) or not isinstance(
-                right_value, ResourceObservation
-            ):
+            if not isinstance(left_value, ResourceObservation) or not isinstance(right_value, ResourceObservation):
                 raise BenchmarkV4SchemaError("invalid_quality_pair_projection")
             if (
                 not left_value.available
@@ -963,9 +910,7 @@ def _pareto_class(
     return "tradeoff"
 
 
-def _both_completed(
-    left: EfficiencyRunProjection, right: EfficiencyRunProjection
-) -> bool:
+def _both_completed(left: EfficiencyRunProjection, right: EfficiencyRunProjection) -> bool:
     return left.task_status == "completed" and right.task_status == "completed"
 
 
@@ -982,9 +927,7 @@ def _fairness_assessment(
         for item in sorted(projections, key=lambda item: (item.started_at, item.run_id))
     )
     chronological = sorted(projections, key=lambda item: (item.started_at, item.run_id))
-    non_overlapping = all(
-        left.finished_at <= right.started_at for left, right in zip(chronological, chronological[1:])
-    )
+    non_overlapping = all(left.finished_at <= right.started_at for left, right in zip(chronological, chronological[1:]))
     schedule_order = unique_starts and non_overlapping and actual_order == expected_order
     by_block: dict[tuple[str, int, int], list[EfficiencyRunProjection]] = defaultdict(list)
     for item in projections:
@@ -1047,9 +990,7 @@ def _fairness_assessment(
     }
 
 
-def _system_declarations(
-    context: Mapping[str, Any], system_ids: Sequence[str]
-) -> dict[str, Mapping[str, Any]]:
+def _system_declarations(context: Mapping[str, Any], system_ids: Sequence[str]) -> dict[str, Mapping[str, Any]]:
     raw = context.get("systems")
     if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
         return {}
@@ -1100,15 +1041,15 @@ def _campaign_context(value: Mapping[str, Any]) -> Mapping[str, Any]:
 
 
 def _stream_seed(plan: EfficiencyPlan, comparison_index: int, stream: str) -> int:
-    return plan.bootstrap_seed + comparison_index * 100_000 + int(
-        stable_digest({"efficiency_bootstrap_stream": stream})[:8], 16
+    return (
+        plan.bootstrap_seed
+        + comparison_index * 100_000
+        + int(stable_digest({"efficiency_bootstrap_stream": stream})[:8], 16)
     )
 
 
 def _comparison_key(left_system_id: str, right_system_id: str) -> str:
-    return "pair-" + stable_digest(
-        {"left_system_id": left_system_id, "right_system_id": right_system_id}
-    )[:32]
+    return "pair-" + stable_digest({"left_system_id": left_system_id, "right_system_id": right_system_id})[:32]
 
 
 def _percentile(sorted_values: Sequence[float], fraction: float) -> float:
