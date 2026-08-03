@@ -9,9 +9,11 @@ all decisions and execution continue through the injected pipeline services.
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from typing import Any
 
 from core.ai.evidence_policy import claim_evidence_policy
+from core.ai.llm_context import normalize_mission_contract
 from core.execution import CancellationContext
 
 
@@ -33,12 +35,21 @@ class ScanLifecycle:
         raw_scan: str = "",
         *,
         cancellation: CancellationContext | None = None,
+        mission_contract: Mapping[str, Any] | None = None,
     ):
         current = pipeline.mission_store.get_mission_by_scan_id(scan_id)
         if current is not None and current.status == "completed" and current.mission_id == pipeline.mission_id:
             pipeline.mission_store.open_mission(scan_id, target)
             return pipeline.state_resolver.resolve_state(scan_id, target)
         pipeline._reset_runtime_state()
+        pipeline._mission_contract = _normalize_mission_contract(mission_contract)
+        analysis_agent = getattr(pipeline, "analysis_agent", None)
+        if analysis_agent is not None and pipeline._mission_contract:
+            analysis_agent.mission_contract = dict(pipeline._mission_contract)
+        elif analysis_agent is not None:
+            previous_contract = getattr(analysis_agent, "mission_contract", None)
+            if isinstance(previous_contract, dict):
+                previous_contract.clear()
         if cancellation is not None:
             # Reset creates the ordinary unbounded per-scan token. A caller
             # supplying an explicit deadline owns this replacement token.
@@ -200,6 +211,11 @@ class ScanLifecycle:
                 if evaluated_fact_snapshot is not None
                 else pipeline.context_builder.build_context(scan_id, target)
             )
+            if pipeline._mission_contract:
+                context = {
+                    **context,
+                    "mission_contract": dict(pipeline._mission_contract),
+                }
             print(
                 f"[*] Context: state={context['state']}, services={context['services']}, "
                 f"questions={context['open_questions']}"
@@ -596,6 +612,14 @@ class ScanLifecycle:
         )
         pipeline._print_efficiency_report(scan_id, target, elapsed)
         return pipeline.state_resolver.resolve_state(scan_id, target)
+
+
+def _normalize_mission_contract(
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Compatibility-local alias for the shared prompt-boundary validator."""
+
+    return normalize_mission_contract(value)
 
 
 __all__ = ["ScanLifecycle", "ToolBudgetReached"]

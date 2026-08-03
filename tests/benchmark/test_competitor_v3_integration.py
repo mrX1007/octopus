@@ -172,6 +172,47 @@ def test_v3_claim_protocol_ignores_raw_observations_and_retains_hallucinations()
     )
 
 
+def test_v3_claim_protocol_reads_ansi_rich_final_panel_only_as_explicit_claims() -> None:
+    token = "OCTOBENCH_V3_" + "F" * 32
+
+    claims = adapter_module._extract_strix_v3_final_report_claims(
+        "\n".join(
+            (
+                "raw tool transcript",
+                f"│ Claim: {token} │",
+                "╭─ STRIX ─────────────────────────────────────────────╮",
+                "│ Penetration test summary                           │",
+                "│                                                    │",
+                f"\x1b[32m│ Claim: {token} │\x1b[0m",
+                "│ Finding: unsupported admin endpoint │",
+                "╰────────────────────────────────────────────────────╯",
+                f"workspace log: Claim: {token}",
+            )
+        )
+    )
+
+    assert claims == (token, "unsupported admin endpoint")
+
+
+def test_strix_claim_protocol_fails_closed_without_native_final_panel() -> None:
+    token = "OCTOBENCH_V3_" + "E" * 32
+
+    assert adapter_module._extract_strix_v3_final_report_claims(f"raw tool transcript\n│ Claim: {token} │\n") == ()
+    assert (
+        adapter_module._extract_strix_v3_final_report_claims(
+            "\n".join(
+                (
+                    "╭─ TOOL OUTPUT ─────────────────────╮",
+                    "│ Penetration test summary         │",
+                    f"│ Claim: {token} │",
+                    "╰──────────────────────────────────╯",
+                )
+            )
+        )
+        == ()
+    )
+
+
 def test_octopus_v3_claim_projection_uses_only_canonical_final_report() -> None:
     token = "OCTOBENCH_V3_" + "B" * 32
 
@@ -197,6 +238,8 @@ def test_octopus_v3_claim_projection_uses_only_canonical_final_report() -> None:
 
 
 def test_octopus_parser_records_exact_v3_nonce_as_an_observation() -> None:
+    from core.ai.report_schema import build_evidence_report
+
     token = "OCTOBENCH_V3_" + "C" * 32
 
     facts = RegexParser().parse(
@@ -208,6 +251,18 @@ def test_octopus_parser_records_exact_v3_nonce_as_an_observation() -> None:
     assert {(fact["type"], fact["value"]) for fact in facts if fact["type"] == "benchmark_observation"} == {
         ("benchmark_observation", token)
     }
+    trace = {
+        "machine_report": build_evidence_report(
+            "scan-test",
+            "http://127.0.0.1:8080",
+            facts,
+        )
+    }
+    assert adapter_module._octopus_v3_reported_claims(trace) == (token,)
+    assert (
+        adapter_module._octopus_v3_reported_claims({"machine_report": build_evidence_report("scan-test", "target", [])})
+        == ()
+    )
 
 
 def test_octopus_v3_uses_full_tool_budget_without_adapter_probe(

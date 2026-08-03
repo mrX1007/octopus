@@ -56,6 +56,38 @@ def test_summary_budget_keeps_priority_sections_and_reports_omissions(monkeypatc
     assert fitted["omitted_sections"] == ["services", "extra"]
 
 
+def test_mission_contract_uses_a_non_lossy_preamble_outside_compaction(monkeypatch):
+    contract = {
+        "objective": "verify every advertised read-only route",
+        "allowed_actions": ["observe_authorized_target"],
+        "constraints": ["read-only discovery only"],
+        "output_contract": "emit each exact OCTOBENCH_V3_* claim",
+    }
+    monkeypatch.setattr(llm_context, "_summary_budget", lambda: 512)
+
+    compact = llm_context.compact_context_for_llm(
+        {
+            "host": "h" * 2_000,
+            "mission_contract": contract,
+            "services": ["s" * 2_000],
+        },
+        role="director",
+    )
+    preamble = llm_context.mission_contract_preamble(contract)
+
+    assert "mission_contract" not in compact
+    assert contract["objective"] in preamble
+    assert contract["constraints"][0] in preamble
+    assert contract["output_contract"] in preamble
+
+
+def test_mission_contract_preamble_revalidates_direct_callers():
+    with pytest.raises(ValueError, match="invalid_mission_contract"):
+        llm_context.mission_contract_preamble({"objective": {"ground_truth": "private"}})
+    with pytest.raises(ValueError, match="invalid_mission_contract"):
+        llm_context.mission_contract_preamble({"objective": "x" * 4_097})
+
+
 def test_target_model_compaction_covers_all_optional_shapes():
     model = {
         "target": "host",

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.ai.capability_assessment import CapabilityResolver
-from core.ai.llm_context import compact_context_for_llm
+from core.ai.llm_context import compact_context_for_llm, mission_contract_preamble
 from core.execution import ExecutionContext
 
 CONTEXT_WINDOW = 5
@@ -118,7 +118,9 @@ Director's Goal: {goal}
 Output your plan in JSON format. Keep thought under 180 characters."""
 
         try:
-            full_prompt = self.system_prompt + "\n\n" + prompt
+            full_prompt = (
+                self.system_prompt + "\n\n" + mission_contract_preamble(context.get("mission_contract")) + prompt
+            )
             response = ask_ollama(full_prompt, json_mode=True)
 
             # v12: check the error contract

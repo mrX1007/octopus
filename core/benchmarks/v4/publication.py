@@ -29,7 +29,8 @@ from .schema import (
 )
 
 EFFICIENCY_CSV_SCHEMA_VERSION = "1.0"
-SOURCE_ATTESTATION_SCHEMA_VERSION = "1.0"
+SOURCE_ATTESTATION_SCHEMA_VERSION = "1.1"
+_LEGACY_SOURCE_ATTESTATION_SCHEMA_VERSION = "1.0"
 EFFICIENCY_PUBLICATION_SCHEMA_VERSION = "1.0"
 SVG_PANEL_IDS = (
     "quality-and-stability",
@@ -37,6 +38,22 @@ SVG_PANEL_IDS = (
     "quality-qualified-effects",
     "telemetry-coverage",
 )
+_PUBLIC_READINESS_ATTESTATION_KEYS = frozenset(
+    {
+        "campaign_id",
+        "cleanup_attestation_digest",
+        "evidence_digest",
+        "plan_digest",
+        "profile_digest",
+        "reset_attestation_set_digest",
+        "source_run_digest",
+        "status",
+    }
+)
+_PUBLIC_READINESS_DIGEST_KEYS = _PUBLIC_READINESS_ATTESTATION_KEYS - {
+    "campaign_id",
+    "status",
+}
 
 
 @dataclass(frozen=True)
@@ -84,7 +101,7 @@ def load_verified_v3_evidence(directory: str | Path) -> VerifiedV3Evidence:
         raise BenchmarkV4SchemaError("v4_source_verification_invalid") from exc
     if expected_runs != len(runs) or len(ledgers) != len(runs):
         raise BenchmarkV4SchemaError("v4_source_evidence_count_mismatch")
-    return VerifiedV3Evidence(
+    source = VerifiedV3Evidence(
         root=root,
         source_plan=source_plan,
         runs=runs,
@@ -93,6 +110,7 @@ def load_verified_v3_evidence(directory: str | Path) -> VerifiedV3Evidence:
         bundle_digest=_sha256(root / "SHA256SUMS"),
         verification=dict(verification),
     )
+    return source
 
 
 def render_efficiency_runs_csv(
@@ -257,6 +275,10 @@ def publish_v4_results(
     source = load_verified_v3_evidence(source_v3_directory)
     if source.source_plan.digest != plan.source_analysis_plan_digest:
         raise BenchmarkV4SchemaError("v4_source_plan_digest_mismatch")
+    _validated_public_readiness_attestation(
+        source,
+        required=plan.publication_tier == "full",
+    )
     projections = extract_efficiency_runs(
         plan,
         source.source_plan,
@@ -293,7 +315,7 @@ def publish_v4_results(
             render_efficiency_svg(plan, statistics_payload),
             encoding="utf-8",
         )
-        source_attestation = _source_attestation(source)
+        source_attestation = _source_attestation(source, plan=plan)
         (temporary / "source-attestation.json").write_text(
             _pretty_json(source_attestation),
             encoding="utf-8",
@@ -350,6 +372,10 @@ def _verify_v4_results(root: Path, source: VerifiedV3Evidence) -> dict[str, Any]
     if (root / "SHA256SUMS").read_text(encoding="utf-8") != canonical_checksums:
         raise BenchmarkV4SchemaError("v4_publication_checksums_invalid")
     plan = load_efficiency_plan(root / "efficiency-plan.json")
+    _validated_public_readiness_attestation(
+        source,
+        required=plan.publication_tier == "full",
+    )
     try:
         publication = json.loads((root / "publication.json").read_text(encoding="utf-8"))
         statistics_payload = json.loads((root / "efficiency-statistics.json").read_text(encoding="utf-8"))
@@ -359,7 +385,7 @@ def _verify_v4_results(root: Path, source: VerifiedV3Evidence) -> dict[str, Any]
     if not all(isinstance(item, Mapping) for item in (publication, statistics_payload, source_attestation)):
         raise BenchmarkV4SchemaError("v4_publication_payload_invalid")
     _validate_publication_manifest(cast(Mapping[str, Any], publication), plan, source)
-    _validate_source_attestation(cast(Mapping[str, Any], source_attestation), source)
+    _validate_source_attestation(cast(Mapping[str, Any], source_attestation), plan, source)
     if source.source_plan.digest != plan.source_analysis_plan_digest:
         raise BenchmarkV4SchemaError("v4_source_plan_digest_mismatch")
     projections = extract_efficiency_runs(
@@ -382,7 +408,7 @@ def _verify_v4_results(root: Path, source: VerifiedV3Evidence) -> dict[str, Any]
         "efficiency-statistics.json": _pretty_json(regenerated_statistics).encode(),
         "efficiency.svg": render_efficiency_svg(plan, regenerated_statistics).encode(),
         "publication.json": _pretty_json(_publication_manifest(plan, source)).encode(),
-        "source-attestation.json": _pretty_json(_source_attestation(source)).encode(),
+        "source-attestation.json": _pretty_json(_source_attestation(source, plan=plan)).encode(),
     }
     for name, payload in expected_bytes.items():
         if (root / name).read_bytes() != payload:
@@ -506,20 +532,83 @@ def _validate_publication_manifest(
         raise BenchmarkV4SchemaError("v4_publication_manifest_invalid")
 
 
-def _validate_source_attestation(payload: Mapping[str, Any], source: VerifiedV3Evidence) -> None:
-    if payload != _source_attestation(source):
+def _validate_source_attestation(
+    payload: Mapping[str, Any],
+    plan: EfficiencyPlan,
+    source: VerifiedV3Evidence,
+) -> None:
+    if payload != _source_attestation(source, plan=plan):
         raise BenchmarkV4SchemaError("v4_source_attestation_invalid")
 
 
-def _source_attestation(source: VerifiedV3Evidence) -> dict[str, Any]:
-    return {
+def _source_attestation(
+    source: VerifiedV3Evidence,
+    *,
+    plan: EfficiencyPlan | None = None,
+) -> dict[str, Any]:
+    readiness = _validated_public_readiness_attestation(
+        source,
+        required=bool(plan is not None and plan.publication_tier == "full"),
+    )
+    payload = {
         "analysis_plan_digest": source.source_plan.digest,
         "run_count": len(source.runs),
-        "schema_version": SOURCE_ATTESTATION_SCHEMA_VERSION,
+        "schema_version": (
+            SOURCE_ATTESTATION_SCHEMA_VERSION if readiness is not None else _LEGACY_SOURCE_ATTESTATION_SCHEMA_VERSION
+        ),
         "source_bundle_digest": source.bundle_digest,
         "source_kind": "benchmark-v3-publication",
         "source_track_id": source.source_plan.track_id,
     }
+    if readiness is not None:
+        payload["readiness_attestation"] = readiness
+    return payload
+
+
+def _validated_public_readiness_attestation(
+    source: VerifiedV3Evidence,
+    *,
+    required: bool = False,
+) -> dict[str, Any] | None:
+    """Return the exact readiness assertion required by a full v4 source."""
+
+    context = source.campaign_context
+    campaign = context.get("campaign") if isinstance(context, Mapping) else None
+    benchmark_v3 = campaign.get("benchmark_v3") if isinstance(campaign, Mapping) else None
+    readiness_config = campaign.get("benchmark_v4_readiness") if isinstance(campaign, Mapping) else None
+    attestation = context.get("readiness_attestation") if isinstance(context, Mapping) else None
+    run_attestations = tuple(run.environment.get("readiness_attestation") for run in source.runs)
+    if (
+        not required
+        and readiness_config is None
+        and attestation is None
+        and not any(item is not None for item in run_attestations)
+    ):
+        return None
+    if (
+        not isinstance(campaign, Mapping)
+        or not isinstance(benchmark_v3, Mapping)
+        or benchmark_v3.get("efficiency_plan_digest") is None
+        or not isinstance(readiness_config, Mapping)
+        or not isinstance(attestation, Mapping)
+        or set(attestation) != _PUBLIC_READINESS_ATTESTATION_KEYS
+        or attestation.get("status") != "ready"
+        or not isinstance(attestation.get("campaign_id"), str)
+        or not attestation.get("campaign_id")
+        or attestation.get("campaign_id") != campaign.get("campaign_id")
+        or attestation.get("profile_digest") != readiness_config.get("profile_digest")
+        or attestation.get("plan_digest") != readiness_config.get("plan_digest")
+        or any(not _lower_hex_digest(attestation.get(key)) for key in _PUBLIC_READINESS_DIGEST_KEYS)
+        or any(item != attestation for item in run_attestations)
+    ):
+        raise BenchmarkV4SchemaError("v4_readiness_attestation_mismatch")
+    return dict(attestation)
+
+
+def _lower_hex_digest(value: Any) -> bool:
+    return bool(
+        isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _publication_manifest(

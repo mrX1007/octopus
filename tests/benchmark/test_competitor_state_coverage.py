@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import builtins
 import json
+import os
 import runpy
+import stat
 
 import pytest
 
@@ -120,6 +122,27 @@ def test_initialize_rejects_invalid_duplicate_and_changed_schedules(tmp_path):
     other = _journal(tmp_path, payload={"input": "different"})
     with pytest.raises(CampaignFingerprintMismatch, match="campaign_fingerprint_mismatch"):
         other.initialize(schedule)
+
+
+def test_attempt_marker_is_owner_only_and_retry_forbidden(tmp_path):
+    journal = _journal(tmp_path)
+    key, schedule = _schedule()
+    with pytest.raises(CampaignStateError, match="campaign_journal_not_initialized"):
+        journal.begin_run_attempt(key)
+    journal.initialize(schedule)
+
+    marker = journal.begin_run_attempt(key)
+
+    assert marker == journal.campaign_root / "attempts" / f"{key}.json"
+    assert journal.attempted_run_count() == 1
+    assert stat.S_IMODE(os.lstat(marker).st_mode) == 0o600
+    assert stat.S_IMODE(os.lstat(marker.parent).st_mode) == 0o700
+    with pytest.raises(CampaignStateError, match="campaign_run_retry_forbidden"):
+        journal.begin_run_attempt(key)
+
+    other_key = schedule_run_key("other", "scenario", 1, 2)
+    with pytest.raises(CampaignStateError, match="run_not_in_campaign_schedule"):
+        journal.begin_run_attempt(other_key)
 
 
 def test_run_key_guards_missing_read_and_immutable_record_paths(tmp_path):

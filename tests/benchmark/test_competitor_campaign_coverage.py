@@ -311,6 +311,11 @@ def _fake_v4_campaign(
         "validate_efficiency_campaign_plan",
         lambda *_args, **_kwargs: efficiency_plan,
     )
+    monkeypatch.setattr(
+        campaign,
+        "require_full_campaign_readiness_material",
+        lambda *_args, **_kwargs: None,
+    )
     return config, efficiency_plan
 
 
@@ -442,6 +447,42 @@ def test_v4_context_includes_plan_attestation_before_publication(
             clock=lambda: 100.0,
             monotonic=lambda: 1.0,
         )
+
+
+def test_v4_campaign_fingerprint_binds_public_readiness_attestation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, _efficiency_plan = _fake_v4_campaign(tmp_path, monkeypatch, "v4-readiness-fingerprint")
+    attestation = {
+        "campaign_id": config.campaign_id,
+        "cleanup_attestation_digest": "1" * 64,
+        "evidence_digest": "2" * 64,
+        "plan_digest": "3" * 64,
+        "profile_digest": "4" * 64,
+        "reset_attestation_set_digest": "5" * 64,
+        "source_run_digest": "6" * 64,
+        "status": "ready",
+    }
+    monkeypatch.setattr(
+        campaign,
+        "require_full_campaign_readiness_material",
+        lambda *_args, **_kwargs: SimpleNamespace(public_attestation=attestation),
+    )
+    captured: dict[str, Any] = {}
+
+    class FingerprintObserved(Exception):
+        pass
+
+    def observe(payload: Mapping[str, Any]) -> str:
+        captured.update(payload)
+        raise FingerprintObserved
+
+    monkeypatch.setattr(campaign, "campaign_fingerprint", observe)
+    with pytest.raises(FingerprintObserved):
+        campaign.run_campaign(config, environment={"CAMPAIGN_TEST_TOKEN": "configured"})
+
+    assert captured["readiness_attestation"] == attestation
 
 
 def test_main_maps_each_outcome_and_failure(

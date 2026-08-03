@@ -62,6 +62,30 @@ def test_valid_hypotheses_are_normalized(monkeypatch):
     assert "required_evidence" not in _agent().system_prompt
 
 
+def test_binding_mission_contract_reaches_analysis_prompt(monkeypatch):
+    captured = {}
+
+    def fake_ask(prompt, **_kwargs):
+        captured["prompt"] = prompt
+        return '{"hypotheses":[]}'
+
+    monkeypatch.setattr(task_agents, "ask_ollama", fake_ask)
+    agent = _agent()
+    agent.mission_contract = {
+        "objective": "verify the authorized fixture",
+        "allowed_actions": ["observe_authorized_target"],
+        "constraints": ["read-only discovery only"],
+        "output_contract": "emit each exact OCTOBENCH_V3_* claim",
+    }
+
+    assert agent.analyze("scan-contract", "10.0.0.5")["llm_status"] == "ok"
+    assert "Caller mission instructions" in captured["prompt"]
+    assert "within deterministic execution policy" in captured["prompt"]
+    assert "verify the authorized fixture" in captured["prompt"]
+    assert "read-only discovery only" in captured["prompt"]
+    assert "emit each exact OCTOBENCH_V3_* claim" in captured["prompt"]
+
+
 @pytest.mark.parametrize(
     ("payload", "error"),
     [

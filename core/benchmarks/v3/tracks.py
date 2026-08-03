@@ -44,6 +44,18 @@ class TrackDefinition:
 
 
 TRACKS: dict[str, TrackDefinition] = {
+    "small-model-readiness-v4": TrackDefinition(
+        track_id="small-model-readiness-v4",
+        purpose="Prospective controller-gated calibration; never an evaluation leaderboard.",
+        model_policy="same_constrained_small_model_class",
+        source_access="blackbox_with_controller_reference",
+        outcome_contract="readiness_only",
+        minimum_repetitions=1,
+        minimum_paired_blocks=1,
+        minimum_batches=1,
+        minimum_hosts=1,
+        merge_group="small-model-readiness-v4-never-merge",
+    ),
     "small-model-stress-v3": TrackDefinition(
         track_id="small-model-stress-v3",
         purpose="Engineering robustness under an intentionally constrained small model.",

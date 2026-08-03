@@ -978,6 +978,19 @@ private 32–64-character hexadecimal `OCTOBENCH_V3_BASE_FIXTURE_SEED`; use the
 [v3 campaign runbook](benchmarks/competitors/campaigns/linux-blackbox-small-model-v3/README.md)
 and a fresh campaign ID.
 
+`linux-blackbox-small-model-v4` measures quality-preserving efficiency with
+controller-measured wall time and fixture requests over 20 paired repetitions
+per family. It cannot start its 480-run evaluation until the mandatory
+`--readiness-calibration` proves verified nonzero signal for both products, at
+least one jointly completed positive evidence-bearing matched block, a perfect
+sealed reference, and zero policy violations. A clean-negative-only success is
+rejected. The bounded calibration is 24 product runs at 300 seconds plus 12
+fast controller-reference checks. Use the
+[v4 campaign runbook](benchmarks/competitors/campaigns/linux-blackbox-small-model-v4/README.md)
+and the same fresh campaign ID for calibration and the subsequent full run.
+
+The shorter v2 publication example remains:
+
 ```bash
 git status --short
 CAMPAIGN_ID="linux-blackbox-small-model-v2-$(date -u +%Y%m%dt%H%M%Sz)"

@@ -5,7 +5,7 @@ import logging
 from typing import Any, Optional
 
 from core.ai.evidence import EvidenceVerifier
-from core.ai.llm_context import compact_context_for_llm
+from core.ai.llm_context import compact_context_for_llm, mission_contract_preamble
 from core.ai.ollama_client import ask_ollama
 from core.ai.tool_registry import ToolRegistry
 
@@ -64,6 +64,7 @@ class AnalysisAgent:
     def __init__(self, fact_store, context_builder):
         self.fact_store = fact_store
         self.context_builder = context_builder
+        self.mission_contract: dict[str, Any] = {}
         self.system_prompt = """You are the ANALYSIS AGENT of OCTOPUS.
 Your job is to read the current context and build hypotheses (claims) about vulnerabilities or next steps.
 You MUST output your response in STRICT JSON format WITHOUT ANY trailing commas, extra braces, or comments.
@@ -88,7 +89,7 @@ Ensure the format matches EXACTLY:
                 "Generate only evidence-backed hypotheses in JSON format. "
                 "Return an empty hypotheses array if no useful hypothesis exists."
             )
-            full_prompt = self.system_prompt + "\n\n" + prompt
+            full_prompt = self.system_prompt + "\n\n" + mission_contract_preamble(self.mission_contract) + prompt
             response = ask_ollama(full_prompt, json_mode=True)
 
             # v12: check the error contract

@@ -131,6 +131,11 @@ def test_live_ollama_lab_lane_is_opt_in_and_loopback_contained() -> None:
     assert "  workflow_dispatch:" in triggers
     assert "  push:" not in triggers
     assert "  pull_request:" not in triggers
+    assert 'OLLAMA_VERSION: "0.18.3"' in workflow
+    assert 'OLLAMA_LINUX_AMD64_SHA256: "7b3fb22f2e01a17f03ec0ac88a0b070ee2d7481030e735337ac8c02b84b5e66e"' in workflow
+    assert "/sha256sum.txt" not in workflow
+    assert "${OLLAMA_LINUX_AMD64_SHA256}" in workflow
+    assert "sha256sum --check --strict ollama-linux-amd64.sha256" in workflow
     assert 'OCTOPUS_RUN_OLLAMA_LAB_E2E: "1"' in workflow
     assert 'OCTOPUS_E2E_TARGET: "127.0.0.1"' in workflow
     assert '"127.0.0.1:${OCTOPUS_E2E_PORT:-18080}:8080"' in compose

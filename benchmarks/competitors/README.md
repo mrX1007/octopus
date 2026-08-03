@@ -8,9 +8,9 @@ The additive [Benchmark v3 methodology](../../docs/benchmarks/benchmark-v3.md)
 defines generated blinded fixtures, schema-2.0 outcomes, frozen statistics,
 and non-mergeable tracks. The checked-in v1/v2 result bundles remain unchanged.
 
-The prospective [Benchmark v4 methodology](../../docs/benchmarks/benchmark-v4.md)
-is a separate efficiency companion over a checksum-verified v3 evidence
-bundle. It adds a pre-run frozen randomized paired schedule, controller-derived
+The [Benchmark v4 methodology](../../docs/benchmarks/benchmark-v4.md) is a
+separate efficiency companion over a checksum-verified v3 evidence bundle. It
+adds a pre-run frozen randomized paired schedule, controller-derived
 wall/request metrics, quality-on-resource statistics, and an independent
 companion verifier without changing v3 artifacts.
 
@@ -362,7 +362,20 @@ to 20 paired repetitions per system/scenario, and schedules 480 executions.
 Its 120-hour sequential ceiling and full-system tool differences make it an
 engineering efficiency comparison, not a universal ranking.
 
-Use a fresh immutable ID for the repeated small-model campaign:
+V4 cannot enter that full schedule directly. First run its fixed
+`--readiness-calibration` under the intended campaign ID. The calibration uses
+12 separate seeds, one repetition per family, a 300-second product cap, a
+sealed controller reference, and exactly 24 product executions. It fails unless
+each product has verified nonzero signal, at least one block is jointly
+completed with positive evidence verified by both products, and policy
+violations are zero. A clean-negative-only success cannot open the gate. The
+full launcher recomputes the owner-only append-only journal before its first
+evaluation run. Use the same ID
+only after readiness reports `ready`; after a failed calibration, fix the cause
+and start with a new ID. Exact commands are in the
+[v4 campaign runbook](campaigns/linux-blackbox-small-model-v4/README.md).
+
+For the shorter v2 repeated campaign, use a fresh immutable ID:
 
 ```bash
 git status --short
@@ -692,6 +705,26 @@ output or the fact store for claims. In particular, observing an
 `OCTOBENCH_V3_...` nonce is not itself a claim; the product must assert it in
 its final native report. Full record text is preserved, so extra invented text
 remains an unsupported claim instead of being stripped away.
+
+The pinned Strix v1.1.0 boundary is narrower than the generic text rule: only
+stdout inside the last complete rounded `STRIX` Rich panel beginning with
+`Penetration test summary` is parsed. That shape comes from the pinned
+`strix/interface/cli.py`; raw transcripts, workspace files, generic or
+incomplete panels, and claim-looking text outside the panel are excluded.
+
+The neutral objective, allowed actions, read-only rules, and output syntax are
+delivered to every product through its native instruction path. For OCTOPUS,
+the adapter supplies an optional bounded mission contract to Director, Planner,
+and Analysis; ordinary non-benchmark scans do not receive it. Context
+compaction cannot discard this preamble. The adapter rejects extra/private
+contract fields and never serializes ground truth, fixture seeds, private
+evidence IDs, or observed nonces into it.
+
+This contract is task input, not a new execution-policy layer: it cannot grant
+tools or override OCTOPUS policy. The isolated controller independently records
+and rejects out-of-contract requests for both products. Each adapter run also
+uses a fresh temporary OCTOPUS state database, so no saved mission can bypass
+or inherit the benchmark instructions.
 
 Action and finding IDs must be canonical campaign IDs. For shipped third-party
 black-box agents, internal per-tool action conformance is `N/A` (`not

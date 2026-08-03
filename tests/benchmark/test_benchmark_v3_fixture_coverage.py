@@ -150,7 +150,9 @@ def test_runtime_rejects_wrong_ledger_and_covers_all_method_and_route_paths():
     ledger = ControlPlaneLedger(variant_digest=variant.variant_digest, clock=lambda: 1.0)
     runtime = FixtureRuntime(variant, ledger)
     assert runtime.handle("DELETE", "/missing").status == 405
-    assert runtime.handle("OPTIONS", variant.entry_target).status == 405
+    options = runtime.handle("OPTIONS", variant.entry_target)
+    assert options.status == 204
+    assert options.headers["Allow"] == "GET, HEAD, OPTIONS"
     assert runtime.handle("TRACE", "/missing").status == 405
     handoff = runtime.handle("GET", "/")
     assert handoff.status == 200
@@ -162,6 +164,10 @@ def test_runtime_rejects_wrong_ledger_and_covers_all_method_and_route_paths():
     )
     assert runtime.handle("HEAD", evidence_header_route.target).status in {302, 307}
     assert set(evidence_header_route.evidence_ids).issubset(ledger.snapshot().observed_evidence_ids)
+    assert ledger.snapshot().violations == (
+        "delete_mutation_attempt",
+        "get_mutation_attempt",
+    )
 
 
 @pytest.mark.parametrize("seed", [True, -1, 2**63])

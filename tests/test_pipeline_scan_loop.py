@@ -128,6 +128,39 @@ def test_pipeline_run_scan_delegates_arguments_to_scan_lifecycle(tmp_path, monke
     }
 
 
+def test_pipeline_passes_optional_mission_contract_to_scan_lifecycle(tmp_path, monkeypatch):
+    pipeline = AIPipeline(str(tmp_path / "mission-contract.db"))
+    contract = {
+        "objective": "verify the fixture",
+        "constraints": ["read-only discovery only"],
+    }
+    observed = {}
+
+    def capture_run(
+        _lifecycle,
+        _facade,
+        _scan_id,
+        _target,
+        _max_iterations,
+        _max_tools,
+        _max_time_minutes,
+        _raw_scan,
+        *,
+        mission_contract=None,
+    ):
+        observed["contract"] = mission_contract
+        return {"state": "delegated"}
+
+    monkeypatch.setattr(ScanLifecycle, "run", capture_run)
+
+    assert pipeline.run_scan(
+        "scan-contract",
+        "10.0.0.5",
+        mission_contract=contract,
+    ) == {"state": "delegated"}
+    assert observed["contract"] is contract
+
+
 def test_pipeline_binds_explicit_scan_cancellation_to_ollama(tmp_path, monkeypatch):
     import core.ai.ollama_client as ollama
 
@@ -167,6 +200,9 @@ def test_pipeline_binds_explicit_scan_cancellation_to_ollama(tmp_path, monkeypat
 def test_scan_lifecycle_installs_explicit_token_after_runtime_reset():
     cancellation = CancellationContext.with_timeout(30.0)
 
+    class LockedAnalysisAgent:
+        __slots__ = ()
+
     class MissionStore:
         @staticmethod
         def get_mission_by_scan_id(_scan_id):
@@ -175,9 +211,8 @@ def test_scan_lifecycle_installs_explicit_token_after_runtime_reset():
     class Facade:
         mission_id = None
         mission_store = MissionStore()
-        state_resolver = SimpleNamespace(
-            resolve_state=lambda _scan_id, _target: {"state": "completed"}
-        )
+        analysis_agent = LockedAnalysisAgent()
+        state_resolver = SimpleNamespace(resolve_state=lambda _scan_id, _target: {"state": "completed"})
 
         def _reset_runtime_state(self):
             self.cancellation = CancellationContext()
@@ -197,6 +232,60 @@ def test_scan_lifecycle_installs_explicit_token_after_runtime_reset():
 
     assert result == {"state": "completed"}
     assert facade.cancellation is cancellation
+
+
+def test_mission_contract_validation_is_bounded_and_rejects_unknown_fields():
+    from core.ai.scan_loop import _normalize_mission_contract
+
+    assert _normalize_mission_contract(None) == {}
+    assert _normalize_mission_contract(
+        {
+            "objective": " verify fixture ",
+            "constraints": ["read-only", "read-only"],
+        }
+    ) == {
+        "objective": "verify fixture",
+        "constraints": ["read-only"],
+    }
+
+    invalid = (
+        {"objective": "ok", "ground_truth": "secret"},
+        {"objective": {"ground_truth": "secret"}},
+        {"objective": "x" * 4_097},
+        {"allowed_actions": [{"ground_truth": "secret"}]},
+        {"constraints": [str(index) for index in range(33)]},
+        {"constraints": "read-only"},
+        {},
+    )
+    for contract in invalid:
+        with pytest.raises(ValueError, match="invalid_mission_contract"):
+            _normalize_mission_contract(contract)
+
+
+def test_scan_lifecycle_installs_contract_for_director_and_analysis(tmp_path):
+    pipeline = _configure_lifecycle(AIPipeline(str(tmp_path / "contract-loop.db")))
+    contract = {
+        "objective": "verify the authorized fixture",
+        "constraints": ["read-only discovery only"],
+        "output_contract": "emit exact benchmark claims",
+    }
+    captured = {}
+
+    def conclude(context, _history):
+        captured.update(context)
+        return {"goal": "conclude", "thought": "done", "llm_status": "ok"}
+
+    pipeline.director = SimpleNamespace(decide_goal=conclude)
+
+    ScanLifecycle().run(
+        pipeline,
+        "scan-contract-loop",
+        "10.0.0.5",
+        mission_contract=contract,
+    )
+
+    assert captured["mission_contract"] == contract
+    assert pipeline.analysis_agent.mission_contract == contract
 
 
 def test_scan_lifecycle_interrupts_if_director_fallback_concludes_after_cancellation(
@@ -242,9 +331,7 @@ def test_scan_lifecycle_checks_tool_budget_before_director(tmp_path, capsys):
         decide_goal=lambda *_args: (_ for _ in ()).throw(AssertionError("director called"))
     )
 
-    result = ScanLifecycle().run(
-        pipeline, "scan-budget", "10.0.0.5", max_iterations=5, max_tools=1
-    )
+    result = ScanLifecycle().run(pipeline, "scan-budget", "10.0.0.5", max_iterations=5, max_tools=1)
 
     assert result["state"] == "unknown"
     assert pipeline.goal_history == []
@@ -263,25 +350,29 @@ def test_scan_lifecycle_preserves_four_observation_anti_loop_boundary(tmp_path):
 
     pipeline._reset_runtime_state = reset_with_completed_task
     pipeline.director = SimpleNamespace(
-        decide_goal=lambda _context, _history: director_calls.append(1) or {
-            "goal": "map",
-            "thought": "repeat",
-            "llm_status": "ok",
-        }
+        decide_goal=lambda _context, _history: (
+            director_calls.append(1)
+            or {
+                "goal": "map",
+                "thought": "repeat",
+                "llm_status": "ok",
+            }
+        )
     )
     pipeline.planner = SimpleNamespace(
-        create_plan=lambda _goal, _context, _history: planner_calls.append(1) or {
-            "plan": [{"agent": "DiscoveryAgent", "task": "service_discovery"}],
-            "llm_status": "ok",
-        }
+        create_plan=lambda _goal, _context, _history: (
+            planner_calls.append(1)
+            or {
+                "plan": [{"agent": "DiscoveryAgent", "task": "service_discovery"}],
+                "llm_status": "ok",
+            }
+        )
     )
     pipeline._extract_plan_steps = lambda result: result["plan"]
     pipeline._normalize_plan = lambda plan, _goal: plan
     pipeline._optimize_plan = lambda plan, _goal, _context: plan
 
-    ScanLifecycle().run(
-        pipeline, "scan-loop", "10.0.0.5", max_iterations=10
-    )
+    ScanLifecycle().run(pipeline, "scan-loop", "10.0.0.5", max_iterations=10)
 
     assert len(director_calls) == 4
     assert len(planner_calls) == 3
@@ -329,9 +420,7 @@ def test_scan_lifecycle_reuses_context_snapshot_for_plan_compilation(tmp_path):
         return plan
 
     pipeline.context_builder = Context()
-    pipeline.planner = SimpleNamespace(
-        create_plan=lambda *_args: {"plan": [], "llm_status": "ok"}
-    )
+    pipeline.planner = SimpleNamespace(create_plan=lambda *_args: {"plan": [], "llm_status": "ok"})
     pipeline._compile_plan = compile_plan
 
     ScanLifecycle().run(

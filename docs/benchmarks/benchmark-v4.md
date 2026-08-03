@@ -48,6 +48,41 @@ A publishable v4 campaign attests the efficiency-plan digest in every source
 run. A retrospective diagnostic may omit that attestation, but it is labelled
 diagnostic and cannot be presented as a pre-registered efficiency result.
 
+## Mandatory readiness calibration
+
+The full 480-run evaluation cannot start until a separate prospective
+readiness calibration passes. Its write-once plan uses calibration-only fixture
+seeds that do not overlap the evaluation schedule. It runs one fixed
+repetition across all 12 families: 24 scored product executions (Octopus and
+Strix) plus 12 controller-owned sealed-reference checks. Product runs have a
+300-second hard cap, so the product-time ceiling is two hours rather than the
+full campaign's 120 hours.
+
+The gate is functional, not a leaderboard and not part of the evaluation
+sample. It requires the exact predeclared run set, a perfect sealed reference
+for every family, verified-recall coverage for every product run, nonzero task
+completion and verified recall for each product, at least one jointly completed
+positive evidence-bearing matched product block (verified-recall numerator and
+denominator are both nonzero for both products), and zero policy violations.
+Missing runs, extra runs, selective retries, evaluation-track runs, mismatched
+fixture variants, or a modified attestation fail closed.
+
+Calibration runs and evidence remain owner-only under
+`.benchmark-state/readiness-journal/<campaign-id>/`. Immediately before the
+first full evaluation run, the launcher reloads the complete journal,
+recomputes the evidence, and verifies its binding to the same immutable
+analysis and efficiency plans. A failed readiness run is not repaired by
+selecting successful attempts; fix the cause and use a fresh campaign ID.
+
+The full source v3 campaign context and every source run publish only the same
+non-sensitive, exact `readiness_attestation`: `campaign_id`, `status` (`ready`),
+`profile_digest`, `plan_digest`, `evidence_digest`, `source_run_digest`,
+`reset_attestation_set_digest`, and `cleanup_attestation_digest`. The v4
+companion copies that eight-field commitment into `source-attestation.json`;
+both verifiers reject a missing, extra, or mismatched field. Raw calibration
+runs, reset and cleanup records, evidence summaries, and the readiness journal
+remain private and owner-only.
+
 ## Quality and stability
 
 V4 reuses v3's sealed task outcome and verified claim evaluation. Per-run
@@ -166,7 +201,8 @@ A v4 companion bundle contains:
 - `efficiency-statistics.json`;
 - a script-free `efficiency.svg`;
 - `source-attestation.json` containing the digest of the source v3
-  `SHA256SUMS` file;
+  `SHA256SUMS` file and, for a full campaign, its exact eight-field public
+  readiness commitment;
 - `publication.json` and `SHA256SUMS`.
 
 The companion does not duplicate the potentially large v3 bundle. Verification
@@ -174,6 +210,11 @@ therefore takes both directories, verifies v3 first, checks the source digest,
 re-derives every ledger/resource projection, recomputes the statistics, CSV,
 JSONL, and SVG, and then compares them byte-for-byte. Re-checksumming a modified
 aggregate is insufficient to pass.
+
+Verify both bundles on the execution host and again after transfer. Keep the
+original source until the destination passes `core.benchmarks.v4 verify`;
+copying only aggregates or regenerating a checksum manifest cannot recover
+missing controller evidence.
 
 The supported workflow for the next live campaign is:
 
@@ -185,28 +226,41 @@ The supported workflow for the next live campaign is:
   --environment-file benchmarks/competitors/secrets.env \
   --prepare-only
 
-# Review both generated plans before using a fresh ID for the live run:
+# Review all generated plans before using a fresh ID for the live run:
 # .benchmark-state/generated/<campaign-id>/analysis-plan.json
 # .benchmark-state/generated/<campaign-id>/efficiency-plan.json
+# .benchmark-state/generated/<campaign-id>/readiness-plan.json
 
-# On the authorized isolated Linux host, use a different fresh live ID and
-# omit --prepare-only. The launcher creates and seals the source v3 bundle.
+# On the authorized isolated Linux host, use a different fresh live ID for the
+# mandatory bounded calibration. A zero exit means the readiness gate passed.
+RUN_ID="linux-blackbox-small-model-v4-$(date -u +%Y%m%dt%H%M%Sz)"
 ./venv/bin/python -m core.benchmarks.competitors.launch \
-  --campaign-id <fresh-live-id> \
+  --campaign-id "$RUN_ID" \
+  --campaign-definition linux-blackbox-small-model-v4 \
+  --profile core \
+  --environment-file benchmarks/competitors/secrets.env \
+  --readiness-calibration
+
+./venv/bin/python -m json.tool \
+  ".benchmark-state/readiness-journal/$RUN_ID/readiness-evidence.json"
+
+# Only after status=ready, run the full campaign with the exact same ID.
+./venv/bin/python -m core.benchmarks.competitors.launch \
+  --campaign-id "$RUN_ID" \
   --campaign-definition linux-blackbox-small-model-v4 \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env
 
 ./venv/bin/python -m core.benchmarks.v4 publish \
-  --plan .benchmark-state/generated/<fresh-live-id>/efficiency-plan.json \
-  --source-v3 benchmarks/competitors/results/<fresh-live-id> \
-  --output benchmarks/competitors/results/<fresh-live-id>-efficiency-v4
+  --plan ".benchmark-state/generated/$RUN_ID/efficiency-plan.json" \
+  --source-v3 "benchmarks/competitors/results/$RUN_ID" \
+  --output "benchmarks/competitors/results/$RUN_ID-efficiency-v4"
 
 ./venv/bin/python -m core.benchmarks.v4 verify \
-  --source-v3 benchmarks/competitors/results/<fresh-live-id> \
-  benchmarks/competitors/results/<fresh-live-id>-efficiency-v4
+  --source-v3 "benchmarks/competitors/results/$RUN_ID" \
+  "benchmarks/competitors/results/$RUN_ID-efficiency-v4"
 ```
 
 Run the live campaign only in the authorized, isolated Linux environment
 described by the competitor benchmark runbook. A prepare-only preview is not a
-live measurement and its campaign ID must not be reused.
+live measurement and its campaign ID must not be reused for calibration.

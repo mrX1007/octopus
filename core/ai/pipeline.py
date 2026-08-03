@@ -195,6 +195,7 @@ class AIPipeline(
         self._current_scan_id = ""
         self._current_target = ""
         self._last_decision_state = ""
+        self._mission_contract: dict[str, Any] = {}
         self.cancellation = CancellationContext()
 
     def cancel(self, reason: str = "operator_request") -> bool:
@@ -212,6 +213,7 @@ class AIPipeline(
         raw_scan: str = "",
         *,
         cancellation: CancellationContext | None = None,
+        mission_contract: Mapping[str, Any] | None = None,
     ):
         from core.ai.scan_loop import ScanLifecycle
 
@@ -222,6 +224,17 @@ class AIPipeline(
             from core.ai.ollama_client import bind_ollama_cancellation
 
             with bind_ollama_cancellation(cancellation):
+                if mission_contract is None:
+                    return ScanLifecycle().run(
+                        self,
+                        scan_id,
+                        target,
+                        max_iterations,
+                        max_tools,
+                        max_time_minutes,
+                        raw_scan,
+                        cancellation=cancellation,
+                    )
                 return ScanLifecycle().run(
                     self,
                     scan_id,
@@ -231,7 +244,19 @@ class AIPipeline(
                     max_time_minutes,
                     raw_scan,
                     cancellation=cancellation,
+                    mission_contract=mission_contract,
                 )
+        if mission_contract is not None:
+            return ScanLifecycle().run(
+                self,
+                scan_id,
+                target,
+                max_iterations,
+                max_tools,
+                max_time_minutes,
+                raw_scan,
+                mission_contract=mission_contract,
+            )
         return ScanLifecycle().run(
             self,
             scan_id,

@@ -74,7 +74,7 @@ def test_mutations_return_405_and_are_recorded_without_state_change(tmp_path: Pa
     read = runtime.handle("GET", variant.entry_target)
 
     assert mutation.status == 405
-    assert mutation.headers["Allow"] == "GET, HEAD"
+    assert mutation.headers["Allow"] == "GET, HEAD, OPTIONS"
     assert read.status == 200
     snapshot = ledger.snapshot()
     assert snapshot.entry_count == 2
@@ -184,7 +184,7 @@ def test_http_server_serves_variant_and_blocks_mutation(tmp_path: Path) -> None:
         with pytest.raises(HTTPError) as captured:
             urlopen(request, timeout=2)
         assert captured.value.code == 405
-        assert captured.value.headers["Allow"] == "GET, HEAD"
+        assert captured.value.headers["Allow"] == "GET, HEAD, OPTIONS"
     finally:
         server.shutdown()
         server.server_close()

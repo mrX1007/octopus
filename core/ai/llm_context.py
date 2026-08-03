@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 ROLE_LIST_LIMITS = {
@@ -12,6 +13,83 @@ ROLE_LIST_LIMITS = {
     "analysis": 20,
 }
 STRING_LIMIT = 320
+_MISSION_CONTRACT_KEYS = frozenset({"allowed_actions", "constraints", "objective", "output_contract"})
+_MISSION_CONTRACT_TEXT_BYTES = 4_096
+_MISSION_CONTRACT_ITEM_BYTES = 512
+_MISSION_CONTRACT_ITEMS = 32
+_MISSION_CONTRACT_BYTES = 8_192
+
+
+def normalize_mission_contract(
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Validate the bounded public task instructions supplied by an adapter."""
+
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping) or set(value) - _MISSION_CONTRACT_KEYS:
+        raise ValueError("invalid_mission_contract")
+
+    normalized: dict[str, Any] = {}
+    for key in ("objective", "output_contract"):
+        if key not in value:
+            continue
+        raw = value[key]
+        if not isinstance(raw, str):
+            raise ValueError("invalid_mission_contract")
+        text = raw.strip()
+        if text:
+            if len(text.encode("utf-8", "replace")) > _MISSION_CONTRACT_TEXT_BYTES:
+                raise ValueError("invalid_mission_contract")
+            normalized[key] = text
+    for key in ("allowed_actions", "constraints"):
+        if key not in value:
+            continue
+        raw = value[key]
+        if not isinstance(raw, Sequence) or isinstance(
+            raw,
+            (str, bytes, bytearray),
+        ):
+            raise ValueError("invalid_mission_contract")
+        items: list[str] = []
+        for item in raw:
+            if not isinstance(item, str):
+                raise ValueError("invalid_mission_contract")
+            text = item.strip()
+            if not text or len(text.encode("utf-8", "replace")) > _MISSION_CONTRACT_ITEM_BYTES:
+                raise ValueError("invalid_mission_contract")
+            if text not in items:
+                items.append(text)
+            if len(items) > _MISSION_CONTRACT_ITEMS:
+                raise ValueError("invalid_mission_contract")
+        if items:
+            normalized[key] = items
+    if not normalized:
+        raise ValueError("invalid_mission_contract")
+    encoded = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if len(encoded.encode("utf-8", "replace")) > _MISSION_CONTRACT_BYTES:
+        raise ValueError("invalid_mission_contract")
+    return normalized
+
+
+def mission_contract_preamble(value: Any) -> str:
+    """Serialize bounded caller instructions outside lossy context compaction."""
+
+    if value is None or value == {}:
+        return ""
+    normalized = normalize_mission_contract(value)
+    encoded = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"Caller mission instructions (obey within deterministic execution policy):\n{encoded}\n\n"
 
 
 def compact_context_for_llm(context: dict[str, Any], role: str = "generic") -> dict[str, Any]:

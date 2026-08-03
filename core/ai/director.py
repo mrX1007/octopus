@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Any, Optional
 
-from core.ai.llm_context import compact_context_for_llm
+from core.ai.llm_context import compact_context_for_llm, mission_contract_preamble
 from core.ai.policy import DeterministicPolicy
 
 CONTEXT_WINDOW = 5
@@ -69,7 +69,9 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
 
         # Try to query LLM in JSON mode
         try:
-            full_prompt = self.system_prompt + "\n\n" + prompt
+            full_prompt = (
+                self.system_prompt + "\n\n" + mission_contract_preamble(context.get("mission_contract")) + prompt
+            )
             response = ask_ollama(full_prompt, json_mode=True)
 
             # v12: check the error contract

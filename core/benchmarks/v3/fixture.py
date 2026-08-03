@@ -42,7 +42,7 @@ SCENARIO_FAMILIES = (
 )
 
 _MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
-_READ_METHODS = frozenset({"GET", "HEAD"})
+_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 _FORBIDDEN_PRODUCT_KEY_FRAGMENTS = frozenset({"evidence", "matcher", "nonce", "seed", "truth"})
 
 
@@ -231,7 +231,7 @@ class FixtureVariant:
         """Return the only fixture metadata allowed in a product process."""
 
         view = {
-            "allowed_methods": ["GET", "HEAD"],
+            "allowed_methods": ["GET", "HEAD", "OPTIONS"],
             "base_url": str(base_url).rstrip("/"),
             # The stable root is a blinded, in-band handoff to the generated
             # entry route.  Campaign adapters therefore never need the seed or
@@ -318,7 +318,7 @@ class FixtureRuntime:
                 status=HTTPStatus.METHOD_NOT_ALLOWED,
                 content_type="application/json",
                 body=b'{"error":"read_only_fixture"}\n',
-                headers={"Allow": "GET, HEAD"},
+                headers={"Allow": "GET, HEAD, OPTIONS"},
                 delay_ms=0,
             )
         if method_name not in _READ_METHODS:
@@ -333,13 +333,26 @@ class FixtureRuntime:
                 status=HTTPStatus.METHOD_NOT_ALLOWED,
                 content_type="application/json",
                 body=b'{"error":"method_not_allowed"}\n',
-                headers={"Allow": "GET, HEAD"},
+                headers={"Allow": "GET, HEAD, OPTIONS"},
+                delay_ms=0,
+            )
+        if method_name == "OPTIONS":
+            self.ledger.record(
+                method=method_name,
+                target=normalized_target,
+                route_id=route.route_id if route else "unmatched-route",
+                status=HTTPStatus.NO_CONTENT,
+            )
+            return FixtureResponse(
+                status=HTTPStatus.NO_CONTENT,
+                content_type="text/plain; charset=utf-8",
+                body=b"",
+                headers={"Allow": "GET, HEAD, OPTIONS"},
                 delay_ms=0,
             )
         if normalized_target == "/" and route is None:
             body = (
-                f'<html><body><a rel="start" href="{self.variant.entry_target}">'
-                "authorized fixture</a></body></html>\n"
+                f'<html><body><a rel="start" href="{self.variant.entry_target}">authorized fixture</a></body></html>\n'
             ).encode()
             self.ledger.record(
                 method=method_name,

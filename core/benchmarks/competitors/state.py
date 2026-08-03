@@ -89,9 +89,11 @@ class CampaignJournal:
 
         if fcntl is None:
             raise CampaignStateError("campaign_lock_unsupported")
-        self.campaign_root.mkdir(parents=True, exist_ok=True)
+        self.campaign_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.campaign_root, 0o700)
         lock_path = self.campaign_root / ".lock"
         descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        os.chmod(lock_path, 0o600)
         try:
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -129,8 +131,32 @@ class CampaignJournal:
         else:
             _atomic_json(path, metadata)
         self._schedule_keys = frozenset(keys)
-        (self.campaign_root / "runs").mkdir(parents=True, exist_ok=True)
-        (self.campaign_root / "attestations").mkdir(parents=True, exist_ok=True)
+        for name in ("runs", "attestations", "attempts"):
+            directory = self.campaign_root / name
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+            os.chmod(directory, 0o700)
+
+    def begin_run_attempt(self, run_key: str) -> Path:
+        """Seal one scheduled attempt before reset; retries are never substituted."""
+
+        self._require_run_key(run_key)
+        destination = self.campaign_root / "attempts" / f"{run_key}.json"
+        if destination.exists() or destination.is_symlink():
+            raise CampaignStateError("campaign_run_retry_forbidden")
+        return _atomic_json(
+            destination,
+            {
+                "schema_version": CAMPAIGN_STATE_SCHEMA_VERSION,
+                "campaign_id": self.campaign_id,
+                "fingerprint": self.fingerprint,
+                "run_key": run_key,
+                "status": "started",
+            },
+        )
+
+    def attempted_run_count(self) -> int:
+        directory = self.campaign_root / "attempts"
+        return len(tuple(directory.glob("*.json"))) if directory.exists() else 0
 
     def read_run(self, run_key: str) -> dict[str, Any] | None:
         self._require_run_key(run_key)
@@ -281,8 +307,9 @@ class CampaignJournal:
             raise CampaignStateError("invalid_cleanup_attestation_status")
 
 
-def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _atomic_json(path: Path, payload: Mapping[str, Any]) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(path.parent, 0o700)
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{path.name}.tmp-",
         dir=str(path.parent),
@@ -295,10 +322,12 @@ def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
+        os.chmod(path, 0o600)
     except Exception:
         with suppress(FileNotFoundError):
             temporary.unlink()
         raise
+    return path
 
 
 def _read_mapping(path: Path) -> dict[str, Any]:

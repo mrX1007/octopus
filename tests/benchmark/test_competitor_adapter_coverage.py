@@ -169,8 +169,10 @@ def test_run_product_adapter_routes_and_normalizes(monkeypatch):
     scenario = _scenario()
     observed: list[str] = []
 
-    def octopus(*_args):
+    def octopus(*_args, **kwargs):
         observed.append("octopus")
+        assert kwargs["mission_contract"]["objective"] == "inspect target"
+        assert kwargs["mission_contract"]["allowed_actions"] == ["observe_authorized_target"]
         return _outcome(metrics={"tool_calls": 6, "bad": math.nan})
 
     def pentagi(*_args):
@@ -247,6 +249,17 @@ def test_prompt_modes_default_and_size_limit(monkeypatch):
     assert "inventory and verify" in adapter.build_product_prompt(scenario, "http://localhost")
     v3 = _scenario(lab_version="discovery-lab-v3")
     assert "Claim: OCTOBENCH_V3_" in adapter.build_product_prompt(v3, "http://localhost")
+    contract = adapter._octopus_mission_contract(v3)
+    assert contract["objective"] == "inspect target"
+    assert contract["allowed_actions"] == ["observe_authorized_target"]
+    assert "exactly the observed OCTOBENCH_V3_* token" in contract["output_contract"]
+    assert "standalone detail" in contract["output_contract"]
+    assert "affects precision" in contract["output_contract"]
+    assert "read-only" in " ".join(contract["constraints"])
+    encoded_contract = json.dumps(contract, sort_keys=True)
+    assert "ground_truth" not in encoded_contract
+    assert "fixture_seed" not in encoded_contract
+    assert "OCTOBENCH_V3_0123456789ABCDEF" not in encoded_contract
     monkeypatch.setattr(adapter, "_MAX_PROMPT_BYTES", 1)
     with pytest.raises(adapter.ProductAdapterError, match="prompt_too_large"):
         adapter.build_product_prompt(scenario, "http://localhost")
@@ -287,7 +300,15 @@ def test_run_octopus_without_probe_and_v3_claims(monkeypatch, tmp_path):
         strategy={"adapter_side_http_probe": False, "max_iterations": "bad"},
     )
     pipeline = _Pipeline("")
-    pipeline.trace_report = lambda *_args: {"machine_report": {"sections": {"observations": [{"detail": "claim-one"}]}}}
+    pipeline.trace_report = lambda *_args: {
+        "machine_report": {
+            "sections": {
+                "observations": [
+                    {"detail": "claim-one"},
+                ]
+            }
+        }
+    }
     monkeypatch.setattr("core.ai.pipeline.AIPipeline", lambda _path: pipeline)
     outcome = adapter._run_octopus(
         scenario,
@@ -515,6 +536,76 @@ def test_cli_profiles_build_bounded_argv(
     assert observed["argv"][: len(expected)] == expected
     assert outcome.status == "succeeded"
     assert outcome.metrics == {"tool_calls": 3.0}
+
+
+def test_strix_v3_cli_uses_only_native_final_stdout_panel_for_claims(
+    monkeypatch,
+    tmp_path,
+):
+    token = "OCTOBENCH_V3_" + "A" * 32
+    false_token = "OCTOBENCH_V3_" + "B" * 32
+    (tmp_path / "tool.log").write_text(f"Claim: {false_token}\n", encoding="utf-8")
+    stdout = "\n".join(
+        (
+            f"tool transcript: Claim: {false_token}",
+            "╭─ STRIX ─────────────────────────────────────────────╮",
+            "│ Penetration test summary                           │",
+            f"│ Claim: {token} │",
+            "╰────────────────────────────────────────────────────╯",
+        )
+    )
+    monkeypatch.setattr(adapter, "_product_environment", lambda *_args: {})
+    monkeypatch.setattr(adapter, "_resolve_executable", lambda *_args: "strix")
+    monkeypatch.setattr(
+        adapter,
+        "_run_bounded_process",
+        lambda *_args, **_kwargs: (0, False, False, stdout, 1.0),
+    )
+
+    outcome = adapter._run_cli_product(
+        "strix",
+        _scenario(lab_version="discovery-lab-v3"),
+        "http://127.0.0.1:8080",
+        "prompt",
+        _environment(),
+        tmp_path,
+        10,
+        4096,
+    )
+
+    assert outcome.reported_claims == (token,)
+    assert false_token in outcome.output_text
+
+
+def test_strix_v3_final_panel_parser_is_exact_terminal_and_fail_closed():
+    first = "OCTOBENCH_V3_" + "A" * 32
+    selected = "OCTOBENCH_V3_" + "B" * 32
+    ignored = "OCTOBENCH_V3_" + "C" * 32
+    complete_first = "\n".join(
+        (
+            "\x1b[32m╭─ STRIX ───╮\x1b[0m",
+            "│ Penetration test summary │",
+            f"│ Claim: {first} │",
+            "╰─────────╯",
+        )
+    )
+    complete_last = "\n".join(
+        (
+            "╭─ STRIX ───╮",
+            "│ Penetration test summary │",
+            f"│ Finding: {selected} │",
+            "╰─────────╯",
+        )
+    )
+    stdout = f"Claim: {ignored}\n{complete_first}\n{complete_last}\n"
+    assert adapter._extract_strix_v3_final_report_claims(stdout) == (selected,)
+
+    assert adapter._extract_strix_v3_final_report_claims(complete_last + f"\nClaim: {ignored}") == (selected,)
+    assert adapter._extract_strix_v3_final_report_claims(complete_last.rsplit("\n", 1)[0]) == ()
+    assert adapter._extract_strix_v3_final_report_claims(complete_last.replace("STRIX", "REPORT")) == ()
+    ascii_panel = complete_last.replace("╭", "+").replace("╮", "+").replace("│", "|")
+    assert adapter._extract_strix_v3_final_report_claims(ascii_panel) == ()
+    assert adapter._extract_strix_v3_final_report_claims(f"raw token only: {selected}") == ()
 
 
 def test_cli_shannon_custom_binary_and_package(monkeypatch, tmp_path):

@@ -289,6 +289,51 @@ def test_planner_accepts_json_array_as_plan(monkeypatch):
     assert result["plan"] == [{"agent": "DiscoveryAgent", "task": "service_discovery"}]
 
 
+def test_benchmark_contract_reaches_director_and_planner_outside_small_context(
+    monkeypatch,
+):
+    import core.ai.director as director_mod
+    import core.ai.llm_context as context_mod
+    import core.ai.planner as planner_mod
+
+    captured = {}
+    contract = {
+        "objective": "verify every advertised read-only route",
+        "allowed_actions": ["observe_authorized_target"],
+        "constraints": ["read-only discovery only"],
+        "output_contract": "emit each exact OCTOBENCH_V3_* claim",
+    }
+
+    def director_ask(prompt, **_kwargs):
+        captured["director"] = prompt
+        return '{"thought":"done","goal":"conclude"}'
+
+    def planner_ask(prompt, **_kwargs):
+        captured["planner"] = prompt
+        return '{"thought":"done","plan":[]}'
+
+    monkeypatch.setattr(context_mod, "_summary_budget", lambda: 512)
+    monkeypatch.setattr(director_mod, "ask_ollama", director_ask)
+    monkeypatch.setattr(planner_mod, "ask_ollama", planner_ask)
+    context = {
+        "host": "h" * 2_000,
+        "state": "initial_recon",
+        "services": ["s" * 2_000],
+        "open_questions": [],
+        "mission_contract": contract,
+    }
+
+    director_mod.DirectorLLM().decide_goal(context, [])
+    planner_mod.MissionPlanner().create_plan("service_discovery", context, [])
+
+    for prompt in captured.values():
+        assert "Caller mission instructions" in prompt
+        assert "within deterministic execution policy" in prompt
+        assert contract["objective"] in prompt
+        assert contract["constraints"][0] in prompt
+        assert contract["output_contract"] in prompt
+
+
 def test_vulnerability_plan_enriches_safe_categories_from_surface_state():
     from core.ai.pipeline import AIPipeline
 

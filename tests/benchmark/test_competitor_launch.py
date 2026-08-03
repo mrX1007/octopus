@@ -37,11 +37,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 def test_reviewed_catalog_matches_launcher_and_bootstrap_pins() -> None:
     root = REPOSITORY_ROOT
-    catalog = json.loads(
-        (root / "benchmarks" / "competitors" / "catalog.json").read_text(
-            encoding="utf-8"
-        )
-    )
+    catalog = json.loads((root / "benchmarks" / "competitors" / "catalog.json").read_text(encoding="utf-8"))
     entries = {item["system_id"]: item for item in catalog["systems"]}
     launcher = {
         item.system_id: item
@@ -53,15 +49,9 @@ def test_reviewed_catalog_matches_launcher_and_bootstrap_pins() -> None:
     assert launcher["strix"].source_revision == entries["strix"]["source_revision"]
     assert launcher["pentagi"].version == entries["pentagi"]["tag"]
     assert launcher["pentagi"].source_revision == launch._PENTAGI_RUNTIME_SOURCE
-    assert (
-        entries["pentagi"]["source_revision"]
-        == PENTAGI_REVISION
-        == launch._PENTAGI_REVIEWED_REVISION
-    )
+    assert entries["pentagi"]["source_revision"] == PENTAGI_REVISION == launch._PENTAGI_REVIEWED_REVISION
 
-    bootstrap = (
-        root / "scripts" / "benchmarks" / "bootstrap_competitors_linux.sh"
-    ).read_text(encoding="utf-8")
+    bootstrap = (root / "scripts" / "benchmarks" / "bootstrap_competitors_linux.sh").read_text(encoding="utf-8")
     prefixes = {
         "strix": "STRIX",
         "pentestgpt": "PENTESTGPT",
@@ -72,24 +62,17 @@ def test_reviewed_catalog_matches_launcher_and_bootstrap_pins() -> None:
         entry = entries[system_id]
         assert f'readonly {prefix}_URL="{entry["repository_url"]}.git"' in bootstrap
         assert f'readonly {prefix}_TAG="{entry["tag"]}"' in bootstrap
-        assert (
-            f'readonly {prefix}_REVISION="{entry["source_revision"]}"' in bootstrap
-        )
-    assert bootstrap.index("\nrequire_glibc_234\n") < bootstrap.index(
-        "\nrequire_command git\n"
-    )
+        assert f'readonly {prefix}_REVISION="{entry["source_revision"]}"' in bootstrap
+    assert bootstrap.index("\nrequire_glibc_234\n") < bootstrap.index("\nrequire_command git\n")
     assert "require_command nmap" not in bootstrap
-    assert all(
-        "Nmap" not in entries[system_id]["requirements"]["commands"]
-        for system_id in ("strix", "pentestgpt")
-    )
+    assert all("Nmap" not in entries[system_id]["requirements"]["commands"] for system_id in ("strix", "pentestgpt"))
     assert entries["pentestgpt"]["comparison"]["launcher_profiles"] == []
     assert entries["pentestgpt"]["bootstrap"]["default"] is False
     assert "--with-pentestgpt" in bootstrap
     assert entries["strix"]["bootstrap"]["sandbox_image"] == launch._STRIX_IMAGE
     assert f'readonly STRIX_IMAGE="{launch._STRIX_IMAGE}"' in bootstrap
     assert 'docker pull --platform linux/amd64 "$STRIX_IMAGE"' in bootstrap
-    assert 'docker image inspect' in bootstrap
+    assert "docker image inspect" in bootstrap
 
 
 def _core_environment() -> dict[str, str]:
@@ -203,18 +186,10 @@ def _stub_ollama_tags(
                     "done": True,
                 }
             elif path == "/api/ps":
-                response_payload = (
-                    default_process_payload
-                    if process_payload is None
-                    else process_payload
-                )
+                response_payload = default_process_payload if process_payload is None else process_payload
             else:  # pragma: no cover - catches accidental endpoint expansion
                 raise AssertionError(f"unexpected Ollama path: {path}")
-            encoded = (
-                response_payload
-                if isinstance(response_payload, bytes)
-                else json.dumps(response_payload).encode()
-            )
+            encoded = response_payload if isinstance(response_payload, bytes) else json.dumps(response_payload).encode()
             return _OllamaTagsResponse(encoded)
 
     def build_opener(*configured_handlers: Any) -> Opener:
@@ -236,15 +211,8 @@ def _prepare_root(
     monkeypatch.delenv("LLM_API_KEY", raising=False)
     for name in launch._OPTIONAL_DOCKER_ENVIRONMENT:
         monkeypatch.delenv(name, raising=False)
-    source_campaigns = (
-        REPOSITORY_ROOT
-        / "benchmarks"
-        / "competitors"
-        / "campaigns"
-    )
-    destination_campaigns = (
-        tmp_path / "benchmarks" / "competitors" / "campaigns"
-    )
+    source_campaigns = REPOSITORY_ROOT / "benchmarks" / "competitors" / "campaigns"
+    destination_campaigns = tmp_path / "benchmarks" / "competitors" / "campaigns"
     for source in source_campaigns.glob("*/scenarios/*.json"):
         destination = destination_campaigns / source.relative_to(source_campaigns)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -268,9 +236,7 @@ def _runtime_attestations() -> dict[str, dict[str, Any]]:
     }
     attestations["strix"]["sandbox_image"] = launch._STRIX_IMAGE
     for system_id in ("octopus", "strix"):
-        attestations[system_id]["ollama_model_digest"] = (
-            launch._SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST
-        )
+        attestations[system_id]["ollama_model_digest"] = launch._SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST
     return attestations
 
 
@@ -321,17 +287,12 @@ def test_core_prepare_generates_exact_pins_commands_and_secret_free_config(
     }
 
     assert set(manifests) == {"octopus", "strix"}
-    assert {
-        name: (payload["version"], payload["source_revision"])
-        for name, payload in manifests.items()
-    } == {
+    assert {name: (payload["version"], payload["source_revision"]) for name, payload in manifests.items()} == {
         "octopus": ("v1.0.0", OCTOPUS_REVISION),
         "strix": ("v1.1.0", STRIX_REVISION),
     }
     expected_python = str(tmp_path / "venv" / "bin" / "python")
-    expected_adapter = str(
-        tmp_path / "benchmarks" / "competitors" / "run_adapter.py"
-    )
+    expected_adapter = str(tmp_path / "benchmarks" / "competitors" / "run_adapter.py")
     for system_id, payload in manifests.items():
         assert payload["track"] == "full_system"
         assert payload["execution_mode"] == "live"
@@ -353,10 +314,7 @@ def test_core_prepare_generates_exact_pins_commands_and_secret_free_config(
             "parameters": {"context_length": SHARED_OLLAMA_CONTEXT_LENGTH},
         }
         assert payload["tool_versions"]["ollama"] == SHARED_OLLAMA_SERVER_VERSION
-        context_environment_present = (
-            "OCTOBENCH_OLLAMA_CONTEXT_LENGTH"
-            in payload["adapter"]["environment_passthrough"]
-        )
+        context_environment_present = "OCTOBENCH_OLLAMA_CONTEXT_LENGTH" in payload["adapter"]["environment_passthrough"]
         assert context_environment_present is (system_id == "octopus")
         assert payload["adapter"]["argv"] == [
             expected_python,
@@ -377,41 +335,29 @@ def test_core_prepare_generates_exact_pins_commands_and_secret_free_config(
         if system_id == "strix":
             expected_provenance["sandbox_image"] = launch._STRIX_IMAGE
             assert payload["metadata"]["scan_mode"] == "quick"
-            assert payload["tool_versions"]["strix-sandbox-image"] == (
-                launch._STRIX_IMAGE
-            )
+            assert payload["tool_versions"]["strix-sandbox-image"] == (launch._STRIX_IMAGE)
             assert "STRIX_IMAGE" in payload["adapter"]["environment_passthrough"]
             assert "LLM_API_BASE" in payload["adapter"]["environment_passthrough"]
             assert "LLM_API_KEY" not in payload["adapter"]["environment_passthrough"]
         assert payload["metadata"]["runtime_provenance"] == expected_provenance
 
-    assert config_path == (
-        tmp_path / ".benchmark-state" / "generated" / "campaign-v1" / "campaign.json"
-    )
-    assert config["scenario_directory"] == str(
-        generated / "scenarios"
-    )
+    assert config_path == (tmp_path / ".benchmark-state" / "generated" / "campaign-v1" / "campaign.json")
+    assert config["scenario_directory"] == str(generated / "scenarios")
     generated_scenario = json.loads(
-        (generated / "scenarios" / "authorized-discovery-v1.json").read_text(
-            encoding="utf-8"
-        )
+        (generated / "scenarios" / "authorized-discovery-v1.json").read_text(encoding="utf-8")
     )
     assert generated_scenario["repetitions"] == 6
-    assert config["output_directory"] == str(
-        tmp_path / "benchmarks" / "competitors" / "results" / "campaign-v1"
-    )
-    assert config["state_directory"] == str(
-        tmp_path / ".benchmark-state" / "journal"
-    )
+    assert config["output_directory"] == str(tmp_path / "benchmarks" / "competitors" / "results" / "campaign-v1")
+    assert config["state_directory"] == str(tmp_path / ".benchmark-state" / "journal")
     assert config["repetitions"] == 6
     assert config["campaign_definition"] == "linux-blackbox-v1"
     assert generated_scenario["budgets"]["max_seconds"] == 300
     loaded_config = load_campaign_config(config_path)
     assert loaded_config.campaign_id == "campaign-v1"
-    assert {
-        load_system_manifest(path).system_id
-        for path in loaded_config.system_manifest_paths
-    } == {"octopus", "strix"}
+    assert {load_system_manifest(path).system_id for path in loaded_config.system_manifest_paths} == {
+        "octopus",
+        "strix",
+    }
     assert config["secret_environment"] == []
     for command, action in (
         (config["lab"]["reset"], "reset"),
@@ -432,13 +378,9 @@ def test_core_prepare_generates_exact_pins_commands_and_secret_free_config(
             "OCTOBENCH_LAB_PORT",
         ]
 
-    serialized = "\n".join(
-        path.read_text(encoding="utf-8") for path in generated.rglob("*.json")
-    )
+    serialized = "\n".join(path.read_text(encoding="utf-8") for path in generated.rglob("*.json"))
     assert _core_environment()["LLM_API_BASE"] not in serialized
-    assert all(
-        path.stat().st_mode & 0o777 == 0o600 for path in generated.rglob("*.json")
-    )
+    assert all(path.stat().st_mode & 0o777 == 0o600 for path in generated.rglob("*.json"))
 
 
 def test_small_model_campaign_definition_is_frozen_distinct_and_public(
@@ -455,25 +397,17 @@ def test_small_model_campaign_definition_is_frozen_distinct_and_public(
         campaign_definition="linux-blackbox-small-model-v1",
     )
     scenarios = tuple((config_path.parent / "scenarios").glob("*.json"))
-    assert [path.name for path in scenarios] == [
-        "authorized-discovery-altered-small-model-stress-v1.json"
-    ]
+    assert [path.name for path in scenarios] == ["authorized-discovery-altered-small-model-stress-v1.json"]
     scenario = json.loads(scenarios[0].read_text(encoding="utf-8"))
-    assert scenario["scenario_id"] == (
-        "authorized-discovery-altered-small-model-stress-v1"
-    )
+    assert scenario["scenario_id"] == ("authorized-discovery-altered-small-model-stress-v1")
     assert scenario["budgets"]["max_seconds"] == 600
     assert scenario["repetitions"] == 6
     assert scenario["model"] == {
         "provider": "ollama",
         "name": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_MODEL,
-        "parameters": {
-            "context_length": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH
-        },
+        "parameters": {"context_length": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_CONTEXT_LENGTH},
     }
-    assert scenario["tool_versions"]["ollama"] == (
-        launch._SMALL_MODEL_CAMPAIGN_OLLAMA_SERVER_VERSION
-    )
+    assert scenario["tool_versions"]["ollama"] == (launch._SMALL_MODEL_CAMPAIGN_OLLAMA_SERVER_VERSION)
     assert scenario["strategy_config"]["evaluation_profile"] == {
         "profile_id": "altered-sub-70b-stress-v1",
         "classification": "small-model-stress",
@@ -500,34 +434,20 @@ def test_small_model_campaign_definition_is_frozen_distinct_and_public(
     assert config["campaign_definition"] == "linux-blackbox-small-model-v1"
     loaded_config = load_campaign_config(config_path)
     assert loaded_config.campaign_definition == "linux-blackbox-small-model-v1"
-    assert loaded_config.fingerprint_payload()["campaign_definition"] == (
-        "linux-blackbox-small-model-v1"
-    )
-    assert loaded_config.public_payload()["campaign_definition"] == (
-        "linux-blackbox-small-model-v1"
-    )
+    assert loaded_config.fingerprint_payload()["campaign_definition"] == ("linux-blackbox-small-model-v1")
+    assert loaded_config.public_payload()["campaign_definition"] == ("linux-blackbox-small-model-v1")
     assert {
         "OCTOBENCH_OLLAMA_FLASH_ATTENTION",
         "OCTOBENCH_OLLAMA_KV_CACHE_TYPE",
     }.issubset(config["required_environment"])
 
     for system_id in ("octopus", "strix"):
-        manifest = json.loads(
-            (config_path.parent / f"{system_id}.json").read_text(encoding="utf-8")
-        )
-        assert manifest["metadata"]["campaign_definition_id"] == (
-            "linux-blackbox-small-model-v1"
-        )
-        assert manifest["metadata"]["evaluation_scope"] == (
-            "altered-small-model-stress"
-        )
+        manifest = json.loads((config_path.parent / f"{system_id}.json").read_text(encoding="utf-8"))
+        assert manifest["metadata"]["campaign_definition_id"] == ("linux-blackbox-small-model-v1")
+        assert manifest["metadata"]["evaluation_scope"] == ("altered-small-model-stress")
         assert manifest["metadata"]["vendor_representative"] is False
-        assert manifest["fairness_profile"]["profile_id"] == (
-            "linux-blackbox-shared-ollama-altered-small-model-v1"
-        )
-        assert "not a vendor-representative score" in manifest[
-            "fairness_profile"
-        ]["notes"]
+        assert manifest["fairness_profile"]["profile_id"] == ("linux-blackbox-shared-ollama-altered-small-model-v1")
+        assert "not a vendor-representative score" in manifest["fairness_profile"]["notes"]
 
 
 def test_small_model_v2_generates_four_isolated_surfaces_and_900s_contract(
@@ -555,15 +475,10 @@ def test_small_model_v2_generates_four_isolated_surfaces_and_900s_contract(
         "service_discovery_verification",
         "web_api_mapping",
     }
-    assert {item["lab"]["version"] for item in scenarios} == {
-        "discovery-lab-v2"
-    }
+    assert {item["lab"]["version"] for item in scenarios} == {"discovery-lab-v2"}
     assert {item["budgets"]["max_seconds"] for item in scenarios} == {900}
     assert {item["repetitions"] for item in scenarios} == {6}
-    assert {
-        item["strategy_config"]["evaluation_profile"]["surface_id"]
-        for item in scenarios
-    } == {
+    assert {item["strategy_config"]["evaluation_profile"]["surface_id"] for item in scenarios} == {
         "hypermedia-pagination-v1",
         "linked-navigation-v1",
         "openapi-contract-v1",
@@ -574,18 +489,13 @@ def test_small_model_v2_generates_four_isolated_surfaces_and_900s_contract(
         calibration = scenario["strategy_config"]["time_budget_calibration"]
         assert evaluation["profile_id"] == "altered-sub-70b-multi-surface-v2"
         assert evaluation["vendor_representative"] is False
-        assert evaluation["model_digest"] == (
-            launch._SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST
-        )
+        assert evaluation["model_digest"] == (launch._SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST)
         assert calibration["basis_seconds"] == 600
         assert calibration["derived_hard_max_seconds"] == 900
         assert calibration["source_matrix_id"] == (
-            "competitor-matrix://sha256/"
-            "4943d0cc7a12fc0af58f7b22f4fe4f9ba04423b3dde70d49935693bb402dfe60"
+            "competitor-matrix://sha256/4943d0cc7a12fc0af58f7b22f4fe4f9ba04423b3dde70d49935693bb402dfe60"
         )
-        assert scenario["ground_truth"]["forbidden_findings"] == [
-            "fixture.cross_surface_evidence"
-        ]
+        assert scenario["ground_truth"]["forbidden_findings"] == ["fixture.cross_surface_evidence"]
 
     reset = config["lab"]["reset"]["argv"]
     health = config["lab"]["health"]["argv"]
@@ -601,19 +511,11 @@ def test_small_model_v2_generates_four_isolated_surfaces_and_900s_contract(
     assert config["campaign_definition"] == "linux-blackbox-small-model-v2"
 
     for system_id in ("octopus", "strix"):
-        manifest = json.loads(
-            (config_path.parent / f"{system_id}.json").read_text(encoding="utf-8")
-        )
-        assert manifest["metadata"]["evaluation_scope"] == (
-            "altered-small-model-multi-surface-v2"
-        )
+        manifest = json.loads((config_path.parent / f"{system_id}.json").read_text(encoding="utf-8"))
+        assert manifest["metadata"]["evaluation_scope"] == ("altered-small-model-multi-surface-v2")
         assert manifest["metadata"]["lab_definition_id"] == "discovery-lab-v2"
-        assert manifest["fairness_profile"]["profile_id"] == (
-            "linux-blackbox-shared-ollama-altered-small-model-v2"
-        )
-        assert "Four scenario-isolated read-only surfaces" in manifest[
-            "fairness_profile"
-        ]["notes"]
+        assert manifest["fairness_profile"]["profile_id"] == ("linux-blackbox-shared-ollama-altered-small-model-v2")
+        assert "Four scenario-isolated read-only surfaces" in manifest["fairness_profile"]["notes"]
 
 
 @pytest.mark.parametrize(
@@ -624,18 +526,19 @@ def test_campaign_definition_rejects_unknown_or_path_values(
     capsys: pytest.CaptureFixture[str],
     campaign_definition: str,
 ) -> None:
-    assert launch.main(
-        [
-            "--campaign-id",
-            "invalid-definition-v1",
-            "--campaign-definition",
-            campaign_definition,
-            "--prepare-only",
-        ]
-    ) == 2
-    assert json.loads(capsys.readouterr().err) == {
-        "error": "invalid_campaign_definition"
-    }
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "invalid-definition-v1",
+                "--campaign-definition",
+                campaign_definition,
+                "--prepare-only",
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().err) == {"error": "invalid_campaign_definition"}
 
 
 def test_small_model_campaign_definition_rejects_wrong_profile_or_runtime() -> None:
@@ -657,9 +560,7 @@ def test_small_model_campaign_definition_rejects_wrong_profile_or_runtime() -> N
     launch._validate_campaign_definition_runtime(
         definition,
         {
-            system_id: {
-                "ollama_model_digest": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST
-            }
+            system_id: {"ollama_model_digest": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST}
             for system_id in ("octopus", "strix")
         },
     )
@@ -673,9 +574,7 @@ def test_small_model_campaign_definition_rejects_wrong_profile_or_runtime() -> N
             definition,
             {
                 "octopus": {"ollama_model_digest": "sha256:" + "0" * 64},
-                "strix": {
-                    "ollama_model_digest": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST
-                },
+                "strix": {"ollama_model_digest": launch._SMALL_MODEL_CAMPAIGN_OLLAMA_DIGEST},
             },
         )
 
@@ -693,9 +592,7 @@ def test_extended_profile_adds_exact_pentagi_pin_and_environment_contract(
         values=_extended_environment(),
         campaign_id="extended-v1",
     )
-    pentagi = json.loads(
-        (config_path.parent / "pentagi.json").read_text(encoding="utf-8")
-    )
+    pentagi = json.loads((config_path.parent / "pentagi.json").read_text(encoding="utf-8"))
 
     assert pentagi["version"] == "v2.1.0"
     assert pentagi["source_revision"] == launch._PENTAGI_RUNTIME_SOURCE
@@ -707,10 +604,10 @@ def test_extended_profile_adds_exact_pentagi_pin_and_environment_contract(
     assert set(pentagi["adapter"]["environment_passthrough"]) == {
         "PATH",
         "HOME",
-            "OCTOBENCH_TARGET_URL",
-            "OCTOBENCH_ACK_AUTHORIZED",
-            "OCTOBENCH_ACK_ISOLATED_HOST",
-            "OCTOBENCH_PENTAGI_URL",
+        "OCTOBENCH_TARGET_URL",
+        "OCTOBENCH_ACK_AUTHORIZED",
+        "OCTOBENCH_ACK_ISOLATED_HOST",
+        "OCTOBENCH_PENTAGI_URL",
         "OCTOBENCH_PENTAGI_TOKEN",
         "OCTOBENCH_PENTAGI_PROVIDER",
         "OCTOBENCH_PENTAGI_MODEL",
@@ -723,16 +620,10 @@ def test_extended_profile_adds_exact_pentagi_pin_and_environment_contract(
     assert config["secret_environment"] == ["OCTOBENCH_PENTAGI_TOKEN"]
     assert config["repetitions"] == 6
     generated_scenario = json.loads(
-        (
-            config_path.parent
-            / "scenarios"
-            / "authorized-discovery-v1.json"
-        ).read_text(encoding="utf-8")
+        (config_path.parent / "scenarios" / "authorized-discovery-v1.json").read_text(encoding="utf-8")
     )
     assert generated_scenario["repetitions"] == 6
-    serialized = "\n".join(
-        path.read_text(encoding="utf-8") for path in config_path.parent.glob("*.json")
-    )
+    serialized = "\n".join(path.read_text(encoding="utf-8") for path in config_path.parent.glob("*.json"))
     assert _extended_environment()["OCTOBENCH_PENTAGI_TOKEN"] not in serialized
 
 
@@ -748,59 +639,69 @@ def test_environment_file_requires_exact_private_permissions_and_required_values
         mode=0o644,
     )
 
-    assert launch.main(
-        [
-            "--campaign-id",
-            "permissions-v1",
-            "--environment-file",
-            str(environment_file),
-            "--prepare-only",
-        ]
-    ) == 2
-    assert json.loads(capsys.readouterr().err) == {
-        "error": "environment_file_permissions"
-    }
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "permissions-v1",
+                "--environment-file",
+                str(environment_file),
+                "--prepare-only",
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().err) == {"error": "environment_file_permissions"}
 
     values = _core_environment()
     values.pop("LLM_API_BASE")
     _write_environment(environment_file, values)
-    assert launch.main(
-        [
-            "--campaign-id",
-            "missing-v1",
-            "--environment-file",
-            str(environment_file),
-            "--prepare-only",
-        ]
-    ) == 2
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "missing-v1",
+                "--environment-file",
+                str(environment_file),
+                "--prepare-only",
+            ]
+        )
+        == 2
+    )
     assert json.loads(capsys.readouterr().err) == {"error": "missing_environment"}
 
     values = _core_environment()
     values["OCTOBENCH_ACK_ISOLATED_HOST"] = "NO"
     _write_environment(environment_file, values)
-    assert launch.main(
-        [
-            "--campaign-id",
-            "isolation-v1",
-            "--environment-file",
-            str(environment_file),
-            "--prepare-only",
-        ]
-    ) == 2
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "isolation-v1",
+                "--environment-file",
+                str(environment_file),
+                "--prepare-only",
+            ]
+        )
+        == 2
+    )
     assert json.loads(capsys.readouterr().err) == {"error": "isolation_required"}
 
     values = _core_environment()
     values["STRIX_IMAGE"] = "ghcr.io/usestrix/strix-sandbox:latest"
     _write_environment(environment_file, values)
-    assert launch.main(
-        [
-            "--campaign-id",
-            "wrong-image-v1",
-            "--environment-file",
-            str(environment_file),
-            "--prepare-only",
-        ]
-    ) == 2
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "wrong-image-v1",
+                "--environment-file",
+                str(environment_file),
+                "--prepare-only",
+            ]
+        )
+        == 2
+    )
     assert json.loads(capsys.readouterr().err) == {"error": "invalid_strix_image"}
 
 
@@ -829,18 +730,19 @@ def test_shared_ollama_contract_rejects_mismatched_or_biased_configuration(
     values = {**_core_environment(), **updates}
     environment_file = _write_environment(tmp_path / "campaign.env", values)
 
-    assert launch.main(
-        [
-            "--campaign-id",
-            "invalid-shared-model-v1",
-            "--environment-file",
-            str(environment_file),
-            "--prepare-only",
-        ]
-    ) == 2
-    assert json.loads(capsys.readouterr().err) == {
-        "error": "invalid_shared_ollama_configuration"
-    }
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "invalid-shared-model-v1",
+                "--environment-file",
+                str(environment_file),
+                "--prepare-only",
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().err) == {"error": "invalid_shared_ollama_configuration"}
 
 
 @pytest.mark.parametrize(
@@ -894,17 +796,13 @@ def test_optional_llm_api_key_is_conditionally_passed_and_redacted(
         campaign_id="optional-key-v1",
     )
     strix = json.loads((config_path.parent / "strix.json").read_text(encoding="utf-8"))
-    octopus = json.loads(
-        (config_path.parent / "octopus.json").read_text(encoding="utf-8")
-    )
+    octopus = json.loads((config_path.parent / "octopus.json").read_text(encoding="utf-8"))
 
     assert "LLM_API_KEY" in strix["adapter"]["environment_passthrough"]
     assert "LLM_API_KEY" in octopus["adapter"]["environment_passthrough"]
     assert "LLM_API_KEY" in config["required_environment"]
     assert config["secret_environment"] == ["LLM_API_KEY"]
-    assert secret not in "\n".join(
-        path.read_text(encoding="utf-8") for path in config_path.parent.rglob("*.json")
-    )
+    assert secret not in "\n".join(path.read_text(encoding="utf-8") for path in config_path.parent.rglob("*.json"))
 
 
 def test_optional_docker_environment_is_conditionally_passed_to_lab_and_strix(
@@ -939,12 +837,8 @@ def test_optional_docker_environment_is_conditionally_passed_to_lab_and_strix(
         capsys,
         campaign_id="docker-env-absent-v1",
     )
-    absent_strix = json.loads(
-        (absent_path.parent / "strix.json").read_text(encoding="utf-8")
-    )
-    assert not set(launch._OPTIONAL_DOCKER_ENVIRONMENT).intersection(
-        absent_strix["adapter"]["environment_passthrough"]
-    )
+    absent_strix = json.loads((absent_path.parent / "strix.json").read_text(encoding="utf-8"))
+    assert not set(launch._OPTIONAL_DOCKER_ENVIRONMENT).intersection(absent_strix["adapter"]["environment_passthrough"])
     assert not set(launch._OPTIONAL_DOCKER_ENVIRONMENT).intersection(
         absent_config["lab"]["reset"]["environment_passthrough"]
     )
@@ -965,15 +859,18 @@ def test_prepare_only_is_platform_and_dirty_independent(
         lambda: clean_calls.append(True) or False,
     )
 
-    assert launch.main(
-        [
-            "--campaign-id",
-            "prepare-v1",
-            "--environment-file",
-            str(environment_file),
-            "--prepare-only",
-        ]
-    ) == 0
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "prepare-v1",
+                "--environment-file",
+                str(environment_file),
+                "--prepare-only",
+            ]
+        )
+        == 0
+    )
     assert Path(capsys.readouterr().out.strip()).name == "campaign.json"
     assert clean_calls == []
 
@@ -1011,9 +908,7 @@ def test_actual_run_enforces_linux_clean_tree_and_new_output(
     assert run_calls == []
 
     with pytest.raises(SystemExit):
-        launch._argument_parser().parse_args(
-            ["--campaign-id", "guard-v1", "--allow-dirty"]
-        )
+        launch._argument_parser().parse_args(["--campaign-id", "guard-v1", "--allow-dirty"])
     capsys.readouterr()
 
 
@@ -1060,30 +955,16 @@ def test_linux_run_sets_detected_target_and_returns_campaign_exit(
     )
 
     assert exit_code == 7
-    assert observed["config"] == (
-        tmp_path / ".benchmark-state" / "generated" / "run-v1" / "campaign.json"
-    )
-    assert observed["environment"]["OCTOBENCH_TARGET_URL"] == (
-        "http://10.1.2.3:8080"
-    )
+    assert observed["config"] == (tmp_path / ".benchmark-state" / "generated" / "run-v1" / "campaign.json")
+    assert observed["environment"]["OCTOBENCH_TARGET_URL"] == ("http://10.1.2.3:8080")
     assert observed["environment"]["OCTOBENCH_LAB_BIND"] == "10.1.2.3"
     assert observed["environment"]["OCTOBENCH_HOST_IP"] == "10.1.2.3"
     assert observed["environment"]["OCTOBENCH_LAB_PORT"] == "8080"
-    assert observed["environment"]["LLM_API_BASE"] == (
-        _small_model_environment()["LLM_API_BASE"]
-    )
+    assert observed["environment"]["LLM_API_BASE"] == (_small_model_environment()["LLM_API_BASE"])
     manifest = json.loads(
-        (
-            tmp_path
-            / ".benchmark-state"
-            / "generated"
-            / "run-v1"
-            / "strix.json"
-        ).read_text(encoding="utf-8")
+        (tmp_path / ".benchmark-state" / "generated" / "run-v1" / "strix.json").read_text(encoding="utf-8")
     )
-    assert manifest["metadata"]["runtime_provenance"] == _runtime_attestations()[
-        "strix"
-    ]
+    assert manifest["metadata"]["runtime_provenance"] == _runtime_attestations()["strix"]
     scenario = json.loads(
         (
             tmp_path
@@ -1097,6 +978,60 @@ def test_linux_run_sets_detected_target_and_returns_campaign_exit(
     assert scenario["repetitions"] == 6
     assert scenario["budgets"]["max_seconds"] == 600
     assert capsys.readouterr().out == f"{tmp_path / 'published'}\n"
+
+
+def test_linux_v4_readiness_calibration_cli_is_separate_and_redacted(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _prepare_root(tmp_path, monkeypatch)
+    values = {**_small_model_environment(), "OCTOBENCH_V3_BASE_FIXTURE_SEED": "9b" * 32}
+    environment_file = _write_environment(tmp_path / "campaign.env", values)
+    monkeypatch.setattr(launch.sys, "platform", "linux")
+    monkeypatch.setattr(launch, "_repository_is_clean", lambda: True)
+    monkeypatch.setattr(launch, "_lab_address", lambda _environment, *, port: "http://10.1.2.3:8080")
+    monkeypatch.setattr(
+        launch,
+        "_validate_runtime_prerequisites",
+        lambda _environment, *, octopus_revision: _runtime_attestations(),
+    )
+    observed: dict[str, Any] = {}
+    evidence_path = tmp_path / ".benchmark-state" / "readiness-journal" / "ready-v4" / "readiness-evidence.json"
+
+    def calibrate(config, *, environment):
+        observed["config"] = config
+        observed["environment"] = environment
+        return evidence_path
+
+    monkeypatch.setattr(launch, "run_readiness_calibration", calibrate)
+    monkeypatch.setattr(launch, "run_campaign", lambda *_args, **_kwargs: pytest.fail("full campaign called"))
+    arguments = [
+        "--campaign-id",
+        "ready-v4",
+        "--campaign-definition",
+        launch._SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID,
+        "--environment-file",
+        str(environment_file),
+        "--readiness-calibration",
+    ]
+
+    assert launch.main(arguments) == 0
+    assert Path(capsys.readouterr().out.strip()) == evidence_path
+    assert observed["config"].campaign_id == "ready-v4"
+    assert observed["environment"]["OCTOBENCH_TARGET_URL"] == "http://10.1.2.3:8080"
+
+    def blocked(*_args, **_kwargs):
+        raise launch.ReadinessCalibrationError("private-detail-must-not-leak")
+
+    monkeypatch.setattr(launch, "run_readiness_calibration", blocked)
+    assert launch.main(arguments) == 2
+    assert json.loads(capsys.readouterr().err) == {"error": "readiness_failed"}
+
+    full_journal = tmp_path / ".benchmark-state" / "journal" / "ready-v4"
+    full_journal.mkdir(parents=True)
+    assert launch.main(arguments) == 2
+    assert json.loads(capsys.readouterr().err) == {"error": "output_exists"}
 
 
 def test_linux_diagnostic_pilot_runs_privately_and_returns_pilot_exit(
@@ -1122,13 +1057,7 @@ def test_linux_diagnostic_pilot_runs_privately_and_returns_pilot_exit(
         lambda _environment, *, octopus_revision: _runtime_attestations(),
     )
     observed: dict[str, Any] = {}
-    summary_path = (
-        tmp_path
-        / ".benchmark-state"
-        / "diagnostics"
-        / "pilot-v1"
-        / "summary.json"
-    )
+    summary_path = tmp_path / ".benchmark-state" / "diagnostics" / "pilot-v1" / "summary.json"
 
     def run_diagnostic(config: Path, **kwargs: Any) -> SimpleNamespace:
         observed["config"] = config
@@ -1155,86 +1084,81 @@ def test_linux_diagnostic_pilot_runs_privately_and_returns_pilot_exit(
     )
 
     assert exit_code == 1
-    assert observed["config"] == (
-        tmp_path / ".benchmark-state" / "generated" / "pilot-v1" / "campaign.json"
-    )
+    assert observed["config"] == (tmp_path / ".benchmark-state" / "generated" / "pilot-v1" / "campaign.json")
     assert observed["root"] == tmp_path / ".benchmark-state" / "diagnostics"
     assert observed["budget_seconds"] == 1200.0
     assert observed["selected_system"] == "strix"
-    assert observed["selected_scenario"] == (
-        "authorized-discovery-altered-small-model-stress-v1"
-    )
-    assert observed["environment"]["OCTOBENCH_TARGET_URL"] == (
-        "http://10.1.2.3:8080"
-    )
+    assert observed["selected_scenario"] == ("authorized-discovery-altered-small-model-stress-v1")
+    assert observed["environment"]["OCTOBENCH_TARGET_URL"] == ("http://10.1.2.3:8080")
     assert capsys.readouterr().out == f"{summary_path}\n"
 
     observed.clear()
-    assert launch.main(
-        [
-            "--campaign-id",
-            "pilot-default-v1",
-            "--environment-file",
-            str(environment_file),
-            "--diagnostic-pilot",
-        ]
-    ) == 1
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "pilot-default-v1",
+                "--environment-file",
+                str(environment_file),
+                "--diagnostic-pilot",
+            ]
+        )
+        == 1
+    )
     assert observed["budget_seconds"] == launch.DEFAULT_PILOT_SECONDS
     assert observed["selected_system"] is None
     assert observed["selected_scenario"] is None
     capsys.readouterr()
 
-    public_output = (
-        tmp_path
-        / "benchmarks"
-        / "competitors"
-        / "results"
-        / "pilot-collision-v1"
-    )
+    public_output = tmp_path / "benchmarks" / "competitors" / "results" / "pilot-collision-v1"
     public_output.mkdir(parents=True)
-    assert launch.main(
-        [
-            "--campaign-id",
-            "pilot-collision-v1",
-            "--environment-file",
-            str(environment_file),
-            "--diagnostic-pilot",
-        ]
-    ) == 2
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "pilot-collision-v1",
+                "--environment-file",
+                str(environment_file),
+                "--diagnostic-pilot",
+            ]
+        )
+        == 2
+    )
     assert json.loads(capsys.readouterr().err) == {"error": "output_exists"}
 
     def diagnostic_failure(*_args: Any, **_kwargs: Any) -> None:
         raise launch.DiagnosticError("private-provider-secret-93824")
 
     monkeypatch.setattr(launch, "run_diagnostic_pilot", diagnostic_failure)
-    assert launch.main(
-        [
-            "--campaign-id",
-            "diagnostic-error-v1",
-            "--environment-file",
-            str(environment_file),
-            "--diagnostic-pilot",
-        ]
-    ) == 2
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "diagnostic-error-v1",
+                "--environment-file",
+                str(environment_file),
+                "--diagnostic-pilot",
+            ]
+        )
+        == 2
+    )
     captured = capsys.readouterr()
     assert json.loads(captured.err) == {"error": "diagnostic_failed"}
     assert "private-provider-secret-93824" not in captured.err
 
-    diagnostic_output = (
-        tmp_path
-        / ".benchmark-state"
-        / "diagnostics"
-        / "public-collision-v1"
-    )
+    diagnostic_output = tmp_path / ".benchmark-state" / "diagnostics" / "public-collision-v1"
     diagnostic_output.mkdir(parents=True)
-    assert launch.main(
-        [
-            "--campaign-id",
-            "public-collision-v1",
-            "--environment-file",
-            str(environment_file),
-        ]
-    ) == 2
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "public-collision-v1",
+                "--environment-file",
+                str(environment_file),
+            ]
+        )
+        == 2
+    )
     assert json.loads(capsys.readouterr().err) == {"error": "output_exists"}
 
 
@@ -1245,21 +1169,20 @@ def test_diagnostic_only_options_reject_incompatible_launch_modes(
         ("--pilot-seconds", "120"),
         ("--pilot-scenario", "authorized-linked-navigation-small-model-v2"),
     ):
-        assert launch.main(
-            ["--campaign-id", "invalid-v1", *option]
-        ) == 2
-        assert json.loads(capsys.readouterr().err) == {
-            "error": "campaign_failed"
-        }
+        assert launch.main(["--campaign-id", "invalid-v1", *option]) == 2
+        assert json.loads(capsys.readouterr().err) == {"error": "campaign_failed"}
 
-    assert launch.main(
-        [
-            "--campaign-id",
-            "invalid-v2",
-            "--prepare-only",
-            "--diagnostic-pilot",
-        ]
-    ) == 2
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "invalid-v2",
+                "--prepare-only",
+                "--diagnostic-pilot",
+            ]
+        )
+        == 2
+    )
     assert json.loads(capsys.readouterr().err) == {"error": "campaign_failed"}
 
 
@@ -1274,9 +1197,7 @@ def test_relative_product_binaries_are_resolved_from_repository_root(
 
     environment = launch._merged_environment(environment_file)
 
-    assert environment["OCTOBENCH_STRIX_BIN"] == str(
-        tmp_path / ".benchmark-tools" / "strix" / "bin" / "strix"
-    )
+    assert environment["OCTOBENCH_STRIX_BIN"] == str(tmp_path / ".benchmark-tools" / "strix" / "bin" / "strix")
 
 
 @pytest.mark.parametrize(
@@ -1293,15 +1214,18 @@ def test_explicit_lab_bind_rejects_non_private_or_non_ip_values(
     values = {**_core_environment(), "OCTOBENCH_LAB_BIND": configured}
     environment_file = _write_environment(tmp_path / "campaign.env", values)
 
-    assert launch.main(
-        [
-            "--campaign-id",
-            "invalid-bind-v1",
-            "--environment-file",
-            str(environment_file),
-            "--prepare-only",
-        ]
-    ) == 2
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "invalid-bind-v1",
+                "--environment-file",
+                str(environment_file),
+                "--prepare-only",
+            ]
+        )
+        == 2
+    )
     assert json.loads(capsys.readouterr().err) == {"error": "invalid_lab_bind"}
 
 
@@ -1356,9 +1280,7 @@ def test_generated_scenario_directory_is_nested_atomic_and_idempotent(
     scenario.chmod(0o600)
 
     assert launch.main(arguments) == 2
-    assert json.loads(capsys.readouterr().err) == {
-        "error": "generated_state_conflict"
-    }
+    assert json.loads(capsys.readouterr().err) == {"error": "generated_state_conflict"}
 
 
 def test_reusing_campaign_id_with_another_definition_conflicts(
@@ -1381,16 +1303,17 @@ def test_reusing_campaign_id_with_another_definition_conflicts(
     assert launch.main(base_arguments) == 0
     capsys.readouterr()
 
-    assert launch.main(
-        [
-            *base_arguments,
-            "--campaign-definition",
-            "linux-blackbox-small-model-v1",
-        ]
-    ) == 2
-    assert json.loads(capsys.readouterr().err) == {
-        "error": "generated_state_conflict"
-    }
+    assert (
+        launch.main(
+            [
+                *base_arguments,
+                "--campaign-definition",
+                "linux-blackbox-small-model-v1",
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().err) == {"error": "generated_state_conflict"}
 
 
 def test_campaign_definition_directory_must_be_real_and_in_repository(
@@ -1403,12 +1326,7 @@ def test_campaign_definition_directory_must_be_real_and_in_repository(
         profile="core",
     )
     scenario_directory = (
-        tmp_path
-        / "benchmarks"
-        / "competitors"
-        / "campaigns"
-        / "linux-blackbox-small-model-v1"
-        / "scenarios"
+        tmp_path / "benchmarks" / "competitors" / "campaigns" / "linux-blackbox-small-model-v1" / "scenarios"
     )
     real_directory = scenario_directory.with_name("real-scenarios")
     scenario_directory.rename(real_directory)
@@ -1537,18 +1455,10 @@ def test_runtime_prerequisites_attest_one_ollama_digest_for_both_systems(
         launch._OLLAMA_PRELOAD_TIMEOUT_SECONDS,
         launch._OLLAMA_ATTESTATION_TIMEOUT_SECONDS,
     ]
-    assert all(
-        item.get_header("Authorization") == f"Bearer {secret}"
-        for item in requests
-    )
-    assert any(
-        isinstance(item, urllib.request.ProxyHandler) and item.proxies == {}
-        for item in handlers
-    )
+    assert all(item.get_header("Authorization") == f"Bearer {secret}" for item in requests)
+    assert any(isinstance(item, urllib.request.ProxyHandler) and item.proxies == {} for item in handlers)
     assert any(isinstance(item, launch._NoRedirectHandler) for item in handlers)
-    tls_handler = next(
-        item for item in handlers if isinstance(item, urllib.request.HTTPSHandler)
-    )
+    tls_handler = next(item for item in handlers if isinstance(item, urllib.request.HTTPSHandler))
     assert tls_handler._context.verify_mode == launch.ssl.CERT_REQUIRED
     assert tls_handler._context.check_hostname is True
     assert secret not in json.dumps(attestations)
@@ -1739,9 +1649,7 @@ def test_ollama_runtime_attestation_hides_unreachable_endpoint_secret(
     )
 
     with pytest.raises(launch.LaunchError) as captured:
-        launch._attest_shared_ollama_runtime(
-            {**_core_environment(), "LLM_API_KEY": secret}
-        )
+        launch._attest_shared_ollama_runtime({**_core_environment(), "LLM_API_KEY": secret})
 
     assert captured.value.code == "runtime_unavailable"
     assert str(captured.value) == "runtime_unavailable"
@@ -1805,12 +1713,8 @@ def test_local_runtime_attestation_checks_layout_version_and_binds_digests(
     assert observed["checkout"] == (source, "d" * 40)
     assert observed["distribution"] == (interpreter, "example-package")
     assert attestation["source_tree_sha256"] == "e" * 64
-    assert attestation["lock_sha256"] == hashlib.sha256(
-        b"frozen-lock\n"
-    ).hexdigest()
-    assert attestation["executable_sha256"] == hashlib.sha256(
-        b"example executable\n"
-    ).hexdigest()
+    assert attestation["lock_sha256"] == hashlib.sha256(b"frozen-lock\n").hexdigest()
+    assert attestation["executable_sha256"] == hashlib.sha256(b"example executable\n").hexdigest()
     assert attestation["distribution_version"] == "1.2.3"
 
     with pytest.raises(launch.LaunchError, match="runtime_unavailable"):
@@ -1888,11 +1792,7 @@ def test_pentagi_custom_ca_is_optional_and_content_bound_for_actual_runs(
         actual_run=True,
     )
 
-    assert "OCTOBENCH_PENTAGI_CA_FILE" in manifest["adapter"][
-        "environment_passthrough"
-    ]
+    assert "OCTOBENCH_PENTAGI_CA_FILE" in manifest["adapter"]["environment_passthrough"]
     provenance = manifest["metadata"]["runtime_provenance"]
     assert provenance["custom_ca_configured"] is True
-    assert provenance["ca_file_sha256"] == hashlib.sha256(
-        b"test-ca-certificate\n"
-    ).hexdigest()
+    assert provenance["ca_file_sha256"] == hashlib.sha256(b"test-ca-certificate\n").hexdigest()

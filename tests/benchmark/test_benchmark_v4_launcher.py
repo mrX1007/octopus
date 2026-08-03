@@ -13,6 +13,7 @@ from core.benchmarks.competitors.schema import load_system_manifest
 from core.benchmarks.schema import load_scenarios
 from core.benchmarks.v3 import load_analysis_plan
 from core.benchmarks.v4 import load_efficiency_plan
+from core.benchmarks.v4.readiness import load_readiness_plan, load_readiness_profile
 
 pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 
@@ -59,6 +60,8 @@ def test_v4_launcher_freezes_twenty_repetition_efficiency_schedule(
     config_payload = json.loads(config_path.read_text(encoding="utf-8"))
     source_plan = load_analysis_plan(config_path.parent / "analysis-plan.json")
     efficiency_plan = load_efficiency_plan(config_path.parent / "efficiency-plan.json")
+    readiness_profile = load_readiness_profile(config_path.parent / "readiness-profile.json")
+    readiness_plan = load_readiness_plan(config_path.parent / "readiness-plan.json")
     config = load_campaign_config(config_path)
     manifests = tuple(load_system_manifest(path) for path in config.system_manifest_paths)
     scenarios = load_scenarios(config.scenario_directory)
@@ -75,12 +78,31 @@ def test_v4_launcher_freezes_twenty_repetition_efficiency_schedule(
     assert efficiency_plan.efficiency_track_id == "small-model-efficiency-v4"
     assert len(efficiency_plan.schedule) == 12 * 20
     assert len(schedule) == 12 * 20 * 2
+    assert readiness_profile.calibration_repetitions == 1
+    assert readiness_profile.calibration_hard_cap_seconds < 900
+    assert readiness_plan.profile == readiness_profile
+    assert readiness_plan.system_ids == ("octopus", "strix")
+    assert readiness_plan.scenario_ids == source_plan.scenario_ids
+    assert readiness_plan.expected_run_count == 36
+    assert not (
+        {seed for values in readiness_plan.fixture_seeds.values() for seed in values}
+        & {block.matched_fixture_seed for block in efficiency_plan.schedule}
+    )
     assert [(item["scenario_id"], item["repetition"], item["seed"], item["system_id"]) for item in schedule] == [
         (block.scenario_id, block.repetition, block.matched_fixture_seed, system_id)
         for block in efficiency_plan.schedule
         for system_id in block.system_order
     ]
     assert config_payload["benchmark_v3"]["efficiency_plan"] == str(config_path.parent / "efficiency-plan.json")
+    assert config_payload["benchmark_v4_readiness"] == {
+        "schema_version": "1.0",
+        "profile": str(config_path.parent / "readiness-profile.json"),
+        "plan": str(config_path.parent / "readiness-plan.json"),
+        "journal_directory": str(tmp_path / ".benchmark-state" / "readiness-journal"),
+        "evidence": str(
+            tmp_path / ".benchmark-state" / "readiness-journal" / "v4-generated-test" / "readiness-evidence.json"
+        ),
+    }
     assert config.benchmark_v3 is not None
     assert config.benchmark_v3.public_payload()["efficiency_plan_digest"] == efficiency_plan.digest
     assert "8f" * 32 not in "".join(
@@ -112,7 +134,10 @@ def test_v3_launcher_contract_does_not_gain_v4_fields(
 
     config_payload = json.loads(config_path.read_text(encoding="utf-8"))
     assert "efficiency_plan" not in config_payload["benchmark_v3"]
+    assert "benchmark_v4_readiness" not in config_payload
     assert not (config_path.parent / "efficiency-plan.json").exists()
+    assert not (config_path.parent / "readiness-plan.json").exists()
+    assert not (config_path.parent / "readiness-profile.json").exists()
     for system_id in ("octopus", "strix"):
         manifest = json.loads((config_path.parent / f"{system_id}.json").read_text(encoding="utf-8"))
         assert "benchmark_v4_efficiency_track_id" not in manifest["metadata"]

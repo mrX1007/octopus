@@ -51,9 +51,27 @@ counts only when the product includes it in one of those final native assertion
 records. The complete assertion text is retained, so invented surrounding text
 does not disappear merely because it contains a valid nonce.
 
+For pinned Strix v1.1.0, the adapter reads only stdout inside the last complete
+rounded Rich panel whose exact title is `STRIX` and whose body starts with
+`Penetration test summary`, matching `strix/interface/cli.py` at the pinned
+tag. Explicit claim-looking text in tool output, workspace logs, incomplete or
+generic panels, and text outside that final-report panel are not promoted to
+claims.
+
 The controller converts ledger observations to sealed truth attestations with
 `verified_truth_ids_from_evidence`; private evidence IDs do not need to appear
 in a product prompt, environment, or claim payload.
+
+Before execution, both product adapters receive the same public mission
+contract: scenario objective, allowed action classes, strict target/read-only
+constraints, and native final-claim syntax. OCTOPUS receives it as a bounded
+task-instruction preamble for Director, Planner, and Analysis prompts; it
+remains present even when ordinary context is compacted. It cannot grant tools
+or override deterministic execution policy. Text-report products receive the
+same content through their native instruction input, while the controller
+independently records policy violations for both products. The contract never
+contains fixture seeds, private truth, matchers, evidence IDs, or observed
+nonce values.
 
 Each declared budget has a system-specific record containing its limit, unit,
 enforcement mode, measured use, exceedance, reliability, and evidence refs.

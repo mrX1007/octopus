@@ -85,6 +85,7 @@ namespaces = true
     "labs/*/README.md",
     "labs/*/compose.yaml",
     "campaigns/*/README.md",
+    "campaigns/*/readiness-profile.json",
     "campaigns/*/scenarios/*.json",
     "scenarios/*.example",
     "systems/*.example",

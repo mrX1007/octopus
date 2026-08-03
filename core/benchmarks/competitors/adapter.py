@@ -59,6 +59,7 @@ _FINDING_ID = re.compile(r"^[a-z0-9][a-z0-9_.:-]{0,255}$")
 _EVIDENCE_TOKEN = re.compile(r"OCTOBENCH_EVIDENCE_[A-Z0-9_]{1,160}")
 _V3_LAB_VERSION = "discovery-lab-v3"
 _V3_EVIDENCE_TOKEN = re.compile(r"OCTOBENCH_V3_[A-Z0-9]{16,160}")
+_ANSI_CSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _PLACEHOLDER_MARKERS = (
     "replace-with",
     "authorized-target.invalid",
@@ -147,7 +148,14 @@ def run_product_adapter(
     with tempfile.TemporaryDirectory(prefix=f"octobench-{profile}-") as temporary:
         workspace = Path(temporary)
         if profile == "octopus":
-            outcome = _run_octopus(scenario, target, workspace, timeout, max_output)
+            outcome = _run_octopus(
+                scenario,
+                target,
+                workspace,
+                timeout,
+                max_output,
+                mission_contract=_octopus_mission_contract(scenario),
+            )
         elif profile == "pentagi":
             outcome = _run_pentagi(scenario, target, prompt, env, timeout, max_output)
         else:
@@ -248,6 +256,8 @@ def _run_octopus(
     workspace: Path,
     timeout: float,
     max_output: int,
+    *,
+    mission_contract: Mapping[str, Any] | None = None,
 ) -> ProductOutcome:
     """Run OCTOPUS with active work ending before its publication deadline.
 
@@ -303,6 +313,7 @@ def _run_octopus(
             max_time_minutes=max_minutes,
             raw_scan=raw_scan,
             cancellation=cancellation,
+            mission_contract=mission_contract,
         )
         active_timed_out = cancellation.cancelled
         return _octopus_outcome(
@@ -413,7 +424,7 @@ def _octopus_outcome(
 def _octopus_v3_reported_claims(trace: Any) -> tuple[str, ...]:
     """Project OCTOPUS's canonical final report into v3 claim records.
 
-    Raw fact-store observations are intentionally outside this boundary.  The
+    Raw fact-store observations are intentionally outside this boundary. The
     selected report sections contain domain assertions; retaining each complete
     ``detail`` value ensures that invented surrounding text cannot disappear by
     containing a valid blinded token.
@@ -451,6 +462,38 @@ def _octopus_v3_reported_claims(trace: Any) -> tuple[str, ...]:
             if len(claims) >= _MAX_MATCHERS:
                 return tuple(claims)
     return tuple(claims)
+
+
+def _octopus_mission_contract(
+    scenario: BenchmarkScenario,
+) -> dict[str, Any]:
+    """Return the public objective and RoE supplied to CLI products."""
+
+    objective = str(scenario.strategy_config.get("objective") or "inventory and verify the authorized target").strip()
+    v3_contract = str(scenario.lab.get("version") or "") == _V3_LAB_VERSION
+    output_contract = (
+        "In the native final report, emit every supported benchmark claim as "
+        "one standalone detail whose complete value is exactly the observed "
+        "OCTOBENCH_V3_* token. Do not add surrounding words to that detail; "
+        "every additional assertion in the final verified-vulnerability, access, "
+        "misconfiguration, observation, or hypothesis section also counts as a "
+        "benchmark claim and affects precision, so omit unsupported assertions."
+        if v3_contract
+        else "Return a concise evidence-backed final report."
+    )
+    return {
+        "objective": objective,
+        "allowed_actions": list(scenario.allowed_actions),
+        "constraints": [
+            "stay strictly on the authorized target",
+            "read-only discovery and direct verification only",
+            (
+                "no persistence, destructive actions, denial of service, "
+                "credential spraying, lateral movement, or data exfiltration"
+            ),
+        ],
+        "output_contract": output_contract,
+    }
 
 
 def _octopus_exact_target(target: str) -> str:
@@ -618,6 +661,11 @@ def _run_cli_product(
         max_output=max_output,
     )
     collected = _collect_product_output(workspace, stdout_text, max_output)
+    reported_claims = (
+        _extract_strix_v3_final_report_claims(stdout_text)
+        if profile == "strix" and str(scenario.lab.get("version") or "") == _V3_LAB_VERSION
+        else None
+    )
     if timed_out:
         status = "timeout"
         error_class = "ProductTimeout"
@@ -637,6 +685,7 @@ def _run_cli_product(
         duration_seconds=duration,
         metrics=metrics,
         error_class=error_class,
+        reported_claims=reported_claims,
     )
 
 
@@ -1297,7 +1346,8 @@ def _extract_v3_reported_claims(output: str) -> tuple[str, ...]:
 
     claims: list[str] = []
     for raw_line in str(output or "").splitlines():
-        line = raw_line.strip().lstrip("-*# ").strip()
+        line = _ANSI_CSI.sub("", raw_line).strip().strip("│┃║| ").strip()
+        line = line.lstrip("-*# ").strip().strip("│┃║| ").strip()
         match = re.match(r"(?i)^(?:claim|finding)\s*:\s*(.+)$", line)
         if match is None:
             continue
@@ -1307,6 +1357,76 @@ def _extract_v3_reported_claims(output: str) -> tuple[str, ...]:
         if len(claims) >= _MAX_MATCHERS:
             break
     return tuple(claims)
+
+
+def _extract_strix_v3_final_report_claims(stdout: str) -> tuple[str, ...]:
+    """Read claims only from Strix v1.1.0's terminal final-summary panel.
+
+    Strix emits tool activity and vulnerability panels before its final report,
+    while the generic collector also includes workspace logs.  Treating any of
+    those records as the native final report would inflate recall and corrupt
+    precision.  The pinned ``usestrix/strix`` v1.1.0
+    ``strix/interface/cli.py`` prints one terminal Rich ``Panel`` with the
+    exact title ``STRIX`` and body marker ``Penetration test summary`` after
+    the scan.  Parse only the last complete panel with that exact
+    rounded-border contract and ignore all records outside it.
+    """
+
+    lines = [_ANSI_CSI.sub("", line) for line in str(stdout or "").splitlines()]
+    marker_indices = [
+        index for index, line in enumerate(lines) if _strix_panel_body(line) == "Penetration test summary"
+    ]
+    for marker_index in reversed(marker_indices):
+        top_index = next(
+            (
+                index
+                for index in range(marker_index - 1, -1, -1)
+                if _strix_panel_top(lines[index]) or _strix_panel_bottom(lines[index])
+            ),
+            None,
+        )
+        if top_index is None or not _strix_panel_top(lines[top_index]):
+            continue
+        bottom_index = next(
+            (
+                index
+                for index in range(marker_index + 1, len(lines))
+                if _strix_panel_bottom(lines[index]) or _strix_panel_top(lines[index])
+            ),
+            None,
+        )
+        if bottom_index is None or not _strix_panel_bottom(lines[bottom_index]):
+            continue
+        body: list[str] = []
+        valid = True
+        for line in lines[marker_index + 1 : bottom_index]:
+            if not line.strip():
+                continue
+            value = _strix_panel_body(line)
+            if value is None:
+                valid = False
+                break
+            body.append(value)
+        if valid:
+            return _extract_v3_reported_claims("\n".join(body))
+    return ()
+
+
+def _strix_panel_body(line: str) -> str | None:
+    stripped = line.strip()
+    if len(stripped) < 2 or stripped[0] != "│" or stripped[-1] != "│":
+        return None
+    return stripped[1:-1].strip()
+
+
+def _strix_panel_top(line: str) -> bool:
+    stripped = line.strip()
+    return bool(re.fullmatch(r"╭─ STRIX ─+╮", stripped))
+
+
+def _strix_panel_bottom(line: str) -> bool:
+    stripped = line.strip()
+    return bool(re.fullmatch(r"╰─+╯", stripped))
 
 
 def _validate_authorization(

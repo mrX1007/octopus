@@ -28,14 +28,27 @@ from ..schema import BenchmarkScenario
 from ..v3.analysis import AnalysisPlan, build_analysis_plan
 from ..v3.fixture import LAB_V3_VERSION, SCENARIO_FAMILIES
 from ..v4 import EfficiencyPlan, build_efficiency_plan
+from ..v4.readiness import (
+    BenchmarkV4ReadinessError,
+    ReadinessPlan,
+    ReadinessProfile,
+    build_readiness_plan,
+    load_readiness_profile,
+)
 from .adapter import STRIX_BENCHMARK_SCAN_MODE
-from .campaign import CampaignConfig, run_campaign
+from .campaign import CampaignConfig, load_campaign_config, run_campaign
 from .diagnostic import (
     DEFAULT_PILOT_SECONDS,
     DiagnosticError,
     run_diagnostic_pilot,
 )
 from .labctl import LabControlError, _lab_address
+from .readiness import (
+    APPROVED_V4_READINESS_PROFILE_DIGEST,
+    APPROVED_V4_READINESS_TRACK_ID,
+    ReadinessCalibrationError,
+    run_readiness_calibration,
+)
 from .schema import SystemManifest
 from .v3_integration import V3_PRODUCT_CLAIM_CONTRACT
 
@@ -58,6 +71,15 @@ _SMALL_MODEL_CAMPAIGN_DEFINITION_ID = "linux-blackbox-small-model-v1"
 _SMALL_MODEL_CAMPAIGN_V2_DEFINITION_ID = "linux-blackbox-small-model-v2"
 _SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID = "linux-blackbox-small-model-v3"
 _SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID = "linux-blackbox-small-model-v4"
+_V4_READINESS_CALIBRATION_SEED = 2
+_V4_READINESS_PROFILE_SOURCE = (
+    Path(__file__).resolve().parents[3]
+    / "benchmarks"
+    / "competitors"
+    / "campaigns"
+    / _SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID
+    / "readiness-profile.json"
+)
 _V3_BASE_FIXTURE_SEED_ENVIRONMENT = "OCTOBENCH_V3_BASE_FIXTURE_SEED"
 _V3_BATCH_ID_ENVIRONMENT = "OCTOBENCH_V3_BATCH_ID"
 _V3_HOST_ID_ENVIRONMENT = "OCTOBENCH_V3_HOST_ID"
@@ -293,7 +315,10 @@ class LaunchError(RuntimeError):
 def main(argv: Sequence[str] | None = None) -> int:
     args = _argument_parser().parse_args(argv)
     try:
-        if args.prepare_only and args.diagnostic_pilot:
+        selected_modes = sum(
+            bool(value) for value in (args.prepare_only, args.diagnostic_pilot, args.readiness_calibration)
+        )
+        if selected_modes > 1:
             raise LaunchError("campaign_failed")
         if not args.diagnostic_pilot and (
             args.pilot_seconds is not None or args.pilot_system is not None or args.pilot_scenario is not None
@@ -304,6 +329,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.campaign_definition,
             profile=args.profile,
         )
+        if args.readiness_calibration and campaign_definition.definition_id != _SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID:
+            raise LaunchError("campaign_definition_mismatch")
         environment = _merged_environment(args.environment_file)
         required = _required_environment(
             args.profile,
@@ -336,7 +363,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_directory = _output_directory(campaign_id)
         diagnostic_directory = _diagnostic_root() / campaign_id
         journal_directory = _journal_campaign_directory(campaign_id)
-        if args.diagnostic_pilot:
+        if args.readiness_calibration or args.diagnostic_pilot:
             if any(
                 path.exists() or path.is_symlink()
                 for path in (
@@ -377,6 +404,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             print(diagnostic.summary_path)
             return diagnostic.exit_code
+        if args.readiness_calibration:
+            evidence_path = run_readiness_calibration(
+                load_campaign_config(config_path),
+                environment=runtime_environment,
+            )
+            print(evidence_path)
+            return 0
         outcome = run_campaign(config_path, environment=runtime_environment)
     except LaunchError as exc:
         _print_error(exc.code)
@@ -386,6 +420,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     except DiagnosticError:
         _print_error("diagnostic_failed")
+        return 2
+    except (BenchmarkV4ReadinessError, ReadinessCalibrationError):
+        _print_error("readiness_failed")
         return 2
     except Exception:
         # The launcher is a secret boundary.  Campaign, filesystem, Git and
@@ -413,6 +450,11 @@ def _argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--environment-file", type=Path)
     parser.add_argument("--prepare-only", action="store_true")
+    parser.add_argument(
+        "--readiness-calibration",
+        action="store_true",
+        help="run the frozen private v4 readiness calibration; never publish evaluation results",
+    )
     parser.add_argument(
         "--diagnostic-pilot",
         action="store_true",
@@ -471,6 +513,8 @@ def _prepare_generated_campaign(
     payloads.update(scenario_payloads)
     analysis_plan: AnalysisPlan | None = None
     efficiency_plan: EfficiencyPlan | None = None
+    readiness_profile: ReadinessProfile | None = None
+    readiness_plan: ReadinessPlan | None = None
     if campaign_definition.benchmark_v3_track_id is not None:
         scenario_ids = tuple(str(payload["scenario_id"]) for _name, payload in sorted(scenario_payloads.items()))
         analysis_plan = build_analysis_plan(
@@ -491,6 +535,26 @@ def _prepare_generated_campaign(
                 require_run_attestation=True,
             )
             payloads["efficiency-plan.json"] = efficiency_plan.to_dict()
+            try:
+                readiness_profile = load_readiness_profile(_V4_READINESS_PROFILE_SOURCE)
+            except Exception:
+                raise LaunchError("campaign_definition_mismatch") from None
+            readiness_plan = build_readiness_plan(
+                efficiency_plan,
+                readiness_profile,
+                calibration_track_id=APPROVED_V4_READINESS_TRACK_ID,
+                calibration_seed=_V4_READINESS_CALIBRATION_SEED,
+            )
+            if (
+                readiness_profile.calibration_repetitions != 1
+                or readiness_profile.digest != APPROVED_V4_READINESS_PROFILE_DIGEST
+                or len(readiness_plan.scenario_ids) != 12
+                or readiness_plan.system_ids != ("octopus", "strix")
+                or readiness_plan.expected_run_count != 36
+            ):
+                raise LaunchError("campaign_definition_mismatch")
+            payloads["readiness-profile.json"] = readiness_profile.to_dict()
+            payloads["readiness-plan.json"] = readiness_plan.to_dict()
     config_name = "campaign.json"
     payloads[config_name] = _campaign_payload(
         campaign_id,
@@ -501,6 +565,8 @@ def _prepare_generated_campaign(
         campaign_definition=campaign_definition,
         analysis_plan=analysis_plan,
         efficiency_plan=efficiency_plan,
+        readiness_profile=readiness_profile,
+        readiness_plan=readiness_plan,
     )
     for system in systems:
         SystemManifest.from_dict(
@@ -735,6 +801,8 @@ def _campaign_payload(
     campaign_definition: _CampaignDefinition,
     analysis_plan: AnalysisPlan | None = None,
     efficiency_plan: EfficiencyPlan | None = None,
+    readiness_profile: ReadinessProfile | None = None,
+    readiness_plan: ReadinessPlan | None = None,
 ) -> dict[str, Any]:
     python = ROOT / "venv" / "bin" / "python"
     lab = ROOT / "benchmarks" / "competitors" / "run_lab.py"
@@ -842,10 +910,18 @@ def _campaign_payload(
             "state_directory": str(ROOT / ".benchmark-state" / "lab-v3"),
         }
         if campaign_definition.efficiency_track_id is not None:
-            if efficiency_plan is None:
+            if efficiency_plan is None or readiness_profile is None or readiness_plan is None:
                 raise LaunchError("campaign_definition_mismatch")
             payload["benchmark_v3"]["efficiency_plan"] = str(_generated_directory(campaign_id) / "efficiency-plan.json")
-        elif efficiency_plan is not None:
+            readiness_journal = ROOT / ".benchmark-state" / "readiness-journal"
+            payload["benchmark_v4_readiness"] = {
+                "schema_version": "1.0",
+                "profile": str(_generated_directory(campaign_id) / "readiness-profile.json"),
+                "plan": str(_generated_directory(campaign_id) / "readiness-plan.json"),
+                "journal_directory": str(readiness_journal),
+                "evidence": str(readiness_journal / campaign_id / "readiness-evidence.json"),
+            }
+        elif efficiency_plan is not None or readiness_profile is not None or readiness_plan is not None:
             raise LaunchError("campaign_definition_mismatch")
     return payload
 

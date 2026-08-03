@@ -16,7 +16,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -30,7 +30,7 @@ from ..schema import (
 from ..v3.analysis import AnalysisPlan
 from ..v3.publication import publish_v3_results, verify_v3_results
 from ..v3.schema import BenchmarkRunV3, BenchmarkV3SchemaError
-from ..v4 import EfficiencyPlan
+from ..v4 import BenchmarkV4SchemaError, EfficiencyPlan
 from .lab import (
     CommandLabController,
     LabCommand,
@@ -45,6 +45,12 @@ from .preflight import (
     run_campaign_preflight,
 )
 from .publication import publish_campaign_bundle, verify_campaign_bundle
+from .readiness import (
+    FullCampaignReadiness,
+    ReadinessCalibrationError,
+    ReadinessCampaignConfig,
+    require_full_campaign_readiness_material,
+)
 from .runner import CommandSystemRunner
 from .schema import (
     CompetitorSchemaError,
@@ -70,6 +76,7 @@ _CAMPAIGN_CONFIG_KEYS = frozenset(
     {
         "$schema",
         "benchmark_v3",
+        "benchmark_v4_readiness",
         "campaign_id",
         "campaign_definition",
         "environment_file",
@@ -117,6 +124,7 @@ class CampaignConfig:
     environment_file: Path | None = None
     campaign_definition: str | None = None
     benchmark_v3: BenchmarkV3CampaignConfig | None = None
+    benchmark_v4_readiness: ReadinessCampaignConfig | None = None
     strict_statuses: tuple[str, ...] = tuple(sorted(_KNOWN_STRICT_STATUSES))
     source_path: Path | None = None
     schema_version: str = CAMPAIGN_CONFIG_SCHEMA_VERSION
@@ -199,6 +207,20 @@ class CampaignConfig:
             )
         except BenchmarkV3SchemaError as exc:
             raise CampaignConfigError(str(exc)) from exc
+        raw_readiness = payload.get("benchmark_v4_readiness")
+        if raw_readiness is not None and not isinstance(raw_readiness, Mapping):
+            raise CampaignConfigError("invalid:benchmark_v4_readiness")
+        try:
+            benchmark_v4_readiness = (
+                ReadinessCampaignConfig.from_dict(
+                    raw_readiness,
+                    base_directory=base,
+                )
+                if isinstance(raw_readiness, Mapping)
+                else None
+            )
+        except ReadinessCalibrationError as exc:
+            raise CampaignConfigError(str(exc)) from exc
         strict_statuses = tuple(
             sorted(
                 set(
@@ -226,6 +248,7 @@ class CampaignConfig:
             environment_file=environment_file,
             campaign_definition=campaign_definition,
             benchmark_v3=benchmark_v3,
+            benchmark_v4_readiness=benchmark_v4_readiness,
             strict_statuses=strict_statuses,
             source_path=Path(source_path).resolve() if source_path is not None else None,
         )
@@ -248,6 +271,8 @@ class CampaignConfig:
             payload["campaign_definition"] = self.campaign_definition
         if self.benchmark_v3 is not None:
             payload["benchmark_v3"] = self.benchmark_v3.fingerprint_payload()
+        if self.benchmark_v4_readiness is not None:
+            payload["benchmark_v4_readiness"] = self.benchmark_v4_readiness.fingerprint_payload()
         return payload
 
     def public_payload(self) -> dict[str, Any]:
@@ -272,6 +297,8 @@ class CampaignConfig:
             payload["campaign_definition"] = self.campaign_definition
         if self.benchmark_v3 is not None:
             payload["benchmark_v3"] = self.benchmark_v3.public_payload()
+        if self.benchmark_v4_readiness is not None:
+            payload["benchmark_v4_readiness"] = self.benchmark_v4_readiness.public_payload()
         return payload
 
 
@@ -323,6 +350,7 @@ def run_campaign(
         else None
     )
     efficiency_plan = _configured_efficiency_plan(resolved)
+    full_readiness: FullCampaignReadiness | None = None
     if efficiency_plan is not None:
         if v3_plan is None:
             raise BenchmarkV3SchemaError("efficiency_plan_requires_v3_plan")
@@ -333,7 +361,17 @@ def run_campaign(
             scenario_ids=tuple(item.scenario_id for item in scenarios),
             repetitions=resolved.repetitions,
         )
+    elif resolved.benchmark_v4_readiness is not None:
+        raise ReadinessCalibrationError("readiness_efficiency_plan_required")
     effective_environment = _effective_environment(resolved, environment)
+    if efficiency_plan is not None:
+        full_readiness = require_full_campaign_readiness_material(
+            resolved,
+            manifests=manifests,
+            scenarios=scenarios,
+            efficiency_plan=efficiency_plan,
+            environment=effective_environment,
+        )
     required_environment = tuple(
         sorted(
             set(resolved.required_environment)
@@ -384,6 +422,7 @@ def run_campaign(
             "schedule": schedule,
             "environment_sha256": environment_identity,
             "controller_source_sha256": controller_source_identity,
+            "readiness_attestation": (dict(full_readiness.public_attestation) if full_readiness is not None else None),
         }
     )
     journal = CampaignJournal(
@@ -502,6 +541,14 @@ def run_campaign(
                         if resolved.benchmark_v3 is not None and v3_plan is not None
                         else None
                     )
+                    if v3_run is not None and full_readiness is not None:
+                        v3_run = replace(
+                            v3_run,
+                            environment={
+                                **dict(v3_run.environment),
+                                "readiness_attestation": dict(full_readiness.public_attestation),
+                            },
+                        )
                     journal.write_run(
                         run_key,
                         {
@@ -587,6 +634,10 @@ def run_campaign(
             run.environment.get("efficiency_plan_digest") != efficiency_plan.digest for run in v3_runs
         ):
             raise BenchmarkV3SchemaError("efficiency_run_attestation_mismatch")
+        if full_readiness is not None and any(
+            run.environment.get("readiness_attestation") != full_readiness.public_attestation for run in v3_runs
+        ):
+            raise BenchmarkV3SchemaError("readiness_run_attestation_mismatch")
         if v3_runs:
             status_counts = Counter(run.execution_status for run in v3_runs)
             task_status_counts = Counter(run.task_status for run in v3_runs)
@@ -656,6 +707,8 @@ def run_campaign(
                 }
                 if efficiency_plan is not None:
                     campaign_context["efficiency_plan_attestation"] = _efficiency_plan_attestation(efficiency_plan)
+                if full_readiness is not None:
+                    campaign_context["readiness_attestation"] = dict(full_readiness.public_attestation)
                 if _contains_secret_canary(campaign_context, secret_canaries):
                     raise CampaignConfigError("secret_canary_detected")
                 bundle = publish_v3_results(
@@ -731,6 +784,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (
         BenchmarkSchemaError,
         BenchmarkV3SchemaError,
+        BenchmarkV4SchemaError,
+        ReadinessCalibrationError,
         CampaignConfigError,
         CompetitorSchemaError,
         LabControlError,

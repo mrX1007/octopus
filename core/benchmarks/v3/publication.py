@@ -41,6 +41,22 @@ SVG_PANEL_IDS = (
     "verified-recall",
     "censored-completion-time",
 )
+_PUBLIC_READINESS_ATTESTATION_KEYS = frozenset(
+    {
+        "campaign_id",
+        "cleanup_attestation_digest",
+        "evidence_digest",
+        "plan_digest",
+        "profile_digest",
+        "reset_attestation_set_digest",
+        "source_run_digest",
+        "status",
+    }
+)
+_PUBLIC_READINESS_DIGEST_KEYS = _PUBLIC_READINESS_ATTESTATION_KEYS - {
+    "campaign_id",
+    "status",
+}
 
 
 @dataclass(frozen=True)
@@ -290,6 +306,7 @@ def publish_v3_results(
         raise BenchmarkV3SchemaError("publication_track_mismatch")
     statistics_payload = analyze_runs(plan, items)
     context_payload = _validated_campaign_context(campaign_context)
+    _validate_public_readiness_binding(plan, items, context_payload)
     ledger_payload = _validated_controller_ledgers(controller_ledgers)
     destination = Path(output_directory).resolve()
     if destination.exists():
@@ -530,6 +547,7 @@ def _verify_v3_bundle(root: Path) -> _VerifiedBundle:
         run_record_names,
         publication_version=publication_version,
     )
+    _validate_public_readiness_binding(plan, run_records, context_payload)
     expected_schedule = {
         (system_id, scenario_id, repetition, plan.fixture_seeds[scenario_id][repetition - 1])
         for system_id in plan.system_ids
@@ -1125,6 +1143,62 @@ def _validated_campaign_context(value: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(decoded, dict) or len(encoded.encode("utf-8")) > 8_000_000:
         raise BenchmarkV3SchemaError("invalid_v3_campaign_context")
     return decoded
+
+
+def _validate_public_readiness_binding(
+    plan: AnalysisPlan,
+    runs: Sequence[BenchmarkRunV3 | _RunProjection],
+    context: Mapping[str, Any],
+) -> None:
+    """Bind a full efficiency source to one exact public readiness assertion.
+
+    Ordinary v3 publications do not carry an efficiency-plan marker and retain
+    their existing contract.  A full source that does carry that marker must
+    publish the same readiness assertion in its campaign context and every run.
+    """
+
+    campaign = context.get("campaign")
+    benchmark_v3 = campaign.get("benchmark_v3") if isinstance(campaign, Mapping) else None
+    readiness_config = campaign.get("benchmark_v4_readiness") if isinstance(campaign, Mapping) else None
+    attestation = context.get("readiness_attestation")
+    run_readiness = tuple(run.environment.get("readiness_attestation") for run in runs)
+    efficiency_backed = bool(
+        isinstance(benchmark_v3, Mapping) and benchmark_v3.get("efficiency_plan_digest") is not None
+    ) or any(run.environment.get("efficiency_plan_digest") is not None for run in runs)
+    readiness_present = (
+        readiness_config is not None or attestation is not None or any(item is not None for item in run_readiness)
+    )
+    if plan.publication_tier != "full":
+        if readiness_present:
+            raise BenchmarkV3SchemaError("v3_readiness_attestation_mismatch")
+        return
+    if not efficiency_backed and not readiness_present:
+        return
+    if not efficiency_backed or not readiness_present:
+        raise BenchmarkV3SchemaError("v3_readiness_attestation_mismatch")
+
+    if (
+        not isinstance(campaign, Mapping)
+        or not isinstance(benchmark_v3, Mapping)
+        or not isinstance(readiness_config, Mapping)
+        or not isinstance(attestation, Mapping)
+        or set(attestation) != _PUBLIC_READINESS_ATTESTATION_KEYS
+        or attestation.get("status") != "ready"
+        or not isinstance(attestation.get("campaign_id"), str)
+        or not attestation.get("campaign_id")
+        or attestation.get("campaign_id") != campaign.get("campaign_id")
+        or attestation.get("profile_digest") != readiness_config.get("profile_digest")
+        or attestation.get("plan_digest") != readiness_config.get("plan_digest")
+        or any(not _lower_hex_digest(attestation.get(key)) for key in _PUBLIC_READINESS_DIGEST_KEYS)
+        or any(item != attestation for item in run_readiness)
+    ):
+        raise BenchmarkV3SchemaError("v3_readiness_attestation_mismatch")
+
+
+def _lower_hex_digest(value: Any) -> bool:
+    return bool(
+        isinstance(value, str) and len(value) == 64 and all(character in "0123456789abcdef" for character in value)
+    )
 
 
 def _write_jsonl_shards(

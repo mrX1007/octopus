@@ -16,6 +16,7 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   PYTHONUNBUFFERED: "1"
   OLLAMA_VERSION: "0.18.3"
+  OLLAMA_LINUX_AMD64_SHA256: "7b3fb22f2e01a17f03ec0ac88a0b070ee2d7481030e735337ac8c02b84b5e66e"
   OLLAMA_HOST: "127.0.0.1:11434"
   OLLAMA_NUM_PARALLEL: "1"
   OLLAMA_MAX_LOADED_MODELS: "1"
@@ -69,12 +70,8 @@ jobs:
           curl --fail --location --retry 5 --retry-all-errors \
             "https://github.com/ollama/ollama/releases/download/v${OLLAMA_VERSION}/ollama-linux-amd64.tar.zst" \
             --output "${ollama_dist}/ollama-linux-amd64.tar.zst"
-          curl --fail --location --retry 5 --retry-all-errors \
-            "https://github.com/ollama/ollama/releases/download/v${OLLAMA_VERSION}/sha256sum.txt" \
-            --output "${ollama_dist}/sha256sum.txt"
-          grep ' ollama-linux-amd64.tar.zst$' "${ollama_dist}/sha256sum.txt" \
+          printf '%s  ollama-linux-amd64.tar.zst\n' "${OLLAMA_LINUX_AMD64_SHA256}" \
             > "${ollama_dist}/ollama-linux-amd64.sha256"
-          test -s "${ollama_dist}/ollama-linux-amd64.sha256"
           (cd "${ollama_dist}" && sha256sum --check --strict ollama-linux-amd64.sha256)
           tar --zstd --extract --file "${ollama_dist}/ollama-linux-amd64.tar.zst" \
             --directory "${ollama_root}"

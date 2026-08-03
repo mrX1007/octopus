@@ -49,6 +49,33 @@ docker compose -f tests/integration/ollama_scanner_lab/compose.yaml down --volum
 The workflow uploads `trace-report.json`, raw Nmap output, exact tool versions,
 and service logs even when the assertion fails.
 
+Do not add `.benchmark-state/readiness-journal/` to those uploads. When this
+runtime is used separately for a full Benchmark v4 campaign, the public source
+v3 bundle and v4 companion expose only the exact eight-field readiness
+commitment: `campaign_id`, `status` (`ready`), `profile_digest`, `plan_digest`,
+`evidence_digest`, `source_run_digest`, `reset_attestation_set_digest`, and
+`cleanup_attestation_digest`. The raw readiness journal, calibration runs, and
+reset, cleanup, and evidence records remain owner-only and private.
+
+## Scheduled runs and bootstrap failures
+
+The hosted lane is scheduled for Monday at `04:41 UTC`; a notification that
+arrives long after the commit therefore does not mean one job ran overnight.
+The job itself has a 55-minute timeout. Manual `workflow_dispatch` runs use the
+same contract.
+
+Treat a failure in `Install checksum-verified Ollama release` separately from
+an E2E assertion failure. Ollama, Nmap, the lab, and pytest have not started if
+the log ends before the `sha256sum --check --strict` result.
+
+The workflow pins both Ollama `0.18.3` and the immutable SHA-256 digest of
+`ollama-linux-amd64.tar.zst`. It deliberately does not parse the release
+`sha256sum.txt`: that manifest records the archive as
+`./ollama-linux-amd64.tar.zst`, and a basename-only `grep` previously aborted
+the step under `bash -e` after successful downloads. A checksum mismatch now
+comes only from `sha256sum` checking the downloaded archive against the pinned
+digest.
+
 ## Boundaries and limitations
 
 This is a CPU-friendly smoke lane, not a performance benchmark or an exploit
