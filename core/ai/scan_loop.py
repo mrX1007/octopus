@@ -211,10 +211,11 @@ class ScanLifecycle:
                 if evaluated_fact_snapshot is not None
                 else pipeline.context_builder.build_context(scan_id, target)
             )
-            if pipeline._mission_contract:
+            mission_contract = getattr(pipeline, "_mission_contract", None)
+            if mission_contract:
                 context = {
                     **context,
-                    "mission_contract": dict(pipeline._mission_contract),
+                    "mission_contract": dict(mission_contract),
                 }
             print(
                 f"[*] Context: state={context['state']}, services={context['services']}, "

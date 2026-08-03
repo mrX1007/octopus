@@ -3,7 +3,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
-    "allowed_methods": { "const": ["GET", "HEAD"] },
+    "allowed_methods": { "const": ["GET", "HEAD", "OPTIONS"] },
     "base_url": { "type": "string" },
     "entry_target": { "pattern": "^/", "type": "string" },
     "lab_version": { "const": "discovery-lab-v3" },
