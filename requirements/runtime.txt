@@ -6,7 +6,7 @@ python-dotenv>=1.2.2
 rich>=13.7.0
 
 # Cryptography
-cryptography>=48.0.1
+cryptography>=50.0.0
 
 # Networking and HTTP
 requests>=2.33.0

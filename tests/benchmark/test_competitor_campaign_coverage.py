@@ -7,7 +7,7 @@ import json
 import runpy
 import sys
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -74,6 +74,7 @@ def test_campaign_config_rejects_each_top_level_contract_violation(
             secret_environment=["SECRET_TOKEN"],
         ),
         _mutated_payload(benchmark_v3=[]),
+        _mutated_payload(benchmark_v4_readiness=[]),
         _mutated_payload(strict_statuses=["succeeded"]),
     )
     for payload in invalid_payloads:
@@ -97,6 +98,33 @@ def test_campaign_config_rejects_each_top_level_contract_violation(
         )
         with pytest.raises(campaign.CampaignConfigError, match="invalid_v3_config"):
             campaign.CampaignConfig.from_dict(_mutated_payload(benchmark_v3={}))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            campaign.ReadinessCampaignConfig,
+            "from_dict",
+            _raises(campaign.ReadinessCalibrationError("invalid_readiness_config")),
+        )
+        with pytest.raises(campaign.CampaignConfigError, match="invalid_readiness_config"):
+            campaign.CampaignConfig.from_dict(_mutated_payload(benchmark_v4_readiness={}))
+
+
+def test_campaign_config_payloads_include_readiness_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    readiness = SimpleNamespace(
+        fingerprint_payload=lambda: {"profile_digest": "a" * 64},
+        public_payload=lambda: {"profile_digest": "a" * 64},
+    )
+    monkeypatch.setattr(
+        campaign.ReadinessCampaignConfig,
+        "from_dict",
+        lambda *_args, **_kwargs: readiness,
+    )
+    config = campaign.CampaignConfig.from_dict(_mutated_payload(benchmark_v4_readiness={}))
+
+    assert config.fingerprint_payload()["benchmark_v4_readiness"] == readiness.fingerprint_payload()
+    assert config.public_payload()["benchmark_v4_readiness"] == readiness.public_payload()
 
 
 def test_campaign_config_loader_failures_and_success(tmp_path: Path) -> None:
@@ -198,9 +226,15 @@ class _FakeBenchmarkV3Config:
         return {"track": "fake-v3"}
 
 
+@dataclass(frozen=True)
 class _FakeSerializedV3Run:
-    def to_dict(self) -> dict[str, str]:
-        return {"schema_version": "fake-v3"}
+    environment: Mapping[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": "fake-v3",
+            "environment": dict(self.environment),
+        }
 
 
 class _FakeBenchmarkV4Config:
@@ -485,6 +519,117 @@ def test_v4_campaign_fingerprint_binds_public_readiness_attestation(
     assert captured["readiness_attestation"] == attestation
 
 
+def _public_readiness_attestation(config: campaign.CampaignConfig) -> dict[str, str]:
+    return {
+        "campaign_id": config.campaign_id,
+        "cleanup_attestation_digest": "1" * 64,
+        "evidence_digest": "2" * 64,
+        "plan_digest": "3" * 64,
+        "profile_digest": "4" * 64,
+        "reset_attestation_set_digest": "5" * 64,
+        "source_run_digest": "6" * 64,
+        "status": "ready",
+    }
+
+
+def _readiness_attested_v4_run(efficiency_plan: Any, attestation: Mapping[str, str]) -> Any:
+    return SimpleNamespace(
+        execution_status="succeeded",
+        task_status="completed",
+        policy_violations=(),
+        environment={
+            "efficiency_plan_digest": efficiency_plan.digest,
+            "readiness_attestation": dict(attestation),
+        },
+    )
+
+
+def test_v4_run_and_context_bind_full_readiness_attestation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, efficiency_plan = _fake_v4_campaign(tmp_path, monkeypatch, "v4-readiness-context")
+    attestation = _public_readiness_attestation(config)
+    written_runs: list[Mapping[str, Any]] = []
+    write_run = campaign.CampaignJournal.write_run
+
+    def capture_write_run(self: Any, run_key: str, payload: Mapping[str, Any]) -> None:
+        written_runs.append(payload)
+        write_run(self, run_key, payload)
+
+    monkeypatch.setattr(campaign.CampaignJournal, "write_run", capture_write_run)
+    monkeypatch.setattr(
+        campaign,
+        "require_full_campaign_readiness_material",
+        lambda *_args, **_kwargs: SimpleNamespace(public_attestation=attestation),
+    )
+    monkeypatch.setattr(
+        campaign,
+        "build_v3_run",
+        lambda **_kwargs: _FakeSerializedV3Run(
+            environment={"efficiency_plan_digest": efficiency_plan.digest},
+        ),
+    )
+    monkeypatch.setattr(
+        campaign,
+        "_journal_v3_runs",
+        lambda *_args, **_kwargs: (_readiness_attested_v4_run(efficiency_plan, attestation),),
+    )
+    monkeypatch.setattr(
+        campaign,
+        "_contains_secret_canary",
+        lambda value, _canaries: isinstance(value, Mapping) and "readiness_attestation" in value,
+    )
+
+    with pytest.raises(campaign.CampaignConfigError, match="secret_canary_detected"):
+        campaign.run_campaign(
+            config,
+            environment={"CAMPAIGN_TEST_TOKEN": "configured"},
+            runner_factory=lifecycle._successful_runner_factory([]),
+            lab_controller=lifecycle.RecordingLab(),
+            clock=lambda: 100.0,
+            monotonic=lambda: 1.0,
+        )
+
+    assert written_runs
+    assert written_runs[0]["benchmark_v3"]["environment"]["readiness_attestation"] == attestation
+
+
+def test_v4_rejects_missing_run_readiness_attestation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, efficiency_plan = _fake_v4_campaign(tmp_path, monkeypatch, "v4-readiness-run-mismatch")
+    attestation = _public_readiness_attestation(config)
+    monkeypatch.setattr(
+        campaign,
+        "require_full_campaign_readiness_material",
+        lambda *_args, **_kwargs: SimpleNamespace(public_attestation=attestation),
+    )
+    monkeypatch.setattr(
+        campaign,
+        "build_v3_run",
+        lambda **_kwargs: _FakeSerializedV3Run(
+            environment={"efficiency_plan_digest": efficiency_plan.digest},
+        ),
+    )
+    monkeypatch.setattr(
+        campaign,
+        "_journal_v3_runs",
+        lambda *_args, **_kwargs: (_attested_v4_run(efficiency_plan),),
+    )
+
+    with pytest.raises(BenchmarkV3SchemaError, match="readiness_run_attestation_mismatch"):
+        campaign.run_campaign(
+            config,
+            environment={"CAMPAIGN_TEST_TOKEN": "configured"},
+            runner_factory=lifecycle._successful_runner_factory([]),
+            lab_controller=lifecycle.RecordingLab(),
+            clock=lambda: 100.0,
+            monotonic=lambda: 1.0,
+        )
+
+
 def test_main_maps_each_outcome_and_failure(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
@@ -640,6 +785,18 @@ def test_campaign_rejects_efficiency_plan_without_validated_v3_source(
     monkeypatch.setattr(campaign, "validate_campaign_plan", lambda *_args, **_kwargs: None)
 
     with pytest.raises(BenchmarkV3SchemaError, match="efficiency_plan_requires_v3_plan"):
+        campaign.run_campaign(config)
+
+
+def test_campaign_rejects_readiness_without_efficiency_plan(
+    tmp_path: Path,
+) -> None:
+    config = replace(
+        _campaign_fixture(tmp_path, "readiness-without-efficiency"),
+        benchmark_v4_readiness=SimpleNamespace(),
+    )
+
+    with pytest.raises(campaign.ReadinessCalibrationError, match="readiness_efficiency_plan_required"):
         campaign.run_campaign(config)
 
 

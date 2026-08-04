@@ -6,6 +6,7 @@ import stat
 import sys
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -450,6 +451,29 @@ def test_v3_pilot_fails_closed_on_missing_or_noncanonical_claims(
     assert "OCTOBENCH_V3_" not in captured.err
 
 
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    (
+        ({"status": "failed"}, ("not_evaluable", 0, 0)),
+        (
+            {"status": "succeeded", "reported_claims": "not-a-sequence"},
+            ("invalid_claims", 0, 0),
+        ),
+    ),
+)
+def test_v3_claim_contract_rejects_unevaluable_and_nonsequence_results(
+    result: dict[str, object],
+    expected: tuple[str, int, int],
+) -> None:
+    base = load_scenario(SCENARIO_PATH)
+    scenario = replace(
+        base,
+        lab={**dict(base.lab), "version": "discovery-lab-v3"},
+    )
+
+    assert diagnostic._claim_contract_observation(scenario, result) == expected
+
+
 def test_v3_config_fails_closed_if_scenario_lab_version_drifts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -593,6 +617,77 @@ def test_v3_pilot_ledger_contract_requires_evidence_and_zero_violations(
         context,
         reset_healthy=True,
     ) == ("policy_violations", 3, 1, 1)
+
+
+def test_v3_ledger_contract_fails_closed_before_or_during_private_load(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = LabRunContext(
+        campaign_id="diagnostic-ledger-edge",
+        system_id="strix",
+        scenario_id="canonical-alias-dedup-v3",
+        repetition=1,
+        seed=17,
+        lab_version="discovery-lab-v3",
+        snapshot_ref="diagnostic-snapshot",
+    )
+    manifest = _manifest(tmp_path, context.system_id)
+    base_config = replace(
+        _config(tmp_path, (manifest,)),
+        campaign_id=context.campaign_id,
+    )
+
+    assert diagnostic._ledger_contract_observation(
+        base_config,
+        context,
+        reset_healthy=False,
+    ) == ("not_evaluable", 0, 0, 0)
+    assert diagnostic._ledger_contract_observation(
+        base_config,
+        context,
+        reset_healthy=True,
+    ) == ("unavailable", 0, 0, 0)
+
+    config = replace(
+        base_config,
+        benchmark_v3=BenchmarkV3CampaignConfig(
+            analysis_plan_path=tmp_path / "unused-analysis-plan.json",
+            state_directory=tmp_path / "lab-v3",
+            batch_id="diagnostic-batch",
+            host_id="diagnostic-host",
+        ),
+    )
+    monkeypatch.setattr(
+        diagnostic,
+        "run_artifacts",
+        lambda *_args, **_kwargs: SimpleNamespace(private_manifest=tmp_path / "fixture.json"),
+    )
+    monkeypatch.setattr(
+        diagnostic,
+        "load_private_fixture",
+        lambda _path: SimpleNamespace(
+            scenario_id="different-scenario",
+            matched_fixture_seed=context.seed,
+            lab_version="discovery-lab-v3",
+        ),
+    )
+    assert diagnostic._ledger_contract_observation(
+        config,
+        context,
+        reset_healthy=True,
+    ) == ("unavailable", 0, 0, 0)
+
+    monkeypatch.setattr(
+        diagnostic,
+        "run_artifacts",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("private path")),
+    )
+    assert diagnostic._ledger_contract_observation(
+        config,
+        context,
+        reset_healthy=True,
+    ) == ("unavailable", 0, 0, 0)
 
 
 def test_diagnostic_progress_sink_failure_is_nonfatal(

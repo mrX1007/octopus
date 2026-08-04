@@ -79,7 +79,7 @@ def test_update_builds_complete_matrix_with_safe_uv_argv(
 
     manifest_path = tmp_path / "requirements" / "locks" / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["epoch"] == "2026-07-24T00:00:00Z"
+    assert manifest["epoch"] == "2026-08-01T00:00:00Z"
     assert manifest["resolver"] == {
         "index": "https://pypi.org/simple",
         "name": "uv",

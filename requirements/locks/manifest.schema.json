@@ -20,7 +20,7 @@
     "$schema": {"const": "manifest.schema.json"},
     "schema_version": {"const": 1},
     "state": {"enum": ["unresolved", "resolved"]},
-    "epoch": {"const": "2026-07-24T00:00:00Z"},
+    "epoch": {"const": "2026-08-01T00:00:00Z"},
     "resolver": {
       "type": "object",
       "additionalProperties": false,

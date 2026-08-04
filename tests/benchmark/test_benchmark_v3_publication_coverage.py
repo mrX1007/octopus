@@ -391,6 +391,15 @@ def test_load_run_projections_rejects_duplicate_sort_key(tmp_path):
         )
 
 
+def test_non_full_publication_rejects_readiness_attestation() -> None:
+    plan = SimpleNamespace(publication_tier="canary")
+    run = SimpleNamespace(environment={})
+    context = {"readiness_attestation": {"status": "ready"}}
+
+    with pytest.raises(BenchmarkV3SchemaError, match="v3_readiness_attestation_mismatch"):
+        publication._validate_public_readiness_binding(plan, (run,), context)
+
+
 def test_validated_run_and_action_projection_guards():
     _plan_value, runs, _context, _ledgers = _inputs()
     payload = runs[0].to_dict()

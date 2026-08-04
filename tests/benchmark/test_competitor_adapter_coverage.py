@@ -607,6 +607,22 @@ def test_strix_v3_final_panel_parser_is_exact_terminal_and_fail_closed():
     assert adapter._extract_strix_v3_final_report_claims(ascii_panel) == ()
     assert adapter._extract_strix_v3_final_report_claims(f"raw token only: {selected}") == ()
 
+    complete_with_blank_body_line = complete_last.replace(
+        f"│ Finding: {selected} │",
+        f"\n│ Finding: {selected} │",
+    )
+    assert adapter._extract_strix_v3_final_report_claims(complete_with_blank_body_line) == (selected,)
+
+    invalid_latest = "\n".join(
+        (
+            "╭─ STRIX ───╮",
+            "│ Penetration test summary │",
+            "malformed panel body",
+            "╰─────────╯",
+        )
+    )
+    assert adapter._extract_strix_v3_final_report_claims(f"{complete_first}\n{invalid_latest}") == (first,)
+
 
 def test_cli_shannon_custom_binary_and_package(monkeypatch, tmp_path):
     observed = {}

@@ -302,6 +302,19 @@ def test_capture_restores_all_hooks_when_cli_raises(
     assert adapter._run_cli_product is run_cli
 
 
+@pytest.mark.parametrize("raw_limit", (True, "32", 0, None))
+def test_capture_limit_rejects_nonpositive_or_noninteger_values(raw_limit: object) -> None:
+    with pytest.raises(
+        diagnostic_worker.DiagnosticWorkerError,
+        match="private_capture_limit_invalid",
+    ):
+        diagnostic_worker._capture_limit(
+            (),
+            {} if raw_limit is None else {"max_output": raw_limit},
+            positional_index=0,
+        )
+
+
 def test_private_log_requires_absolute_path_and_supports_missing_os_flags(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

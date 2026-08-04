@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 
 from core.benchmarks.competitors import launch
+from tests.benchmark import test_competitor_launch as launch_fixtures
 
 pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 
@@ -102,6 +103,57 @@ def test_redirect_and_main_exception_boundaries(
         monkeypatch.setattr(launch, "_campaign_id", _raises(error))
         assert launch.main(["--campaign-id", "boundary-v1"]) == 2
         assert json.loads(capsys.readouterr().err) == {"error": expected}
+
+
+def test_readiness_mode_rejects_non_v4_campaign_definition(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                "wrong-readiness-definition",
+                "--campaign-definition",
+                launch._SMALL_MODEL_CAMPAIGN_V3_DEFINITION_ID,
+                "--readiness-calibration",
+            ]
+        )
+        == 2
+    )
+    assert json.loads(capsys.readouterr().err) == {"error": "campaign_definition_mismatch"}
+
+
+def test_v4_generated_campaign_fails_closed_on_invalid_readiness_material(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launch_fixtures._prepare_root(tmp_path, monkeypatch)
+    environment = {
+        **launch_fixtures._small_model_environment(),
+        "OCTOBENCH_V3_BASE_FIXTURE_SEED": "ab" * 32,
+    }
+    definition = launch._CAMPAIGN_DEFINITIONS[launch._SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID]
+    common = {
+        "profile": "core",
+        "environment": environment,
+        "environment_file": None,
+        "octopus_revision": launch_fixtures.OCTOPUS_REVISION,
+        "campaign_definition": definition,
+    }
+
+    with monkeypatch.context() as patch:
+        patch.setattr(launch, "load_readiness_profile", _raises(ValueError("invalid profile")))
+        with pytest.raises(launch.LaunchError, match="campaign_definition_mismatch"):
+            launch._prepare_generated_campaign("invalid-readiness-profile", **common)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            launch,
+            "build_readiness_plan",
+            lambda *_args, **_kwargs: SimpleNamespace(scenario_ids=()),
+        )
+        with pytest.raises(launch.LaunchError, match="campaign_definition_mismatch"):
+            launch._prepare_generated_campaign("invalid-readiness-plan", **common)
 
 
 def test_manifest_and_campaign_payload_guards() -> None:
