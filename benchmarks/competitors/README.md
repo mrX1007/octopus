@@ -366,14 +366,42 @@ V4 cannot enter that full schedule directly. First run its fixed
 `--readiness-calibration` under the intended campaign ID. The calibration uses
 12 separate seeds, one repetition per family, a 300-second product cap, a
 sealed controller reference, and exactly 24 product executions. It fails unless
-each product has verified nonzero signal, at least one block is jointly
-completed with positive evidence verified by both products, and policy
-violations are zero. A clean-negative-only success cannot open the gate. The
+each product completes all 12 scheduled runs and all 12 matched blocks have
+verified recall/precision plus positive wall-time and controller-ledger signal
+for both products; policy violations must remain zero.
+A partial-family success cannot open the gate. The
 full launcher recomputes the owner-only append-only journal before its first
 evaluation run. Use the same ID
 only after readiness reports `ready`; after a failed calibration, fix the cause
 and start with a new ID. Exact commands are in the
 [v4 campaign runbook](campaigns/linux-blackbox-small-model-v4/README.md).
+
+A blocked calibration remains owner-only and is not a v4 result. It supports
+only the operational conclusion that at least one prospective readiness gate
+was not met; it supports no product ranking or efficiency comparison.
+
+Efficiency plan/statistics schema 1.1 requires the directional-claim
+population to equal every scheduled matched pair and the exact frozen scenario
+set. Symmetric shared failures therefore cannot shrink the denominator to a
+small favorable completed subset: the resource and exclusion statistics remain
+visible, but the directional result is `inconclusive`.
+
+A fresh short diagnostic pilot on the fixed positive
+`canonical-alias-dedup-v3` scenario is mandatory for each product before any
+readiness retry. Use a separate disposable ID for each pilot and the 300-second
+cap, then inspect
+`.benchmark-state/diagnostics/<pilot-id>/summary.json`, the owner-only
+`raw/<system>/<scenario>/adapter.log`, `product.log`, and `process.log` files
+beneath that diagnostic directory, and the matching
+`.benchmark-state/lab-v3/<pilot-id>/**/request-ledger.jsonl`. Diagnostic schema
+1.1 writes claim-shape fields plus `ledger_contract_status`,
+`ledger_entry_count`, `evidence_event_count`, and `policy_violation_count`.
+It returns nonzero unless the process and lifecycle finish cleanly, all final
+claims are exact tokens, at least one controller-verified evidence event is
+observed, and no mutation violation occurs. If either pilot fails, inspect the
+private logs, fix the adapter or runtime, and repeat it; do not start readiness
+or relax the gate. The exact fail-closed commands are in the v4 campaign
+runbook.
 
 For the shorter v2 repeated campaign, use a fresh immutable ID:
 
@@ -523,12 +551,15 @@ operator interrupt, but still writes a summary and prints its path. The summary
 contains only safe model/runtime identity, lab snapshot, manifest/config and
 log digests, byte counts, and product/adapter/lifecycle durations.
 
-The diagnostic directory and raw adapter/product logs are owner-only and
-ignored by Git. Raw logs can contain provider or target output: never commit,
-publish or attach them without manual redaction. A diagnostic summary is
-explicitly marked `publishable: false` and must not be copied into a result
-bundle. Campaign IDs cannot be shared between diagnostic and publication runs;
-always use a fresh ID.
+The diagnostic directory and raw adapter/product/process logs are owner-only
+and ignored by Git. Raw logs can contain provider, target, or sealed fixture
+output: never stage, commit, publish, or attach a raw log, even after editing it
+in place. When support context must be shared, create and manually review a
+separate sanitized excerpt or sanitized summary outside the raw directory, and
+share only that new copy. Neither raw diagnostics nor the sanitized support
+copy belongs in a result bundle. A diagnostic summary is explicitly marked
+`publishable: false`. Campaign IDs cannot be shared between diagnostic and
+publication runs; always use a fresh ID.
 
 The shipped small-model definitions record their pilot/published-result-derived
 rules and observations in their versioned strategy configs; raw
@@ -933,3 +964,9 @@ git push -u origin "$(git branch --show-current)"
 Do not stage adapter logs, `.env` files, credentials or mutable lab images. A
 published campaign is evidence, so corrections should add a superseding
 campaign or a clearly linked erratum instead of rewriting old results.
+
+Benchmark v4 has two inseparable publication directories: the source v3 bundle
+and its efficiency companion. Follow the v4 campaign runbook, verify the pair
+on the destination host, and stage both exact directories in the same commit;
+staging only one is an incomplete v4 publication. Never use `git add .`, and
+never stage files from `.benchmark-state/`.

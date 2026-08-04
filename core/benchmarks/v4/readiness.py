@@ -23,14 +23,17 @@ from typing import Any, cast
 from ..v3.schema import BenchmarkRunV3, canonical_json, stable_digest
 from .schema import BenchmarkV4SchemaError, EfficiencyPlan
 
-READINESS_PROFILE_SCHEMA_VERSION = "1.0"
-READINESS_PLAN_SCHEMA_VERSION = "1.0"
-READINESS_EVIDENCE_SCHEMA_VERSION = "1.0"
+READINESS_PROFILE_SCHEMA_VERSION = "1.1"
+READINESS_PLAN_SCHEMA_VERSION = "1.1"
+READINESS_EVIDENCE_SCHEMA_VERSION = "1.1"
 READINESS_PHASE = "calibration"
 READINESS_METHODOLOGY = MappingProxyType(
     {
         "evaluation_data_used": False,
         "missing_verified_recall": "fail_closed_no_imputation",
+        "paired_claim_eligibility": (
+            "both_succeeded_completed_error_free_uncensored_verified_recall_precision_positive_wall_and_verified_ledger"
+        ),
         "policy_violation_gate": "zero_tolerance",
         "reference_population": "every_predeclared_calibration_block",
         "stopping_rule": "fixed_complete_schedule_no_optional_stopping",
@@ -62,7 +65,7 @@ class ReadinessProfile:
     reference_runner_id: str
     calibration_repetitions: int
     calibration_hard_cap_seconds: int
-    minimum_paired_completed_blocks: int
+    minimum_paired_claim_eligible_blocks: int
     minimum_system_completed_runs: int
     minimum_system_completion_rate: float
     minimum_system_verified_recall: float
@@ -90,8 +93,8 @@ class ReadinessProfile:
             maximum=899,
         )
         _integer_range(
-            self.minimum_paired_completed_blocks,
-            "readiness_profile.minimum_paired_completed_blocks",
+            self.minimum_paired_claim_eligible_blocks,
+            "readiness_profile.minimum_paired_claim_eligible_blocks",
             minimum=1,
             maximum=_MAX_RUNS,
         )
@@ -127,7 +130,7 @@ class ReadinessProfile:
             "calibration_repetitions": self.calibration_repetitions,
             "maximum_policy_violations": self.maximum_policy_violations,
             "methodology": dict(self.methodology),
-            "minimum_paired_completed_blocks": self.minimum_paired_completed_blocks,
+            "minimum_paired_claim_eligible_blocks": self.minimum_paired_claim_eligible_blocks,
             "minimum_reference_completion_rate": self.minimum_reference_completion_rate,
             "minimum_reference_verified_recall": self.minimum_reference_verified_recall,
             "minimum_system_completed_runs": self.minimum_system_completed_runs,
@@ -152,7 +155,7 @@ class ReadinessProfile:
                 "frozen",
                 "maximum_policy_violations",
                 "methodology",
-                "minimum_paired_completed_blocks",
+                "minimum_paired_claim_eligible_blocks",
                 "minimum_reference_completion_rate",
                 "minimum_reference_verified_recall",
                 "minimum_system_completed_runs",
@@ -182,9 +185,9 @@ class ReadinessProfile:
                     payload.get("calibration_repetitions"),
                     "readiness_profile.calibration_repetitions",
                 ),
-                minimum_paired_completed_blocks=_integer(
-                    payload.get("minimum_paired_completed_blocks"),
-                    "readiness_profile.minimum_paired_completed_blocks",
+                minimum_paired_claim_eligible_blocks=_integer(
+                    payload.get("minimum_paired_claim_eligible_blocks"),
+                    "readiness_profile.minimum_paired_claim_eligible_blocks",
                 ),
                 minimum_system_completed_runs=_integer(
                     payload.get("minimum_system_completed_runs"),
@@ -289,7 +292,7 @@ class ReadinessPlan:
         scheduled_per_system = len(self.scenario_ids) * self.profile.calibration_repetitions
         if self.profile.minimum_system_completed_runs > scheduled_per_system:
             raise BenchmarkV4SchemaError("readiness_threshold_unattainable")
-        if self.profile.minimum_paired_completed_blocks > scheduled_per_system:
+        if self.profile.minimum_paired_claim_eligible_blocks > scheduled_per_system:
             raise BenchmarkV4SchemaError("readiness_threshold_unattainable")
         if self.schema_version != READINESS_PLAN_SCHEMA_VERSION:
             raise BenchmarkV4SchemaError("unsupported_readiness_plan_schema")
@@ -545,7 +548,7 @@ class ReadinessEvidence:
     observed_run_count: int
     attested_run_count: int
     matched_fixture_block_count: int
-    paired_completed_block_count: int
+    paired_claim_eligible_block_count: int
     reference_scenarios: tuple[CalibrationSummary, ...]
     systems: tuple[CalibrationSummary, ...]
     checks: tuple[ReadinessCheck, ...]
@@ -566,7 +569,7 @@ class ReadinessEvidence:
             ("observed_run_count", self.observed_run_count),
             ("attested_run_count", self.attested_run_count),
             ("matched_fixture_block_count", self.matched_fixture_block_count),
-            ("paired_completed_block_count", self.paired_completed_block_count),
+            ("paired_claim_eligible_block_count", self.paired_claim_eligible_block_count),
         ):
             _integer_range(value, f"readiness_evidence.{name}", minimum=0, maximum=_MAX_RUNS)
         if not self.reference_scenarios or not self.systems or not self.checks:
@@ -608,7 +611,7 @@ class ReadinessEvidence:
             "efficiency_plan_digest": self.efficiency_plan_digest,
             "expected_run_count": self.expected_run_count,
             "matched_fixture_block_count": self.matched_fixture_block_count,
-            "paired_completed_block_count": self.paired_completed_block_count,
+            "paired_claim_eligible_block_count": self.paired_claim_eligible_block_count,
             "methodology": dict(self.methodology),
             "observed_run_count": self.observed_run_count,
             "readiness_plan_digest": self.readiness_plan_digest,
@@ -644,7 +647,7 @@ class ReadinessEvidence:
                 "expected_run_count",
                 "frozen",
                 "matched_fixture_block_count",
-                "paired_completed_block_count",
+                "paired_claim_eligible_block_count",
                 "methodology",
                 "observed_run_count",
                 "readiness_plan_digest",
@@ -674,9 +677,9 @@ class ReadinessEvidence:
                     payload.get("matched_fixture_block_count"),
                     "readiness_evidence.matched_fixture_block_count",
                 ),
-                paired_completed_block_count=_integer(
-                    payload.get("paired_completed_block_count"),
-                    "readiness_evidence.paired_completed_block_count",
+                paired_claim_eligible_block_count=_integer(
+                    payload.get("paired_claim_eligible_block_count"),
+                    "readiness_evidence.paired_claim_eligible_block_count",
                 ),
                 reference_scenarios=tuple(
                     CalibrationSummary.from_dict(_mapping(item, "readiness_evidence.reference_scenarios"))
@@ -702,7 +705,7 @@ class ReadinessEvidence:
             plan,
             evidence.reference_scenarios,
             evidence.systems,
-            paired_completed_block_count=evidence.paired_completed_block_count,
+            paired_claim_eligible_block_count=evidence.paired_claim_eligible_block_count,
         )
         if evidence.checks != expected_checks:
             raise BenchmarkV4SchemaError("readiness_evidence_check_mismatch")
@@ -843,7 +846,7 @@ def assess_readiness(
         _summarize_runs(system_id, "system", tuple(run for run in ordered if run.system_id == system_id))
         for system_id in plan.system_ids
     )
-    paired_completed_block_count = sum(
+    paired_claim_eligible_block_count = sum(
         all(_paired_product_run_eligible(by_key[(*block, system_id)]) for system_id in plan.system_ids)
         for block in block_digests
     )
@@ -851,7 +854,7 @@ def assess_readiness(
         plan,
         reference_scenarios,
         systems,
-        paired_completed_block_count=paired_completed_block_count,
+        paired_claim_eligible_block_count=paired_claim_eligible_block_count,
     )
     return ReadinessEvidence(
         readiness_plan_digest=plan.digest,
@@ -868,7 +871,7 @@ def assess_readiness(
         observed_run_count=len(ordered),
         attested_run_count=len(ordered),
         matched_fixture_block_count=len(block_digests),
-        paired_completed_block_count=paired_completed_block_count,
+        paired_claim_eligible_block_count=paired_claim_eligible_block_count,
         reference_scenarios=reference_scenarios,
         systems=systems,
         checks=checks,
@@ -905,7 +908,7 @@ def assert_full_campaign_ready(
         plan,
         evidence.reference_scenarios,
         evidence.systems,
-        paired_completed_block_count=evidence.paired_completed_block_count,
+        paired_claim_eligible_block_count=evidence.paired_claim_eligible_block_count,
     ):
         raise BenchmarkV4SchemaError("readiness_evidence_check_mismatch")
     failed = tuple(item.check_id for item in evidence.checks if not item.passed)
@@ -968,7 +971,7 @@ def _readiness_checks(
     reference_scenarios: Sequence[CalibrationSummary],
     systems: Sequence[CalibrationSummary],
     *,
-    paired_completed_block_count: int,
+    paired_claim_eligible_block_count: int,
 ) -> tuple[ReadinessCheck, ...]:
     profile = plan.profile
     checks = [
@@ -981,9 +984,9 @@ def _readiness_checks(
     ]
     checks.append(
         ReadinessCheck(
-            "paired_completed_blocks",
-            paired_completed_block_count >= profile.minimum_paired_completed_blocks,
-            f"observed:{paired_completed_block_count};minimum:{profile.minimum_paired_completed_blocks}",
+            "paired_claim_eligible_blocks",
+            paired_claim_eligible_block_count >= profile.minimum_paired_claim_eligible_blocks,
+            f"observed:{paired_claim_eligible_block_count};minimum:{profile.minimum_paired_claim_eligible_blocks}",
         )
     )
     for item in reference_scenarios:
@@ -1048,7 +1051,7 @@ def _validate_evidence_against_plan(evidence: ReadinessEvidence, plan: Readiness
         or evidence.observed_run_count != plan.expected_run_count
         or evidence.attested_run_count != plan.expected_run_count
         or evidence.matched_fixture_block_count != len(plan.scenario_ids) * plan.profile.calibration_repetitions
-        or evidence.paired_completed_block_count > len(plan.scenario_ids) * plan.profile.calibration_repetitions
+        or evidence.paired_claim_eligible_block_count > len(plan.scenario_ids) * plan.profile.calibration_repetitions
         or tuple(item.subject_id for item in evidence.reference_scenarios) != plan.scenario_ids
         or tuple(item.subject_id for item in evidence.systems) != plan.system_ids
     ):
@@ -1056,10 +1059,16 @@ def _validate_evidence_against_plan(evidence: ReadinessEvidence, plan: Readiness
 
 
 def _paired_product_run_eligible(run: BenchmarkRunV3) -> bool:
+    """Require the calibration inputs needed by a v4 directional claim."""
+
     recall = run.evaluation.metric("verified_recall", "all_scheduled")
+    precision = run.evaluation.metric("verified_claim_precision", "all_scheduled")
+    declared_ledger_entries = run.environment.get("controller_ledger_entries")
     return bool(
         run.execution_status == "succeeded"
         and run.task_status == "completed"
+        and not run.error_class
+        and not run.duration_censored
         and recall.available
         and recall.reliability == "verified"
         and recall.value is not None
@@ -1068,6 +1077,17 @@ def _paired_product_run_eligible(run: BenchmarkRunV3) -> bool:
         and recall.denominator > 0
         and recall.numerator is not None
         and recall.numerator > 0
+        and precision.available
+        and precision.reliability == "verified"
+        and precision.value is not None
+        and float(precision.value) > 0.0
+        and math.isfinite(float(run.duration_seconds))
+        and float(run.duration_seconds) > 0.0
+        and run.action_telemetry_available
+        and run.action_telemetry_reliability == "verified"
+        and type(declared_ledger_entries) is int
+        and declared_ledger_entries > 0
+        and declared_ledger_entries == run.action_event_count
     )
 
 

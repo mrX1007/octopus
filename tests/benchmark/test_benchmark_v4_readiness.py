@@ -11,7 +11,10 @@ from typing import Any
 import pytest
 
 from core.benchmarks.v3 import build_analysis_plan
+from core.benchmarks.v3.evaluation import ReportedClaim, evaluate_claims
+from core.benchmarks.v3.fixture import SCENARIO_FAMILIES, generate_fixture_variant
 from core.benchmarks.v3.schema import (
+    ActionEvent,
     BenchmarkRunV3,
     BudgetEnforcement,
     MetricObservation,
@@ -57,7 +60,7 @@ def profile() -> readiness.ReadinessProfile:
         reference_runner_id="sealed-reference-v4",
         calibration_repetitions=1,
         calibration_hard_cap_seconds=300,
-        minimum_paired_completed_blocks=1,
+        minimum_paired_claim_eligible_blocks=1,
         minimum_system_completed_runs=1,
         minimum_system_completion_rate=0.01,
         minimum_system_verified_recall=0.01,
@@ -85,14 +88,21 @@ def _run(
     recall: float | None = 1.0,
     recall_numerator: int | None = None,
     recall_denominator: int | None = None,
+    precision: float | None = 1.0,
     reliability: str = "verified",
+    precision_reliability: str | None = None,
+    duration_seconds: float = 1.0,
+    ledger_entries: int | None = 1,
+    action_count: int = 1,
+    action_telemetry_available: bool = True,
+    action_telemetry_reliability: str = "verified",
     policy_violations: tuple[str, ...] = (),
     track_id: str | None = None,
     attestation: dict[str, Any] | None = None,
     fixture_variant_digest: str | None = None,
 ) -> BenchmarkRunV3:
     scenario_id, repetition, seed, system_id = key
-    metric = (
+    recall_metric = (
         MetricObservation.unavailable("verified_recall", "all_scheduled", "calibration_metric_missing")
         if recall is None
         else MetricObservation(
@@ -105,12 +115,31 @@ def _run(
             denominator=(1 if recall_denominator is None else recall_denominator),
         )
     )
+    precision_metric = (
+        MetricObservation.unavailable(
+            "verified_claim_precision",
+            "all_scheduled",
+            "calibration_metric_missing",
+        )
+        if precision is None
+        else MetricObservation(
+            name="verified_claim_precision",
+            population="all_scheduled",
+            available=True,
+            reliability=precision_reliability or reliability,
+            value=precision,
+            numerator=int(precision > 0),
+            denominator=1,
+        )
+    )
     environment = {
         "efficiency_plan_digest": efficiency_plan.digest,
         "readiness_phase": readiness.READINESS_PHASE,
         "readiness_plan_digest": plan.digest,
         "readiness_role": ("reference" if system_id == plan.profile.reference_runner_id else "system"),
     }
+    if ledger_entries is not None:
+        environment["controller_ledger_entries"] = ledger_entries
     if attestation is not None:
         environment.update(attestation)
     return BenchmarkRunV3(
@@ -123,7 +152,7 @@ def _run(
         evaluation=RunEvaluation(
             task_status="completed" if completed else "not_completed",
             completion_rule_id="readiness-completion-v1",
-            metrics=(metric,),
+            metrics=(recall_metric, precision_metric),
             evaluator_id="sealed-evaluator-v3",
         ),
         matched_fixture_seed=seed,
@@ -144,14 +173,26 @@ def _run(
                 reliable=True,
             ),
         ),
-        action_telemetry=(),
-        action_telemetry_available=True,
-        action_telemetry_reliability="verified",
-        duration_seconds=1.0,
+        action_telemetry=tuple(
+            ActionEvent(
+                event_id=f"ledger-event-{index + 1}",
+                sequence=index,
+                action_name="fixture-http-request",
+                action_type="http",
+                status="succeeded",
+                method="GET",
+                target_class="fixture-route",
+                evidence_refs=("evidence-one",),
+            )
+            for index in range(action_count)
+        ),
+        action_telemetry_available=action_telemetry_available,
+        action_telemetry_reliability=action_telemetry_reliability,
+        duration_seconds=duration_seconds,
         duration_censored=not completed,
         censor_limit_seconds=10.0 if not completed else None,
         started_at=float(seed),
-        finished_at=float(seed) + 1.0,
+        finished_at=float(seed) + duration_seconds,
         policy_violations=policy_violations,
         environment=environment,
     )
@@ -191,9 +232,17 @@ def test_profile_plan_and_passing_evidence_are_frozen_and_recomputable(
 ) -> None:
     published_profile = readiness.load_readiness_profile(PROFILE_PATH)
     assert published_profile.profile_id == "small-model-efficiency-v4-readiness"
-    assert published_profile.digest == "7f1da06c06514e1d106fa2f467332ec735f6e18bcc0566d42d2b3c38c21b376f"
-    assert published_profile.minimum_system_completion_rate > 0
-    assert published_profile.minimum_system_verified_recall > 0
+    assert published_profile.schema_version == "1.1"
+    assert published_profile.digest == "7c83880e2c277d84d2eb5b431946afa5b39be59a1a496db3087e3879e9c65689"
+    assert published_profile.minimum_paired_claim_eligible_blocks == 12
+    assert published_profile.minimum_system_completed_runs == 12
+    assert published_profile.minimum_system_completion_rate == 1.0
+    assert published_profile.minimum_system_verified_recall == 1.0
+    assert published_profile.minimum_paired_claim_eligible_blocks == len(SCENARIO_FAMILIES)
+    assert all(
+        generate_fixture_variant(family, matched_fixture_seed=1).completion_rule.required_truth_ids
+        for family in SCENARIO_FAMILIES
+    )
     assert published_profile.maximum_policy_violations == 0
     assert published_profile.methodology["evaluation_data_used"] is False
 
@@ -213,11 +262,18 @@ def test_profile_plan_and_passing_evidence_are_frozen_and_recomputable(
 
     runs = _runs(plan, efficiency_plan)
     evidence = readiness.assess_readiness(plan, efficiency_plan, runs)
+    assert plan.schema_version == "1.1"
+    assert evidence.schema_version == "1.1"
+    assert (
+        evidence.methodology["paired_claim_eligibility"]
+        == "both_succeeded_completed_error_free_uncensored_verified_recall_precision_"
+        "positive_wall_and_verified_ledger"
+    )
     assert evidence.ready
     assert evidence.observed_run_count == plan.expected_run_count
     assert evidence.attested_run_count == plan.expected_run_count
     assert evidence.matched_fixture_block_count == 2
-    assert evidence.paired_completed_block_count == 2
+    assert evidence.paired_claim_eligible_block_count == 2
     assert all(check.passed for check in evidence.checks)
     readiness.assert_full_campaign_ready(plan, efficiency_plan, evidence)
     readiness.verify_readiness_evidence(plan, efficiency_plan, runs, evidence)
@@ -244,7 +300,7 @@ def test_zero_signal_cannot_launch_full_campaign(efficiency_plan, plan) -> None:
 
     assert not evidence.ready
     assert {item.check_id for item in evidence.checks if not item.passed} == {
-        "paired_completed_blocks",
+        "paired_claim_eligible_blocks",
         "system_completion:alpha",
         "system_completion:beta",
         "system_verified_recall:alpha",
@@ -253,7 +309,7 @@ def test_zero_signal_cannot_launch_full_campaign(efficiency_plan, plan) -> None:
     with pytest.raises(readiness.BenchmarkV4ReadinessError) as caught:
         readiness.assert_full_campaign_ready(plan, efficiency_plan, evidence)
     assert caught.value.failed_check_ids == (
-        "paired_completed_blocks",
+        "paired_claim_eligible_blocks",
         "system_completion:alpha",
         "system_verified_recall:alpha",
         "system_completion:beta",
@@ -278,13 +334,16 @@ def test_disjoint_system_successes_do_not_satisfy_paired_readiness(efficiency_pl
 
     evidence = readiness.assess_readiness(plan, efficiency_plan, runs)
 
-    assert evidence.paired_completed_block_count == 0
-    assert {item.check_id for item in evidence.checks if not item.passed} == {"paired_completed_blocks"}
+    assert evidence.paired_claim_eligible_block_count == 0
+    assert {item.check_id for item in evidence.checks if not item.passed} == {"paired_claim_eligible_blocks"}
     with pytest.raises(readiness.BenchmarkV4ReadinessError):
         readiness.assert_full_campaign_ready(plan, efficiency_plan, evidence)
 
 
-def test_joint_clean_negative_only_does_not_satisfy_positive_paired_readiness(efficiency_plan, plan) -> None:
+def test_zero_denominator_completed_block_does_not_satisfy_positive_paired_readiness(
+    efficiency_plan,
+    plan,
+) -> None:
     runs = tuple(
         _run(
             plan,
@@ -299,8 +358,73 @@ def test_joint_clean_negative_only_does_not_satisfy_positive_paired_readiness(ef
 
     evidence = readiness.assess_readiness(plan, efficiency_plan, runs)
 
-    assert evidence.paired_completed_block_count == 0
-    assert "paired_completed_blocks" in {item.check_id for item in evidence.checks if not item.passed}
+    assert evidence.paired_claim_eligible_block_count == 0
+    assert "paired_claim_eligible_blocks" in {item.check_id for item in evidence.checks if not item.passed}
+
+
+def test_real_clean_negative_is_one_claim_eligible_block_but_cannot_open_shipped_gate() -> None:
+    source = build_analysis_plan(
+        track_id="small-model-stress-v3",
+        system_ids=("alpha", "beta"),
+        scenario_ids=tuple(family.replace("_", "-") + "-v3" for family in SCENARIO_FAMILIES),
+        repetitions=20,
+        base_fixture_seed=131,
+        publication_tier="full",
+        bootstrap_samples=100,
+    )
+    efficiency_plan = build_efficiency_plan(
+        source,
+        efficiency_track_id="clean-negative-efficiency-v4",
+        publication_tier="full",
+    )
+    profile = readiness.load_readiness_profile(PROFILE_PATH)
+    plan = readiness.build_readiness_plan(
+        efficiency_plan,
+        profile,
+        calibration_track_id="clean-negative-readiness-v4",
+        calibration_seed=29,
+    )
+    variant = generate_fixture_variant("clean_negative", matched_fixture_seed=31)
+    truth = variant.truth_claims[0]
+    clean_negative_evaluation = evaluate_claims(
+        execution_status="succeeded",
+        reported_claims=(
+            ReportedClaim(
+                text=truth.canonical_text,
+                evidence_refs=truth.required_evidence_ids,
+            ),
+        ),
+        truth_claims=variant.truth_claims,
+        completion_rule=variant.completion_rule,
+        observed_evidence_ids=truth.required_evidence_ids,
+    )
+    recall = clean_negative_evaluation.metric("verified_recall", "all_scheduled")
+    precision = clean_negative_evaluation.metric("verified_claim_precision", "all_scheduled")
+    assert clean_negative_evaluation.task_status == "completed"
+    assert (recall.numerator, recall.denominator, recall.value) == (1, 1, 1.0)
+    assert (precision.numerator, precision.denominator, precision.value) == (1, 1, 1.0)
+
+    clean_negative_id = "clean-negative-v3"
+    runs = []
+    for key in plan.expected_run_keys():
+        is_reference = key[3] == profile.reference_runner_id
+        is_clean_negative = key[0] == clean_negative_id
+        run = _run(
+            plan,
+            efficiency_plan,
+            key,
+            completed=is_reference or is_clean_negative,
+            recall=(1.0 if is_reference or is_clean_negative else 0.0),
+        )
+        if is_clean_negative and not is_reference:
+            run = replace(run, evaluation=clean_negative_evaluation)
+        runs.append(run)
+
+    evidence = readiness.assess_readiness(plan, efficiency_plan, tuple(runs))
+
+    assert evidence.paired_claim_eligible_block_count == 1
+    assert not evidence.ready
+    assert "paired_claim_eligible_blocks" in {item.check_id for item in evidence.checks if not item.passed}
 
 
 @pytest.mark.parametrize(
@@ -452,7 +576,7 @@ def test_profile_json_is_canonical_and_digest_bound() -> None:
         ({"calibration_repetitions": 0}, "calibration_repetitions"),
         ({"calibration_hard_cap_seconds": 900}, "calibration_hard_cap_seconds"),
         ({"minimum_system_completed_runs": 0}, "completed_runs"),
-        ({"minimum_paired_completed_blocks": 0}, "paired_completed_blocks"),
+        ({"minimum_paired_claim_eligible_blocks": 0}, "paired_claim_eligible_blocks"),
         ({"minimum_system_completion_rate": 0.0}, "completion_rate"),
     ],
 )
@@ -529,7 +653,7 @@ def test_readiness_plan_rejects_bad_seed_mapping_and_unattainable_threshold(plan
     impossible = replace(profile, minimum_system_completed_runs=3)
     with pytest.raises(readiness.BenchmarkV4SchemaError, match="threshold_unattainable"):
         replace(plan, profile=impossible)
-    impossible_pairing = replace(profile, minimum_paired_completed_blocks=3)
+    impossible_pairing = replace(profile, minimum_paired_claim_eligible_blocks=3)
     with pytest.raises(readiness.BenchmarkV4SchemaError, match="threshold_unattainable"):
         replace(plan, profile=impossible_pairing)
 
@@ -744,6 +868,59 @@ def test_process_failure_cannot_count_as_verified_completion(efficiency_plan, pl
     alpha = next(item for item in evidence.systems if item.subject_id == "alpha")
     assert alpha.execution_succeeded_runs == alpha.scheduled_runs - 1
     assert alpha.completed_runs == alpha.scheduled_runs - 1
+
+
+@pytest.mark.parametrize(
+    "updates",
+    (
+        {"precision": None},
+        {"precision_reliability": "measured"},
+        {"duration_seconds": 0.0},
+        {"ledger_entries": None},
+        {"action_count": 0, "ledger_entries": 0},
+        {"action_count": 1, "ledger_entries": 2},
+        {
+            "action_count": 0,
+            "action_telemetry_available": False,
+            "action_telemetry_reliability": "unavailable",
+        },
+    ),
+)
+def test_paired_readiness_requires_v4_claim_inputs(
+    efficiency_plan,
+    profile,
+    updates: dict[str, Any],
+) -> None:
+    strict_profile = replace(
+        profile,
+        minimum_paired_claim_eligible_blocks=2,
+        minimum_system_completed_runs=2,
+        minimum_system_completion_rate=1.0,
+        minimum_system_verified_recall=1.0,
+    )
+    strict_plan = readiness.build_readiness_plan(
+        efficiency_plan,
+        strict_profile,
+        calibration_track_id="strict-readiness-calibration-v4",
+        calibration_seed=23,
+    )
+    target_key = next(key for key in strict_plan.expected_run_keys() if key[0] == "scenario-a" and key[3] == "alpha")
+    runs = tuple(
+        _run(
+            strict_plan,
+            efficiency_plan,
+            key,
+            **(updates if key == target_key else {}),
+        )
+        for key in strict_plan.expected_run_keys()
+    )
+
+    evidence = readiness.assess_readiness(strict_plan, efficiency_plan, runs)
+
+    assert evidence.paired_claim_eligible_block_count == 1
+    assert {item.check_id for item in evidence.checks if not item.passed} == {"paired_claim_eligible_blocks"}
+    with pytest.raises(readiness.BenchmarkV4ReadinessError):
+        readiness.assert_full_campaign_ready(strict_plan, efficiency_plan, evidence)
 
 
 def test_freeze_and_load_helpers_reject_wrong_types_and_io_failures(

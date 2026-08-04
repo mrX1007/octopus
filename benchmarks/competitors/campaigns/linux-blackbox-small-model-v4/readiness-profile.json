@@ -6,20 +6,21 @@
   "methodology": {
     "evaluation_data_used": false,
     "missing_verified_recall": "fail_closed_no_imputation",
+    "paired_claim_eligibility": "both_succeeded_completed_error_free_uncensored_verified_recall_precision_positive_wall_and_verified_ledger",
     "policy_violation_gate": "zero_tolerance",
     "reference_population": "every_predeclared_calibration_block",
     "stopping_rule": "fixed_complete_schedule_no_optional_stopping",
     "verified_recall_population": "all_scheduled"
   },
-  "minimum_paired_completed_blocks": 1,
+  "minimum_paired_claim_eligible_blocks": 12,
   "minimum_reference_completion_rate": 1.0,
   "minimum_reference_verified_recall": 1.0,
-  "minimum_system_completed_runs": 1,
-  "minimum_system_completion_rate": 0.08,
-  "minimum_system_verified_recall": 0.01,
-  "profile_digest": "7f1da06c06514e1d106fa2f467332ec735f6e18bcc0566d42d2b3c38c21b376f",
+  "minimum_system_completed_runs": 12,
+  "minimum_system_completion_rate": 1.0,
+  "minimum_system_verified_recall": 1.0,
+  "profile_digest": "7c83880e2c277d84d2eb5b431946afa5b39be59a1a496db3087e3879e9c65689",
   "profile_id": "small-model-efficiency-v4-readiness",
   "reference_runner_id": "sealed-reference-runner-v4",
   "required_evaluator_id": "sealed-evaluator-v3",
-  "schema_version": "1.0"
+  "schema_version": "1.1"
 }

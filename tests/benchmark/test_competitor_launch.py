@@ -1020,6 +1020,12 @@ def test_linux_v4_readiness_calibration_cli_is_separate_and_redacted(
     assert Path(capsys.readouterr().out.strip()) == evidence_path
     assert observed["config"].campaign_id == "ready-v4"
     assert observed["environment"]["OCTOBENCH_TARGET_URL"] == "http://10.1.2.3:8080"
+    readiness_config = observed["config"].benchmark_v4_readiness
+    assert readiness_config is not None
+    assert readiness_config.journal_directory == launch._readiness_journal_root()
+    assert readiness_config.evidence_path == (
+        launch._readiness_journal_campaign_directory("ready-v4") / "readiness-evidence.json"
+    )
 
     def blocked(*_args, **_kwargs):
         raise launch.ReadinessCalibrationError("private-detail-must-not-leak")
@@ -1032,6 +1038,99 @@ def test_linux_v4_readiness_calibration_cli_is_separate_and_redacted(
     full_journal.mkdir(parents=True)
     assert launch.main(arguments) == 2
     assert json.loads(capsys.readouterr().err) == {"error": "output_exists"}
+
+
+@pytest.mark.parametrize(
+    "private_mode",
+    ("--readiness-calibration", "--diagnostic-pilot"),
+)
+def test_private_launch_modes_reject_existing_readiness_journal_id_before_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    private_mode: str,
+) -> None:
+    _prepare_root(tmp_path, monkeypatch)
+    values = {**_small_model_environment(), "OCTOBENCH_V3_BASE_FIXTURE_SEED": "8c" * 32}
+    environment_file = _write_environment(tmp_path / "campaign.env", values)
+    monkeypatch.setattr(launch.sys, "platform", "linux")
+    monkeypatch.setattr(launch, "_repository_is_clean", lambda: True)
+    runtime_calls: list[bool] = []
+    monkeypatch.setattr(
+        launch,
+        "_validate_runtime_prerequisites",
+        lambda *_args, **_kwargs: runtime_calls.append(True),
+    )
+    campaign_id = "existing-readiness-v4"
+    readiness_root = launch._readiness_journal_campaign_directory(campaign_id)
+    readiness_root.mkdir(parents=True)
+
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                campaign_id,
+                "--campaign-definition",
+                launch._SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID,
+                "--environment-file",
+                str(environment_file),
+                private_mode,
+            ]
+        )
+        == 2
+    )
+
+    assert json.loads(capsys.readouterr().err) == {"error": "output_exists"}
+    assert runtime_calls == []
+
+
+def test_full_campaign_allows_existing_readiness_journal_for_same_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _prepare_root(tmp_path, monkeypatch)
+    values = {**_small_model_environment(), "OCTOBENCH_V3_BASE_FIXTURE_SEED": "7d" * 32}
+    environment_file = _write_environment(tmp_path / "campaign.env", values)
+    monkeypatch.setattr(launch.sys, "platform", "linux")
+    monkeypatch.setattr(launch, "_repository_is_clean", lambda: True)
+    monkeypatch.setattr(
+        launch,
+        "_lab_address",
+        lambda _environment, *, port: "http://10.1.2.3:8080",
+    )
+    monkeypatch.setattr(
+        launch,
+        "_validate_runtime_prerequisites",
+        lambda _environment, *, octopus_revision: _runtime_attestations(),
+    )
+    campaign_id = "readiness-then-full-v4"
+    launch._readiness_journal_campaign_directory(campaign_id).mkdir(parents=True)
+    observed: list[Path] = []
+
+    def run(config: Path, *, environment: dict[str, str]) -> SimpleNamespace:
+        observed.append(config)
+        assert environment["OCTOBENCH_TARGET_URL"] == "http://10.1.2.3:8080"
+        return SimpleNamespace(bundle_path=tmp_path / "published-v4", exit_code=0)
+
+    monkeypatch.setattr(launch, "run_campaign", run)
+
+    assert (
+        launch.main(
+            [
+                "--campaign-id",
+                campaign_id,
+                "--campaign-definition",
+                launch._SMALL_MODEL_CAMPAIGN_V4_DEFINITION_ID,
+                "--environment-file",
+                str(environment_file),
+            ]
+        )
+        == 0
+    )
+
+    assert observed == [launch._generated_directory(campaign_id) / "campaign.json"]
+    assert Path(capsys.readouterr().out.strip()) == tmp_path / "published-v4"
 
 
 def test_linux_diagnostic_pilot_runs_privately_and_returns_pilot_exit(

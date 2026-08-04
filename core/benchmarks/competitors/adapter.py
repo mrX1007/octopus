@@ -1234,8 +1234,10 @@ def _collect_product_output(root: Path, stdout: str, limit: int) -> str:
     chunks = [stdout]
     used = len(stdout.encode("utf-8", "replace"))
     for path in sorted(root.rglob("*")):
-        if used >= limit or not path.is_file() or path.is_symlink():
+        if used >= limit:
             break
+        if path.is_symlink() or not path.is_file():
+            continue
         if path.name == "adapter-stdout.log":
             continue
         if path.suffix.lower() not in _TEXT_SUFFIXES:

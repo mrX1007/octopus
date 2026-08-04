@@ -55,6 +55,9 @@
           "const": ["wall_time_seconds", "fixture_http_requests"]
         },
         "completion_gate": { "const": "all_scheduled_noninferiority" },
+        "directional_claim_population_gate": {
+          "const": "all_scheduled_pairs_exact_frozen_scenarios"
+        },
         "missing_data": { "const": "unavailable_no_imputation" },
         "multiple_testing": { "const": "bonferroni_comparison_pairs_x_primary_resources" },
         "paired_quality_gate": { "const": "both_completed_verified_f1_noninferiority" },
@@ -67,6 +70,7 @@
         "bootstrap_unit",
         "claim_resources",
         "completion_gate",
+        "directional_claim_population_gate",
         "missing_data",
         "multiple_testing",
         "paired_quality_gate",
@@ -107,7 +111,7 @@
       "minimum": 0,
       "type": "integer"
     },
-    "schema_version": { "const": "1.0" },
+    "schema_version": { "const": "1.1" },
     "secondary_resources": {
       "const": [
         "unique_fixture_targets",

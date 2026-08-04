@@ -1,9 +1,10 @@
 """Private adapter worker for non-publishable runtime calibration.
 
-The ordinary adapter intentionally discards raw vendor output after hashing it.
-This worker is used only by the ignored diagnostic pilot.  It intercepts the
-bounded product-process log while the adapter workspace still exists and copies
-the exact bytes to an owner-only destination supplied by the pilot controller.
+The ordinary adapter intentionally discards raw product output after hashing it.
+This worker is used only by the ignored diagnostic pilot.  It preserves raw CLI
+stdout separately, then captures the bounded product outcome after the adapter
+has collected workspace reports.  OCTOPUS's bounded in-process outcome uses the
+same owner-only product sink.
 """
 
 from __future__ import annotations
@@ -59,23 +60,64 @@ def _run_with_private_capture(
     scenario: Any,
     product_log: Path,
 ) -> dict[str, Any]:
-    original = adapter._run_bounded_process
+    process_log = _initialize_private_log(
+        str(product_log.with_name("process.log")),
+    )
+    original_process = adapter._run_bounded_process
+    original_octopus = adapter._run_octopus
+    original_cli = adapter._run_cli_product
 
-    def capture(*args: Any, **kwargs: Any):
-        outcome = original(*args, **kwargs)
+    def capture_process(*args: Any, **kwargs: Any):
+        outcome = original_process(*args, **kwargs)
         workspace = Path(kwargs["cwd"])
-        limit = int(kwargs["max_output"])
+        limit = _capture_limit(args, kwargs, positional_index=4)
         source = workspace / "adapter-stdout.log"
         if source.is_file() and not source.is_symlink():
             with source.open("rb") as raw_log:
-                _append_private_bytes(product_log, raw_log.read(limit))
+                _append_private_bytes(process_log, raw_log.read(limit))
         return outcome
 
-    adapter._run_bounded_process = capture
+    def capture_octopus(*args: Any, **kwargs: Any):
+        outcome = original_octopus(*args, **kwargs)
+        limit = _capture_limit(args, kwargs, positional_index=4)
+        _append_private_bytes(
+            product_log,
+            outcome.output_text.encode("utf-8", "replace")[:limit],
+        )
+        return outcome
+
+    def capture_cli(*args: Any, **kwargs: Any):
+        outcome = original_cli(*args, **kwargs)
+        limit = _capture_limit(args, kwargs, positional_index=7)
+        _append_private_bytes(
+            product_log,
+            outcome.output_text.encode("utf-8", "replace")[:limit],
+        )
+        return outcome
+
+    adapter._run_bounded_process = capture_process
+    adapter._run_octopus = capture_octopus
+    adapter._run_cli_product = capture_cli
     try:
         return adapter.run_product_adapter(system, scenario)
     finally:
-        adapter._run_bounded_process = original
+        adapter._run_bounded_process = original_process
+        adapter._run_octopus = original_octopus
+        adapter._run_cli_product = original_cli
+
+
+def _capture_limit(
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    *,
+    positional_index: int,
+) -> int:
+    raw_limit = kwargs.get("max_output")
+    if raw_limit is None and len(args) > positional_index:
+        raw_limit = args[positional_index]
+    if isinstance(raw_limit, bool) or not isinstance(raw_limit, int) or raw_limit <= 0:
+        raise DiagnosticWorkerError("private_capture_limit_invalid")
+    return min(raw_limit, adapter._MAX_CAPTURE_BYTES)
 
 
 def _initialize_private_log(value: str | None) -> Path:
@@ -95,10 +137,7 @@ def _initialize_private_log(value: str | None) -> Path:
     try:
         parent_descriptor = os.open(candidate.parent, parent_flags)
         parent_metadata = os.fstat(parent_descriptor)
-        if (
-            not stat.S_ISDIR(parent_metadata.st_mode)
-            or stat.S_IMODE(parent_metadata.st_mode) & 0o077
-        ):
+        if not stat.S_ISDIR(parent_metadata.st_mode) or stat.S_IMODE(parent_metadata.st_mode) & 0o077:
             raise DiagnosticWorkerError("private_log_parent_unsafe")
         descriptor = os.open(
             candidate.name,
@@ -129,10 +168,7 @@ def _append_private_bytes(destination: Path, payload: bytes) -> None:
     descriptor = os.open(destination, flags)
     try:
         metadata = os.fstat(descriptor)
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or stat.S_IMODE(metadata.st_mode) != 0o600
-        ):
+        if not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600:
             raise DiagnosticWorkerError("private_log_changed")
         view = memoryview(payload)
         written = 0

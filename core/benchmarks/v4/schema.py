@@ -26,9 +26,9 @@ from ..v3.schema import (
     stable_digest,
 )
 
-EFFICIENCY_PLAN_SCHEMA_VERSION = "1.0"
+EFFICIENCY_PLAN_SCHEMA_VERSION = "1.1"
 EFFICIENCY_RUN_SCHEMA_VERSION = "1.0"
-EFFICIENCY_STATISTICS_SCHEMA_VERSION = "1.0"
+EFFICIENCY_STATISTICS_SCHEMA_VERSION = "1.1"
 
 PRIMARY_RESOURCES = (
     "wall_time_seconds",
@@ -50,6 +50,7 @@ EFFICIENCY_METHODOLOGY = MappingProxyType(
     {
         "automatic_winner": False,
         "bootstrap_unit": "scenario_then_matched_block",
+        "directional_claim_population_gate": "all_scheduled_pairs_exact_frozen_scenarios",
         "claim_resources": PRIMARY_RESOURCES,
         "completion_gate": "all_scheduled_noninferiority",
         "missing_data": "unavailable_no_imputation",

@@ -158,6 +158,148 @@ def test_capture_skips_missing_workspace_log_and_restores_runner(
         is outcome
     )
     assert adapter._run_bounded_process is bounded
+    process_log = tmp_path / "process.log"
+    assert process_log.read_bytes() == b""
+    assert stat.S_IMODE(process_log.stat().st_mode) == 0o600
+
+
+def test_capture_records_bounded_octopus_outcome_without_changing_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    product_log = diagnostic_worker._initialize_private_log(str(private / "product.log"))
+    outcome = adapter.ProductOutcome(
+        status="succeeded",
+        output_text="private-octopus-outcome",
+        duration_seconds=1.0,
+    )
+    result = {"status": "succeeded", "artifact_refs": ["sha256:fixture"]}
+
+    def run_octopus(*_args, **_kwargs):
+        return outcome
+
+    def run_product(system, scenario):
+        assert system == "octopus"
+        assert scenario is selected_scenario
+        observed = adapter._run_octopus(
+            scenario,
+            "http://127.0.0.1:8080",
+            tmp_path,
+            1.0,
+            7,
+        )
+        assert observed is outcome
+        return result
+
+    selected_scenario = object()
+    monkeypatch.setattr(adapter, "_run_octopus", run_octopus)
+    monkeypatch.setattr(adapter, "run_product_adapter", run_product)
+
+    captured = diagnostic_worker._run_with_private_capture(
+        "octopus",
+        selected_scenario,
+        product_log,
+    )
+
+    assert captured is result
+    assert product_log.read_bytes() == b"private"
+    assert stat.S_IMODE(product_log.stat().st_mode) == 0o600
+    process_log = private / "process.log"
+    assert process_log.read_bytes() == b""
+    assert stat.S_IMODE(process_log.stat().st_mode) == 0o600
+    assert adapter._run_octopus is run_octopus
+
+
+def test_capture_restores_all_hooks_when_octopus_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    product_log = diagnostic_worker._initialize_private_log(str(private / "product.log"))
+
+    def bounded(*_args, **_kwargs):
+        return 0, False, False, "", 0.0
+
+    def run_octopus(*_args, **_kwargs):
+        raise RuntimeError("private product failure")
+
+    def run_product(_system, scenario):
+        return adapter._run_octopus(
+            scenario,
+            "http://127.0.0.1:8080",
+            tmp_path,
+            1.0,
+            7,
+        )
+
+    monkeypatch.setattr(adapter, "_run_bounded_process", bounded)
+    monkeypatch.setattr(adapter, "_run_octopus", run_octopus)
+    monkeypatch.setattr(adapter, "run_product_adapter", run_product)
+    original_cli = adapter._run_cli_product
+
+    with pytest.raises(RuntimeError, match="private product failure"):
+        diagnostic_worker._run_with_private_capture(
+            "octopus",
+            object(),
+            product_log,
+        )
+
+    assert adapter._run_bounded_process is bounded
+    assert adapter._run_octopus is run_octopus
+    assert adapter._run_cli_product is original_cli
+
+
+def test_capture_restores_all_hooks_when_cli_raises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    product_log = diagnostic_worker._initialize_private_log(str(private / "product.log"))
+
+    def bounded(*_args, **_kwargs):
+        return 0, False, False, "", 0.0
+
+    def run_octopus(*_args, **_kwargs):
+        return adapter.ProductOutcome(
+            status="failed",
+            output_text="",
+            duration_seconds=0.0,
+        )
+
+    def run_cli(*_args, **_kwargs):
+        raise RuntimeError("private cli failure")
+
+    def run_product(_system, scenario):
+        return adapter._run_cli_product(
+            "strix",
+            scenario,
+            "http://127.0.0.1:8080",
+            "prompt",
+            {},
+            tmp_path,
+            1.0,
+            32,
+        )
+
+    monkeypatch.setattr(adapter, "_run_bounded_process", bounded)
+    monkeypatch.setattr(adapter, "_run_octopus", run_octopus)
+    monkeypatch.setattr(adapter, "_run_cli_product", run_cli)
+    monkeypatch.setattr(adapter, "run_product_adapter", run_product)
+
+    with pytest.raises(RuntimeError, match="private cli failure"):
+        diagnostic_worker._run_with_private_capture(
+            "strix",
+            object(),
+            product_log,
+        )
+
+    assert adapter._run_bounded_process is bounded
+    assert adapter._run_octopus is run_octopus
+    assert adapter._run_cli_product is run_cli
 
 
 def test_private_log_requires_absolute_path_and_supports_missing_os_flags(

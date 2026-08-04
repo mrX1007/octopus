@@ -7,6 +7,7 @@ import json
 import math
 import os
 import stat
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -54,7 +55,7 @@ from .v3_integration import BenchmarkV3CampaignConfig, build_v3_run, run_artifac
 
 READINESS_CAMPAIGN_CONFIG_SCHEMA_VERSION = "1.0"
 APPROVED_V4_READINESS_PROFILE_ID = "small-model-efficiency-v4-readiness"
-APPROVED_V4_READINESS_PROFILE_DIGEST = "7f1da06c06514e1d106fa2f467332ec735f6e18bcc0566d42d2b3c38c21b376f"
+APPROVED_V4_READINESS_PROFILE_DIGEST = "7c83880e2c277d84d2eb5b431946afa5b39be59a1a496db3087e3879e9c65689"
 APPROVED_V4_READINESS_TRACK_ID = "small-model-readiness-v4"
 _READINESS_CONFIG_KEYS = frozenset({"evidence", "journal_directory", "plan", "profile", "schema_version"})
 _CALIBRATION_FINGERPRINT_VERSION = "benchmark-v4-readiness-calibration-v1"
@@ -201,6 +202,54 @@ def calibration_analysis_plan(plan: ReadinessPlan) -> AnalysisPlan:
     )
 
 
+def _emit_run_start(*, index: int, total: int, context: LabRunContext) -> None:
+    """Report public run identity before reset/execution can block."""
+
+    _emit_progress(
+        "[readiness] run_start"
+        f" index={index}"
+        f" total={total}"
+        f" system={context.system_id}"
+        f" scenario={context.scenario_id}"
+        f" repetition={context.repetition}"
+    )
+
+
+def _emit_run_finish(
+    *,
+    index: int,
+    total: int,
+    context: LabRunContext,
+    result: Mapping[str, Any],
+    run: BenchmarkRunV3,
+) -> None:
+    """Report bounded aggregate progress without claims, artifacts, seeds, or tokens."""
+
+    _emit_progress(
+        "[readiness] run_finish"
+        f" index={index}"
+        f" total={total}"
+        f" system={context.system_id}"
+        f" scenario={context.scenario_id}"
+        f" repetition={context.repetition}"
+        f" status={result['status']}"
+        f" error={'present' if result.get('error_class') else 'none'}"
+        f" duration_seconds={float(result['duration_seconds']):.3f}"
+        f" task_status={run.task_status}"
+        f" actions={run.action_event_count}"
+        f" policy_violations={len(run.policy_violations)}"
+    )
+
+
+def _emit_progress(message: str) -> None:
+    """Keep best-effort operator output outside the write-once run semantics."""
+
+    try:
+        print(message, file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        return
+
+
 def run_readiness_calibration(
     config: Any,
     *,
@@ -282,11 +331,12 @@ def run_readiness_calibration(
         cleanup_error = ""
         with _temporary_environment(effective_environment):
             try:
-                for scheduled in schedule:
+                for run_index, scheduled in enumerate(schedule, start=1):
                     run_key = str(scheduled["run_key"])
                     journal.begin_run_attempt(run_key)
                     context = _context(str(config.campaign_id), scheduled, scenario_by_id)
                     last_context = context
+                    _emit_run_start(index=run_index, total=len(schedule), context=context)
                     attestation = controller.reset_and_health(context)
                     attestation_payload = attestation.to_dict()
                     journal.write_attestation(run_key, attestation_payload)
@@ -362,6 +412,13 @@ def run_readiness_calibration(
                             "result": result,
                             "benchmark_v3": v3_run.to_dict(),
                         },
+                    )
+                    _emit_run_finish(
+                        index=run_index,
+                        total=len(schedule),
+                        context=context,
+                        result=result,
+                        run=v3_run,
                     )
             finally:
                 if last_context is not None:

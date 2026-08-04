@@ -26,11 +26,13 @@ task from appearing efficient.
 
 ## Frozen design
 
-`efficiency-plan.json` is write-once and content-addressed. It binds the source
+Under efficiency plan schema 1.1, `efficiency-plan.json` is write-once and
+content-addressed. It binds the source
 v3 analysis-plan digest, systems, scenarios, matched fixture seeds, comparison
 pairs, resource definitions, optimization direction, quality gate,
 non-inferiority margin, telemetry coverage gates, bootstrap design, and an
-explicit block schedule.
+explicit block schedule. It also freezes an all-scheduled joint-completion
+population gate for every directional efficiency claim.
 
 The schedule pseudo-randomizes scenario blocks using a frozen schedule seed.
 The two system runs for one fixture seed remain adjacent, receive the same
@@ -60,12 +62,18 @@ full campaign's 120 hours.
 
 The gate is functional, not a leaderboard and not part of the evaluation
 sample. It requires the exact predeclared run set, a perfect sealed reference
-for every family, verified-recall coverage for every product run, nonzero task
-completion and verified recall for each product, at least one jointly completed
-positive evidence-bearing matched product block (verified-recall numerator and
-denominator are both nonzero for both products), and zero policy violations.
+for every family, verified-recall coverage for every product run, all scheduled
+product tasks completed, and every matched product block jointly claim-eligible
+for both products. Claim eligibility requires positive verified-recall
+numerators and denominators, available verified claim precision, positive wall
+time, and a positive verified controller-ledger count that matches action
+telemetry. Policy violations remain zero-tolerance.
 Missing runs, extra runs, selective retries, evaluation-track runs, mismatched
-fixture variants, or a modified attestation fail closed.
+fixture variants, or a modified attestation fail closed. The shipped profile
+requires 12/12 completed runs per product, a 100% system completion rate, and
+12/12 jointly claim-eligible blocks; readiness therefore
+cannot open from a favorable one-family subset when the full efficiency claim
+requires the complete scheduled population.
 
 Calibration runs and evidence remain owner-only under
 `.benchmark-state/readiness-journal/<campaign-id>/`. Immediately before the
@@ -73,6 +81,35 @@ first full evaluation run, the launcher reloads the complete journal,
 recomputes the evidence, and verifies its binding to the same immutable
 analysis and efficiency plans. A failed readiness run is not repaired by
 selecting successful attempts; fix the cause and use a fresh campaign ID.
+
+### Interpreting a blocked calibration
+
+A blocked calibration establishes only that one or more prospective gates were
+not met. It remains owner-only, is not an evaluation sample, and must not be
+published as a product ranking or efficiency result. Its controller-private
+`request-ledger.jsonl` files remain the source for individual method, status,
+violation, route and timestamp records.
+
+Before retrying readiness, run one fixed, positive
+`canonical-alias-dedup-v3` diagnostic pilot for each product with the same
+300-second per-product cap. Pilot IDs are disposable and must differ from the
+future readiness ID. Diagnostic schema 1.1 records claim-shape fields plus
+`ledger_contract_status`, `ledger_entry_count`, `evidence_event_count`, and
+`policy_violation_count` in each run summary. A v3 pilot exits zero only when
+the product/lifecycle finishes cleanly, the reported claim list is nonempty
+and contains only complete, exact `OCTOBENCH_V3_*` values, at least one
+controller-verified evidence event occurred, and the verified ledger contains
+no mutation violation.
+
+Inspect the owner-only `adapter.log`, `process.log`, and `product.log` files below
+`.benchmark-state/diagnostics/<pilot-id>/raw/<system>/<scenario>/` when the
+automatic check fails, and inspect the matching private fixture ledger below
+`.benchmark-state/lab-v3/<pilot-id>/`. The pilot verifies the ledger hash chain,
+but its claim-shape and evidence-contact checks still do not establish claim
+correctness or recall. Do not whitelist a mutation, relax the zero-tolerance
+gate, or copy a token into the final report in the adapter. These raw logs must
+never be staged, published, or attached; create a separate manually reviewed
+sanitized excerpt if support analysis is required.
 
 The full source v3 campaign context and every source run publish only the same
 non-sensitive, exact `readiness_attestation`: `campaign_id`, `status` (`ready`),
@@ -129,7 +166,10 @@ for one system.
 Every system receives all-scheduled resource summaries, even when a run fails.
 Quality-on-resource and resource-superiority analysis uses only matched blocks
 where both systems have `task_status == completed`. Exclusion counts and
-reasons are published for every comparison and resource.
+reasons are published for every comparison and resource. Schema 1.1 prevents
+that conditional denominator from becoming a favorable selected subset: a
+directional claim additionally requires every scheduled pair, across the exact
+frozen scenario-family set, to be jointly completed and quality-qualified.
 
 For each scenario and then as an equal-weight macro result across scenarios,
 v4 publishes:
@@ -154,6 +194,9 @@ A directional per-resource efficiency claim is eligible only when all of the
 following were frozen and pass:
 
 - both products completed the task in the contributing pairs;
+- the contributing population equals all scheduled pairs and covers the exact
+  frozen scenario-family set; one or a few favorable completed pairs cannot
+  support a directional claim;
 - verified F1 is available for every all-scheduled pair and every jointly
   completed pair;
 - primary telemetry coverage and balance gates pass;
@@ -167,9 +210,10 @@ following were frozen and pass:
   checks pass.
 
 Even then the claim applies only to that resource and track. Conflicting
-resource results are a trade-off, not an overall winner. With no jointly
-completed tasks, v4 publishes resource consumption descriptively and makes no
-efficiency-superiority claim.
+resource results are a trade-off, not an overall winner. If any scheduled pair
+is not jointly completed and quality-qualified, v4 still publishes stability,
+resource consumption, exclusions and descriptive paired effects, but its
+directional result is `inconclusive`.
 
 ## Fairness and missing data
 
@@ -219,47 +263,26 @@ missing controller evidence.
 The supported workflow for the next live campaign is:
 
 ```bash
+set -euo pipefail
+
+PREVIEW_ID="linux-blackbox-small-model-v4-check-$(date -u +%Y%m%dt%H%M%Sz)"
 ./venv/bin/python -m core.benchmarks.competitors.launch \
-  --campaign-id linux-blackbox-small-model-v4-check \
+  --campaign-id "$PREVIEW_ID" \
   --campaign-definition linux-blackbox-small-model-v4 \
   --profile core \
   --environment-file benchmarks/competitors/secrets.env \
   --prepare-only
-
-# Review all generated plans before using a fresh ID for the live run:
-# .benchmark-state/generated/<campaign-id>/analysis-plan.json
-# .benchmark-state/generated/<campaign-id>/efficiency-plan.json
-# .benchmark-state/generated/<campaign-id>/readiness-plan.json
-
-# On the authorized isolated Linux host, use a different fresh live ID for the
-# mandatory bounded calibration. A zero exit means the readiness gate passed.
-RUN_ID="linux-blackbox-small-model-v4-$(date -u +%Y%m%dt%H%M%Sz)"
-./venv/bin/python -m core.benchmarks.competitors.launch \
-  --campaign-id "$RUN_ID" \
-  --campaign-definition linux-blackbox-small-model-v4 \
-  --profile core \
-  --environment-file benchmarks/competitors/secrets.env \
-  --readiness-calibration
-
-./venv/bin/python -m json.tool \
-  ".benchmark-state/readiness-journal/$RUN_ID/readiness-evidence.json"
-
-# Only after status=ready, run the full campaign with the exact same ID.
-./venv/bin/python -m core.benchmarks.competitors.launch \
-  --campaign-id "$RUN_ID" \
-  --campaign-definition linux-blackbox-small-model-v4 \
-  --profile core \
-  --environment-file benchmarks/competitors/secrets.env
-
-./venv/bin/python -m core.benchmarks.v4 publish \
-  --plan ".benchmark-state/generated/$RUN_ID/efficiency-plan.json" \
-  --source-v3 "benchmarks/competitors/results/$RUN_ID" \
-  --output "benchmarks/competitors/results/$RUN_ID-efficiency-v4"
-
-./venv/bin/python -m core.benchmarks.v4 verify \
-  --source-v3 "benchmarks/competitors/results/$RUN_ID" \
-  "benchmarks/competitors/results/$RUN_ID-efficiency-v4"
 ```
+
+Stop after this command and manually review the generated
+`analysis-plan.json`, `efficiency-plan.json`, `readiness-plan.json`, neutral
+scenarios, and system manifests beneath
+`.benchmark-state/generated/$PREVIEW_ID/`. Do not turn preview, pilots,
+readiness, full execution, and publication into one unattended shell block.
+After review, follow the separately bounded diagnostic, readiness, full-run,
+verification, and exact-two-directory Git steps in the
+[campaign runbook](../../benchmarks/competitors/campaigns/linux-blackbox-small-model-v4/README.md).
+Each section has its own fail-closed checks and deliberate operator boundary.
 
 Run the live campaign only in the authorized, isolated Linux environment
 described by the competitor benchmark runbook. A prepare-only preview is not a

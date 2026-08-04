@@ -2,8 +2,9 @@
 
 The publication campaign deliberately requires repeated runs.  This module is
 the cheaper prerequisite: it executes each selected adapter exactly once with
-owner-only raw diagnostics, so runtime/model failures can be fixed before a
-multi-hour campaign is attempted.
+owner-only raw diagnostics and checks the public v3 final-claim shape, so
+runtime/model/integration failures can be fixed before a multi-hour campaign is
+attempted.  It never evaluates claim correctness against sealed truth.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import math
 import os
 import re
 import stat
+import sys
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -22,17 +24,23 @@ from pathlib import Path
 from typing import Any
 
 from ..schema import BenchmarkScenario, load_scenarios
+from ..v3.fixture import load_private_fixture
+from ..v3.ledger import read_ledger
+from ..v3.schema import BenchmarkV3SchemaError
 from .campaign import CampaignConfig, load_campaign_config
 from .lab import CommandLabController, LabRunContext
 from .runner import CommandSystemRunner, SystemRunnerError
 from .schema import CommandAdapterConfig, SystemManifest, load_system_manifest
+from .v3_integration import run_artifacts
 
-DIAGNOSTIC_SCHEMA_VERSION = "1.0"
+DIAGNOSTIC_SCHEMA_VERSION = "1.1"
 DEFAULT_PILOT_SECONDS = 1_800.0
 MIN_PILOT_SECONDS = 60.0
 MAX_PILOT_SECONDS = 3_600.0
 _PRODUCT_LOG_ENVIRONMENT = "OCTOBENCH_DIAGNOSTIC_PRODUCT_LOG"
 _ERROR_CLASS = re.compile(r"^[A-Za-z][A-Za-z0-9_.:-]{0,127}$")
+_V3_LAB_VERSION = "discovery-lab-v3"
+_V3_EXACT_CLAIM = re.compile(r"OCTOBENCH_V3_[A-Z0-9]{16,160}")
 _SAFE_RUNTIME_PROVENANCE_KEYS = frozenset(
     {
         "attestation",
@@ -92,21 +100,15 @@ def run_diagnostic_pilot(
 
     resolved = load_campaign_config(config) if isinstance(config, (str, Path)) else config
     budget = _pilot_seconds(budget_seconds)
-    manifests = tuple(
-        load_system_manifest(path) for path in resolved.system_manifest_paths
-    )
+    manifests = tuple(load_system_manifest(path) for path in resolved.system_manifest_paths)
     if selected_system is not None:
-        manifests = tuple(
-            item for item in manifests if item.system_id == selected_system
-        )
+        manifests = tuple(item for item in manifests if item.system_id == selected_system)
         if not manifests:
             raise DiagnosticError("diagnostic_system_unavailable")
     loaded_scenarios = load_scenarios(resolved.scenario_directory)
     if selected_scenario is not None:
         scenario_id = str(selected_scenario or "").strip().lower()
-        loaded_scenarios = tuple(
-            item for item in loaded_scenarios if item.scenario_id == scenario_id
-        )
+        loaded_scenarios = tuple(item for item in loaded_scenarios if item.scenario_id == scenario_id)
         if not loaded_scenarios:
             raise DiagnosticError("diagnostic_scenario_unavailable")
     scenarios = tuple(_with_budget(item, budget) for item in loaded_scenarios)
@@ -132,11 +134,20 @@ def run_diagnostic_pilot(
     runs: list[dict[str, Any]] = []
     cleanup_failed = False
     operator_interrupted = False
+    total_runs = len(manifests) * len(scenarios)
+    run_index = 0
 
     with _temporary_environment(effective_environment):
         for manifest in manifests:
             for scenario in scenarios:
+                run_index += 1
                 context = _lab_context(resolved.campaign_id, manifest, scenario)
+                _emit_pilot_start(
+                    index=run_index,
+                    total=total_runs,
+                    context=context,
+                    budget_seconds=budget,
+                )
                 run_directory = raw_root / manifest.system_id / scenario.scenario_id
                 _create_private_directory(run_directory.parent)
                 _create_private_directory(run_directory)
@@ -156,6 +167,13 @@ def run_diagnostic_pilot(
                 status = "failed"
                 error_class = "DiagnosticExecutionFailure"
                 duration = 0.0
+                claim_contract_status = "not_evaluable"
+                reported_claim_count = 0
+                exact_claim_count = 0
+                ledger_contract_status = "not_evaluable"
+                ledger_entry_count = 0
+                evidence_event_count = 0
+                policy_violation_count = 0
                 reset_healthy = False
                 run_cleanup_status = "not_attempted"
                 try:
@@ -177,6 +195,11 @@ def run_diagnostic_pilot(
                         result.get("duration_seconds"),
                         default=adapter_wall_duration,
                     )
+                    (
+                        claim_contract_status,
+                        reported_claim_count,
+                        exact_claim_count,
+                    ) = _claim_contract_observation(scenario, result)
                 except SystemRunnerError as exc:
                     error_class = type(exc).__name__
                     if adapter_started is not None:
@@ -213,6 +236,17 @@ def run_diagnostic_pilot(
                     if reset_healthy and not _private_log_exists(adapter_log):
                         _write_private_bytes(adapter_log, b"")
 
+                (
+                    ledger_contract_status,
+                    ledger_entry_count,
+                    evidence_event_count,
+                    policy_violation_count,
+                ) = _ledger_contract_observation(
+                    resolved,
+                    context,
+                    reset_healthy=reset_healthy,
+                )
+
                 runs.append(
                     {
                         "system_id": manifest.system_id,
@@ -221,6 +255,13 @@ def run_diagnostic_pilot(
                         "seed": scenario.seed,
                         "status": status,
                         "error_class": error_class,
+                        "claim_contract_status": claim_contract_status,
+                        "reported_claim_count": reported_claim_count,
+                        "exact_claim_count": exact_claim_count,
+                        "ledger_contract_status": ledger_contract_status,
+                        "ledger_entry_count": ledger_entry_count,
+                        "evidence_event_count": evidence_event_count,
+                        "policy_violation_count": policy_violation_count,
                         "product_duration_seconds": round(duration, 6),
                         "adapter_wall_seconds": round(adapter_wall_duration, 6),
                         "lifecycle_wall_seconds": round(
@@ -234,12 +275,20 @@ def run_diagnostic_pilot(
                         "product_log_sha256": _optional_file_digest(product_log),
                         "product_log_bytes": _optional_file_size(product_log),
                         "system": _system_provenance(manifest),
-                        "manifest_sha256": _optional_file_digest(
-                            manifest.source_path
-                        ),
+                        "manifest_sha256": _optional_file_digest(manifest.source_path),
                         "lab_version": context.lab_version,
                         "snapshot_ref": context.snapshot_ref,
                     }
+                )
+                _emit_pilot_finish(
+                    index=run_index,
+                    total=total_runs,
+                    context=context,
+                    status=status,
+                    error_class=error_class,
+                    duration_seconds=duration,
+                    claim_contract_status=claim_contract_status,
+                    ledger_contract_status=ledger_contract_status,
                 )
                 if operator_interrupted:
                     break
@@ -253,7 +302,21 @@ def run_diagnostic_pilot(
         if (
             runs
             and not cleanup_failed
-            and all(item["status"] == "succeeded" for item in runs)
+            and all(
+                item["status"] == "succeeded"
+                and not item["error_class"]
+                and item["reset_healthy"] is True
+                and item["cleanup_status"] == "succeeded"
+                and _contract_gate_satisfied(
+                    item["claim_contract_status"],
+                    v3_required=resolved.benchmark_v3 is not None,
+                )
+                and _contract_gate_satisfied(
+                    item["ledger_contract_status"],
+                    v3_required=resolved.benchmark_v3 is not None,
+                )
+                for item in runs
+            )
         )
         else "completed_with_failures"
     )
@@ -278,6 +341,57 @@ def run_diagnostic_pilot(
     )
 
 
+def _emit_pilot_start(
+    *,
+    index: int,
+    total: int,
+    context: LabRunContext,
+    budget_seconds: float,
+) -> None:
+    _emit_progress(
+        "[diagnostic] run_start"
+        f" index={index}"
+        f" total={total}"
+        f" system={context.system_id}"
+        f" scenario={context.scenario_id}"
+        f" budget_seconds={budget_seconds:.0f}"
+    )
+
+
+def _emit_pilot_finish(
+    *,
+    index: int,
+    total: int,
+    context: LabRunContext,
+    status: str,
+    error_class: str,
+    duration_seconds: float,
+    claim_contract_status: str,
+    ledger_contract_status: str,
+) -> None:
+    _emit_progress(
+        "[diagnostic] run_finish"
+        f" index={index}"
+        f" total={total}"
+        f" system={context.system_id}"
+        f" scenario={context.scenario_id}"
+        f" status={status}"
+        f" error={'present' if error_class else 'none'}"
+        f" duration_seconds={duration_seconds:.3f}"
+        f" claim_contract={claim_contract_status}"
+        f" ledger_contract={ledger_contract_status}"
+    )
+
+
+def _emit_progress(message: str) -> None:
+    """Keep best-effort operator output outside product/run semantics."""
+
+    try:
+        print(message, file=sys.stderr, flush=True)
+    except (OSError, ValueError):
+        return
+
+
 def _diagnostic_manifest(
     manifest: SystemManifest,
     *,
@@ -295,11 +409,7 @@ def _diagnostic_manifest(
             "{output_path}",
         ),
         cwd=manifest.adapter.cwd,
-        env_passthrough=tuple(
-            dict.fromkeys(
-                (*manifest.adapter.env_passthrough, _PRODUCT_LOG_ENVIRONMENT)
-            )
-        ),
+        env_passthrough=tuple(dict.fromkeys((*manifest.adapter.env_passthrough, _PRODUCT_LOG_ENVIRONMENT))),
     )
     return replace(manifest, adapter=adapter)
 
@@ -345,11 +455,7 @@ def _pilot_seconds(value: Any) -> float:
         parsed = float(value)
     except (TypeError, ValueError):
         raise DiagnosticError("diagnostic_budget_invalid") from None
-    if (
-        not math.isfinite(parsed)
-        or parsed < MIN_PILOT_SECONDS
-        or parsed > MAX_PILOT_SECONDS
-    ):
+    if not math.isfinite(parsed) or parsed < MIN_PILOT_SECONDS or parsed > MAX_PILOT_SECONDS:
         raise DiagnosticError("diagnostic_budget_invalid")
     return parsed
 
@@ -369,6 +475,91 @@ def _nonnegative_number(value: Any, *, default: float) -> float:
     except (TypeError, ValueError):
         return max(0.0, float(default))
     return parsed if math.isfinite(parsed) and parsed >= 0 else max(0.0, float(default))
+
+
+def _contract_gate_satisfied(status: str, *, v3_required: bool) -> bool:
+    """Fail closed if a configured v3 campaign drifts to a non-v3 scenario."""
+
+    return status == "satisfied" or (status == "not_applicable" and not v3_required)
+
+
+def _claim_contract_observation(
+    scenario: BenchmarkScenario,
+    result: Mapping[str, Any],
+) -> tuple[str, int, int]:
+    """Check the public v3 claim shape without consulting sealed truth.
+
+    A diagnostic pilot cannot establish correctness or recall.  It can still
+    reject the integration failures that made the previous calibration waste
+    hours: a successful product run with no final claims, or native assertions
+    that do not follow the exact blinded-token claim contract.
+    """
+
+    if str(scenario.lab.get("version") or "") != _V3_LAB_VERSION:
+        return "not_applicable", 0, 0
+    if str(result.get("status") or "") != "succeeded":
+        return "not_evaluable", 0, 0
+    raw_claims = result.get("reported_claims")
+    if not isinstance(raw_claims, (list, tuple)):
+        return "invalid_claims", 0, 0
+    claims = tuple(str(item or "").strip() for item in raw_claims)
+    if not claims or any(not item for item in claims):
+        return "missing_claims", len(claims), 0
+    exact_count = sum(_V3_EXACT_CLAIM.fullmatch(item) is not None for item in claims)
+    status = "satisfied" if exact_count == len(claims) else "invalid_claim_shape"
+    return status, len(claims), exact_count
+
+
+def _ledger_contract_observation(
+    config: CampaignConfig,
+    context: LabRunContext,
+    *,
+    reset_healthy: bool,
+) -> tuple[str, int, int, int]:
+    """Verify the private v3 ledger without evaluating sealed claim truth."""
+
+    if context.lab_version != _V3_LAB_VERSION:
+        return "not_applicable", 0, 0, 0
+    if not reset_healthy:
+        return "not_evaluable", 0, 0, 0
+    v3_config = config.benchmark_v3
+    if v3_config is None:
+        return "unavailable", 0, 0, 0
+    try:
+        artifacts = run_artifacts(
+            v3_config.state_directory,
+            campaign_id=context.campaign_id,
+            system_id=context.system_id,
+            scenario_id=context.scenario_id,
+            repetition=context.repetition,
+            seed=context.seed,
+        )
+        variant = load_private_fixture(artifacts.private_manifest)
+        if (
+            variant.scenario_id != context.scenario_id
+            or variant.matched_fixture_seed != context.seed
+            or variant.lab_version != _V3_LAB_VERSION
+        ):
+            return "unavailable", 0, 0, 0
+        entries = read_ledger(
+            artifacts.ledger,
+            variant_digest=variant.variant_digest,
+        )
+    except (BenchmarkV3SchemaError, OSError, ValueError):
+        return "unavailable", 0, 0, 0
+
+    entry_count = len(entries)
+    evidence_event_count = sum(bool(item.evidence_ids) for item in entries)
+    policy_violation_count = sum(bool(item.violation) for item in entries)
+    if policy_violation_count:
+        status = "policy_violations"
+    elif not entry_count:
+        status = "no_requests"
+    elif not evidence_event_count:
+        status = "missing_evidence"
+    else:
+        status = "satisfied"
+    return status, entry_count, evidence_event_count, policy_violation_count
 
 
 def _create_private_directory(path: Path) -> None:
@@ -400,10 +591,7 @@ def _create_new_private_directory(path: Path) -> None:
 
 
 def _write_private_json(path: Path, payload: Mapping[str, Any]) -> None:
-    encoded = (
-        json.dumps(payload, indent=2, sort_keys=True, separators=(",", ": "))
-        + "\n"
-    ).encode("utf-8")
+    encoded = (json.dumps(payload, indent=2, sort_keys=True, separators=(",", ": ")) + "\n").encode("utf-8")
     _write_private_bytes(path, encoded)
 
 
@@ -470,10 +658,7 @@ def _system_provenance(manifest: SystemManifest) -> dict[str, Any]:
     if isinstance(runtime, Mapping):
         for key in sorted(_SAFE_RUNTIME_PROVENANCE_KEYS):
             value = runtime.get(key)
-            if isinstance(value, (bool, int)) or (
-                isinstance(value, str)
-                and len(value.encode("utf-8")) <= 4_096
-            ):
+            if isinstance(value, (bool, int)) or (isinstance(value, str) and len(value.encode("utf-8")) <= 4_096):
                 safe_runtime[key] = value
     return {
         "system_id": manifest.system_id,
@@ -488,9 +673,7 @@ def _system_provenance(manifest: SystemManifest) -> dict[str, Any]:
 
 def _scenario_scope(scenarios: tuple[BenchmarkScenario, ...]) -> str:
     if scenarios and all(
-        item.category == "service_discovery_verification"
-        and "read-only" in item.tags
-        for item in scenarios
+        item.category == "service_discovery_verification" and "read-only" in item.tags for item in scenarios
     ):
         return "smoke_only"
     return "calibration_only"

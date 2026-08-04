@@ -1328,11 +1328,29 @@ def test_collect_product_output_filters_and_bounds_files():
         ]
     )
     assert adapter._collect_product_output(root, "stdout", 100) == "stdout\nresult"
-    stopped = _OutputRoot([_OutputPath("directory", file=False), _OutputPath("z.txt", data=b"no")])
-    assert adapter._collect_product_output(stopped, "stdout", 100) == "stdout"
-    symlink = _OutputRoot([_OutputPath("link.txt", symlink=True)])
-    assert adapter._collect_product_output(symlink, "", 100) == ""
     assert adapter._collect_product_output(root, "full", 4) == "full"
+
+
+def test_collect_product_output_skips_directories_before_safe_reports(tmp_path):
+    cache = tmp_path / "cache"
+    home = tmp_path / "home"
+    cache.mkdir()
+    home.mkdir()
+    (home / "nested-report.md").write_text("nested report", encoding="utf-8")
+    (tmp_path / "root-report.txt").write_text("root report", encoding="utf-8")
+
+    assert adapter._collect_product_output(tmp_path, "stdout", 100) == ("stdout\nnested report\nroot report")
+
+
+def test_collect_product_output_skips_symlink_before_safe_report(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("must not follow", encoding="utf-8")
+    (workspace / "a-link.txt").symlink_to(outside)
+    (workspace / "z-report.txt").write_text("safe report", encoding="utf-8")
+
+    assert adapter._collect_product_output(workspace, "stdout", 100) == "stdout\nsafe report"
 
 
 def test_extract_metrics_and_matcher_validation(monkeypatch):

@@ -55,8 +55,13 @@ def test_v4_companion_round_trip_is_deterministic_and_schema_valid(tmp_path: Pat
 
     assert verification["status"] == "verified"
     assert verification["runs"] == 4
+    assert statistics_payload["schema_version"] == "1.1"
     assert statistics_payload["automatic_winner"] is False
     assert statistics_payload["fairness"]["eligible"] is True
+    assert all(
+        statistics_payload["comparisons"][0]["resources"][name]["claim_population_gate"]["passed"] is True
+        for name in ("wall_time_seconds", "fixture_http_requests")
+    )
     assert {
         effect["directional_claim"]
         for effect in statistics_payload["paired_effects"]
@@ -98,6 +103,58 @@ def test_fast_failure_cannot_become_an_efficiency_win() -> None:
     failed_projection = next(item for item in projections if item.system_id == "beta" and item.repetition == 2)
     assert failed_projection.resources["wall_time_seconds"].value == 0.1
     assert failed_projection.resources["fixture_http_requests"].value == 0.0
+
+
+def test_shared_failures_cannot_shrink_the_directional_claim_population() -> None:
+    source_plan, efficiency_plan, runs, context, ledgers = _canary_inputs(
+        failed_system="beta",
+        failed_repetition=2,
+    )
+    failed_evaluation = next(run.evaluation for run in runs if run.system_id == "beta" and run.repetition == 2)
+    shared_failure_runs = tuple(
+        replace(
+            run,
+            execution_status="failed",
+            evaluation=failed_evaluation,
+            error_class="adapter_failure",
+        )
+        if run.system_id == "alpha" and run.repetition == 2
+        else run
+        for run in runs
+    )
+
+    statistics_payload = analyze_efficiency(
+        efficiency_plan,
+        source_plan,
+        shared_failure_runs,
+        ledgers,
+        context,
+    )
+    comparison = statistics_payload["comparisons"][0]
+
+    assert statistics_payload["systems"]["alpha"]["stability"]["task_completion_rate"] == 0.5
+    assert statistics_payload["systems"]["beta"]["stability"]["task_completion_rate"] == 0.5
+    assert statistics_payload["fairness"]["eligible"] is False
+    for resource_name in ("wall_time_seconds", "fixture_http_requests"):
+        detail = comparison["resources"][resource_name]
+        population_gate = detail["claim_population_gate"]
+        assert detail["coverage_gate"]["passed"] is True
+        assert detail["resource_ratio"]["sample_size"] == 1
+        assert detail["quality_per_resource_delta"]["sample_size"] == 1
+        assert population_gate == {
+            "all_scheduled_pairs_eligible": False,
+            "eligible_pair_count": 1,
+            "eligible_pair_coverage": 0.5,
+            "exact_scenario_coverage": True,
+            "jointly_completed_pair_count": 1,
+            "passed": False,
+            "quality_per_resource_scenario_ids": ["deep-navigation-v3"],
+            "required_scenario_ids": ["deep-navigation-v3"],
+            "resource_ratio_scenario_ids": ["deep-navigation-v3"],
+            "scheduled_pair_count": 2,
+        }
+        assert detail["directional_claims"]["result"] == "inconclusive"
+        assert comparison["primary_metric_gates"][resource_name]["passed"] is False
 
 
 def test_missing_quality_cannot_select_a_favorable_subset() -> None:

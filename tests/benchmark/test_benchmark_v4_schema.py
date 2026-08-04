@@ -50,10 +50,12 @@ def test_efficiency_plan_is_isolated_frozen_and_position_balanced(tmp_path: Path
         publication_tier="canary",
     )
 
+    assert plan.schema_version == "1.1"
     assert plan.source_track_id == source.track_id
     assert plan.efficiency_track_id != source.track_id
     assert plan.primary_resources == PRIMARY_RESOURCES
     assert plan.methodology["automatic_winner"] is False
+    assert plan.methodology["directional_claim_population_gate"] == "all_scheduled_pairs_exact_frozen_scenarios"
     assert plan.methodology["resource_direction"] == "lower_is_better"
     assert plan.methodology["resource_pair_population"] == "both_task_status_completed"
     assert plan.methodology["multiple_testing"] == "bonferroni_comparison_pairs_x_primary_resources"

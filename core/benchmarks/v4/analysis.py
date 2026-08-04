@@ -670,7 +670,13 @@ def _comparison_statistics(
         resource_details[resource_name] = detail
         paired_effects.append(detail["effect_projection"])
         if resource_name in PRIMARY_RESOURCES:
-            primary_metric_gates[resource_name] = detail["coverage_gate"]
+            coverage_gate = cast(Mapping[str, Any], detail["coverage_gate"])
+            population_gate = cast(Mapping[str, Any], detail["claim_population_gate"])
+            primary_metric_gates[resource_name] = {
+                "claim_population": dict(population_gate),
+                "measurement_coverage": dict(coverage_gate),
+                "passed": bool(coverage_gate["passed"] and population_gate["passed"]),
+            }
     return {
         "all_scheduled_noninferiority": noninferiority,
         "left_system_id": left_id,
@@ -779,6 +785,25 @@ def _resource_effect(
         "required": required_coverage,
         "scheduled_pair_count": len(paired),
     }
+    ratio_scenario_ids = tuple(sorted(ratio_by_scenario))
+    qpr_scenario_ids = tuple(sorted(qpr_by_scenario))
+    required_scenario_ids = tuple(plan.scenario_ids)
+    all_scheduled_pairs_eligible = eligible_pairs == jointly_completed_count == len(paired)
+    exact_scenario_coverage = set(ratio_scenario_ids) == set(required_scenario_ids) and set(qpr_scenario_ids) == set(
+        required_scenario_ids
+    )
+    claim_population_gate = {
+        "all_scheduled_pairs_eligible": all_scheduled_pairs_eligible,
+        "eligible_pair_count": eligible_pairs,
+        "eligible_pair_coverage": _round(eligible_pairs / len(paired)) if paired else 0.0,
+        "exact_scenario_coverage": exact_scenario_coverage,
+        "jointly_completed_pair_count": jointly_completed_count,
+        "passed": all_scheduled_pairs_eligible and exact_scenario_coverage,
+        "quality_per_resource_scenario_ids": list(qpr_scenario_ids),
+        "required_scenario_ids": list(required_scenario_ids),
+        "resource_ratio_scenario_ids": list(ratio_scenario_ids),
+        "scheduled_pair_count": len(paired),
+    }
     base = bool(fairness.get("base_eligible")) and coverage_gate["passed"]
     completion_gate = noninferiority["task_completion_rate"]
     quality_gate = noninferiority["verified_f1"]
@@ -787,13 +812,12 @@ def _resource_effect(
     qpr_available = bool(quality_per_resource.get("available"))
     all_scheduled_quality_complete = quality_gate["effect"].get("sample_size") == len(paired)
     completed_quality_complete = paired_quality_gate["effect"].get("sample_size") == jointly_completed_count
-    resource_claim_population_complete = eligible_pairs == jointly_completed_count
     right_supported = bool(
         resource_name in PRIMARY_RESOURCES
         and base
         and all_scheduled_quality_complete
         and completed_quality_complete
-        and resource_claim_population_complete
+        and claim_population_gate["passed"]
         and completion_gate["right_noninferior"]
         and quality_gate["right_noninferior"]
         and paired_quality_gate["right_noninferior"]
@@ -807,7 +831,7 @@ def _resource_effect(
         and base
         and all_scheduled_quality_complete
         and completed_quality_complete
-        and resource_claim_population_complete
+        and claim_population_gate["passed"]
         and completion_gate["left_noninferior"]
         and quality_gate["left_noninferior"]
         and paired_quality_gate["left_noninferior"]
@@ -833,6 +857,7 @@ def _resource_effect(
         "right_system_id": right_id,
     }
     return {
+        "claim_population_gate": claim_population_gate,
         "coverage_gate": coverage_gate,
         "directional_claims": {
             "automatic_winner": False,

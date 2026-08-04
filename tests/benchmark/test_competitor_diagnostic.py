@@ -11,9 +11,14 @@ import pytest
 
 from core.benchmarks.competitors import adapter, diagnostic, diagnostic_worker
 from core.benchmarks.competitors.campaign import CampaignConfig
-from core.benchmarks.competitors.lab import LabCommand
+from core.benchmarks.competitors.lab import LabCommand, LabRunContext
 from core.benchmarks.competitors.schema import SystemManifest
+from core.benchmarks.competitors.v3_integration import (
+    BenchmarkV3CampaignConfig,
+    prepare_fixture_run,
+)
 from core.benchmarks.schema import load_scenario
+from core.benchmarks.v3.ledger import ControlPlaneLedger
 
 pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 
@@ -80,9 +85,7 @@ def _config(tmp_path: Path, manifests: tuple[SystemManifest, ...]) -> CampaignCo
     command = LabCommand(argv=(sys.executable, "-c", "pass"), working_directory=tmp_path)
     return CampaignConfig(
         campaign_id="diagnostic-fixture-v1",
-        system_manifest_paths=tuple(
-            item.source_path for item in manifests if item.source_path is not None
-        ),
+        system_manifest_paths=tuple(item.source_path for item in manifests if item.source_path is not None),
         scenario_directory=SCENARIO_PATH.parent,
         output_directory=tmp_path / "unused-results",
         state_directory=tmp_path / "unused-state",
@@ -333,9 +336,7 @@ def test_pilot_can_select_one_exact_scenario_and_rejects_unknown_id(
     )
     payload = json.loads(outcome.summary_path.read_text(encoding="utf-8"))
     assert observed == [second.scenario_id]
-    assert [item["scenario_id"] for item in payload["runs"]] == [
-        second.scenario_id
-    ]
+    assert [item["scenario_id"] for item in payload["runs"]] == [second.scenario_id]
 
     with pytest.raises(
         diagnostic.DiagnosticError,
@@ -348,6 +349,261 @@ def test_pilot_can_select_one_exact_scenario_and_rejects_unknown_id(
             budget_seconds=120,
             selected_scenario="not-in-definition",
         )
+
+
+@pytest.mark.parametrize(
+    ("reported_claims", "contract_status", "error_class", "expected_exit"),
+    (
+        (["OCTOBENCH_V3_0123456789ABCDEF"], "satisfied", "", 0),
+        (
+            ["OCTOBENCH_V3_0123456789ABCDEF"],
+            "satisfied",
+            "UnexpectedError",
+            1,
+        ),
+        ([], "missing_claims", "", 1),
+        (["generic native assertion"], "invalid_claim_shape", "", 1),
+        (
+            [
+                "OCTOBENCH_V3_0123456789ABCDEF",
+                "generic native assertion",
+            ],
+            "invalid_claim_shape",
+            "",
+            1,
+        ),
+    ),
+)
+def test_v3_pilot_fails_closed_on_missing_or_noncanonical_claims(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    reported_claims: list[str],
+    contract_status: str,
+    error_class: str,
+    expected_exit: int,
+) -> None:
+    manifest = _manifest(tmp_path, "strix")
+    config = _config(tmp_path, (manifest,))
+    base = load_scenario(SCENARIO_PATH)
+    scenario = replace(
+        base,
+        lab={**dict(base.lab), "version": "discovery-lab-v3"},
+    )
+    monkeypatch.setattr(diagnostic, "load_system_manifest", lambda _path: manifest)
+    monkeypatch.setattr(diagnostic, "load_scenarios", lambda _path: (scenario,))
+
+    class Controller:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        def reset_and_health(self, _context):
+            return None
+
+        def cleanup(self, _context):
+            return None
+
+    class Runner:
+        def __init__(self, _manifest, *, private_log_path):
+            self.private_log_path = Path(private_log_path)
+
+        def __call__(self, _scenario, _repetition, _seed):
+            return {
+                "status": "succeeded",
+                "duration_seconds": 1.0,
+                "error_class": error_class,
+                "reported_claims": reported_claims,
+            }
+
+    monkeypatch.setattr(diagnostic, "CommandLabController", Controller)
+    monkeypatch.setattr(diagnostic, "CommandSystemRunner", Runner)
+    monkeypatch.setattr(
+        diagnostic,
+        "_ledger_contract_observation",
+        lambda *_args, **_kwargs: ("satisfied", 1, 1, 0),
+    )
+
+    outcome = diagnostic.run_diagnostic_pilot(
+        config,
+        environment={},
+        root=tmp_path / "diagnostics",
+        budget_seconds=120,
+        selected_system="strix",
+    )
+
+    payload = json.loads(outcome.summary_path.read_text(encoding="utf-8"))
+    run = payload["runs"][0]
+    assert payload["schema_version"] == "1.1"
+    assert outcome.exit_code == expected_exit
+    assert run["status"] == "succeeded"
+    assert run["claim_contract_status"] == contract_status
+    assert run["reported_claim_count"] == len(reported_claims)
+    assert run["exact_claim_count"] == sum(item.startswith("OCTOBENCH_V3_") for item in reported_claims)
+    assert run["ledger_contract_status"] == "satisfied"
+    assert run["ledger_entry_count"] == 1
+    assert run["evidence_event_count"] == 1
+    assert run["policy_violation_count"] == 0
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.count("[diagnostic] run_start ") == 1
+    assert captured.err.count("[diagnostic] run_finish ") == 1
+    assert "OCTOBENCH_V3_" not in captured.err
+
+
+def test_v3_config_fails_closed_if_scenario_lab_version_drifts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manifest = _manifest(tmp_path, "strix")
+    v3_config = BenchmarkV3CampaignConfig(
+        analysis_plan_path=tmp_path / "unused-analysis-plan.json",
+        state_directory=tmp_path / "lab-v3",
+        batch_id="diagnostic-batch",
+        host_id="diagnostic-host",
+    )
+    config = replace(
+        _config(tmp_path, (manifest,)),
+        benchmark_v3=v3_config,
+    )
+    scenario = load_scenario(SCENARIO_PATH)
+    monkeypatch.setattr(diagnostic, "load_system_manifest", lambda _path: manifest)
+    monkeypatch.setattr(diagnostic, "load_scenarios", lambda _path: (scenario,))
+
+    class Controller:
+        def __init__(self, *_args, **_kwargs):
+            return None
+
+        def reset_and_health(self, _context):
+            return None
+
+        def cleanup(self, _context):
+            return None
+
+    class Runner:
+        def __init__(self, _manifest, *, private_log_path):
+            self.private_log_path = Path(private_log_path)
+
+        def __call__(self, _scenario, _repetition, _seed):
+            return {
+                "status": "succeeded",
+                "duration_seconds": 1.0,
+                "error_class": "",
+            }
+
+    monkeypatch.setattr(diagnostic, "CommandLabController", Controller)
+    monkeypatch.setattr(diagnostic, "CommandSystemRunner", Runner)
+
+    outcome = diagnostic.run_diagnostic_pilot(
+        config,
+        environment={},
+        root=tmp_path / "diagnostics",
+        budget_seconds=120,
+        selected_system="strix",
+    )
+
+    payload = json.loads(outcome.summary_path.read_text(encoding="utf-8"))
+    assert outcome.exit_code == 1
+    assert payload["status"] == "completed_with_failures"
+    assert payload["runs"][0]["claim_contract_status"] == "not_applicable"
+    assert payload["runs"][0]["ledger_contract_status"] == "not_applicable"
+
+
+def test_v3_pilot_ledger_contract_requires_evidence_and_zero_violations(
+    tmp_path: Path,
+) -> None:
+    state_directory = tmp_path / "lab-v3"
+    campaign_id = "diagnostic-ledger-contract"
+    scenario_id = "canonical-alias-dedup-v3"
+    system_id = "strix"
+    seed = 17
+    v3_config = BenchmarkV3CampaignConfig(
+        analysis_plan_path=tmp_path / "unused-analysis-plan.json",
+        state_directory=state_directory,
+        batch_id="diagnostic-batch",
+        host_id="diagnostic-host",
+    )
+    config = replace(
+        _config(tmp_path, (_manifest(tmp_path, system_id),)),
+        campaign_id=campaign_id,
+        benchmark_v3=v3_config,
+    )
+    context = LabRunContext(
+        campaign_id=campaign_id,
+        system_id=system_id,
+        scenario_id=scenario_id,
+        repetition=1,
+        seed=seed,
+        lab_version="discovery-lab-v3",
+        snapshot_ref="diagnostic-snapshot",
+    )
+    variant, artifacts = prepare_fixture_run(
+        state_directory,
+        campaign_id=campaign_id,
+        system_id=system_id,
+        scenario_id=scenario_id,
+        repetition=1,
+        seed=seed,
+        base_url="http://127.0.0.1:8080",
+    )
+    ledger = ControlPlaneLedger(
+        variant_digest=variant.variant_digest,
+        path=artifacts.ledger,
+    )
+
+    assert diagnostic._ledger_contract_observation(
+        config,
+        context,
+        reset_healthy=True,
+    ) == ("no_requests", 0, 0, 0)
+
+    ledger.record(
+        method="GET",
+        target="http://127.0.0.1:8080/",
+        route_id="entry-handoff",
+        status=200,
+    )
+    assert diagnostic._ledger_contract_observation(
+        config,
+        context,
+        reset_healthy=True,
+    ) == ("missing_evidence", 1, 0, 0)
+
+    ledger.record(
+        method="GET",
+        target="http://127.0.0.1:8080/evidence",
+        route_id="route-1",
+        status=200,
+        evidence_ids=("ev-diagnostic",),
+    )
+    assert diagnostic._ledger_contract_observation(
+        config,
+        context,
+        reset_healthy=True,
+    ) == ("satisfied", 2, 1, 0)
+
+    ledger.record(
+        method="POST",
+        target="http://127.0.0.1:8080/evidence",
+        route_id="route-1",
+        status=405,
+        violation="read_only_mutation_attempt",
+    )
+    assert diagnostic._ledger_contract_observation(
+        config,
+        context,
+        reset_healthy=True,
+    ) == ("policy_violations", 3, 1, 1)
+
+
+def test_diagnostic_progress_sink_failure_is_nonfatal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken_print(*_args, **_kwargs) -> None:
+        raise BrokenPipeError
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr("builtins.print", broken_print)
+        diagnostic._emit_progress("safe diagnostic progress")
 
 
 def test_cleanup_failure_is_nonzero_and_partial_destination_is_not_reused(
@@ -417,15 +673,13 @@ def test_cleanup_failure_is_nonzero_and_partial_destination_is_not_reused(
         )
 
 
-def test_diagnostic_worker_captures_only_bounded_private_product_output(
+def test_diagnostic_worker_separates_bounded_raw_process_output(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     private = tmp_path / "private"
     private.mkdir(mode=0o700)
-    product_log = diagnostic_worker._initialize_private_log(
-        str(private / "product.log")
-    )
+    product_log = diagnostic_worker._initialize_private_log(str(private / "product.log"))
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     payload = b"private-product-detail" * 100
@@ -454,8 +708,87 @@ def test_diagnostic_worker_captures_only_bounded_private_product_output(
     )
 
     assert result["error_class"] == "ProductExitCode1"
-    assert product_log.read_bytes() == payload[:17]
+    assert product_log.read_bytes() == b""
     assert stat.S_IMODE(product_log.stat().st_mode) == 0o600
+    process_log = private / "process.log"
+    assert process_log.read_bytes() == payload[:17]
+    assert stat.S_IMODE(process_log.stat().st_mode) == 0o600
+
+
+def test_diagnostic_worker_captures_file_only_cli_claim_in_collected_product_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    product_log = diagnostic_worker._initialize_private_log(str(private / "product.log"))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    exact_claim = "OCTOBENCH_V3_0123456789ABCDEF"
+    raw_stdout = "strix completed without a stdout claim"
+    base_scenario = load_scenario(SCENARIO_PATH)
+    scenario = replace(
+        base_scenario,
+        lab={
+            **dict(base_scenario.lab),
+            "version": "discovery-lab-v3",
+        },
+    )
+    outcomes: list[adapter.ProductOutcome] = []
+
+    def bounded_process(*_args, **kwargs):
+        selected_workspace = Path(kwargs["cwd"])
+        (selected_workspace / "adapter-stdout.log").write_text(
+            raw_stdout,
+            encoding="utf-8",
+        )
+        (selected_workspace / "00-final-report.txt").write_text(
+            f"Claim: {exact_claim}\n",
+            encoding="utf-8",
+        )
+        return 0, False, False, raw_stdout, 1.0
+
+    def run_product(system, selected_scenario):
+        assert system == "strix"
+        outcome = adapter._run_cli_product(
+            "strix",
+            selected_scenario,
+            "http://127.0.0.1:8080",
+            "authorized diagnostic prompt",
+            {
+                "OCTOBENCH_STRIX_BIN": sys.executable,
+                "STRIX_IMAGE": f"fixture.invalid/strix@sha256:{'a' * 64}",
+            },
+            workspace,
+            1.0,
+            4_096,
+        )
+        outcomes.append(outcome)
+        return {
+            "status": outcome.status,
+            "reported_claims": list(outcome.reported_claims or ()),
+        }
+
+    original_cli = adapter._run_cli_product
+    monkeypatch.setattr(adapter, "_run_bounded_process", bounded_process)
+    monkeypatch.setattr(adapter, "run_product_adapter", run_product)
+
+    result = diagnostic_worker._run_with_private_capture(
+        "strix",
+        scenario,
+        product_log,
+    )
+
+    assert result == {"status": "succeeded", "reported_claims": []}
+    assert len(outcomes) == 1
+    assert exact_claim in outcomes[0].output_text
+    assert product_log.read_text(encoding="utf-8") == outcomes[0].output_text
+    assert stat.S_IMODE(product_log.stat().st_mode) == 0o600
+    process_log = private / "process.log"
+    assert process_log.read_text(encoding="utf-8") == raw_stdout
+    assert exact_claim not in process_log.read_text(encoding="utf-8")
+    assert stat.S_IMODE(process_log.stat().st_mode) == 0o600
+    assert adapter._run_cli_product is original_cli
 
 
 def test_diagnostic_worker_rejects_unsafe_parent_and_final_symlink(

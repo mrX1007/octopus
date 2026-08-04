@@ -978,16 +978,32 @@ private 32–64-character hexadecimal `OCTOBENCH_V3_BASE_FIXTURE_SEED`; use the
 [v3 campaign runbook](benchmarks/competitors/campaigns/linux-blackbox-small-model-v3/README.md)
 and a fresh campaign ID.
 
-`linux-blackbox-small-model-v4` measures quality-preserving efficiency with
-controller-measured wall time and fixture requests over 20 paired repetitions
-per family. It cannot start its 480-run evaluation until the mandatory
-`--readiness-calibration` proves verified nonzero signal for both products, at
-least one jointly completed positive evidence-bearing matched block, a perfect
-sealed reference, and zero policy violations. A clean-negative-only success is
-rejected. The bounded calibration is 24 product runs at 300 seconds plus 12
-fast controller-reference checks. Use the
+`linux-blackbox-small-model-v4` is designed to measure quality-preserving
+efficiency with controller-measured wall time and fixture requests over 20
+paired repetitions per family. It cannot start its 480-run evaluation until
+the mandatory `--readiness-calibration` proves verified nonzero signal for
+both products, all 12 matched product blocks jointly claim-eligible with
+verified recall/precision and positive controller resources, a perfect sealed
+reference, and zero policy violations. A
+partial-family success is rejected. The bounded calibration is 24 product
+runs at 300 seconds plus 12 fast controller-reference checks. Use the
 [v4 campaign runbook](benchmarks/competitors/campaigns/linux-blackbox-small-model-v4/README.md)
 and the same fresh campaign ID for calibration and the subsequent full run.
+
+A blocked calibration remains private diagnostic evidence: it is not published
+and is not an efficiency result. Before another readiness attempt, run the
+runbook's fixed short positive-scenario diagnostic once for each product under
+disposable pilot IDs. Diagnostic schema 1.1 reports final-claim and verified
+controller-ledger contract fields and returns nonzero unless the run finishes
+cleanly, reports only exact `OCTOBENCH_V3_*` claims, reaches fixture evidence,
+and records no mutation-method violation. Do not start readiness until both
+pilots exit zero.
+
+Efficiency plan/statistics schema 1.1 also closes the completed-subset
+denominator: a directional resource claim requires every one of the 240 frozen
+matched pairs, covering all 12 scenario families, to be jointly completed and
+quality-qualified. Otherwise v4 still publishes stability, resource use and
+descriptive effects, but the directional result is `inconclusive`.
 
 The shorter v2 publication example remains:
 

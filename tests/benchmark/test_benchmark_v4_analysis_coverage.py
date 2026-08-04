@@ -50,6 +50,19 @@ def _noninferiority_stubs() -> dict[str, dict[str, Any]]:
     }
 
 
+def _passing_noninferiority_stubs(sample_size: int) -> dict[str, dict[str, Any]]:
+    gate = {
+        "effect": {"available": True, "sample_size": sample_size},
+        "left_noninferior": True,
+        "right_noninferior": True,
+    }
+    return {
+        "task_completion_rate": gate,
+        "verified_f1": gate,
+        "verified_f1_both_completed": gate,
+    }
+
+
 def test_extract_rejects_duplicate_missing_and_unattested_runs(
     canary: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
@@ -365,6 +378,42 @@ def test_resource_effect_counts_both_and_left_incomplete_tasks(canary: SimpleNam
         "both_tasks_not_completed": 1,
         "left_task_not_completed": 1,
     }
+
+
+def test_resource_effect_requires_the_exact_frozen_scenario_set(canary: SimpleNamespace) -> None:
+    block = canary.plan.schedule[0]
+    by_system = {
+        item.system_id: item
+        for item in canary.projections
+        if item.block_key == (block.scenario_id, block.repetition, block.matched_fixture_seed)
+    }
+    left_id, right_id = canary.plan.comparison_pairs[0]
+    plan_with_missing_scenario = _unchecked_copy(
+        canary.plan,
+        scenario_ids=(*canary.plan.scenario_ids, "missing-scenario-v3"),
+    )
+
+    result = analysis._resource_effect(
+        plan_with_missing_scenario,
+        [(by_system[left_id], by_system[right_id])],
+        left_id,
+        right_id,
+        "wall_time_seconds",
+        0,
+        0,
+        canary.plan.alpha / 2,
+        {"base_eligible": True},
+        _passing_noninferiority_stubs(1),
+    )
+
+    gate = result["claim_population_gate"]
+    assert gate["all_scheduled_pairs_eligible"] is True
+    assert gate["exact_scenario_coverage"] is False
+    assert gate["required_scenario_ids"] == ["deep-navigation-v3", "missing-scenario-v3"]
+    assert gate["resource_ratio_scenario_ids"] == ["deep-navigation-v3"]
+    assert gate["quality_per_resource_scenario_ids"] == ["deep-navigation-v3"]
+    assert gate["passed"] is False
+    assert result["directional_claims"]["result"] == "inconclusive"
 
 
 def test_group_pairs_and_pareto_boundaries(canary: SimpleNamespace) -> None:

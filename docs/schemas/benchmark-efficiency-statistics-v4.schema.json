@@ -24,7 +24,7 @@
       "type": "array"
     },
     "run_count": { "minimum": 1, "type": "integer" },
-    "schema_version": { "const": "1.0" },
+    "schema_version": { "const": "1.1" },
     "source_analysis_plan_digest": { "$ref": "#/$defs/digest" },
     "source_v3_validation": {
       "additionalProperties": false,
@@ -167,6 +167,50 @@
         "scheduled": { "minimum": 1, "type": "integer" }
       },
       "required": ["available", "coverage", "mean", "median", "scheduled"],
+      "type": "object"
+    },
+    "claimPopulationGate": {
+      "additionalProperties": false,
+      "properties": {
+        "all_scheduled_pairs_eligible": { "type": "boolean" },
+        "eligible_pair_count": { "minimum": 0, "type": "integer" },
+        "eligible_pair_coverage": { "$ref": "#/$defs/ratio" },
+        "exact_scenario_coverage": { "type": "boolean" },
+        "jointly_completed_pair_count": { "minimum": 0, "type": "integer" },
+        "passed": { "type": "boolean" },
+        "quality_per_resource_scenario_ids": {
+          "items": { "$ref": "#/$defs/identifier" },
+          "maxItems": 4096,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "required_scenario_ids": {
+          "items": { "$ref": "#/$defs/identifier" },
+          "maxItems": 4096,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "resource_ratio_scenario_ids": {
+          "items": { "$ref": "#/$defs/identifier" },
+          "maxItems": 4096,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "scheduled_pair_count": { "minimum": 1, "type": "integer" }
+      },
+      "required": [
+        "all_scheduled_pairs_eligible",
+        "eligible_pair_count",
+        "eligible_pair_coverage",
+        "exact_scenario_coverage",
+        "jointly_completed_pair_count",
+        "passed",
+        "quality_per_resource_scenario_ids",
+        "required_scenario_ids",
+        "resource_ratio_scenario_ids",
+        "scheduled_pair_count"
+      ],
       "type": "object"
     },
     "comparison": {
@@ -489,10 +533,20 @@
     "primaryMetricGates": {
       "additionalProperties": false,
       "properties": {
-        "fixture_http_requests": { "$ref": "#/$defs/primaryCoverageGate" },
-        "wall_time_seconds": { "$ref": "#/$defs/primaryCoverageGate" }
+        "fixture_http_requests": { "$ref": "#/$defs/primaryMetricGate" },
+        "wall_time_seconds": { "$ref": "#/$defs/primaryMetricGate" }
       },
       "required": ["fixture_http_requests", "wall_time_seconds"],
+      "type": "object"
+    },
+    "primaryMetricGate": {
+      "additionalProperties": false,
+      "properties": {
+        "claim_population": { "$ref": "#/$defs/claimPopulationGate" },
+        "measurement_coverage": { "$ref": "#/$defs/primaryCoverageGate" },
+        "passed": { "type": "boolean" }
+      },
+      "required": ["claim_population", "measurement_coverage", "passed"],
       "type": "object"
     },
     "primaryResourceEffect": {
@@ -549,6 +603,7 @@
     "resourceEffect": {
       "additionalProperties": false,
       "properties": {
+        "claim_population_gate": { "$ref": "#/$defs/claimPopulationGate" },
         "coverage_gate": { "$ref": "#/$defs/coverageGate" },
         "directional_claims": { "$ref": "#/$defs/directionalClaims" },
         "effect_projection": { "$ref": "#/$defs/effectProjection" },
@@ -562,6 +617,7 @@
         "scheduled_pair_count": { "minimum": 1, "type": "integer" }
       },
       "required": [
+        "claim_population_gate",
         "coverage_gate",
         "directional_claims",
         "effect_projection",

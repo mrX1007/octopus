@@ -15,6 +15,7 @@ from core.benchmarks.competitors import campaign, launch, readiness
 from core.benchmarks.competitors.lab import LabRunContext, ResetAttestation
 from core.benchmarks.competitors.state import CampaignFingerprintMismatch
 from core.benchmarks.v3.schema import (
+    ActionEvent,
     BenchmarkRunV3,
     BudgetEnforcement,
     MetricObservation,
@@ -105,6 +106,15 @@ def _passing_v3_run(**kwargs: Any) -> BenchmarkRunV3:
         numerator=1,
         denominator=1,
     )
+    precision = MetricObservation(
+        name="verified_claim_precision",
+        population="all_scheduled",
+        available=True,
+        reliability="verified",
+        value=1.0,
+        numerator=1,
+        denominator=1,
+    )
     return BenchmarkRunV3(
         run_id="calibration-run-"
         + stable_digest(
@@ -123,7 +133,7 @@ def _passing_v3_run(**kwargs: Any) -> BenchmarkRunV3:
         evaluation=RunEvaluation(
             task_status="completed",
             completion_rule_id="readiness-completion-v1",
-            metrics=(recall,),
+            metrics=(recall, precision),
             evaluator_id="sealed-evaluator-v3",
         ),
         matched_fixture_seed=seed,
@@ -144,7 +154,18 @@ def _passing_v3_run(**kwargs: Any) -> BenchmarkRunV3:
                 reliable=True,
             ),
         ),
-        action_telemetry=(),
+        action_telemetry=(
+            ActionEvent(
+                event_id="ledger-event-1",
+                sequence=0,
+                action_name="fixture-http-request",
+                action_type="http",
+                status="succeeded",
+                method="GET",
+                target_class="fixture-route",
+                evidence_refs=("evidence-one",),
+            ),
+        ),
         action_telemetry_available=True,
         action_telemetry_reliability="verified",
         duration_seconds=1.0,
@@ -154,6 +175,7 @@ def _passing_v3_run(**kwargs: Any) -> BenchmarkRunV3:
         finished_at=float(kwargs["finished_at"]),
         environment={
             "analysis_plan_digest": plan.digest,
+            "controller_ledger_entries": 1,
             "reset_attestation": dict(kwargs["reset_attestation"]),
         },
     )
@@ -226,7 +248,7 @@ def test_calibration_runs_exact_frozen_schedule_and_full_gate_recomputes(
     assert stat.S_IMODE(evidence_path.stat().st_mode) == 0o600
     evidence = load_readiness_evidence(evidence_path, plan=plan)
     assert evidence.ready
-    assert evidence.paired_completed_block_count == 12
+    assert evidence.paired_claim_eligible_block_count == 12
     assert (
         readiness.require_full_campaign_readiness(
             config,
@@ -251,9 +273,86 @@ def test_calibration_runs_exact_frozen_schedule_and_full_gate_recomputes(
         )
 
 
+def test_calibration_emits_safe_start_and_finish_progress(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config = _prepared_config(tmp_path, monkeypatch, "readiness-progress")
+    readiness_config = config.benchmark_v4_readiness
+    assert readiness_config is not None
+    plan = readiness_config.plan()
+    base_factory, *_unused = _install_passing_execution(monkeypatch)
+    sensitive_marker = "OCTOBENCH_V3_DO_NOT_PRINT_THIS_TOKEN"
+
+    def factory(manifest):
+        runner = base_factory(manifest)
+
+        def run(scenario, repetition, seed):
+            result = dict(runner(scenario, repetition, seed))
+            result.update(
+                {
+                    "status": "failed",
+                    "error_class": f"AdapterFailure:{sensitive_marker}",
+                    "reported_claims": [sensitive_marker],
+                    "artifact_refs": [f"private://{sensitive_marker}"],
+                    "coverage_gaps": [sensitive_marker],
+                    "policy_violations": [sensitive_marker],
+                }
+            )
+            return result
+
+        return run
+
+    readiness.run_readiness_calibration(
+        config,
+        environment=_environment(),
+        runner_factory=factory,
+        lab_controller=_RecordingLab(
+            reset_command_sha256=readiness._command_digest(config.reset_command),
+            health_command_sha256=readiness._command_digest(config.health_command),
+        ),
+        clock=lambda: 10.0,
+        monotonic=lambda: 1.0,
+    )
+
+    captured = capsys.readouterr()
+    lines = captured.err.splitlines()
+    starts = [line for line in lines if line.startswith("[readiness] run_start ")]
+    finishes = [line for line in lines if line.startswith("[readiness] run_finish ")]
+    first_scenario, first_repetition, _first_seed, first_system = plan.expected_run_keys()[0]
+
+    assert captured.out == ""
+    assert len(starts) == len(finishes) == plan.expected_run_count == 36
+    assert starts[0] == (
+        "[readiness] run_start index=1 total=36"
+        f" system={first_system} scenario={first_scenario} repetition={first_repetition}"
+    )
+    product_finish = next(line for line in finishes if " system=octopus " in line)
+    assert " status=failed error=present duration_seconds=1.000 task_status=completed " in product_finish
+    assert " actions=1 policy_violations=0" in product_finish
+    assert sensitive_marker not in captured.err
+    assert "reported_claims" not in captured.err
+    assert "artifact_refs" not in captured.err
+    assert "seed=" not in captured.err
+    assert "run_key=" not in captured.err
+
+
+def test_readiness_progress_sink_failure_is_nonfatal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken_print(*_args, **_kwargs) -> None:
+        raise BrokenPipeError
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr("builtins.print", broken_print)
+        readiness._emit_progress("safe readiness progress")
+
+
 def test_interrupted_calibration_cannot_retry_or_substitute(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     config = _prepared_config(tmp_path, monkeypatch, "readiness-no-retry")
     factory, factory_ids, product_calls, reference_calls = _install_passing_execution(monkeypatch)
@@ -265,6 +364,11 @@ def test_interrupted_calibration_cannot_retry_or_substitute(
             runner_factory=factory,
             lab_controller=failed_lab,
         )
+    interrupted_output = capsys.readouterr()
+    assert interrupted_output.out == ""
+    assert len(interrupted_output.err.splitlines()) == 1
+    assert interrupted_output.err.startswith("[readiness] run_start index=1 total=36 ")
+    assert "[readiness] run_finish" not in interrupted_output.err
     factory_count_after_interruption = len(factory_ids)
 
     second_lab = _RecordingLab()
@@ -476,12 +580,14 @@ def test_blocked_calibration_freezes_evidence_before_failing(
 ) -> None:
     config = _prepared_config(tmp_path, monkeypatch, "readiness-blocked")
     factory, *_unused = _install_passing_execution(monkeypatch)
+    plan = config.benchmark_v4_readiness.plan()
+    incomplete_scenario = plan.scenario_ids[0]
 
     def blocked_run(**kwargs: Any) -> BenchmarkRunV3:
         run = _passing_v3_run(**kwargs)
-        if run.system_id == config.benchmark_v4_readiness.plan().profile.reference_runner_id:
-            return run
-        return replace(run, evaluation=replace(run.evaluation, task_status="not_completed"))
+        if run.system_id == "octopus" and run.scenario_id == incomplete_scenario:
+            return replace(run, evaluation=replace(run.evaluation, task_status="not_completed"))
+        return run
 
     monkeypatch.setattr(readiness, "build_v3_run", blocked_run)
     with pytest.raises(readiness.BenchmarkV4ReadinessError):
@@ -500,4 +606,6 @@ def test_blocked_calibration_freezes_evidence_before_failing(
     evidence_path = config.benchmark_v4_readiness.evidence_path
     payload = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert payload["status"] == "blocked"
+    failed_checks = {item["check_id"] for item in payload["checks"] if item["status"] == "failed"}
+    assert failed_checks == {"paired_claim_eligible_blocks", "system_completion:octopus"}
     assert stat.S_IMODE(evidence_path.stat().st_mode) == 0o600

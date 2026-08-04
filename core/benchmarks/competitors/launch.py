@@ -363,6 +363,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_directory = _output_directory(campaign_id)
         diagnostic_directory = _diagnostic_root() / campaign_id
         journal_directory = _journal_campaign_directory(campaign_id)
+        readiness_journal_directory = _readiness_journal_campaign_directory(
+            campaign_id,
+        )
         if args.readiness_calibration or args.diagnostic_pilot:
             if any(
                 path.exists() or path.is_symlink()
@@ -370,6 +373,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     output_directory,
                     diagnostic_directory,
                     journal_directory,
+                    readiness_journal_directory,
                 )
             ):
                 raise LaunchError("output_exists")
@@ -913,13 +917,13 @@ def _campaign_payload(
             if efficiency_plan is None or readiness_profile is None or readiness_plan is None:
                 raise LaunchError("campaign_definition_mismatch")
             payload["benchmark_v3"]["efficiency_plan"] = str(_generated_directory(campaign_id) / "efficiency-plan.json")
-            readiness_journal = ROOT / ".benchmark-state" / "readiness-journal"
+            readiness_journal = _readiness_journal_root()
             payload["benchmark_v4_readiness"] = {
                 "schema_version": "1.0",
                 "profile": str(_generated_directory(campaign_id) / "readiness-profile.json"),
                 "plan": str(_generated_directory(campaign_id) / "readiness-plan.json"),
                 "journal_directory": str(readiness_journal),
-                "evidence": str(readiness_journal / campaign_id / "readiness-evidence.json"),
+                "evidence": str(_readiness_journal_campaign_directory(campaign_id) / "readiness-evidence.json"),
             }
         elif efficiency_plan is not None or readiness_profile is not None or readiness_plan is not None:
             raise LaunchError("campaign_definition_mismatch")
@@ -2084,6 +2088,14 @@ def _diagnostic_root() -> Path:
 
 def _journal_campaign_directory(campaign_id: str) -> Path:
     return ROOT / ".benchmark-state" / "journal" / campaign_id
+
+
+def _readiness_journal_root() -> Path:
+    return ROOT / ".benchmark-state" / "readiness-journal"
+
+
+def _readiness_journal_campaign_directory(campaign_id: str) -> Path:
+    return _readiness_journal_root() / campaign_id
 
 
 def _print_error(code: str) -> None:
