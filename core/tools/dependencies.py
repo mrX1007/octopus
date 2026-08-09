@@ -507,11 +507,7 @@ def _vendor_available(requirement: VendorDependency, context: DependencyContext)
     if not isinstance(artifacts, list):
         return False
     record = next(
-        (
-            item
-            for item in artifacts
-            if isinstance(item, dict) and str(item.get("path") or "") == requirement.path
-        ),
+        (item for item in artifacts if isinstance(item, dict) and str(item.get("path") or "") == requirement.path),
         None,
     )
     if record is None:
@@ -544,7 +540,9 @@ def evaluate_dependency(
             if spec.mode is DependencyMode.ALL
             else bool(children) and any(child.available for child in children)
         )
-        return DependencyEvaluation(spec, available, "requirements_satisfied" if available else "requirements_missing", children)
+        return DependencyEvaluation(
+            spec, available, "requirements_satisfied" if available else "requirements_missing", children
+        )
     if isinstance(spec, BinaryDependency):
         available = shutil.which(spec.name) is not None
     elif isinstance(spec, PythonDependency):

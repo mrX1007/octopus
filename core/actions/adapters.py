@@ -205,9 +205,7 @@ class RegisteredToolAdapter(ActionAdapter):
             requirements=ActionRequirements(
                 system_dependencies=tuple(str(item) for item in getattr(tool_def, "requires", ()) or ()),
                 dependency_expression=(
-                    tool_def.dependency_manifest()
-                    if callable(getattr(tool_def, "dependency_manifest", None))
-                    else None
+                    tool_def.dependency_manifest() if callable(getattr(tool_def, "dependency_manifest", None)) else None
                 ),
                 target_required=bool(getattr(tool_def, "needs_target", True)),
                 active=active,

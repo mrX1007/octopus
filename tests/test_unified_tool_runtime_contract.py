@@ -144,9 +144,7 @@ def test_pass_the_hash_name_and_alias_are_quarantined_without_exposing_raw_hash(
     assert canonical.enabled is False
     assert get_tool("pth") is canonical
     assert "pass_the_hash" not in {
-        provider
-        for task in registry.task_map
-        for provider in registry._tool_names_for_task(task)
+        provider for task in registry.task_map for provider in registry._tool_names_for_task(task)
     }
 
     for name in ("pass_the_hash", "pth"):
@@ -360,9 +358,7 @@ def test_legacy_menu_special_arguments_are_explicit_and_hermetic(monkeypatch):
 
 def test_every_builtin_name_and_alias_dispatches_through_one_runtime(tmp_path):
     definitions = tuple(
-        replace(tool_def, requires=[], dependencies=None)
-        for tool_def in _builtin_tool_defs()
-        if tool_def.enabled
+        replace(tool_def, requires=[], dependencies=None) for tool_def in _builtin_tool_defs() if tool_def.enabled
     )
     context = _approved_context()
     calls: list[tuple[str, ExecutionContext]] = []
@@ -408,9 +404,7 @@ def test_every_builtin_name_and_alias_dispatches_through_one_runtime(tmp_path):
 
 def test_every_builtin_name_and_alias_crosses_scheduler_and_action_catalog(tmp_path):
     definitions = tuple(
-        replace(tool_def, requires=[], dependencies=None)
-        for tool_def in _builtin_tool_defs()
-        if tool_def.enabled
+        replace(tool_def, requires=[], dependencies=None) for tool_def in _builtin_tool_defs() if tool_def.enabled
     )
     context = _approved_context()
     calls: list[tuple[str, ExecutionContext]] = []
@@ -451,9 +445,7 @@ def test_every_builtin_name_and_alias_crosses_scheduler_and_action_catalog(tmp_p
 
 def test_automatic_context_never_dispatches_policy_active_builtin_or_alias(tmp_path):
     definitions = tuple(
-        replace(tool_def, requires=[], dependencies=None)
-        for tool_def in _builtin_tool_defs()
-        if tool_def.enabled
+        replace(tool_def, requires=[], dependencies=None) for tool_def in _builtin_tool_defs() if tool_def.enabled
     )
     context = ExecutionContext.automatic(target_scope=(TARGET, CALLBACK_TARGET))
     calls: list[str] = []

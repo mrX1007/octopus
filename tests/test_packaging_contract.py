@@ -32,9 +32,7 @@ def test_package_has_build_backend_version_and_console_entrypoints() -> None:
     assert payload["build-system"]["build-backend"] == "setuptools.build_meta"
     assert payload["project"]["dynamic"] == ["version"]
     assert "version" not in payload["project"]
-    assert payload["tool"]["setuptools"]["dynamic"]["version"] == {
-        "attr": "core.version.__version__"
-    }
+    assert payload["tool"]["setuptools"]["dynamic"]["version"] == {"attr": "core.version.__version__"}
     assert APPLICATION_VERSION
     assert payload["project"]["scripts"] == {
         "octobench": "core.benchmarks.__main__:main",
@@ -65,9 +63,7 @@ def test_runtime_build_sources_and_service_are_in_wheel_and_sdist_manifests() ->
     }
     assert "core.opsec" not in payload["package-data"]
     assert payload["exclude-package-data"]["core.opsec"] == ["ja3_client.go"]
-    assert payload["data-files"]["share/octopus-security/systemd"] == [
-        "data/octopus-c2.service"
-    ]
+    assert payload["data-files"]["share/octopus-security/systemd"] == ["data/octopus-c2.service"]
     manifest = set((ROOT / "MANIFEST.in").read_text(encoding="utf-8").splitlines())
     assert {
         "include config.yaml",

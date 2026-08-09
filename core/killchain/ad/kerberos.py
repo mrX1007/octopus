@@ -42,6 +42,7 @@ CLI_TIMEOUT = 300
 
 # Internal helpers
 
+
 def _normalize_creds(creds: dict[str, str] | None) -> dict[str, str]:
     """Return a dict with guaranteed keys: user, password, domain, nthash."""
     defaults: dict[str, str] = {"user": "", "password": "", "domain": "", "nthash": ""}
@@ -63,7 +64,11 @@ def _run_cli(cmd: list[str] | tuple[str, ...], timeout: int = CLI_TIMEOUT) -> st
         return "[!] Unsafe CLI command rejected: an argv sequence is required"
     try:
         result = subprocess.run(
-            list(cmd), shell=False, capture_output=True, text=True, timeout=timeout,
+            list(cmd),
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
         return (result.stdout + result.stderr).strip()
     except subprocess.TimeoutExpired:
@@ -77,6 +82,7 @@ def _run_cli(cmd: list[str] | tuple[str, ...], timeout: int = CLI_TIMEOUT) -> st
 
 
 # AS-REP Roasting
+
 
 def asrep_roast(
     target: str,
@@ -128,6 +134,7 @@ def asrep_roast(
             # impacket GetNPUsers expects an argparse-style namespace
             class _Args:
                 """Minimal namespace to drive GetNPUsers."""
+
                 def __init__(self) -> None:
                     self.target = f"{creds['domain']}/{creds['user']}:{creds['password']}"
                     self.dc_ip = target
@@ -171,6 +178,7 @@ def asrep_roast(
 
 # Kerberoasting
 
+
 def kerberoast(target: str, creds: dict[str, str] | None = None) -> str:
     """Kerberoast — request TGS tickets for service accounts and crack offline.
 
@@ -200,6 +208,7 @@ def kerberoast(target: str, creds: dict[str, str] | None = None) -> str:
 
         class _Args:
             """Minimal namespace to drive GetUserSPNs."""
+
             def __init__(self) -> None:
                 self.target = f"{creds['domain']}/{creds['user']}:{creds['password']}"
                 self.dc_ip = target
@@ -241,6 +250,7 @@ def kerberoast(target: str, creds: dict[str, str] | None = None) -> str:
 
 
 # Ticket extraction
+
 
 def extract_tickets(target: str, creds: dict[str, str] | None = None) -> str:
     """Extract TGT/TGS tickets from memory or request new ones via impacket.
@@ -319,6 +329,7 @@ def extract_tickets(target: str, creds: dict[str, str] | None = None) -> str:
 
 # Ticket cracking
 
+
 def crack_tickets(
     ticket_file: str,
     wordlist: str = "",
@@ -366,16 +377,29 @@ def crack_tickets(
         print(f"    {C_CYAN}[*] Cracking with hashcat (mode {hashcat_mode})...{C_RESET}")
         potfile = ticket_file + ".potfile"
         cmd = [
-            "hashcat", "-m", str(hashcat_mode), ticket_file, wordlist,
-            "--potfile-path", potfile, "--force", "--quiet",
+            "hashcat",
+            "-m",
+            str(hashcat_mode),
+            ticket_file,
+            wordlist,
+            "--potfile-path",
+            potfile,
+            "--force",
+            "--quiet",
         ]
         cli_out = _run_cli(cmd, timeout=CLI_TIMEOUT)
         output += f"[hashcat]\n{cli_out[:3000]}\n"
 
         # Show cracked results
         show_cmd = [
-            "hashcat", "-m", str(hashcat_mode), ticket_file,
-            "--show", "--potfile-path", potfile, "--quiet",
+            "hashcat",
+            "-m",
+            str(hashcat_mode),
+            ticket_file,
+            "--show",
+            "--potfile-path",
+            potfile,
+            "--quiet",
         ]
         cracked = _run_cli(show_cmd, timeout=30)
         if cracked and "[!]" not in cracked:

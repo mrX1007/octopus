@@ -22,22 +22,25 @@ from .web import WebParser
 
 class ParserFamilyPipeline:
     def __init__(self, parsers: Optional[Iterable[BaseParser]] = None):
-        self.parsers = list(parsers or [
-            NmapParser(),
-            WebParser(),
-            SSHParser(),
-            MSFParser(),
-            PluginParser(),
-            IntelligenceParser(),
-            TemplateParser(),
-            NetworkGraphParser(),
-            ASMParser(),
-            APIParser(),
-            ADParser(),
-            CloudParser(),
-            SecretsParser(),
-            CodeParser(),
-        ])
+        self.parsers = list(
+            parsers
+            or [
+                NmapParser(),
+                WebParser(),
+                SSHParser(),
+                MSFParser(),
+                PluginParser(),
+                IntelligenceParser(),
+                TemplateParser(),
+                NetworkGraphParser(),
+                ASMParser(),
+                APIParser(),
+                ADParser(),
+                CloudParser(),
+                SecretsParser(),
+                CodeParser(),
+            ]
+        )
 
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
         facts: list[Fact] = []

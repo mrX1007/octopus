@@ -18,7 +18,7 @@ class KnowledgeEnricher:
 
     def __init__(self, graph: KnowledgeGraph):
         self.graph = graph
-        self._processed: set[str] = set()   # avoid duplicate processing
+        self._processed: set[str] = set()  # avoid duplicate processing
 
     def enrich_from_facts(self, target_ip: str, facts: list[tuple[str, str]]):
         """
@@ -51,30 +51,28 @@ class KnowledgeEnricher:
         ft.lower()
 
         # ── PORT OPEN ──
-        m = re.match(r'Port (\d+) OPEN \((\S+)\)', ft)
+        m = re.match(r"Port (\d+) OPEN \((\S+)\)", ft)
         if m:
             port, svc_name = int(m.group(1)), m.group(2)
             self.graph.add_service(target_ip, port, service_name=svc_name)
             return
 
         # ── PORT FILTERED ──
-        m = re.match(r'Port (\d+) FILTERED \((\S+)\)', ft)
+        m = re.match(r"Port (\d+) FILTERED \((\S+)\)", ft)
         if m:
             port, svc_name = int(m.group(1)), m.group(2)
-            self.graph.add_service(target_ip, port, service_name=svc_name,
-                                   state="filtered")
+            self.graph.add_service(target_ip, port, service_name=svc_name, state="filtered")
             return
 
         # ── PORT CLOSED ──
-        m = re.match(r'Port (\d+) CLOSED \((\S+)\)', ft)
+        m = re.match(r"Port (\d+) CLOSED \((\S+)\)", ft)
         if m:
             port, svc_name = int(m.group(1)), m.group(2)
-            self.graph.add_service(target_ip, port, service_name=svc_name,
-                                   state="closed")
+            self.graph.add_service(target_ip, port, service_name=svc_name, state="closed")
             return
 
         # ── PORT VERSION ──
-        m = re.match(r'Port (\d+) version: (.+)', ft)
+        m = re.match(r"Port (\d+) version: (.+)", ft)
         if m:
             port, version = int(m.group(1)), m.group(2).strip()
             self.graph.add_service(target_ip, port, version=version)
@@ -85,18 +83,18 @@ class KnowledgeEnricher:
             cred_part = ft.split("CREDENTIALS FOUND:")[-1].strip()
             # Formats: "user:pass", "ssh://user:pass on port 22"
             cred_clean = cred_part.split(" on ")[0]
-            cred_clean = re.sub(r'^(ssh|ftp|http|mysql)://', '', cred_clean)
+            cred_clean = re.sub(r"^(ssh|ftp|http|mysql)://", "", cred_clean)
             if ":" in cred_clean:
                 user, pwd = cred_clean.split(":", 1)
                 user = user.strip("'\".,;:()[] ")
                 pwd = pwd.strip("'\".,;:()[] ")
                 if user and pwd and len(user) >= 2:
                     cred = self.graph.add_credential(
-                        user, pwd, source=source,
-                        service="ssh", verified=True, host=target_ip)
+                        user, pwd, source=source, service="ssh", verified=True, host=target_ip
+                    )
                     self.graph.link_credential_to_asset(
-                        cred.node_id, self.graph.add_asset(target_ip).node_id,
-                        method="password_auth")
+                        cred.node_id, self.graph.add_asset(target_ip).node_id, method="password_auth"
+                    )
             return
 
         # ── SSH VALID USER ──
@@ -104,13 +102,8 @@ class KnowledgeEnricher:
         if m:
             username = m.group(1).strip("'\"")
             asset = self.graph.add_asset(target_ip)
-            identity = self.graph.add_identity(
-                username, identity_type="local", host=target_ip
-            )
-            self.graph.link(asset.node_id,
-                            identity.node_id,
-                            EdgeType.HAS_IDENTITY,
-                            source=source)
+            identity = self.graph.add_identity(username, identity_type="local", host=target_ip)
+            self.graph.link(asset.node_id, identity.node_id, EdgeType.HAS_IDENTITY, source=source)
             return
 
         # ── SYSTEM USER ──
@@ -118,12 +111,8 @@ class KnowledgeEnricher:
         if m:
             username, uid = m.group(1), int(m.group(2))
             asset = self.graph.add_asset(target_ip)
-            identity = self.graph.add_identity(
-                username, identity_type="local", host=target_ip, uid=uid
-            )
-            self.graph.link(asset.node_id,
-                            identity.node_id,
-                            EdgeType.HAS_IDENTITY)
+            identity = self.graph.add_identity(username, identity_type="local", host=target_ip, uid=uid)
+            self.graph.link(asset.node_id, identity.node_id, EdgeType.HAS_IDENTITY)
             return
 
         # ── SYSTEM LOGIN USER ──
@@ -131,12 +120,8 @@ class KnowledgeEnricher:
         if m:
             username, shell = m.group(1), m.group(2)
             asset = self.graph.add_asset(target_ip)
-            identity = self.graph.add_identity(
-                username, identity_type="local", host=target_ip, shell=shell
-            )
-            self.graph.link(asset.node_id,
-                            identity.node_id,
-                            EdgeType.HAS_IDENTITY)
+            identity = self.graph.add_identity(username, identity_type="local", host=target_ip, shell=shell)
+            self.graph.link(asset.node_id, identity.node_id, EdgeType.HAS_IDENTITY)
             return
 
         # ── TARGET IS ROOTED ──
@@ -147,10 +132,8 @@ class KnowledgeEnricher:
         # ── NOPASSWD SUDO ──
         if "NOPASSWD sudo:" in ft:
             vuln = self.graph.add_vulnerability(
-                f"nopasswd-sudo-{target_ip}",
-                name="NOPASSWD Sudo",
-                severity="high", confirmed=True,
-                description=ft)
+                f"nopasswd-sudo-{target_ip}", name="NOPASSWD Sudo", severity="high", confirmed=True, description=ft
+            )
             # Find SSH service to link
             svc_id = f"svc:{target_ip}:22"
             self.graph.link(svc_id, vuln.node_id, EdgeType.VULNERABLE_TO)
@@ -163,8 +146,10 @@ class KnowledgeEnricher:
             vuln = self.graph.add_vulnerability(
                 f"suid-{binary_path.replace('/', '-')}",
                 name=f"SUID: {binary_path}",
-                severity="high", confirmed=True,
-                description=ft)
+                severity="high",
+                confirmed=True,
+                description=ft,
+            )
             svc_id = f"svc:{target_ip}:22"
             self.graph.link(svc_id, vuln.node_id, EdgeType.VULNERABLE_TO)
             return
@@ -174,8 +159,7 @@ class KnowledgeEnricher:
         if m:
             internal_ip = m.group(1)
             self.graph.add_asset(internal_ip)
-            self.graph.link(f"asset:{target_ip}", f"asset:{internal_ip}",
-                            EdgeType.TRUSTS, discovery=source)
+            self.graph.link(f"asset:{target_ip}", f"asset:{internal_ip}", EdgeType.TRUSTS, discovery=source)
             return
 
         # ── WEB APP DETECTED ──
@@ -195,16 +179,14 @@ class KnowledgeEnricher:
         for pattern, app_name in web_apps.items():
             if pattern in ft:
                 # Add/update HTTP service with web_app tag
-                self.graph.add_service(target_ip, 80, service_name="http",
-                                       web_app=app_name)
+                self.graph.add_service(target_ip, 80, service_name="http", web_app=app_name)
                 return
 
         # ── DB CREDENTIALS ──
         m = re.match(r"DB PASSWORD FOUND: (.+)", ft)
         if m:
             db_pass = m.group(1).strip()
-            self.graph.add_credential("root", db_pass, source=source,
-                                      service="mysql", host=target_ip)
+            self.graph.add_credential("root", db_pass, source=source, service="mysql", host=target_ip)
             return
 
         m = re.match(r"DB USER FOUND: (.+)", ft)
@@ -216,8 +198,7 @@ class KnowledgeEnricher:
         # ── SECRET KEYS ──
         if "SECRET KEY FOUND:" in ft:
             key_val = ft.split("SECRET KEY FOUND:")[-1].strip()
-            self.graph.add_credential("api_key", key_val, source=source,
-                                      secret_type="token", host=target_ip)
+            self.graph.add_credential("api_key", key_val, source=source, secret_type="token", host=target_ip)
             return
 
         # ── LATERAL MOVEMENT ──
@@ -226,17 +207,15 @@ class KnowledgeEnricher:
             user, host = m.group(1), m.group(2)
             self.graph.add_asset(host)
             self.graph.add_identity(user)
-            self.graph.link(f"asset:{target_ip}", f"asset:{host}",
-                            EdgeType.PIVOTS_TO, method="lateral_movement")
+            self.graph.link(f"asset:{target_ip}", f"asset:{host}", EdgeType.PIVOTS_TO, method="lateral_movement")
             return
 
         # ── PERSISTENCE ──
         if "PERSISTENCE:" in ft:
             vuln_id = f"persistence-{target_ip}"
             self.graph.add_vulnerability(
-                vuln_id, name="Persistence Planted",
-                severity="critical", confirmed=True,
-                description=ft)
+                vuln_id, name="Persistence Planted", severity="critical", confirmed=True, description=ft
+            )
             return
 
         # ── KILL CHAIN STAGES (informational, no graph action needed) ──
@@ -247,12 +226,10 @@ class KnowledgeEnricher:
         # ── HTTP HEADERS ──
         if ft.startswith("HTTP header:"):
             # Parse server version from headers
-            m_server = re.search(r'Server:\s*(.+)', ft, re.IGNORECASE)
+            m_server = re.search(r"Server:\s*(.+)", ft, re.IGNORECASE)
             if m_server:
                 server_ver = m_server.group(1).strip()
-                self.graph.add_service(target_ip, 80,
-                                       service_name="http",
-                                       version=server_ver)
+                self.graph.add_service(target_ip, 80, service_name="http", version=server_ver)
             return
 
     def get_processed_count(self) -> int:

@@ -23,11 +23,25 @@ CAP_PYTHON_REPL = "python_repl"
 
 _AUDIT_HASH_KEY = os.urandom(32)
 _POSITIONAL_SECRET_TOOLS = {
-    "ad_enum", "adcs_review", "asrep_roast", "bloodhound_ingest",
-    "dcsync", "gpo_review", "kerberoast", "killchain_cleanup",
-    "killchain_exfil", "killchain_full", "killchain_lateral",
-    "killchain_persist", "killchain_privesc", "pass_the_hash",
-    "psexec", "ssh_exec", "ssh_inventory", "ssh_session", "wmiexec",
+    "ad_enum",
+    "adcs_review",
+    "asrep_roast",
+    "bloodhound_ingest",
+    "dcsync",
+    "gpo_review",
+    "kerberoast",
+    "killchain_cleanup",
+    "killchain_exfil",
+    "killchain_full",
+    "killchain_lateral",
+    "killchain_persist",
+    "killchain_privesc",
+    "pass_the_hash",
+    "psexec",
+    "ssh_exec",
+    "ssh_inventory",
+    "ssh_session",
+    "wmiexec",
 }
 
 _CREDENTIAL_ASSIGNMENT_RE = re.compile(
@@ -40,20 +54,14 @@ _CREDENTIAL_FLAG_RE = re.compile(
     r"(?ix)(?:^|\s)--(?:password|passwd|pass|token|secret|api-key|"
     r"authorization|private-key)(?:-stdin)?(?:=|\s|$)"
 )
-_AUTHORIZATION_VALUE_RE = re.compile(
-    r"(?i)\b(?:proxy-)?authorization\s*:\s*(?:basic|bearer)\s+\S+"
-)
-_URL_CREDENTIAL_RE = re.compile(
-    r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/@:]+:[^\s/@]+@"
-)
+_AUTHORIZATION_VALUE_RE = re.compile(r"(?i)\b(?:proxy-)?authorization\s*:\s*(?:basic|bearer)\s+\S+")
+_URL_CREDENTIAL_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/@:]+:[^\s/@]+@")
 _SHELL_CREDENTIAL_CONSUMER_RE = re.compile(
     r"(?ix)(?:^|[\s;&|])(?:[^\s;&|]*/)?(?:sshpass|chpasswd)(?:\s|$)|"
     r"(?:^|[\s;&|])(?:[^\s;&|]*/)?sudo\s+-S(?:\s|$)|"
     r"(?:^|[\s;&|])(?:[^\s;&|]*/)?passwd\s+--stdin(?:\s|$)"
 )
-_OPAQUE_SECRET_REFERENCE_RE = re.compile(
-    r"(?i)(?:credential|secret|credential-auth)://[A-Za-z0-9._~-]+"
-)
+_OPAQUE_SECRET_REFERENCE_RE = re.compile(r"(?i)(?:credential|secret|credential-auth)://[A-Za-z0-9._~-]+")
 
 
 def redact_sensitive_command(command: str) -> str:
@@ -69,7 +77,7 @@ def redact_sensitive_command(command: str) -> str:
         redacted,
     )
     redacted = re.sub(
-        r'''(?ix)(["']?(?:password|passwd|pwd|token|secret|api[_-]?key)["']?\s*:\s*["'])([^"']+)(["'])''',
+        r"""(?ix)(["']?(?:password|passwd|pwd|token|secret|api[_-]?key)["']?\s*:\s*["'])([^"']+)(["'])""",
         r"\1[REDACTED]\3",
         redacted,
     )
@@ -131,16 +139,12 @@ def contains_sensitive_command_material(
         return any(part in {"-u", "--user"} or part.startswith("--user=") for part in lowered[1:])
     if basenames and basenames[0] == "docker" and len(lowered) > 1 and lowered[1] == "login":
         return any(
-            part in {"-p", "--password", "--password-stdin"} or part.startswith("--password=")
-            for part in lowered[2:]
+            part in {"-p", "--password", "--password-stdin"} or part.startswith("--password=") for part in lowered[2:]
         )
     if basenames and basenames[0] in {"mysql", "mariadb"}:
         return any(part == "-p" or (part.startswith("-p") and len(part) > 2) for part in lowered[1:])
     if basenames and basenames[0] in {"ssh", "scp", "sftp"}:
-        return any(
-            part in {"-i", "-oidentityfile"} or part.startswith("-oidentityfile=")
-            for part in lowered[1:]
-        )
+        return any(part in {"-i", "-oidentityfile"} or part.startswith("-oidentityfile=") for part in lowered[1:])
     credential_flags = {
         "ldapsearch": {"-w", "-y"},
         "redis-cli": {"-a", "--pass"},
@@ -170,9 +174,7 @@ class ExecutionContext:
     actor: str
     origin: str
     target_scope: tuple[str, ...] = ()
-    capabilities: frozenset[str] = field(
-        default_factory=lambda: frozenset({CAP_REGISTERED_TOOL, CAP_DIRECT_BINARY})
-    )
+    capabilities: frozenset[str] = field(default_factory=lambda: frozenset({CAP_REGISTERED_TOOL, CAP_DIRECT_BINARY}))
     approved: bool = False
     approval_id: str = ""
     request_id: str = field(default_factory=_request_id)

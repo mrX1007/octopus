@@ -1,4 +1,3 @@
-
 import os
 import sqlite3
 from contextlib import contextmanager
@@ -56,50 +55,64 @@ class ArtifactManager:
 
     def record_file(self, file_path: str, description: str = ""):
         with self._get_conn() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO artifacts (target_ip, artifact_type, path, description, timestamp)
                 VALUES (?, 'file', ?, ?, ?)
-            """, (self.target_ip, file_path, description, datetime.now().isoformat()))
+            """,
+                (self.target_ip, file_path, description, datetime.now().isoformat()),
+            )
             conn.commit()
 
     def record_ssh_key(self, user: str, key_comment: str):
         with self._get_conn() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO artifacts (target_ip, artifact_type, user, marker, timestamp)
                 VALUES (?, 'ssh_key', ?, ?, ?)
-            """, (self.target_ip, user, key_comment, datetime.now().isoformat()))
+            """,
+                (self.target_ip, user, key_comment, datetime.now().isoformat()),
+            )
             conn.commit()
 
     def record_cron(self, user: str, marker: str):
         with self._get_conn() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO artifacts (target_ip, artifact_type, user, marker, timestamp)
                 VALUES (?, 'cron', ?, ?, ?)
-            """, (self.target_ip, user, marker, datetime.now().isoformat()))
+            """,
+                (self.target_ip, user, marker, datetime.now().isoformat()),
+            )
             conn.commit()
 
     def record_file_line(self, file_path: str, marker: str, user: str = ""):
         """Track one inserted line without treating the containing file as disposable."""
         with self._get_conn() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO artifacts (target_ip, artifact_type, path, user, marker, timestamp)
                 VALUES (?, 'file_line', ?, ?, ?, ?)
-            """, (self.target_ip, file_path, user, marker, datetime.now().isoformat()))
+            """,
+                (self.target_ip, file_path, user, marker, datetime.now().isoformat()),
+            )
             conn.commit()
 
     def record_process(self, pid: int, description: str = ""):
         with self._get_conn() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO artifacts (target_ip, artifact_type, marker, description, timestamp)
                 VALUES (?, 'process', ?, ?, ?)
-            """, (self.target_ip, str(pid), description, datetime.now().isoformat()))
+            """,
+                (self.target_ip, str(pid), description, datetime.now().isoformat()),
+            )
             conn.commit()
 
     def get_pending_cleanups(self) -> list[dict[str, Any]]:
         with self._get_conn() as conn:
             rows = conn.execute(
-                "SELECT * FROM artifacts WHERE target_ip = ? AND status = 'active'",
-                (self.target_ip,)
+                "SELECT * FROM artifacts WHERE target_ip = ? AND status = 'active'", (self.target_ip,)
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -108,23 +121,23 @@ class ArtifactManager:
         with self._get_conn() as conn:
             if target_ip:
                 rows = conn.execute(
-                    "SELECT * FROM artifacts WHERE target_ip = ? ORDER BY timestamp DESC",
-                    (target_ip,)
+                    "SELECT * FROM artifacts WHERE target_ip = ? ORDER BY timestamp DESC", (target_ip,)
                 ).fetchall()
             else:
-                rows = conn.execute(
-                    "SELECT * FROM artifacts ORDER BY timestamp DESC"
-                ).fetchall()
+                rows = conn.execute("SELECT * FROM artifacts ORDER BY timestamp DESC").fetchall()
         return [dict(r) for r in rows]
 
     def mark_cleaned(self, identifier: str):
         """Mark artifact as cleaned by path, marker, or comment."""
         with self._get_conn() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE artifacts SET status = 'cleaned'
                 WHERE target_ip = ? AND status = 'active'
                   AND (path = ? OR marker = ?)
-            """, (self.target_ip, identifier, identifier))
+            """,
+                (self.target_ip, identifier, identifier),
+            )
             conn.commit()
 
     def mark_cleaned_by_id(self, artifact_id: int):
@@ -143,7 +156,6 @@ class ArtifactManager:
         """Mark all active artifacts for this target as cleaned."""
         with self._get_conn() as conn:
             conn.execute(
-                "UPDATE artifacts SET status = 'cleaned' WHERE target_ip = ? AND status = 'active'",
-                (self.target_ip,)
+                "UPDATE artifacts SET status = 'cleaned' WHERE target_ip = ? AND status = 'active'", (self.target_ip,)
             )
             conn.commit()

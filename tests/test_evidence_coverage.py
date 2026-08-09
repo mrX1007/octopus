@@ -412,10 +412,7 @@ CLEANUP STATUS: PARTIAL
     pairs = _pairs(facts)
     assert ("service_status", "internal_services:2") in pairs
     assert ("credential", "ssh_login_success:alice@10.0.0.1") in pairs
-    assert not any(
-        fact_type == "credential" and "root:" in value
-        for fact_type, value in pairs
-    )
+    assert not any(fact_type == "credential" and "root:" in value for fact_type, value in pairs)
     assert "password: secret" not in repr(facts)
     assert ("persistence", "mechanism_planted") in pairs
     assert ("cleanup", "partial") in pairs

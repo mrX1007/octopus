@@ -35,9 +35,10 @@ class _LegacyTextResult:
 
 
 def test_canonical_check_url_preserves_pipeline_identity_rules() -> None:
-    assert canonical_check_url(
-        " HTTPS://User:Pass@EXAMPLE.COM:443/admin/?b=2#ignored "
-    ) == "https://example.com/admin/?b=2"
+    assert (
+        canonical_check_url(" HTTPS://User:Pass@EXAMPLE.COM:443/admin/?b=2#ignored ")
+        == "https://example.com/admin/?b=2"
+    )
     assert canonical_check_url("http://EXAMPLE.COM:8080/") == "http://example.com:8080"
     assert canonical_check_url(" Example.COM/path/ ") == "Example.COM/path"
 
@@ -110,10 +111,7 @@ def test_endpoint_scope_retains_legacy_ip_suffix_behavior() -> None:
 
 def test_internal_service_scope_value_keeps_permissive_prefix_parser() -> None:
     assert internal_service_scope_value("10.0.0.2:00443/TCP") == "10.0.0.2:443/tcp"
-    assert (
-        internal_service_scope_value("999.999.999.999:00080/UDP trailing")
-        == "999.999.999.999:80/udp"
-    )
+    assert internal_service_scope_value("999.999.999.999:00080/UDP trailing") == "999.999.999.999:80/udp"
     assert internal_service_scope_value("host.example:443/tcp") == ""
 
 

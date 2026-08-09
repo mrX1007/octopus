@@ -530,9 +530,7 @@ def build_repository_sbom(
     components: dict[str, dict] = {}
     root_dependencies: set[str] = set()
     dependency_rows: list[dict] = []
-    metadata_properties = [
-        {"name": "octopus:input:python-lock:sha256", "value": _sha256_file(lock_path, "lock")}
-    ]
+    metadata_properties = [{"name": "octopus:input:python-lock:sha256", "value": _sha256_file(lock_path, "lock")}]
     for component in _python_components(lock_path):
         root_dependencies.add(_add_component(components, component))
 
@@ -628,7 +626,12 @@ def _argument_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _argument_parser().parse_args(argv)
     try:
-        if args.root is None and args.go_mod is None and args.vendor_manifest is None and not args.include_tool_dependencies:
+        if (
+            args.root is None
+            and args.go_mod is None
+            and args.vendor_manifest is None
+            and not args.include_tool_dependencies
+        ):
             payload = build_sbom(args.lock)
         else:
             root = (args.root or Path.cwd()).resolve(strict=True)
@@ -648,10 +651,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, SbomError) as exc:
         print(f"SBOM generation failed: {exc}", file=sys.stderr)
         return 1
-    print(
-        "SBOM generated: "
-        f"{len(payload['components'])} components, {len(payload.get('services', []))} services"
-    )
+    print(f"SBOM generated: {len(payload['components'])} components, {len(payload.get('services', []))} services")
     return 0
 
 

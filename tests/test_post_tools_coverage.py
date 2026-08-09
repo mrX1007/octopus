@@ -234,26 +234,18 @@ def test_killchain_menu_helpers(monkeypatch):
     monkeypatch.setattr(
         killchain,
         "run_full_killchain",
-        lambda target, credential, callback_host: (
-            f"full:{credential.username}:{callback_host}"
-        ),
+        lambda target, credential, callback_host: f"full:{credential.username}:{callback_host}",
     )
     monkeypatch.setattr(post_tools, "call_credential_provider", _call_provider)
     known = _ref()
     monkeypatch.setattr(post_tools, "get_best_credential_ref", lambda *args, **kwargs: known)
     answers = iter(["callback.example", ""])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    assert post_tools._run_killchain_interactive("full", "host") == (
-        "full:alice:callback.example"
-    )
+    assert post_tools._run_killchain_interactive("full", "host") == ("full:alice:callback.example")
 
     monkeypatch.setattr("builtins.input", lambda prompt="": "")
-    assert "explicit callback_host is required" in post_tools._run_killchain_interactive(
-        "full", "host"
-    )
-    assert "must be one host" in post_tools._run_killchain_interactive(
-        "full", "host", "https://callback.example/path"
-    )
+    assert "explicit callback_host is required" in post_tools._run_killchain_interactive("full", "host")
+    assert "must be one host" in post_tools._run_killchain_interactive("full", "host", "https://callback.example/path")
 
     for stage, expected in (
         ("privesc", "run_privesc"),
@@ -1021,6 +1013,7 @@ def test_ad_ai_wrappers_error_requirements_and_success(monkeypatch):
     assert post_tools.ai_dcsync("host") == "dcsync"
     assert post_tools.ai_psexec("host", command='"whoami"') == "psexec:whoami"
     assert post_tools.ai_wmiexec("host", command="'hostname'") == "wmiexec:hostname"
+
 
 def test_adcs_review_binary_credentials_and_provider(monkeypatch):
     @contextmanager

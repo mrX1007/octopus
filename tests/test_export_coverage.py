@@ -164,9 +164,7 @@ def test_html_empty_report_uses_default_directory(monkeypatch, tmp_path):
     monkeypatch.setattr(export, "_get_report_dir", lambda: str(tmp_path))
     rendered = Path(export.export_html(_empty_report())).read_text(encoding="utf-8")
 
-    assert rendered.count("None recorded.") == len(
-        export.extract_machine_report(_empty_report())["section_order"]
-    )
+    assert rendered.count("None recorded.") == len(export.extract_machine_report(_empty_report())["section_order"])
 
 
 def test_html_finding_without_optional_provenance(monkeypatch, tmp_path):

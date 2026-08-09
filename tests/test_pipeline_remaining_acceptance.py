@@ -252,9 +252,7 @@ def test_plan_compiler_compat_fallback_uses_evaluated_decision_facts(tmp_path):
     )
 
     assert [fact["id"] for fact in captured["facts"]] == [1]
-    assert compiled[0]["evaluated_snapshot_ref"].startswith(
-        "evaluated-facts://sha256/"
-    )
+    assert compiled[0]["evaluated_snapshot_ref"].startswith("evaluated-facts://sha256/")
 
 
 def test_plan_optimization_keeps_same_task_for_distinct_typed_scopes(tmp_path):
@@ -322,9 +320,7 @@ def test_pipeline_schedules_only_typed_transient_failure_for_retry(tmp_path):
     pipeline = AIPipeline(str(tmp_path / "typed-retry.db"))
     pipeline._reset_runtime_state()
     pipeline._start_mission("scan-typed-retry", "10.0.0.5")
-    pipeline._register_mission_plan(
-        [{"agent": "DiscoveryAgent", "task": "service_discovery"}]
-    )
+    pipeline._register_mission_plan([{"agent": "DiscoveryAgent", "task": "service_discovery"}])
     pipeline._begin_task_attempt("DiscoveryAgent", "service_discovery")
     pipeline.completed_tasks.add("service_discovery")
 
@@ -374,38 +370,51 @@ def test_state_change_replan_is_material_deduplicated_and_bounded(tmp_path):
             {"state": "inventory_completed", "next_required_capability": "conclude"},
         ]
     )
-    pipeline.context_builder = SimpleNamespace(
-        build_context=lambda _scan, _target: next(contexts)
-    )
+    pipeline.context_builder = SimpleNamespace(build_context=lambda _scan, _target: next(contexts))
 
-    assert pipeline._evaluate_state_change_replan(
-        {"state": "initial_recon"},
-        "scan-state-replan",
-        "10.0.0.5",
-    ) is True
-    assert pipeline._evaluate_state_change_replan(
-        {"state": "recon_completed", "next_required_capability": "verify"},
-        "scan-state-replan",
-        "10.0.0.5",
-    ) is True
-    assert pipeline._evaluate_state_change_replan(
-        {"state": "access_confirmed", "next_required_capability": "inventory"},
-        "scan-state-replan",
-        "10.0.0.5",
-    ) is False
+    assert (
+        pipeline._evaluate_state_change_replan(
+            {"state": "initial_recon"},
+            "scan-state-replan",
+            "10.0.0.5",
+        )
+        is True
+    )
+    assert (
+        pipeline._evaluate_state_change_replan(
+            {"state": "recon_completed", "next_required_capability": "verify"},
+            "scan-state-replan",
+            "10.0.0.5",
+        )
+        is True
+    )
+    assert (
+        pipeline._evaluate_state_change_replan(
+            {"state": "access_confirmed", "next_required_capability": "inventory"},
+            "scan-state-replan",
+            "10.0.0.5",
+        )
+        is False
+    )
     assert pipeline._state_replan_count == 2
-    assert len(
-        pipeline.decision_trace.list_events(
-            scan_id="scan-state-replan",
-            event_type="state_replan_requested",
+    assert (
+        len(
+            pipeline.decision_trace.list_events(
+                scan_id="scan-state-replan",
+                event_type="state_replan_requested",
+            )
         )
-    ) == 2
-    assert len(
-        pipeline.decision_trace.list_events(
-            scan_id="scan-state-replan",
-            event_type="state_replan_rejected",
+        == 2
+    )
+    assert (
+        len(
+            pipeline.decision_trace.list_events(
+                scan_id="scan-state-replan",
+                event_type="state_replan_rejected",
+            )
         )
-    ) == 1
+        == 1
+    )
 
 
 def test_state_change_replan_reads_nested_fact_assessment_counts(tmp_path):
@@ -417,30 +426,24 @@ def test_state_change_replan_reads_nested_fact_assessment_counts(tmp_path):
         "state": "recon_completed",
         "next_required_capability": "verify",
         "stage_gates": {"recon": True},
-        "fact_assessments": {
-            "counts": {"observed": 1, "verified": 0, "contradicted": 0}
-        },
+        "fact_assessments": {"counts": {"observed": 1, "verified": 0, "contradicted": 0}},
     }
     current = {
         **previous,
-        "fact_assessments": {
-            "counts": {"observed": 0, "verified": 1, "contradicted": 0}
-        },
+        "fact_assessments": {"counts": {"observed": 0, "verified": 1, "contradicted": 0}},
     }
-    pipeline.context_builder = SimpleNamespace(
-        build_context=lambda _scan, _target: current
-    )
+    pipeline.context_builder = SimpleNamespace(build_context=lambda _scan, _target: current)
 
-    assert pipeline._evaluate_state_change_replan(
-        previous,
-        "scan-assessment-replan",
-        "10.0.0.5",
-    ) is True
-    assert pipeline._state_replan_count == 1
     assert (
-        pipeline.mission_store.snapshot(pipeline.mission_id).mission.state_replan_count
-        == 1
+        pipeline._evaluate_state_change_replan(
+            previous,
+            "scan-assessment-replan",
+            "10.0.0.5",
+        )
+        is True
     )
+    assert pipeline._state_replan_count == 1
+    assert pipeline.mission_store.snapshot(pipeline.mission_id).mission.state_replan_count == 1
 
 
 def test_state_change_replan_budget_and_deduplication_survive_restart(tmp_path):
@@ -454,9 +457,7 @@ def test_state_change_replan_budget_and_deduplication_survive_restart(tmp_path):
     first._reset_runtime_state()
     first._start_mission(scan_id, target)
     first._max_state_replans = lambda: 1
-    first.context_builder = SimpleNamespace(
-        build_context=lambda _scan, _target: recon
-    )
+    first.context_builder = SimpleNamespace(build_context=lambda _scan, _target: recon)
     assert first._evaluate_state_change_replan(initial, scan_id, target) is True
     assert first._state_replan_count == 1
     first.mission_store.close()
@@ -469,9 +470,7 @@ def test_state_change_replan_budget_and_deduplication_survive_restart(tmp_path):
     assert resumed._state_replan_count == 1
     assert len(resumed._state_replan_signatures) == 1
 
-    resumed.context_builder = SimpleNamespace(
-        build_context=lambda _scan, _target: recon
-    )
+    resumed.context_builder = SimpleNamespace(build_context=lambda _scan, _target: recon)
     assert resumed._evaluate_state_change_replan(initial, scan_id, target) is False
     assert len(resumed._state_replan_signatures) == 1
 
@@ -480,9 +479,7 @@ def test_state_change_replan_budget_and_deduplication_survive_restart(tmp_path):
         "next_required_capability": "verify",
         "fact_assessments": {"counts": {"observed": 0, "verified": 1}},
     }
-    resumed.context_builder = SimpleNamespace(
-        build_context=lambda _scan, _target: verified
-    )
+    resumed.context_builder = SimpleNamespace(build_context=lambda _scan, _target: verified)
     assert resumed._evaluate_state_change_replan(recon, scan_id, target) is False
 
     durable = resumed.mission_store.snapshot(resumed.mission_id).mission
@@ -491,27 +488,31 @@ def test_state_change_replan_budget_and_deduplication_survive_restart(tmp_path):
     assert len(resumed._state_replan_signatures) == 2
     assert resumed._evaluate_state_change_replan(recon, scan_id, target) is False
     assert len(resumed._state_replan_signatures) == 2
-    assert len(
-        resumed.decision_trace.list_events(
-            scan_id=scan_id,
-            event_type="state_replan_requested",
+    assert (
+        len(
+            resumed.decision_trace.list_events(
+                scan_id=scan_id,
+                event_type="state_replan_requested",
+            )
         )
-    ) == 1
-    assert len(
-        resumed.decision_trace.list_events(
-            scan_id=scan_id,
-            event_type="state_replan_rejected",
+        == 1
+    )
+    assert (
+        len(
+            resumed.decision_trace.list_events(
+                scan_id=scan_id,
+                event_type="state_replan_rejected",
+            )
         )
-    ) == 1
+        == 1
+    )
 
 
 def test_pipeline_scoring_penalizes_repeats_and_emits_explanation(tmp_path):
     pipeline = AIPipeline(str(tmp_path / "task-scoring.db"))
     pipeline._reset_runtime_state()
     pipeline._current_scan_id = "scan-task-scoring"
-    pipeline.task_history.extend(
-        ["DiscoveryAgent:plugin_assessment", "DiscoveryAgent:plugin_assessment"]
-    )
+    pipeline.task_history.extend(["DiscoveryAgent:plugin_assessment", "DiscoveryAgent:plugin_assessment"])
     context = {"state": "recon_completed", "open_questions": []}
 
     ranked = pipeline._rank_candidate_tasks(
@@ -525,18 +526,14 @@ def test_pipeline_scoring_penalizes_repeats_and_emits_explanation(tmp_path):
         event_type="task_scoring",
     )[0]
     assert event["chosen_action"] == "external_intelligence"
-    assert event["actual_outcome"]["ranking"][0]["explanation"].startswith(
-        "task_score:1.0;"
-    )
+    assert event["actual_outcome"]["ranking"][0]["explanation"].startswith("task_score:1.0;")
 
 
 def test_critical_candidate_is_a_hard_tier_above_configured_soft_score(tmp_path):
     pipeline = AIPipeline(str(tmp_path / "critical-task-scoring.db"))
     pipeline._reset_runtime_state()
     pipeline._current_scan_id = "scan-critical-task-scoring"
-    pipeline.task_history.extend(
-        ["DiscoveryAgent:template_verification"] * 3
-    )
+    pipeline.task_history.extend(["DiscoveryAgent:template_verification"] * 3)
     pipeline.task_scorer = TaskScorer(
         TaskScoringWeights(
             information_gain=0,
@@ -561,7 +558,5 @@ def test_critical_candidate_is_a_hard_tier_above_configured_soft_score(tmp_path)
         scan_id="scan-critical-task-scoring",
         event_type="task_scoring",
     )[0]
-    assert event["expected_outcome"]["critical_candidates"] == [
-        "template_verification"
-    ]
+    assert event["expected_outcome"]["critical_candidates"] == ["template_verification"]
     assert event["actual_outcome"]["ranking"][0]["priority_tier"] == "critical"

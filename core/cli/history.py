@@ -9,16 +9,54 @@ from collections.abc import Sequence
 
 DEFAULT_HISTORY_FILE = os.path.expanduser("~/.octopus_history")
 DEFAULT_COMPLETIONS = (
-    "1", "2", "3", "4", "5",
-    "new", "scan", "history", "resume", "c2", "exit", "quit",
-    "nmap", "whois", "whatweb", "curl", "dig", "sslscan", "ffuf",
-    "enum4linux", "smbclient", "wpscan", "sqlmap", "nikto",
-    "scrapling", "jmx2rce", "bruteforce", "ssh_session", "ssh_exec",
-    "killchain", "shodan", "crack_hashes",
-    "ad_enum", "asrep_roast", "kerberoast", "dcsync", "psexec", "wmiexec",
-    "socks_proxy", "port_forward", "network_recon",
-    "build_go_implant", "build_python_implant", "build_ps_stager",
-    "all", "default", "help", "back",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "new",
+    "scan",
+    "history",
+    "resume",
+    "c2",
+    "exit",
+    "quit",
+    "nmap",
+    "whois",
+    "whatweb",
+    "curl",
+    "dig",
+    "sslscan",
+    "ffuf",
+    "enum4linux",
+    "smbclient",
+    "wpscan",
+    "sqlmap",
+    "nikto",
+    "scrapling",
+    "jmx2rce",
+    "bruteforce",
+    "ssh_session",
+    "ssh_exec",
+    "killchain",
+    "shodan",
+    "crack_hashes",
+    "ad_enum",
+    "asrep_roast",
+    "kerberoast",
+    "dcsync",
+    "psexec",
+    "wmiexec",
+    "socks_proxy",
+    "port_forward",
+    "network_recon",
+    "build_go_implant",
+    "build_python_implant",
+    "build_ps_stager",
+    "all",
+    "default",
+    "help",
+    "back",
 )
 
 
@@ -32,9 +70,7 @@ class OctopusCompleter:
     def complete(self, text: str, state: int) -> str | None:
         if state == 0:
             self.matches = (
-                [item for item in self.options if item.startswith(text.lower())]
-                if text
-                else list(self.options)
+                [item for item in self.options if item.startswith(text.lower())] if text else list(self.options)
             )
         try:
             return self.matches[state]

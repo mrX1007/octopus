@@ -46,17 +46,24 @@ FILTER_USERS = "(&(objectCategory=person)(objectClass=user))"
 FILTER_GROUPS = "(objectCategory=group)"
 FILTER_COMPUTERS = "(objectCategory=computer)"
 FILTER_GPO = "(objectClass=groupPolicyContainer)"
-USER_ATTRS = ["sAMAccountName", "displayName", "memberOf", "mail",
-              "userAccountControl", "lastLogon", "pwdLastSet",
-              "description", "adminCount"]
+USER_ATTRS = [
+    "sAMAccountName",
+    "displayName",
+    "memberOf",
+    "mail",
+    "userAccountControl",
+    "lastLogon",
+    "pwdLastSet",
+    "description",
+    "adminCount",
+]
 GROUP_ATTRS = ["sAMAccountName", "member", "description", "adminCount"]
-COMPUTER_ATTRS = ["sAMAccountName", "dNSHostName", "operatingSystem",
-                  "operatingSystemVersion", "lastLogon"]
-GPO_ATTRS = ["displayName", "gPCFileSysPath", "versionNumber",
-             "gPCMachineExtensionNames"]
+COMPUTER_ATTRS = ["sAMAccountName", "dNSHostName", "operatingSystem", "operatingSystemVersion", "lastLogon"]
+GPO_ATTRS = ["displayName", "gPCFileSysPath", "versionNumber", "gPCMachineExtensionNames"]
 
 
 # Helper: Credential normalization
+
 
 def _normalize_creds(creds: dict[str, str] | None) -> dict[str, str]:
     """Return a dict with guaranteed keys: user, password, domain, nthash."""
@@ -80,9 +87,13 @@ def _build_base_dn(domain: str) -> str:
 
 # Backend helpers
 
+
 def _ldap_search_impacket(
-    target: str, base_dn: str, search_filter: str,
-    attributes: list[str], creds: dict[str, str],
+    target: str,
+    base_dn: str,
+    search_filter: str,
+    attributes: list[str],
+    creds: dict[str, str],
 ) -> list[dict[str, Any]] | None:
     """Perform an LDAP search via impacket's ``ldap`` module.
 
@@ -101,8 +112,11 @@ def _ldap_search_impacket(
 
         if creds["nthash"]:
             conn.login(
-                creds["user"], "", creds["domain"],
-                lmhash="", nthash=creds["nthash"],
+                creds["user"],
+                "",
+                creds["domain"],
+                lmhash="",
+                nthash=creds["nthash"],
             )
         else:
             conn.login(creds["user"], creds["password"], creds["domain"])
@@ -136,8 +150,11 @@ def _ldap_search_impacket(
 
 
 def _ldap_search_ldap3(
-    target: str, base_dn: str, search_filter: str,
-    attributes: list[str], creds: dict[str, str],
+    target: str,
+    base_dn: str,
+    search_filter: str,
+    attributes: list[str],
+    creds: dict[str, str],
 ) -> list[dict[str, Any]] | None:
     """Perform an LDAP search via the ``ldap3`` library.
 
@@ -150,14 +167,12 @@ def _ldap_search_ldap3(
         return None
 
     try:
-        server = ldap3.Server(target, port=LDAP_PORT, get_info=ldap3.ALL,
-                              connect_timeout=LDAP_TIMEOUT)
-        bind_user = (
-            f"{creds['domain']}\\{creds['user']}" if creds["domain"]
-            else creds["user"]
-        )
+        server = ldap3.Server(target, port=LDAP_PORT, get_info=ldap3.ALL, connect_timeout=LDAP_TIMEOUT)
+        bind_user = f"{creds['domain']}\\{creds['user']}" if creds["domain"] else creds["user"]
         conn = ldap3.Connection(
-            server, user=bind_user, password=creds["password"],
+            server,
+            user=bind_user,
+            password=creds["password"],
             authentication=ldap3.NTLM if creds["domain"] else ldap3.SIMPLE,
             auto_bind=True,
         )
@@ -193,7 +208,10 @@ def _run_cli(cmd: list[str] | tuple[str, ...], timeout: int = LDAP_TIMEOUT) -> s
         return "[!] Unsafe CLI command rejected: an argv sequence is required"
     try:
         result = subprocess.run(
-            list(cmd), shell=False, capture_output=True, text=True,
+            list(cmd),
+            shell=False,
+            capture_output=True,
+            text=True,
             timeout=timeout,
         )
         return (result.stdout + result.stderr).strip()
@@ -208,8 +226,11 @@ def _run_cli(cmd: list[str] | tuple[str, ...], timeout: int = LDAP_TIMEOUT) -> s
 
 
 def _ldap_search_cli(
-    target: str, base_dn: str, search_filter: str,
-    attributes: list[str], creds: dict[str, str],
+    target: str,
+    base_dn: str,
+    search_filter: str,
+    attributes: list[str],
+    creds: dict[str, str],
 ) -> str:
     """Fall back to ``ldapsearch`` CLI tool.  Returns raw text output."""
     if not shutil.which("ldapsearch"):
@@ -217,9 +238,7 @@ def _ldap_search_cli(
 
     if creds["user"] or creds["password"]:
         return "[!] Credential-bearing ldapsearch CLI fallback is disabled"
-    return _run_cli(
-        ["ldapsearch", "-H", f"ldap://{target}", "-b", base_dn, "-x", search_filter, *attributes]
-    )
+    return _run_cli(["ldapsearch", "-H", f"ldap://{target}", "-b", base_dn, "-x", search_filter, *attributes])
 
 
 def _format_entries(entries: list[dict[str, Any]], label: str) -> str:
@@ -242,6 +261,7 @@ def _format_entries(entries: list[dict[str, Any]], label: str) -> str:
 
 
 # Public API
+
 
 def run_ad_enum(target: str, creds: dict[str, str] | None = None) -> str:
     """Run comprehensive AD enumeration against a Domain Controller.
@@ -466,17 +486,17 @@ def bloodhound_ingest(target: str, creds: dict[str, str] | None = None) -> str:
         from bloodhound.ad.domain import AD as BH_AD
 
         logger.info("Using bloodhound Python module")
-        ad = BH_AD(domain=creds["domain"], auth="", nameserver=target,
-                    dns_tcp=False, dns_timeout=10)
+        ad = BH_AD(domain=creds["domain"], auth="", nameserver=target, dns_tcp=False, dns_timeout=10)
         ad.dns_resolve(domain=creds["domain"])
 
         bh = BloodHound(ad)
         bh.connect(
-            creds["user"], creds["password"], creds["domain"],
+            creds["user"],
+            creds["password"],
+            creds["domain"],
         )
         bh.run(
-            collect=["group", "localadmin", "session", "trusts",
-                     "objectprops", "acl", "dcom", "rdp", "psremote"],
+            collect=["group", "localadmin", "session", "trusts", "objectprops", "acl", "dcom", "rdp", "psremote"],
             output_directory=loot_dir,
         )
         output += f"  [+] BloodHound data collected → {loot_dir}\n"

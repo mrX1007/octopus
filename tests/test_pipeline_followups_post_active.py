@@ -49,39 +49,54 @@ def test_post_access_cached_credentials_are_explicitly_gated_and_repeat_safe():
     )
 
     assert proposed[0].rule_id == "post_access.cached_ssh_credential"
-    assert rules.propose(
-        "host.example",
-        facts,
-        enabled=True,
-        inventory_seen=False,
-        allow_cached_credentials=False,
-    ) == []
-    assert rules.propose(
-        "host.example",
-        facts,
-        enabled=True,
-        inventory_seen=False,
-        already_executed={"ssh_inventory host.example"},
-    ) == []
-    assert rules.propose(
-        "host.example",
-        facts,
-        enabled=False,
-        inventory_seen=False,
-    ) == []
-    assert rules.propose(
-        "host.example",
-        facts,
-        enabled=True,
-        inventory_seen=True,
-    ) == []
-    assert rules.propose(
-        "host.example",
-        facts,
-        enabled=True,
-        inventory_seen=False,
-        limit=0,
-    ) == []
+    assert (
+        rules.propose(
+            "host.example",
+            facts,
+            enabled=True,
+            inventory_seen=False,
+            allow_cached_credentials=False,
+        )
+        == []
+    )
+    assert (
+        rules.propose(
+            "host.example",
+            facts,
+            enabled=True,
+            inventory_seen=False,
+            already_executed={"ssh_inventory host.example"},
+        )
+        == []
+    )
+    assert (
+        rules.propose(
+            "host.example",
+            facts,
+            enabled=False,
+            inventory_seen=False,
+        )
+        == []
+    )
+    assert (
+        rules.propose(
+            "host.example",
+            facts,
+            enabled=True,
+            inventory_seen=True,
+        )
+        == []
+    )
+    assert (
+        rules.propose(
+            "host.example",
+            facts,
+            enabled=True,
+            inventory_seen=False,
+            limit=0,
+        )
+        == []
+    )
 
 
 def test_post_access_does_not_promote_application_sessions_or_unrelated_facts():
@@ -108,12 +123,15 @@ def test_active_promotion_requires_authorization_and_exact_positive_module_match
         {"type": "potential_vulnerability", "value": "msf_check_positive:exploit/linux/http/unmatched"},
     ]
 
-    assert rules.propose(
-        [matched, unmatched],
-        facts,
-        authorization_granted=False,
-        max_runs=2,
-    ) == []
+    assert (
+        rules.propose(
+            [matched, unmatched],
+            facts,
+            authorization_granted=False,
+            max_runs=2,
+        )
+        == []
+    )
 
     proposals = rules.propose(
         [matched, unmatched],
@@ -130,13 +148,9 @@ def test_active_promotion_requires_authorization_and_exact_positive_module_match
 
 def test_active_promotion_preserves_candidate_order_repeat_snapshot_and_run_cap():
     rules = ActivePromotionFollowupRules()
-    commands = [
-        f"msf_run host exploit/test/module_{index} RPORT={8000 + index}"
-        for index in range(1, 5)
-    ]
+    commands = [f"msf_run host exploit/test/module_{index} RPORT={8000 + index}" for index in range(1, 5)]
     facts = [
-        {"type": "vulnerability", "value": f"msf_check_positive:exploit/test/module_{index}"}
-        for index in range(1, 5)
+        {"type": "vulnerability", "value": f"msf_check_positive:exploit/test/module_{index}"} for index in range(1, 5)
     ]
     executed = {commands[0]}
     executed_before = set(executed)

@@ -18,10 +18,10 @@ from typing import Any, Optional
 
 from core.version import APPLICATION_VERSION
 
-C_GREEN  = "\033[92m"
+C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
-C_CYAN   = "\033[96m"
-C_RESET  = "\033[0m"
+C_CYAN = "\033[96m"
+C_RESET = "\033[0m"
 
 
 class ReconTask:
@@ -93,15 +93,13 @@ class ReconEngine:
         print(f"  {C_CYAN}[*] Running fast async NMAP on {target}...{C_RESET}")
         cmd = ["nmap", "-T4", "-F", "--open", "-n", target]
         proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, _stderr = await proc.communicate()
-        out = stdout.decode('utf-8', errors='ignore')
-        
+        out = stdout.decode("utf-8", errors="ignore")
+
         self.results[target]["nmap"] = out
-        
+
         # Adaptive Scanning: Parse ports and queue specific tasks
         ports = []
         for line in out.splitlines():
@@ -112,12 +110,12 @@ class ReconEngine:
                     self.state[target]["open_ports"].append(port)
                 except ValueError:
                     continue
-        
+
         # Queue follow-up adaptive tasks
         for port in ports:
             # High priority (0) for banners so we get them fast
             await self.queue.put(ReconTask(target, "banner_grab", priority=0, meta={"port": port}))
-            
+
             if port in [443, 8443, 10443]:
                 await self.queue.put(ReconTask(target, "tls_fingerprint", priority=0, meta={"port": port}))
                 await self.queue.put(ReconTask(target, "http_probe", priority=1, meta={"port": port, "is_tls": True}))
@@ -130,25 +128,23 @@ class ReconEngine:
         """Pure python async banner grabbing with heuristic protocol detection."""
         writer = None
         try:
-            reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(target, port), timeout=3.0
-            )
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(target, port), timeout=3.0)
             # Send an HTTP request and some generic bytes to trigger a response
             writer.write(b"GET / HTTP/1.1\r\nHost: " + target.encode() + b"\r\n\r\n\x00\x00")
             await writer.drain()
-            
+
             data = await asyncio.wait_for(reader.read(1024), timeout=3.0)
 
-            banner = data.decode('utf-8', errors='ignore').strip()
+            banner = data.decode("utf-8", errors="ignore").strip()
             if banner:
                 svc = self._heuristic_service_detect(port, banner)
                 self.state[target]["services"][port] = svc
-                
+
                 # Format for output
                 if "banners" not in self.results[target]:
                     self.results[target]["banners"] = ""
                 self.results[target]["banners"] += f"[Port {port} | {svc}] {banner[:100]}...\n"
-                
+
         except (asyncio.TimeoutError, ConnectionError, OSError, UnicodeError) as exc:
             logging.debug("Banner probe unavailable: %s", type(exc).__name__)
         finally:
@@ -175,9 +171,7 @@ class ReconEngine:
         """Async TLS fingerprinting without relying on sslscan executable."""
         try:
             # We use a blocking call to get_server_certificate wrapped in to_thread
-            cert_pem = await asyncio.to_thread(
-                ssl.get_server_certificate, (target, port), timeout=5
-            )
+            cert_pem = await asyncio.to_thread(ssl.get_server_certificate, (target, port), timeout=5)
             if "tls" not in self.results[target]:
                 self.results[target]["tls"] = ""
             self.results[target]["tls"] += f"[Port {port} TLS Cert Extracted]\n{cert_pem[:200]}...\n"
@@ -192,25 +186,25 @@ class ReconEngine:
         try:
             # Minimal pure-python async HTTP GET using asyncio streams
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(target, port, ssl=is_tls if is_tls else None), 
-                timeout=5.0
+                asyncio.open_connection(target, port, ssl=is_tls if is_tls else None), timeout=5.0
             )
             req = f"GET / HTTP/1.1\r\nHost: {target}\r\nUser-Agent: Mozilla/5.0\r\nConnection: close\r\n\r\n"
             writer.write(req.encode())
             await writer.drain()
-            
+
             data = await asyncio.wait_for(reader.read(4096), timeout=5.0)
 
-            resp = data.decode('utf-8', errors='ignore')
-            
+            resp = data.decode("utf-8", errors="ignore")
+
             # Simple title extraction
             title = "None"
             if "<title>" in resp.lower():
                 import re
-                match = re.search(r'<title>(.*?)</title>', resp, re.IGNORECASE | re.DOTALL)
+
+                match = re.search(r"<title>(.*?)</title>", resp, re.IGNORECASE | re.DOTALL)
                 if match:
                     title = match.group(1).strip()
-            
+
             server = "Unknown"
             for line in resp.splitlines():
                 if line.lower().startswith("server:"):
@@ -220,7 +214,7 @@ class ReconEngine:
             if "http_enum" not in self.results[target]:
                 self.results[target]["http_enum"] = ""
             self.results[target]["http_enum"] += f"URL: {url} | Server: {server} | Title: {title}\n"
-            
+
         except (asyncio.TimeoutError, ConnectionError, OSError, ssl.SSLError) as exc:
             logging.debug("HTTP probe unavailable: %s", type(exc).__name__)
         finally:
@@ -237,12 +231,10 @@ class ReconEngine:
         proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             stdout, _stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
-            self.results[target]["enum4linux"] = stdout.decode('utf-8', errors='ignore')
+            self.results[target]["enum4linux"] = stdout.decode("utf-8", errors="ignore")
         except asyncio.TimeoutError:
             if proc is not None:
                 with suppress(ProcessLookupError):
@@ -250,9 +242,7 @@ class ReconEngine:
                 await proc.communicate()
             self.results[target]["enum4linux"] = "[!] enum4linux timed out."
         except (OSError, ValueError) as exc:
-            self.results[target]["enum4linux"] = (
-                f"[!] enum4linux error: {type(exc).__name__}"
-            )
+            self.results[target]["enum4linux"] = f"[!] enum4linux error: {type(exc).__name__}"
 
     # =========================================================================
     # PUBLIC API
@@ -265,24 +255,26 @@ class ReconEngine:
             f"v{APPLICATION_VERSION} for {len(targets)} target(s){C_RESET}"
         )
         start_time = time.time()
-        
+
         # Seed initial tasks (priority 10 so they run first but yield to adaptive tasks)
         for target in targets:
             await self.queue.put(ReconTask(target, "nmap_fast", priority=10))
-            
+
         # Start workers
         workers = [asyncio.create_task(self._worker(i)) for i in range(self.concurrency)]
-        
+
         # Wait for all tasks (initial + adaptive) to complete
         await self.queue.join()
-        
+
         # Shutdown workers
         for w in workers:
             w.cancel()
-            
+
         elapsed = time.time() - start_time
-        print(f"{C_GREEN}[+] Async Recon Engine finished. Processed {self.completed_tasks} tasks in {elapsed:.2f}s.{C_RESET}")
-        
+        print(
+            f"{C_GREEN}[+] Async Recon Engine finished. Processed {self.completed_tasks} tasks in {elapsed:.2f}s.{C_RESET}"
+        )
+
         # Combine results into the format expected by LLM
         final_output = {}
         for target, data in self.results.items():
@@ -291,19 +283,22 @@ class ReconEngine:
                 if output.strip():
                     combined += f"[{tool_name.upper()}]\n{output.strip()}\n\n"
             final_output[target] = combined
-            
+
         return final_output
+
 
 # Helper to run from synchronous code
 def run_async_recon(targets: list[str], concurrency: int = 10) -> dict[str, str]:
     engine = ReconEngine(concurrency=concurrency)
     return asyncio.run(engine.run_scan(targets))
 
+
 if __name__ == "__main__":
     # Test script
     import sys
+
     targets_to_scan = sys.argv[1:] if len(sys.argv) > 1 else ["127.0.0.1"]
     res = run_async_recon(targets_to_scan, concurrency=20)
     for t, out in res.items():
-        print(f"\n{'='*50}\nRESULTS FOR {t}\n{'='*50}\n")
+        print(f"\n{'=' * 50}\nRESULTS FOR {t}\n{'=' * 50}\n")
         print(out)

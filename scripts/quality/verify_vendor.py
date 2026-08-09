@@ -68,20 +68,14 @@ def _require_exact_keys(value: Mapping[str, Any], expected: Iterable[str], label
     if actual != required:
         missing = sorted(required - actual)
         unknown = sorted(actual - required)
-        raise VendorVerificationError(
-            f"{label} has invalid keys (missing={missing}, unknown={unknown})"
-        )
+        raise VendorVerificationError(f"{label} has invalid keys (missing={missing}, unknown={unknown})")
 
 
 def _relative_posix_path(value: Any, label: str) -> PurePosixPath:
     if not isinstance(value, str) or not value or "\\" in value:
         raise VendorVerificationError(f"{label} must be a canonical relative POSIX path")
     path = PurePosixPath(value)
-    if (
-        path.is_absolute()
-        or value != path.as_posix()
-        or any(part in {"", ".", ".."} for part in path.parts)
-    ):
+    if path.is_absolute() or value != path.as_posix() or any(part in {"", ".", ".."} for part in path.parts):
         raise VendorVerificationError(f"{label} must be a canonical relative POSIX path")
     return path
 
@@ -110,13 +104,9 @@ def load_manifest(path: Path) -> VendorManifest:
     if not isinstance(raw_artifacts, list):
         raise VendorVerificationError("manifest.artifacts must be a list")
     if not raw_submodules and raw_artifacts:
-        raise VendorVerificationError(
-            "manifest.submodules must be non-empty when manifest.artifacts is non-empty"
-        )
+        raise VendorVerificationError("manifest.submodules must be non-empty when manifest.artifacts is non-empty")
     if raw_submodules and not raw_artifacts:
-        raise VendorVerificationError(
-            "manifest.artifacts must be non-empty when manifest.submodules is non-empty"
-        )
+        raise VendorVerificationError("manifest.artifacts must be non-empty when manifest.submodules is non-empty")
 
     submodules: list[SubmoduleSpec] = []
     submodule_paths = set()
@@ -212,9 +202,7 @@ def _verify_submodule(root: Path, spec: SubmoduleSpec, require_clean: bool) -> N
     if len(fields) != 4 or fields[0] != "160000" or fields[3] != path_text:
         raise VendorVerificationError(f"{path_text} is not a pinned parent-repository gitlink")
     if fields[1] != spec.commit:
-        raise VendorVerificationError(
-            f"gitlink mismatch for {path_text}: expected {spec.commit}, got {fields[1]}"
-        )
+        raise VendorVerificationError(f"gitlink mismatch for {path_text}: expected {spec.commit}, got {fields[1]}")
 
     checkout = _resolved_inside(root, spec.path, f"submodule {path_text}")
     if checkout.is_symlink() or not checkout.is_dir():
@@ -267,9 +255,7 @@ def _verify_artifact(root: Path, manifest: VendorManifest, spec: ArtifactSpec) -
 
     actual_hash = _hash_file(artifact_path)
     if actual_hash != spec.sha256:
-        raise VendorVerificationError(
-            f"SHA-256 mismatch for {spec.path}: expected {spec.sha256}, got {actual_hash}"
-        )
+        raise VendorVerificationError(f"SHA-256 mismatch for {spec.path}: expected {spec.sha256}, got {actual_hash}")
 
 
 def _auto_platform() -> str:

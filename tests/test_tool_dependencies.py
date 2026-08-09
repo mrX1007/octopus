@@ -273,16 +273,12 @@ def test_fallback_and_database_tools_declare_their_real_python_graphs() -> None:
     }
     for definition in (browser, scrapling, crawl):
         assert definition is not None
-        assert {
-            leaf.label for leaf in dependency_leaves(definition.dependency_expression)
-        } == expected_browser
+        assert {leaf.label for leaf in dependency_leaves(definition.dependency_expression)} == expected_browser
         assert definition.dependency_expression.mode is DependencyMode.ALL
 
     assert database is not None
     assert database.dependency_expression.mode is DependencyMode.ANY
-    assert {
-        leaf.label for leaf in dependency_leaves(database.dependency_expression)
-    } == {
+    assert {leaf.label for leaf in dependency_leaves(database.dependency_expression)} == {
         "python:psycopg2-binary",
         "python:psycopg",
         "python:PyMySQL",

@@ -639,10 +639,7 @@ def run_shodan_vulns(ip: str) -> str:
 def run_shodan_interactive(target: str = "") -> str:
     """Interactive Shodan interface for terminal menu."""
     print(f"\n  {C_MAGENTA}{'=' * 60}{C_RESET}")
-    print(
-        f"  {C_MAGENTA}    OCTOPUS -- Shodan OSINT Module "
-        f"v{APPLICATION_VERSION}{C_RESET}"
-    )
+    print(f"  {C_MAGENTA}    OCTOPUS -- Shodan OSINT Module v{APPLICATION_VERSION}{C_RESET}")
     print(f"  {C_MAGENTA}{'=' * 60}{C_RESET}")
 
     sr = ShodanRecon()

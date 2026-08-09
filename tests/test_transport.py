@@ -288,9 +288,7 @@ def test_go_tls_transport_serializes_requests_and_maps_adapter_failures(
     assert failed["error"] == "Go client failed: bad certificate"
     assert transport._do_request("get", "https://example.invalid", timeout=3.0)["error"] == ("Request timed out")
     assert transport._do_request("get", "https://example.invalid")["error"] == ("Invalid JSON from Go client")
-    assert transport._do_request("get", "https://example.invalid")["error"] == (
-        f"Go binary not found: {go_binary}"
-    )
+    assert transport._do_request("get", "https://example.invalid")["error"] == (f"Go binary not found: {go_binary}")
     assert serialized[0] == {
         "method": "GET",
         "url": "https://example.invalid",
@@ -302,7 +300,6 @@ def test_go_tls_transport_serializes_requests_and_maps_adapter_failures(
     assert serialized[1]["headers"] == {"Content-Type": "text/plain"}
     assert serialized[1]["body"] == "hello"
     assert transport._temp_files == []
-
 
 
 def test_go_tls_transport_fails_closed_for_missing_or_non_executable_binary(

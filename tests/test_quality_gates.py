@@ -131,7 +131,7 @@ def test_nightly_external_tool_smoke_is_fail_closed() -> None:
     assert "OCTOPUS_STRICT_EXTERNAL_TOOLS" not in workflow
     assert "--yes curl nmap" in workflow
     assert "dispatch_registered_tool" in smoke
-    assert "ThreadingHTTPServer((\"127.0.0.1\", 0)" in smoke
+    assert 'ThreadingHTTPServer(("127.0.0.1", 0)' in smoke
     assert "subprocess.run" not in smoke
 
 

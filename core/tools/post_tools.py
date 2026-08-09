@@ -1443,12 +1443,7 @@ def ai_browser_surface_analysis(target: str, proto: str = "https", port: str = "
     if not decision.allowed:
         return f"[!] Browser surface analysis blocked: {decision.reason}"
     result = run_scrapling_fetch(url)
-    return (
-        f"[Browser Surface Analysis - {url}]\n"
-        f"URL: {url}\n"
-        f"Backend: scrapling/requests\n\n"
-        f"{result}"
-    )
+    return f"[Browser Surface Analysis - {url}]\nURL: {url}\nBackend: scrapling/requests\n\n{result}"
 
 
 @tool(

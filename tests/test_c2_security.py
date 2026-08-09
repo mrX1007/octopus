@@ -38,22 +38,28 @@ def test_enrollment_token_is_authenticated_expiring_and_single_use(tmp_path):
 def test_agent_registration_is_insert_only(tmp_path):
     database = C2Database(str(tmp_path / "c2.db"))
 
-    assert database.register_agent(
-        "AGT-server-assigned",
-        hostname="host-a",
-        os_name="linux",
-        user="operator",
-        ip="127.0.0.1",
-        crypto_state="sealed-state-a",
-    ) is True
-    assert database.register_agent(
-        "AGT-server-assigned",
-        hostname="host-b",
-        os_name="linux",
-        user="other",
-        ip="127.0.0.2",
-        crypto_state="sealed-state-b",
-    ) is False
+    assert (
+        database.register_agent(
+            "AGT-server-assigned",
+            hostname="host-a",
+            os_name="linux",
+            user="operator",
+            ip="127.0.0.1",
+            crypto_state="sealed-state-a",
+        )
+        is True
+    )
+    assert (
+        database.register_agent(
+            "AGT-server-assigned",
+            hostname="host-b",
+            os_name="linux",
+            user="other",
+            ip="127.0.0.2",
+            crypto_state="sealed-state-b",
+        )
+        is False
+    )
     assert database.get_agent_crypto("AGT-server-assigned") == "sealed-state-a"
 
 
@@ -62,9 +68,7 @@ def test_task_result_requires_owner_and_sent_state(tmp_path):
     database.queue_task("task-1", "agent-a", "whoami")
 
     assert database.update_task_result("task-1", "agent-a", "too early") is False
-    assert database.get_pending_tasks("agent-a") == [
-        {"task_id": "task-1", "command": "whoami", "delivery_attempt": 1}
-    ]
+    assert database.get_pending_tasks("agent-a") == [{"task_id": "task-1", "command": "whoami", "delivery_attempt": 1}]
     assert database.update_task_result("task-1", "agent-b", "forged") is False
     assert database.update_task_result("task-1", "agent-a", "ok") is True
     assert database.update_task_result("task-1", "agent-a", "duplicate") is False
@@ -74,24 +78,16 @@ def test_task_delivery_ack_and_retry_are_owned_and_idempotent(tmp_path):
     database = C2Database(str(tmp_path / "c2.db"))
     database.queue_task("task-retry", "agent-a", "status")
 
-    first = database.get_pending_tasks(
-        "agent-a", now=100, retry_after_seconds=10, ack_retry_after_seconds=30
-    )
+    first = database.get_pending_tasks("agent-a", now=100, retry_after_seconds=10, ack_retry_after_seconds=30)
     assert first[0]["delivery_attempt"] == 1
-    assert database.get_pending_tasks(
-        "agent-a", now=105, retry_after_seconds=10, ack_retry_after_seconds=30
-    ) == []
-    retried = database.get_pending_tasks(
-        "agent-a", now=111, retry_after_seconds=10, ack_retry_after_seconds=30
-    )
+    assert database.get_pending_tasks("agent-a", now=105, retry_after_seconds=10, ack_retry_after_seconds=30) == []
+    retried = database.get_pending_tasks("agent-a", now=111, retry_after_seconds=10, ack_retry_after_seconds=30)
     assert retried[0]["delivery_attempt"] == 2
 
     assert database.acknowledge_tasks("agent-b", ["task-retry"], now=112) == 0
     assert database.acknowledge_tasks("agent-a", ["task-retry"], now=112) == 1
     assert database.acknowledge_tasks("agent-a", ["task-retry"], now=113) == 1
-    assert database.get_pending_tasks(
-        "agent-a", now=130, retry_after_seconds=10, ack_retry_after_seconds=30
-    ) == []
+    assert database.get_pending_tasks("agent-a", now=130, retry_after_seconds=10, ack_retry_after_seconds=30) == []
     acknowledged_retry = database.get_pending_tasks(
         "agent-a", now=143, retry_after_seconds=10, ack_retry_after_seconds=30
     )
@@ -122,9 +118,7 @@ def test_keystore_seals_session_state_and_protects_files(tmp_path):
         serialization.NoEncryption(),
     )
     assert not (tmp_path / "keys" / "server_x25519_private.pem").exists()
-    assert os.stat(
-        tmp_path / "keys" / "server_x25519_private.enc"
-    ).st_mode & 0o077 == 0
+    assert os.stat(tmp_path / "keys" / "server_x25519_private.enc").st_mode & 0o077 == 0
 
     reopened = KeyStore(str(tmp_path / "keys"))
     assert reopened.unlock("correct horse battery staple") is True
@@ -159,18 +153,14 @@ def test_go_builder_contract_contains_enrollment_token():
         "single-use-token",
     )
     raw = base64.b64decode(blob)
-    config = json.loads(
-        AESGCM(bytes.fromhex(hex_key)).decrypt(raw[:12], raw[12:], None)
-    )
+    config = json.loads(AESGCM(bytes.fromhex(hex_key)).decrypt(raw[:12], raw[12:], None))
 
     assert config["enrollment_token"] == "single-use-token"
     assert len(base64.b64decode(config["pub"])) == 32
 
 
 def test_go_client_uses_unified_bounded_acknowledged_protocol():
-    source_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "core", "c2", "implant.go"
-    )
+    source_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "core", "c2", "implant.go")
     with open(source_path, encoding="utf-8") as source_file:
         source = source_file.read()
 
@@ -265,9 +255,7 @@ def test_register_endpoint_requires_token_and_assigns_identity(tmp_path, monkeyp
     response = client.post("/register", json=request_body)
 
     assert response.status_code == 200
-    response_data = _decrypt_message(
-        session_key, response.json()["data"]
-    )
+    response_data = _decrypt_message(session_key, response.json()["data"])
     assigned_id = response_data["agent_id"]
     assert assigned_id.startswith("AGT-")
     assert assigned_id != "AGT-client-controlled"
@@ -291,11 +279,13 @@ def test_register_endpoint_requires_token_and_assigns_identity(tmp_path, monkeyp
     )
     assert beacon_response.status_code == 200
     tasks = _decrypt_message(session_key, beacon_response.json()["data"])["tasks"]
-    assert tasks == [{
-        "task_id": "task-contract",
-        "command": "status",
-        "delivery_attempt": 1,
-    }]
+    assert tasks == [
+        {
+            "task_id": "task-contract",
+            "command": "status",
+            "delivery_attempt": 1,
+        }
+    ]
 
     ack_response = client.post(
         "/beacon",
@@ -320,22 +310,26 @@ def test_register_endpoint_requires_token_and_assigns_identity(tmp_path, monkeyp
                 {
                     "hostname": "test-host",
                     "acks": [],
-                    "results": [{
-                        "task_id": "task-contract",
-                        "output": "ok",
-                        "error": "",
-                    }],
+                    "results": [
+                        {
+                            "task_id": "task-contract",
+                            "output": "ok",
+                            "error": "",
+                        }
+                    ],
                 },
                 4,
             )
         },
     )
     assert result_response.status_code == 200
-    assert daemon.db.get_results(assigned_id) == [{
-        "task_id": "task-contract",
-        "output": "ok",
-        "status": "completed",
-    }]
+    assert daemon.db.get_results(assigned_id) == [
+        {
+            "task_id": "task-contract",
+            "output": "ok",
+            "status": "completed",
+        }
+    ]
 
     stored_state = daemon.key_store.unseal_json(
         daemon.db.get_agent_crypto(assigned_id), aad=assigned_id.encode("utf-8")

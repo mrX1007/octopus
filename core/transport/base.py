@@ -26,13 +26,19 @@ class TrafficPolicy:
     Applied automatically by the Transport layer.
     """
 
-    def __init__(self, profile_name: str = "default",
-                 min_jitter: float = 0.1, max_jitter: float = 2.0,
-                 burst_size: int = 3, burst_cooldown: float = 5.0,
-                 chunk_size: int = 16384,
-                 retry_base: float = 1.0, retry_max: float = 30.0,
-                 retry_jitter: float = 0.5,
-                 max_retries: int = 3):
+    def __init__(
+        self,
+        profile_name: str = "default",
+        min_jitter: float = 0.1,
+        max_jitter: float = 2.0,
+        burst_size: int = 3,
+        burst_cooldown: float = 5.0,
+        chunk_size: int = 16384,
+        retry_base: float = 1.0,
+        retry_max: float = 30.0,
+        retry_jitter: float = 0.5,
+        max_retries: int = 3,
+    ):
         self.profile_name = profile_name
         self.min_jitter = min_jitter
         self.max_jitter = max_jitter
@@ -68,7 +74,7 @@ class TrafficPolicy:
 
     def retry_delay(self, attempt: int) -> float:
         """Exponential backoff with jitter for retries."""
-        delay = min(self.retry_base * (2 ** attempt), self.retry_max)
+        delay = min(self.retry_base * (2**attempt), self.retry_max)
         delay += random.uniform(-self.retry_jitter, self.retry_jitter)
         return max(0.1, delay)
 
@@ -78,7 +84,7 @@ class TrafficPolicy:
             return [data]
         chunks = []
         for i in range(0, len(data), self.chunk_size):
-            chunks.append(data[i:i + self.chunk_size])
+            chunks.append(data[i : i + self.chunk_size])
         return chunks
 
 
@@ -96,19 +102,27 @@ class Transport(ABC):
         self._temp_files: list[str] = []
 
     @abstractmethod
-    def _do_request(self, method: str, url: str,
-                    headers: Optional[dict[str, str]] = None,
-                    body: Optional[bytes] = None,
-                    timeout: float = 30.0) -> dict[str, Any]:
+    def _do_request(
+        self,
+        method: str,
+        url: str,
+        headers: Optional[dict[str, str]] = None,
+        body: Optional[bytes] = None,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
         """
         Perform the actual HTTP request.
         Returns: {"status_code": int, "headers": dict, "body": str, "error": str}
         """
 
-    def request(self, method: str, url: str,
-                headers: Optional[dict[str, str]] = None,
-                body: Optional[bytes] = None,
-                timeout: float = 30.0) -> dict[str, Any]:
+    def request(
+        self,
+        method: str,
+        url: str,
+        headers: Optional[dict[str, str]] = None,
+        body: Optional[bytes] = None,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
         """
         Make an HTTP request with traffic policy applied.
         Handles jitter, retries, and temp file cleanup.
@@ -147,7 +161,7 @@ class Transport(ABC):
     def _create_temp_file(self, content: str) -> str:
         """Create a temp file and track it for cleanup."""
         fd, path = tempfile.mkstemp(prefix="mt_", suffix=".tmp")
-        with os.fdopen(fd, 'w') as f:
+        with os.fdopen(fd, "w") as f:
             f.write(content)
         self._temp_files.append(path)
         return path
@@ -156,23 +170,22 @@ class Transport(ABC):
 class PythonTransport(Transport):
     """Transport implementation using Python requests library."""
 
-    def _do_request(self, method: str, url: str,
-                    headers: Optional[dict[str, str]] = None,
-                    body: Optional[bytes] = None,
-                    timeout: float = 30.0) -> dict[str, Any]:
+    def _do_request(
+        self,
+        method: str,
+        url: str,
+        headers: Optional[dict[str, str]] = None,
+        body: Optional[bytes] = None,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
         try:
             import requests
         except ImportError:
-            return {"error": "requests library not installed", "status_code": 0,
-                    "headers": {}, "body": ""}
+            return {"error": "requests library not installed", "status_code": 0, "headers": {}, "body": ""}
 
         try:
             resp = requests.request(
-                method=method, url=url,
-                headers=headers or {},
-                data=body,
-                timeout=timeout,
-                verify=True
+                method=method, url=url, headers=headers or {}, data=body, timeout=timeout, verify=True
             )
             return {
                 "status_code": resp.status_code,
@@ -180,8 +193,7 @@ class PythonTransport(Transport):
                 "body": resp.text,
             }
         except requests.Timeout:
-            return {"error": "Request timed out", "status_code": 0,
-                    "headers": {}, "body": ""}
+            return {"error": "Request timed out", "status_code": 0, "headers": {}, "body": ""}
         except Exception as e:
             return {"error": str(e), "status_code": 0, "headers": {}, "body": ""}
 
@@ -192,8 +204,7 @@ class GoTLSTransport(Transport):
     Wraps an explicitly deployment-managed binary as a subprocess.
     """
 
-    def __init__(self, go_binary: str, browser: str = "chrome",
-                 policy: Optional[TrafficPolicy] = None):
+    def __init__(self, go_binary: str, browser: str = "chrome", policy: Optional[TrafficPolicy] = None):
         super().__init__(policy)
         self.browser = browser
         if not go_binary.strip():
@@ -207,42 +218,39 @@ class GoTLSTransport(Transport):
             raise PermissionError(f"Go TLS binary is not executable: {configured_binary}")
         self.go_binary = configured_binary
 
-    def _do_request(self, method: str, url: str,
-                    headers: Optional[dict[str, str]] = None,
-                    body: Optional[bytes] = None,
-                    timeout: float = 30.0) -> dict[str, Any]:
+    def _do_request(
+        self,
+        method: str,
+        url: str,
+        headers: Optional[dict[str, str]] = None,
+        body: Optional[bytes] = None,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
         import subprocess
 
         req_data = {
             "method": method.upper(),
             "url": url,
             "headers": headers or {},
-            "body": body.decode('utf-8') if body else "",
+            "body": body.decode("utf-8") if body else "",
             "browser": self.browser,
         }
 
         req_file = self._create_temp_file(json.dumps(req_data))
 
         try:
-            result = subprocess.run(
-                [self.go_binary, "-in", req_file],
-                capture_output=True, text=True, timeout=timeout
-            )
+            result = subprocess.run([self.go_binary, "-in", req_file], capture_output=True, text=True, timeout=timeout)
 
             if result.returncode != 0:
-                return {"error": f"Go client failed: {result.stderr}",
-                        "status_code": 0, "headers": {}, "body": ""}
+                return {"error": f"Go client failed: {result.stderr}", "status_code": 0, "headers": {}, "body": ""}
 
             return json.loads(result.stdout)
 
         except subprocess.TimeoutExpired:
-            return {"error": "Request timed out", "status_code": 0,
-                    "headers": {}, "body": ""}
+            return {"error": "Request timed out", "status_code": 0, "headers": {}, "body": ""}
         except json.JSONDecodeError:
-            return {"error": "Invalid JSON from Go client",
-                    "status_code": 0, "headers": {}, "body": ""}
+            return {"error": "Invalid JSON from Go client", "status_code": 0, "headers": {}, "body": ""}
         except FileNotFoundError:
-            return {"error": f"Go binary not found: {self.go_binary}",
-                    "status_code": 0, "headers": {}, "body": ""}
+            return {"error": f"Go binary not found: {self.go_binary}", "status_code": 0, "headers": {}, "body": ""}
         finally:
             self.cleanup()

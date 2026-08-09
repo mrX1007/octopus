@@ -241,10 +241,9 @@ class PolicyDenial:
         decision_ref: str = "",
     ) -> PolicyDenial:
         raw = str(reason or "unknown").split(":", 1)[0].strip().casefold()
-        reason_code = "".join(
-            character if character.isalnum() or character in "_.-" else "_"
-            for character in raw
-        )[:128]
+        reason_code = "".join(character if character.isalnum() or character in "_.-" else "_" for character in raw)[
+            :128
+        ]
         return cls(
             phase=str(phase or "unknown")[:64],
             reason_code=reason_code or "unknown",
@@ -277,11 +276,13 @@ class ActionLifecycle:
     def record(self, event: str, *, reason: str = "") -> None:
         self.updated_at = time.time()
         if len(self.events) < 64:
-            self.events.append({
-                "event": str(event),
-                "reason": str(reason),
-                "timestamp": self.updated_at,
-            })
+            self.events.append(
+                {
+                    "event": str(event),
+                    "reason": str(reason),
+                    "timestamp": self.updated_at,
+                }
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -320,9 +321,7 @@ class ActionExecutionReport:
             "applicability": self.applicability.to_dict() if self.applicability else None,
             "check_result": self.check_result.to_dict() if self.check_result else None,
             "execution_result": self.execution_result.to_dict() if self.execution_result else None,
-            "verification_result": (
-                self.verification_result.to_dict() if self.verification_result else None
-            ),
+            "verification_result": (self.verification_result.to_dict() if self.verification_result else None),
             "cleanup_result": self.cleanup_result.to_dict() if self.cleanup_result else None,
             "policy_decision_refs": list(self.policy_decision_refs),
             "policy_denials": [item.to_dict() for item in self.policy_denials],

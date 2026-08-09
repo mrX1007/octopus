@@ -151,7 +151,7 @@ def test_opsec_client_never_compiles_go_at_runtime() -> None:
     source = Path(network.__file__).read_text(encoding="utf-8")
 
     assert "_compile_go_client" not in source
-    assert 'subprocess.run' not in source
+    assert "subprocess.run" not in source
     assert '["go", "build"' not in source
 
 

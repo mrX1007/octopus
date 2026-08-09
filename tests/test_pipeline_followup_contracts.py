@@ -5,6 +5,7 @@ import pytest
 
 pytestmark = pytest.mark.contract
 
+
 def test_internal_recon_goal_forces_single_network_task():
     from core.ai.pipeline import AIPipeline
 
@@ -136,11 +137,13 @@ def test_pipeline_does_not_truncate_verification_followup_fanout_to_three():
         if cmd.startswith("exploit_select"):
             lines = ["[EXPLOIT SELECTION - 10.0.0.5]", "Services analyzed: 6"]
             for idx, port in enumerate(["49153", "49154", "49155", "49156", "49157", "49158"], 1):
-                lines.extend([
-                    f"[EXPLOIT CANDIDATE {idx}] redis:{port} Redis key-value store -> exploit/linux/redis/redis_replication_cmd_exec (version_map; matched 'redis')",
-                    "  Payload recommendation: cmd/unix/reverse_python",
-                    f"  MSF check: msf_check 10.0.0.5 exploit/linux/redis/redis_replication_cmd_exec RHOSTS=10.0.0.5 RPORT={port}",
-                ])
+                lines.extend(
+                    [
+                        f"[EXPLOIT CANDIDATE {idx}] redis:{port} Redis key-value store -> exploit/linux/redis/redis_replication_cmd_exec (version_map; matched 'redis')",
+                        "  Payload recommendation: cmd/unix/reverse_python",
+                        f"  MSF check: msf_check 10.0.0.5 exploit/linux/redis/redis_replication_cmd_exec RHOSTS=10.0.0.5 RPORT={port}",
+                    ]
+                )
             return "\n".join(lines)
         if cmd.startswith("msf_check"):
             return "[-] The target does not appear to be vulnerable."
@@ -282,10 +285,7 @@ def test_web_content_discovery_negative_probe_becomes_fact_not_loop():
     finally:
         pipeline_mod.run_arbitrary_cmd = old_runner
 
-    pairs = {
-        (fact["type"], fact["value"])
-        for fact in pipeline.fact_store.get_facts("scan-no-web-task", "10.0.0.5")
-    }
+    pairs = {(fact["type"], fact["value"]) for fact in pipeline.fact_store.get_facts("scan-no-web-task", "10.0.0.5")}
 
     assert calls == ["ffuf 10.0.0.5", "scrapling_crawl 10.0.0.5"]
     assert ("service_status", "web_content_discovery_skipped:no_http_response") in pairs
@@ -329,9 +329,7 @@ Databases (1):
     try:
         db_path = f"/tmp/octopus_pipeline_protocol_actions_{uuid.uuid4().hex}.db"
         pipeline = AIPipeline(db_path)
-        pipeline._known_credentials_for_target = lambda target: {
-            "postgresql": [("postgres", "secret")]
-        }
+        pipeline._known_credentials_for_target = lambda target: {"postgresql": [("postgres", "secret")]}
         scan_id = "scan-protocol-actions"
         host = "10.0.0.5"
         result = pipeline._run_task_commands(scan_id, host, [f"nmap -Pn -sV {host}"], fact_label="Fact")
@@ -454,7 +452,7 @@ def test_pipeline_records_internal_vulnerability_check_results_from_compact_stat
 
     pipeline = AIPipeline("/tmp/octopus_internal_vuln_check_results.db")
     cmd = (
-        'exploit_select 10.0.0.5 port_open -> 22/tcp (ssh) | '
+        "exploit_select 10.0.0.5 port_open -> 22/tcp (ssh) | "
         'compact_state -> {"internal_services":[{"host":"172.24.108.2","port":53,"proto":"tcp","service":"dns"}]}'
     )
 
@@ -481,9 +479,15 @@ def test_web_surface_actions_include_safe_nuclei_katana_and_api_imports():
     from core.ai.pipeline import AIPipeline
 
     pipeline = AIPipeline(f"/tmp/octopus_pipeline_safe_web_{uuid.uuid4().hex}.db")
-    pipeline.tool_registry._is_tool_available = lambda name: name in {
-        "nuclei_safe", "katana_crawl", "security_headers_check", "cors_check",
-    }
+    pipeline.tool_registry._is_tool_available = lambda name: (
+        name
+        in {
+            "nuclei_safe",
+            "katana_crawl",
+            "security_headers_check",
+            "cors_check",
+        }
+    )
     scan_id = "scan-safe-web"
     target = "10.0.0.5"
     pipeline.fact_store.add_fact(scan_id, target, "web_endpoint", "https://10.0.0.5:8443/", "test")

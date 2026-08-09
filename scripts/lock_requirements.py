@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-EPOCH = "2026-08-01T00:00:00Z"
-SOURCE_DATE_EPOCH = "1785542400"
+EPOCH = "2026-08-04T00:00:00Z"
+SOURCE_DATE_EPOCH = "1785801600"
 UV_VERSION = "0.11.28"
 INDEX_URL = "https://pypi.org/simple"
 SCHEMA_VERSION = 1

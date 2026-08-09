@@ -174,16 +174,12 @@ def test_repository_sbom_is_deterministic_and_covers_every_dependency_family(tmp
     assert "pkg:generic/curl" in references
     assert "urn:octopus:resource:modules" in references
     assert "urn:octopus:vendor:vendor%2Fhelper.bin" in references
-    assert first["services"] == [
-        {"bom-ref": "urn:octopus:service:public-intelligence", "name": "public-intelligence"}
-    ]
+    assert first["services"] == [{"bom-ref": "urn:octopus:service:public-intelligence", "name": "public-intelligence"}]
     properties = {item["name"]: item["value"] for item in first["metadata"]["properties"]}
     assert properties["octopus:tool-dependency:passive_fixture"].startswith('{"items":')
     assert len(properties["octopus:tool-dependency-inventory:sha256"]) == 64
     dependency_rows = {item["ref"]: item["dependsOn"] for item in first["dependencies"]}
-    assert dependency_rows["pkg:golang/example.test/implant@2.3.4"] == [
-        "pkg:golang/example.test/module@v1.2.3"
-    ]
+    assert dependency_rows["pkg:golang/example.test/implant@2.3.4"] == ["pkg:golang/example.test/module@v1.2.3"]
     assert "urn:octopus:service:public-intelligence" in dependency_rows["pkg:pypi/fixture-app@2.3.4"]
 
 

@@ -53,9 +53,7 @@ def _wheel_version(archive: zipfile.ZipFile, names: set[str]) -> str:
     if len(metadata_files) != 1:
         raise WheelSmokeError(f"wheel_metadata_count:{len(metadata_files)}")
 
-    metadata = BytesParser(policy=policy.default).parsebytes(
-        archive.read(next(iter(metadata_files)))
-    )
+    metadata = BytesParser(policy=policy.default).parsebytes(archive.read(next(iter(metadata_files))))
     project_name = str(metadata.get("Name", "")).strip()
     version = str(metadata.get("Version", "")).strip()
     if _canonical_project_name(project_name) != "octopus-security":
@@ -191,9 +189,7 @@ def validate_sdist(path: str | Path) -> dict[str, int]:
     if len(config_files) != 1:
         raise WheelSmokeError(f"sdist_config_count:{len(config_files)}")
     relative_names = {
-        str(PurePosixPath(*PurePosixPath(name).parts[1:]))
-        for name in names
-        if len(PurePosixPath(name).parts) > 1
+        str(PurePosixPath(*PurePosixPath(name).parts[1:])) for name in names if len(PurePosixPath(name).parts) > 1
     }
     required = {
         "config.yaml",

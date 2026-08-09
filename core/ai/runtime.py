@@ -923,11 +923,7 @@ class PipelineRuntime:
         if not isinstance(existing_refs, (list, tuple, set)):
             existing_refs = ()
         refs = tuple(
-            dict.fromkeys(
-                str(item)
-                for item in (*existing_refs, *secret_refs)
-                if str(item).startswith("secret://")
-            )
+            dict.fromkeys(str(item) for item in (*existing_refs, *secret_refs) if str(item).startswith("secret://"))
         )
         if refs:
             safe_fact["secret_refs"] = list(refs)
@@ -1044,9 +1040,7 @@ class PipelineRuntime:
             "fact_pairs": [(fact.get("type"), fact.get("value")) for fact in facts],
         }
         if command_result_fields:
-            command_result.update(
-                dict(self.facts.redactor.redact_data(dict(command_result_fields)))
-            )
+            command_result.update(dict(self.facts.redactor.redact_data(dict(command_result_fields))))
         return {
             "facts": facts,
             "new_facts": 0,
@@ -1245,15 +1239,10 @@ class PipelineRuntime:
             "parsed_facts": parsed_fact_count,
             "new_facts": new_fact_count,
             "fact_ids": list(unique_fact_ids),
-            "fact_pairs": [
-                (fact.get("type"), fact.get("value"))
-                for fact in safe_prepared_facts
-            ],
+            "fact_pairs": [(fact.get("type"), fact.get("value")) for fact in safe_prepared_facts],
         }
         if command_result_fields:
-            command_result.update(
-                dict(self.facts.redactor.redact_data(dict(command_result_fields)))
-            )
+            command_result.update(dict(self.facts.redactor.redact_data(dict(command_result_fields))))
         return {
             "facts": stored_facts,
             "new_facts": new_fact_count,

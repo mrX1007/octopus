@@ -83,8 +83,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if failures:
         for failure in failures:
             print(
-                f"import smoke failed: {failure.module}: "
-                f"{failure.error_type}: {failure.message}",
+                f"import smoke failed: {failure.module}: {failure.error_type}: {failure.message}",
                 file=sys.stderr,
             )
         return 1

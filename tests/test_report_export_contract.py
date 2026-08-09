@@ -510,7 +510,5 @@ def test_every_user_facing_version_comes_from_the_single_owner(tmp_path):
         package_metadata = tomllib.load(handle)
     assert package_metadata["project"]["dynamic"] == ["version"]
     assert "version" not in package_metadata["project"]
-    assert package_metadata["tool"]["setuptools"]["dynamic"]["version"] == {
-        "attr": "core.version.__version__"
-    }
+    assert package_metadata["tool"]["setuptools"]["dynamic"]["version"] == {"attr": "core.version.__version__"}
     assert stat.S_IMODE((root / "export.py").stat().st_mode) & stat.S_IXUSR

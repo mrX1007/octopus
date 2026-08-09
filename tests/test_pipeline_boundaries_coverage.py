@@ -803,6 +803,7 @@ def test_web_endpoint_and_compact_context_boundaries() -> None:
     assert not pipeline._web_fact_in_target_scope("http://external.test/path", "host")
     assert pipeline._web_fact_in_target_scope("relative", "host")
 
+
 def test_exploit_context_augmentation_covers_empty_and_compact_context() -> None:
     pipeline = _bare_pipeline()
     stored_facts: list[dict] = []

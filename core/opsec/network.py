@@ -38,24 +38,19 @@ class OpsecClient:
         if use_go_tls:
             go_bin = go_binary if go_binary is not None else os.environ.get("OCTOPUS_GO_TLS_BINARY")
             if not go_bin or not go_bin.strip():
-                raise RuntimeError(
-                    "Go TLS opt-in requires go_binary or OCTOPUS_GO_TLS_BINARY"
-                )
-            self._transport: Transport = GoTLSTransport(
-                go_binary=go_bin, browser=browser, policy=policy
-            )
+                raise RuntimeError("Go TLS opt-in requires go_binary or OCTOPUS_GO_TLS_BINARY")
+            self._transport: Transport = GoTLSTransport(go_binary=go_bin, browser=browser, policy=policy)
         else:
             self._transport: Transport = PythonTransport(policy=policy)
 
-    def request(self, method: str, url: str,
-                headers: Optional[dict[str, str]] = None,
-                body: str = "",
-                **kwargs) -> dict[str, Any]:
+    def request(
+        self, method: str, url: str, headers: Optional[dict[str, str]] = None, body: str = "", **kwargs
+    ) -> dict[str, Any]:
         """
         Make an HTTP request with traffic shaping and JA3 spoofing.
         Traffic policy (jitter, retries, pacing) is applied automatically.
         """
-        body_bytes = body.encode('utf-8') if body else None
+        body_bytes = body.encode("utf-8") if body else None
         return self._transport.request(method, url, headers, body_bytes)
 
     @property

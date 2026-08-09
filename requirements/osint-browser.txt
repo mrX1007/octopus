@@ -1,6 +1,7 @@
 # Optional OSINT/search/browser profile.
 beautifulsoup4>=4.12.0
 ddgs>=9.14.4
+h2>=4.4.1
 lxml>=5.1.0
 primp>=0.6.0
 scrapling>=0.2.0

@@ -88,9 +88,7 @@ def test_compatibility_ingest_uses_canonical_timeout_completion_semantics(
     assert facts[0]["coverage_status"] == "degraded"
     assert facts[0]["freshness_status"] == "unknown"
     assert fact_is_decision_usable(facts[0]) is False
-    assert facts[0]["assessment"]["source_execution_ids"] == [
-        "exec-compat-timeout"
-    ]
+    assert facts[0]["assessment"]["source_execution_ids"] == ["exec-compat-timeout"]
 
 
 def test_completion_orders_evidence_result_projection_and_attempt_provenance(
@@ -163,22 +161,16 @@ def test_completion_orders_evidence_result_projection_and_attempt_provenance(
     assert completion["new_facts"] == 2
     assert completion["parsed_facts"] == 1
     assert len(runtime.facts.get_command_results("scan", "host")) == 1
-    stored_by_type = {
-        fact["type"]: fact for fact in runtime.facts.get_facts("scan", "host")
-    }
+    stored_by_type = {fact["type"]: fact for fact in runtime.facts.get_facts("scan", "host")}
     for fact_type in ("port_open", "web_endpoint"):
         observation = stored_by_type[fact_type]["observations"][0]
         assert observation["source_identity"] == "fixture-probe"
         assert observation["observation_method"] == "tls-handshake"
     persisted_attempt = next(
-        item
-        for item in runtime.missions.snapshot(mission.mission_id).attempts
-        if item.attempt_id == attempt.attempt_id
+        item for item in runtime.missions.snapshot(mission.mission_id).attempts if item.attempt_id == attempt.attempt_id
     )
     assert persisted_attempt.execution_ids == ("exec-ingress",)
-    assert persisted_attempt.fact_ids == tuple(
-        completion["command_result"]["fact_ids"]
-    )
+    assert persisted_attempt.fact_ids == tuple(completion["command_result"]["fact_ids"])
 
 
 def test_completion_never_returns_or_callbacks_plaintext_credential_facts(
@@ -223,9 +215,7 @@ def test_completion_never_returns_or_callbacks_plaintext_credential_facts(
     assert canary not in repr(callback_facts)
     safe_value = completion["facts"][1]["value"]
     assert safe_value.startswith("support:secret://")
-    assert completion["command_result"]["fact_pairs"] == [
-        ("credential", safe_value)
-    ]
+    assert completion["command_result"]["fact_pairs"] == [("credential", safe_value)]
     assert callback_facts[0][0]["value"] == safe_value
     assert completion["stored_base_facts"][0]["fact"]["value"] == safe_value
 
@@ -330,9 +320,7 @@ def test_completion_replay_repairs_attempt_tail_without_replaying_evidence(
     )
 
     persisted_attempt = next(
-        item
-        for item in runtime.missions.snapshot(mission.mission_id).attempts
-        if item.attempt_id == attempt.attempt_id
+        item for item in runtime.missions.snapshot(mission.mission_id).attempts if item.attempt_id == attempt.attempt_id
     )
     assert parser.calls == 1
     assert replayed["new_facts"] == 0
@@ -642,9 +630,7 @@ def test_scan_generation_survives_reopen_and_each_clear_increments_it(
     assert before_second_clear.scan_generation == 1
     assert reopened_again.scan_completion_generation("scan") == 2
     with reopened_again._get_conn() as conn:
-        generation_row = conn.execute(
-            "SELECT scan_key, generation FROM scan_completion_generations"
-        ).fetchone()
+        generation_row = conn.execute("SELECT scan_key, generation FROM scan_completion_generations").fetchone()
     assert generation_row == (
         reopened_again._completion_scan_key("scan"),
         2,
@@ -705,17 +691,13 @@ def test_clear_while_dispatch_is_blocked_fences_the_returned_execution(
     tmp_path: Path,
 ) -> None:
     pipeline = AIPipeline(str(tmp_path / "dispatch-clear.db"))
-    pipeline.runtime.decide = (
-        lambda command, _facts, _keys, _context, *_retry: CommandDecision(
-            command,
-            "probe host",
-            "execute",
-            "fixture",
-        )
+    pipeline.runtime.decide = lambda command, _facts, _keys, _context, *_retry: CommandDecision(
+        command,
+        "probe host",
+        "execute",
+        "fixture",
     )
-    pipeline._execution_context = lambda _scan, _target: ExecutionContext.automatic(
-        target_scope=("host",)
-    )
+    pipeline._execution_context = lambda _scan, _target: ExecutionContext.automatic(target_scope=("host",))
     dispatch_entered = Event()
     dispatch_release = Event()
     execution = _execution(pipeline.runtime, "exec-returned-after-clear")
@@ -909,9 +891,7 @@ def test_normalization_failure_releases_claim_before_evidence_writes(
 
     assert runtime.facts.get_facts("scan", "host") == []
     with runtime.facts._get_conn() as conn:
-        claims = conn.execute(
-            "SELECT idempotency_key FROM command_completion_claims"
-        ).fetchall()
+        claims = conn.execute("SELECT idempotency_key FROM command_completion_claims").fetchall()
     assert claims == []
 
 
@@ -956,13 +936,11 @@ def test_production_and_snapshot_replay_delegate_to_completion_ingress(
     monkeypatch,
 ) -> None:
     pipeline = AIPipeline(str(tmp_path / "pipeline.db"))
-    pipeline.runtime.decide = (
-        lambda command, _facts, _keys, _context, *_retry: CommandDecision(
-            command,
-            "probe host",
-            "execute",
-            "fixture",
-        )
+    pipeline.runtime.decide = lambda command, _facts, _keys, _context, *_retry: CommandDecision(
+        command,
+        "probe host",
+        "execute",
+        "fixture",
     )
     pipeline.runtime._runner = lambda _command: "443/tcp open https"
     calls: list[str] = []
@@ -994,13 +972,11 @@ def test_production_and_snapshot_replay_delegate_to_completion_ingress(
 
 def test_pipeline_caller_handles_an_exact_completion_replay(tmp_path: Path) -> None:
     pipeline = AIPipeline(str(tmp_path / "pipeline-replay.db"))
-    pipeline.runtime.decide = (
-        lambda command, _facts, _keys, _context, *_retry: CommandDecision(
-            command,
-            "probe host",
-            "execute",
-            "fixture",
-        )
+    pipeline.runtime.decide = lambda command, _facts, _keys, _context, *_retry: CommandDecision(
+        command,
+        "probe host",
+        "execute",
+        "fixture",
     )
     execution = _execution(pipeline.runtime, "exec-pipeline-replay")
     pipeline.runtime.execute = lambda _decision, _context: execution
@@ -1033,7 +1009,5 @@ def test_pipeline_caller_handles_an_exact_completion_replay(tmp_path: Path) -> N
 
     assert parse_calls == 1
     assert replayed["new_facts"] == 0
-    assert replayed["command_result"]["check_status"] == first["command_result"][
-        "check_status"
-    ]
+    assert replayed["command_result"]["check_status"] == first["command_result"]["check_status"]
     assert len(pipeline.fact_store.get_command_results("scan", "host")) == 1

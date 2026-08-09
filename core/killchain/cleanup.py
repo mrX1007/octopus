@@ -78,10 +78,7 @@ def _artifact_command(artifact: dict[str, Any], session_user: str) -> tuple[str,
 
     if artifact_type == "cron" and marker and artifact_user == session_user:
         needle = shlex.quote(marker)
-        command = (
-            "(crontab -l 2>/dev/null || true) "
-            f"| awk -v needle={needle} 'index($0, needle) == 0' | crontab -"
-        )
+        command = f"(crontab -l 2>/dev/null || true) | awk -v needle={needle} 'index($0, needle) == 0' | crontab -"
         return command, f"registered crontab line for {artifact_user}"
 
     if artifact_type == "process" and marker.isdecimal() and int(marker) > 1:
@@ -93,10 +90,7 @@ def _artifact_command(artifact: dict[str, Any], session_user: str) -> tuple[str,
 
 
 def _run_exact_cleanup(client: Any, command: str) -> tuple[bool, str]:
-    wrapped = (
-        f"({command}) && printf '\\n{_SUCCESS_SENTINEL}\\n' "
-        f"|| printf '\\n{_FAILURE_SENTINEL}\\n'"
-    )
+    wrapped = f"({command}) && printf '\\n{_SUCCESS_SENTINEL}\\n' || printf '\\n{_FAILURE_SENTINEL}\\n'"
     result = _ssh_exec(client, wrapped, timeout=10)
     return _SUCCESS_SENTINEL in result and _FAILURE_SENTINEL not in result, result
 

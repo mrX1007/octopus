@@ -64,10 +64,29 @@ def as_url(target: str) -> str:
 def nmap_service_looks_web(service: str, banner: str = "") -> bool:
     text = f"{service or ''} {banner or ''}".lower()
     web_markers = (
-        "http", "httpd", "web server", "nginx", "apache", "cowboy",
-        "golang net/http", "node.js", "express", "php", "wordpress",
-        "tomcat", "jetty", "gunicorn", "uwsgi", "werkzeug", "flask",
-        "django", "rails", "sinatra", "grafana", "kibana", "prometheus",
+        "http",
+        "httpd",
+        "web server",
+        "nginx",
+        "apache",
+        "cowboy",
+        "golang net/http",
+        "node.js",
+        "express",
+        "php",
+        "wordpress",
+        "tomcat",
+        "jetty",
+        "gunicorn",
+        "uwsgi",
+        "werkzeug",
+        "flask",
+        "django",
+        "rails",
+        "sinatra",
+        "grafana",
+        "kibana",
+        "prometheus",
     )
     return any(marker in text for marker in web_markers)
 
@@ -115,13 +134,10 @@ def canonical_check_url(url: str) -> str:
     port = parsed.port
     netloc = parsed.hostname.lower()
     if port and not (
-        (parsed.scheme.lower() == "http" and port == 80)
-        or (parsed.scheme.lower() == "https" and port == 443)
+        (parsed.scheme.lower() == "http" and port == 80) or (parsed.scheme.lower() == "https" and port == 443)
     ):
         netloc = f"{netloc}:{port}"
-    return urlunparse(
-        (parsed.scheme.lower(), netloc, parsed.path or "/", "", parsed.query, "")
-    ).rstrip("/")
+    return urlunparse((parsed.scheme.lower(), netloc, parsed.path or "/", "", parsed.query, "")).rstrip("/")
 
 
 def canonical_endpoint_value(url: str, service: str = "", port: str = "") -> str:
@@ -144,9 +160,7 @@ def canonical_endpoint_value(url: str, service: str = "", port: str = "") -> str
         or (parsed.scheme.lower() == "https" and parsed_port == 443)
     ):
         netloc = f"{netloc}:{parsed_port}"
-    canonical_url = urlunparse(
-        (parsed.scheme.lower(), netloc, path, "", parsed.query, "")
-    )
+    canonical_url = urlunparse((parsed.scheme.lower(), netloc, path, "", parsed.query, ""))
     return json.dumps(
         {
             "url": canonical_url,
@@ -228,10 +242,8 @@ def internal_service_scopes_from_compact_state(cmd: str) -> list[str]:
     scopes: list[str] = []
     seen: set[str] = set()
     decoder = json.JSONDecoder()
-    for match in re.finditer(
-        r"compact_state\s*(?:->|:)\s*", cmd or "", re.IGNORECASE
-    ):
-        payload = (cmd or "")[match.end():].lstrip()
+    for match in re.finditer(r"compact_state\s*(?:->|:)\s*", cmd or "", re.IGNORECASE):
+        payload = (cmd or "")[match.end() :].lstrip()
         try:
             parsed, _end = decoder.raw_decode(payload)
         except (TypeError, ValueError, json.JSONDecodeError):

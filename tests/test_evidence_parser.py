@@ -36,9 +36,7 @@ $ find / -perm -4000 -type f 2>/dev/null | head -80
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     cached_credentials = [
-        value
-        for fact_type, value in pairs
-        if fact_type == "credential" and value.startswith("support:secret://")
+        value for fact_type, value in pairs if fact_type == "credential" and value.startswith("support:secret://")
     ]
     assert len(cached_credentials) == 1
     assert "fixture-password-123" not in repr(facts)

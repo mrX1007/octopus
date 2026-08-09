@@ -21,12 +21,28 @@ def _adapt_state_to_result():
 
     db_stub = types.ModuleType("db")
     for name in (
-        "get_connection", "create_session", "update_session_status",
-        "save_vulnerability", "save_fix", "save_exploit", "save_summary",
-        "get_all_history", "get_session", "get_vulnerabilities", "get_fixes",
-        "get_exploits", "edit_vulnerability", "edit_fix", "edit_exploit",
-        "edit_summary_risk", "delete_vulnerability", "delete_exploit",
-        "delete_fix", "delete_full_session", "print_history", "print_session",
+        "get_connection",
+        "create_session",
+        "update_session_status",
+        "save_vulnerability",
+        "save_fix",
+        "save_exploit",
+        "save_summary",
+        "get_all_history",
+        "get_session",
+        "get_vulnerabilities",
+        "get_fixes",
+        "get_exploits",
+        "edit_vulnerability",
+        "edit_fix",
+        "edit_exploit",
+        "edit_summary_risk",
+        "delete_vulnerability",
+        "delete_exploit",
+        "delete_fix",
+        "delete_full_session",
+        "print_history",
+        "print_session",
     ):
         setattr(db_stub, name, lambda *args, **kwargs: None)
     sys.modules["db"] = db_stub

@@ -241,9 +241,7 @@ def test_validate_wheel_uses_metadata_version_for_installed_cli(
     with zipfile.ZipFile(wheel, mode="w") as archive:
         for name in sorted(names):
             payload = (
-                "Metadata-Version: 2.1\nName: octopus-security\nVersion: 7.8.9\n"
-                if name == metadata_name
-                else "{}"
+                "Metadata-Version: 2.1\nName: octopus-security\nVersion: 7.8.9\n" if name == metadata_name else "{}"
             )
             archive.writestr(name, payload)
     _patch_wheel_runtime(monkeypatch, version_output="octopus 7.8.9\n")
@@ -499,11 +497,7 @@ def test_wheel_smoke_script_exits_nonzero_for_missing_archive(
 
 def test_wheel_smoke_help_runs_from_clean_checkout_without_project_imports(tmp_path: Path) -> None:
     script = ROOT / "scripts" / "quality" / "wheel_smoke.py"
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key not in {"PYTHONHOME", "PYTHONPATH"}
-    }
+    environment = {key: value for key, value in os.environ.items() if key not in {"PYTHONHOME", "PYTHONPATH"}}
 
     completed = subprocess.run(
         [sys.executable, "-I", str(script), "--help"],

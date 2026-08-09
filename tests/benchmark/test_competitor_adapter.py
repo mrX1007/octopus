@@ -28,10 +28,7 @@ from core.execution import CancellationContext, ExecutionCancelled
 
 pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 
-STRIX_IMAGE = (
-    "ghcr.io/usestrix/strix-sandbox@"
-    "sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c"
-)
+STRIX_IMAGE = "ghcr.io/usestrix/strix-sandbox@sha256:2e3a7e63a90428979ce34fbf80a8e83bb375d0d1146597a5d74087a259ee925c"
 
 
 def _scenario(
@@ -483,9 +480,7 @@ def test_octopus_adapter_cannot_succeed_during_protocol_completion_grace(
     [(0.05, 0.01), (10.0, 2.0), (300.0, 60.0), (900.0, 60.0)],
 )
 def test_octopus_finalization_reserve_scales_and_is_bounded(timeout, expected):
-    assert adapter_module._octopus_finalization_reserve(timeout) == pytest.approx(
-        expected
-    )
+    assert adapter_module._octopus_finalization_reserve(timeout) == pytest.approx(expected)
 
 
 def test_octopus_deadline_cancellation_preserves_a_bounded_partial_snapshot(
@@ -739,10 +734,7 @@ def test_pentagi_graphql_adapter_collects_structured_usage(monkeypatch):
 
 def test_pentagi_base_url_is_a_canonical_origin():
     assert adapter_module._pentagi_base_origin("HTTP://LOCALHOST:80/") == "http://localhost"
-    assert (
-        adapter_module._pentagi_base_origin("https://127.0.0.1:8443/")
-        == "https://127.0.0.1:8443"
-    )
+    assert adapter_module._pentagi_base_origin("https://127.0.0.1:8443/") == "https://127.0.0.1:8443"
 
 
 @pytest.mark.parametrize(
@@ -835,9 +827,7 @@ def test_pentagi_runtime_attestations_fail_closed_on_release_or_model_drift():
         adapter_module._validate_pentagi_execution(
             {
                 "flow": {"provider": {"name": "openai"}},
-                "usageStatsByModelAgentsForFlow": [
-                    {"model": "different-model", "provider": "openai"}
-                ],
+                "usageStatsByModelAgentsForFlow": [{"model": "different-model", "provider": "openai"}],
             },
             expected_provider="openai",
             expected_model="benchmark-model",
@@ -917,11 +907,7 @@ def test_parent_termination_kills_nested_product_process_group(tmp_path):
         # give supported CI hosts enough startup room and fail early if the
         # wrapper itself exits.
         deadline = time.monotonic() + 15.0
-        while (
-            time.monotonic() < deadline
-            and wrapper.poll() is None
-            and not product_pid_path.exists()
-        ):
+        while time.monotonic() < deadline and wrapper.poll() is None and not product_pid_path.exists():
             time.sleep(0.05)
         assert wrapper.poll() is None, "adapter wrapper exited before starting its product"
         assert product_pid_path.is_file(), "nested product did not start before the bounded deadline"

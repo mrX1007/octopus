@@ -5,6 +5,7 @@ import pytest
 
 pytestmark = pytest.mark.contract
 
+
 def test_evidence_verifier_accepts_indexed_context_evidence_aliases():
     import uuid
 
@@ -124,8 +125,14 @@ def test_exploit_select_context_filters_offscope_web_urls():
     scan_id = "scan-context-scope"
     target = "83.166.242.55"
     facts = [
-        ("web_endpoint", {"url": "http://83.166.242.55/", "scheme": "http", "host": "83.166.242.55", "port": "80", "path": "/"}),
-        ("web_endpoint", {"url": "http://nginx.org/", "scheme": "http", "host": "nginx.org", "port": "80", "path": "/"}),
+        (
+            "web_endpoint",
+            {"url": "http://83.166.242.55/", "scheme": "http", "host": "83.166.242.55", "port": "80", "path": "/"},
+        ),
+        (
+            "web_endpoint",
+            {"url": "http://nginx.org/", "scheme": "http", "host": "nginx.org", "port": "80", "path": "/"},
+        ),
         ("web_link", "/admin"),
         ("web_link", "http://nginx.com/"),
         ("browser_rendered", "http://83.166.242.55"),
@@ -309,13 +316,16 @@ def test_internal_vulnerability_gap_closes_with_internal_service_check_result():
         scan_id,
         host,
         "check_result",
-        json.dumps({
-            "tool": "exploit_select",
-            "kind": "internal_vulnerability_assessment",
-            "mode": "check_only",
-            "scope": {"type": "internal_service", "value": "172.24.108.2:53/tcp"},
-            "status": "completed",
-        }, sort_keys=True),
+        json.dumps(
+            {
+                "tool": "exploit_select",
+                "kind": "internal_vulnerability_assessment",
+                "mode": "check_only",
+                "scope": {"type": "internal_service", "value": "172.24.108.2:53/tcp"},
+                "status": "completed",
+            },
+            sort_keys=True,
+        ),
         "exploit_select",
     )
 

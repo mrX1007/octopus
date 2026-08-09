@@ -44,6 +44,7 @@ DCOM_PORT = 135
 
 # Internal helpers
 
+
 def _normalize_creds(creds: dict[str, str] | None) -> dict[str, str]:
     """Complete the provider-local material mapping without copying secrets."""
 
@@ -61,7 +62,11 @@ def _run_cli(cmd: list[str] | tuple[str, ...], timeout: int = CLI_TIMEOUT) -> st
         return "[!] Unsafe CLI command rejected: an argv sequence is required"
     try:
         result = subprocess.run(
-            list(cmd), shell=False, capture_output=True, text=True, timeout=timeout,
+            list(cmd),
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
         return (result.stdout + result.stderr).strip()
     except subprocess.TimeoutExpired:
@@ -81,6 +86,7 @@ def _provider_failure(exc: Exception) -> str:
 
 
 # PsExec
+
 
 def psexec(
     target: str,
@@ -148,6 +154,7 @@ def psexec(
 
 # WMIExec
 
+
 def wmiexec(
     target: str,
     creds: dict[str, str] | None = None,
@@ -213,6 +220,7 @@ def wmiexec(
 
 
 # SMBExec
+
 
 def smbexec(
     target: str,
@@ -281,6 +289,7 @@ def smbexec(
 
 # WinRM
 
+
 def winrm_exec(
     target: str,
     creds: dict[str, str] | None = None,
@@ -319,8 +328,7 @@ def winrm_exec(
                 session = pywinrm.Session(
                     f"{scheme}://{target}:{port}/wsman",
                     auth=(
-                        f"{creds['domain']}\\{creds['user']}" if creds["domain"]
-                        else creds["user"],
+                        f"{creds['domain']}\\{creds['user']}" if creds["domain"] else creds["user"],
                         creds["password"],
                     ),
                     transport="ntlm",
@@ -363,6 +371,7 @@ def winrm_exec(
 
 
 # DCOM Exec
+
 
 def dcom_exec(
     target: str,
