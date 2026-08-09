@@ -12,7 +12,7 @@ from collections.abc import Generator, Iterator
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 
-import requests  # type: ignore[import-untyped]
+import requests
 
 from core.execution import CancellationContext
 
