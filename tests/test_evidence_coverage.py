@@ -371,8 +371,8 @@ login success
     assert ("exploit_success", "msf_session_opened:exploit/test") in extra_pairs
     assert ("exploit_attempted", "payload") in extra_pairs
     assert ("credential", "login_success") in extra_pairs
-    assert parser.parse("custom", "VULNERABLE cPanel", "session") == []
-    assert parser.parse("custom", "VULNERABLE cPanel\nSession: :", "session") == []
+    assert parser.parse("custom", "VULNERABLE unowned-service", "session") == []
+    assert parser.parse("custom", "VULNERABLE unowned-service\nSession: :", "session") == []
     assert parser.parse(
         "custom",
         "[EXPLOIT CANDIDATE 1] ssh:22 OpenSSH -> informational/module",
@@ -411,7 +411,12 @@ CLEANUP STATUS: PARTIAL
     facts = parser.parse("nikto", raw, "session")
     pairs = _pairs(facts)
     assert ("service_status", "internal_services:2") in pairs
-    assert ("credential", "root:secret (ssh port 22)") in pairs
+    assert ("credential", "ssh_login_success:alice@10.0.0.1") in pairs
+    assert not any(
+        fact_type == "credential" and "root:" in value
+        for fact_type, value in pairs
+    )
+    assert "password: secret" not in repr(facts)
     assert ("persistence", "mechanism_planted") in pairs
     assert ("cleanup", "partial") in pairs
 
@@ -684,14 +689,6 @@ GenericAll on Domain Admins
     assert ("browser_rendered", "https://ok.test") in _pairs(rendered_browser)
     assert parser.parse("browser_surface", "Page title: no URL", "s")
 
-    osint = parser.parse(
-        "custom",
-        '[ShardX OSINT Search - query]\n"google": {"content_length": 12}\n"bing": {"error": "blocked"}',
-        "s",
-    )
-    assert {fact["type"] for fact in osint} >= {"osint_query", "osint_result", "osint_status"}
-    assert parser.parse("custom", "shardx osint search", "s") == []
-
     network = parser.parse(
         "network_recon",
         """Network discovery
@@ -729,7 +726,7 @@ def test_structured_web_llm_and_output_parser_boundaries(
             "bad",
         ],
         "cve": "CVE-2026-1",
-        "plugin": "cpanel_auth_bypass",
+        "plugin": "demo_extension",
         "success": True,
         "artifacts": ["artifact"],
         "sessions": [
@@ -739,7 +736,7 @@ def test_structured_web_llm_and_output_parser_boundaries(
         ],
     }
     facts = structured.parse(
-        "plugin cpanel_auth_bypass host.test scan",
+        "plugin demo_extension host.test scan",
         "prefix\n" + json.dumps(payload),
         "session",
     )

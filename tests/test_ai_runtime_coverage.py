@@ -445,6 +445,7 @@ def persisted_result():
 def test_replayed_completion_validates_storage_and_applies_fields() -> None:
     instance = bare_runtime()
     instance.facts = SimpleNamespace(
+        redactor=StubRedactor(),
         get_command_result_by_id=MagicMock(return_value=None),
         get_facts_by_ids=MagicMock(return_value=[]),
     )

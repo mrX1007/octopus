@@ -92,7 +92,7 @@ Ensure the format matches EXACTLY:
             full_prompt = self.system_prompt + "\n\n" + mission_contract_preamble(self.mission_contract) + prompt
             response = ask_ollama(full_prompt, json_mode=True)
 
-            # v12: check the error contract
+            # Enforce the current LLM error contract.
             if not isinstance(response, str):
                 logger.warning("AnalysisAgent returned a non-text response")
                 print("[!] AnalysisAgent: invalid response type, skipping analysis")

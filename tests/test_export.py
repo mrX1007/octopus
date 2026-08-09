@@ -74,11 +74,11 @@ class TestJsonExport:
         with open(filepath) as f:
             data = json.load(f)
 
-        assert "metadata" in data
-        assert "scan" in data
-        assert "vulnerabilities" in data
-        assert "statistics" in data
-        assert data["metadata"]["tool"] == "OCTOPUS"
+        assert data["schema_version"] == "1.0"
+        assert data["report_id"].startswith("evidence-report://sha256/")
+        assert isinstance(data["sections"], dict)
+        assert isinstance(data["evidence_index"], list)
+        assert data["legacy_adapter"]["source_schema"] == "octopus-db-session-v1"
 
     def test_json_vuln_count_matches(self, sample_session_data, tmp_path):
         from export import export_json
@@ -88,8 +88,9 @@ class TestJsonExport:
         with open(filepath) as f:
             data = json.load(f)
 
-        assert data["statistics"]["total_vulnerabilities"] == 2
-        assert len(data["vulnerabilities"]) == 2
+        counts = data["summary"]["section_counts"]
+        assert counts["verified_vulnerabilities"] == 0
+        assert counts["hypotheses_candidates"] == 2
 
     def test_json_target_correct(self, sample_session_data, tmp_path):
         from export import export_json
@@ -99,7 +100,7 @@ class TestJsonExport:
         with open(filepath) as f:
             data = json.load(f)
 
-        assert data["scan"]["target"] == "192.168.1.100"
+        assert data["target"] == "192.168.1.100"
 
     def test_json_preserves_vulnerability_provenance(
         self,
@@ -113,12 +114,14 @@ class TestJsonExport:
         monkeypatch.setattr(export, "CFG", {"reporting": {"include_raw_output": True}})
         filepath = export_json(sample_session_data, str(tmp_path))
         with open(filepath, encoding="utf-8") as f:
-            vuln = json.load(f)["vulnerabilities"][0]
+            candidates = json.load(f)["sections"]["hypotheses_candidates"]
+            vuln = next(item for item in candidates if item["legacy_fields"]["title"] == "CVE-2021-41773")
 
-        assert vuln["evidence_source"] == "nmap"
-        assert vuln["raw_evidence"] == "HTTP 200 with /etc/passwd"
-        assert vuln["repro_cmd"] == "curl --path-as-is ..."
-        assert vuln["cvss_score"] == 8.1
+        legacy = vuln["legacy_fields"]
+        assert legacy["evidence_source"] == "nmap"
+        assert legacy["raw_evidence"] == "HTTP 200 with /etc/passwd"
+        assert legacy["reproduction_command"] == "curl --path-as-is ..."
+        assert legacy["cvss_score"] == 8.1
 
     def test_export_filename_is_contained(self, sample_session_data, tmp_path):
         from export import export_json
@@ -151,8 +154,8 @@ class TestCsvExport:
             reader = csv.reader(f)
             header = next(reader)
 
-        assert "ID" in header
-        assert "Vulnerability" in header
+        assert "Item ID" in header
+        assert "Title" in header
         assert "Severity" in header
         assert "CVSS" in header
 
@@ -165,8 +168,8 @@ class TestCsvExport:
             reader = csv.reader(f)
             rows = list(reader)
 
-        # Header + 2 vulnerabilities
-        assert len(rows) == 3
+        # Header + every canonical item (two findings and one attempt).
+        assert len(rows) == 4
 
     def test_csv_neutralizes_spreadsheet_formulas(
         self,
@@ -193,7 +196,7 @@ class TestCsvExport:
 
         row = rows[0]
         assert row["Target"].startswith("'=")
-        assert row["Vulnerability"].startswith("'  +")
+        assert row["Title"].startswith("'  +")
         assert row["Description"].startswith("'@")
         assert row["Raw Evidence"].startswith("'-")
         assert row["Reproduction Command"].startswith("'\t")

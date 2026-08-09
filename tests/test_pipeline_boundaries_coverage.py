@@ -515,8 +515,6 @@ def test_fact_action_mapping_and_service_intelligence_boundaries() -> None:
     pipeline._facts_include_cached_ssh_credential = lambda _facts: True
     pipeline._facts_confirm_ssh_access = lambda _facts: False
     pipeline._auto_ssh_inventory_enabled = lambda: True
-    pipeline._facts_indicate_cpanel_surface = lambda _facts: False
-    pipeline._cpanel_already_verified = lambda _pairs: False
     pipeline._service_intelligence_commands = lambda *_args: ["exploit_select host"]
     pipeline._service_action_commands = lambda *_args: []
     pipeline._web_path_action_commands = lambda *_args: []
@@ -581,17 +579,11 @@ def test_service_evidence_and_search_query_edge_cases() -> None:
     assert pipeline._query_from_config_path("/srv/unknown") == ""
 
 
-def test_inventory_cpanel_and_service_seen_boundaries() -> None:
+def test_inventory_and_service_seen_boundaries() -> None:
     pipeline = _bare_pipeline()
 
     assert pipeline._post_access_inventory_seen({("post_exploit_stage", "post_access_inventory_completed")})
     assert pipeline._post_access_inventory_seen({("service_status", "ssh_inventory_completed")})
-    assert not pipeline._facts_indicate_cpanel_surface(
-        [{"type": "application_access", "value": "cpanel authenticated"}]
-    )
-    assert pipeline._cpanel_already_verified({("application_access", "cpanel_whm_authenticated:user")})
-    assert pipeline._cpanel_already_verified({("vulnerability", "cpanel_auth_bypass")})
-    assert pipeline._cpanel_already_verified({("credential", "whm_session:ref")})
     assert pipeline._open_service_ports(
         [
             {"type": "port_open", "value": "malformed"},
@@ -767,7 +759,7 @@ def test_expansion_and_jmx_endpoint_boundaries() -> None:
     assert not AIPipeline._has_jmx_or_tomcat_evidence(pipeline, "scan", "host")
 
 
-def test_web_endpoint_compact_context_and_cpanel_boundaries() -> None:
+def test_web_endpoint_and_compact_context_boundaries() -> None:
     pipeline = _bare_pipeline()
     pipeline.fact_store = SimpleNamespace(
         get_facts=lambda *_args: [
@@ -810,34 +802,6 @@ def test_web_endpoint_compact_context_and_cpanel_boundaries() -> None:
     pipeline._endpoint_url_from_value = lambda _value: ""
     assert not pipeline._web_fact_in_target_scope("http://external.test/path", "host")
     assert pipeline._web_fact_in_target_scope("relative", "host")
-
-    pipeline._best_cpanel_port = lambda *_args: ""
-    assert pipeline._augment_cpanel_command("plugin demo host scan", "scan", "host") == "plugin demo host scan"
-    pipeline._best_cpanel_port = lambda *_args: "2087"
-    assert pipeline._augment_cpanel_command("plugin demo host scan", "scan", "host") == "plugin demo host scan"
-    assert (
-        pipeline._augment_cpanel_command(
-            "plugin cpanel_auth_bypass host scan",
-            "scan",
-            "host",
-        )
-        == "plugin cpanel_auth_bypass host:2087 scan"
-    )
-    assert (
-        pipeline._augment_cpanel_command(
-            "cpanel_exploit host scan",
-            "scan",
-            "host",
-        )
-        == "cpanel_exploit host:2087 scan"
-    )
-
-    pipeline.fact_store.get_facts = lambda *_args: [
-        {"type": "other", "value": "2087/tcp (https)"},
-        {"type": "port_open", "value": "80/tcp (http)"},
-    ]
-    assert AIPipeline._best_cpanel_port(pipeline, "scan", "host") == ""
-
 
 def test_exploit_context_augmentation_covers_empty_and_compact_context() -> None:
     pipeline = _bare_pipeline()

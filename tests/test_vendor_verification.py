@@ -101,6 +101,24 @@ def test_vendor_manifest_accepts_pinned_clean_checkout(vendor_repo):
 
 
 @pytest.mark.contract
+def test_vendor_manifest_accepts_explicitly_empty_inventory(tmp_path: Path):
+    manifest_path = tmp_path / "vendor-manifest.json"
+    manifest_path.write_text(
+        json.dumps({"schema_version": 1, "submodules": [], "artifacts": []}),
+        encoding="utf-8",
+    )
+
+    result = verify_vendor.verify_repository(
+        tmp_path,
+        manifest_path,
+        platform_selector="all",
+    )
+
+    assert result.submodules_checked == 0
+    assert result.artifacts_checked == 0
+
+
+@pytest.mark.contract
 def test_vendor_manifest_rejects_gitlink_change(vendor_repo):
     root, manifest_path, _commit = vendor_repo
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

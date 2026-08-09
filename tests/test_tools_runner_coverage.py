@@ -523,6 +523,8 @@ def test_single_tool_and_basic_dispatch_helpers(
 
     tool_def = get_tool("nmap")
     assert tool_def is not None
+    monkeypatch.setattr(tool_def, "dependencies", None)
+    monkeypatch.setattr(tool_def, "requires", [])
     canonical_calls: list[str] = []
 
     def provider(target, extra_flags=None):
@@ -663,6 +665,8 @@ def test_registered_provider_exception_is_redacted_and_output_bounded(
 
     tool_def = get_tool("nmap")
     assert tool_def is not None
+    monkeypatch.setattr(tool_def, "dependencies", None)
+    monkeypatch.setattr(tool_def, "requires", [])
 
     def provider(_target, extra_flags=None):
         del extra_flags
@@ -1862,9 +1866,6 @@ def _install_ad_modules(monkeypatch: pytest.MonkeyPatch, calls: list[Any]) -> No
     kerberos.kerberoast = lambda target, creds: calls.append(("kerb", target, creds)) or "kerb-ok"
     credential = types.ModuleType("core.killchain.ad.credential")
     credential.dcsync = lambda target, creds: calls.append(("dcsync", target, creds)) or "dcsync-ok"
-    credential.pass_the_hash = lambda target, user, nthash, domain="": (
-        calls.append(("pth", target, user, nthash, domain)) or "pth-ok"
-    )
     lateral = types.ModuleType("core.killchain.ad.lateral")
     lateral.psexec = lambda target, creds: calls.append(("psexec", target, creds)) or "psexec-ok"
     lateral.wmiexec = lambda target, creds: calls.append(("wmiexec", target, creds)) or "wmiexec-ok"
@@ -1882,19 +1883,21 @@ def test_ad_tool_success_missing_credentials_and_unknown_actions(
     monkeypatch.setattr(runner, "credential_material_for_execution", _material_for)
     credential = _credential()
     monkeypatch.setattr(runner, "get_best_credential_ref", lambda *_args: credential)
-    inputs = iter(["", "abc123"])
-    monkeypatch.setattr(builtins, "input", lambda _prompt="": next(inputs))
+    monkeypatch.setattr(
+        builtins,
+        "input",
+        lambda _prompt="": pytest.fail("quarantined PTH must not request a raw NT hash"),
+    )
 
     assert runner._run_ad_tool("enum", "target") == "enum-ok"
     assert runner._run_ad_tool("asrep", "target") == "asrep-ok"
     assert runner._run_ad_tool("kerberoast", "target") == "kerb-ok"
     assert runner._run_ad_tool("dcsync", "target") == "dcsync-ok"
-    assert "requires an NT hash" in runner._run_ad_tool("pth", "target")
-    assert runner._run_ad_tool("pth", "target") == "pth-ok"
+    assert "unsafe_provider_contract_not_mounted" in runner._run_ad_tool("pth", "target")
     assert runner._run_ad_tool("psexec", "target") == "psexec-ok"
     assert runner._run_ad_tool("wmiexec", "target") == "wmiexec-ok"
     assert "Unknown AD action" in runner._run_ad_tool("unknown", "target")
-    assert any(item[0] == "pth" and item[2:4] == ("alice", "abc123") for item in calls)
+    assert all(item[0] != "pth" for item in calls)
 
     monkeypatch.setattr(runner, "get_best_credential_ref", lambda *_args: None)
     assert "requires valid domain credentials" in runner._run_ad_tool("kerberoast", "target")

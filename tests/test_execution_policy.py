@@ -13,6 +13,7 @@ from core.execution import (
     ExecutionPolicy,
     ToolInvocation,
     bind_execution_context,
+    contains_sensitive_command_material,
     current_execution_context,
     redact_sensitive_command,
     validate_target,
@@ -80,6 +81,40 @@ def test_redactor_handles_json_flags_and_malformed_shell_text():
     assert "value" not in value.replace("[REDACTED]", "")
     assert value.count("[REDACTED]") == 3
     assert redact_sensitive_command("tool 'unterminated PASSWORD=value").endswith("PASSWORD=[REDACTED]")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "PASSWORD=canary command",
+        "curl --user alice:canary https://example.test",
+        "docker login --password-stdin registry.example.test",
+        "mysql -pcanary database",
+        "redis-cli -a canary ping",
+        "ssh -i /tmp/private-key alice@example.test",
+        "sshpass -p canary ssh alice@example.test",
+        "tool --token canary",
+        "tool secret://opaque-reference",
+        "https://alice:canary@example.test/path",
+        "printf '-----BEGIN PRIVATE KEY-----'",
+    ],
+)
+def test_sensitive_command_detector_rejects_shell_credential_forms(command):
+    assert contains_sensitive_command_material(command)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "curl --head https://example.test",
+        "docker run -p 8080:80 example/image",
+        "echo password rotation required",
+        "mysql --host database.example.test",
+        "ssh alice@example.test",
+    ],
+)
+def test_sensitive_command_detector_preserves_secret_free_shell_forms(command):
+    assert not contains_sensitive_command_material(command)
 
 
 @pytest.mark.parametrize(
@@ -288,7 +323,6 @@ def test_registered_options_cannot_smuggle_secondary_targets(command):
         "build_python_implant https://c2.example:9443",
         "build_ps_stager https://c2.example:9443",
         "shodan outside.example",
-        "shardbrowser_osint outside.example",
     ],
 )
 def test_nonstandard_network_parameters_require_explicit_scope(command):
@@ -323,14 +357,6 @@ def test_registered_policy_covers_limits_capabilities_special_actions_and_local_
         _invocation(targets=("bad target",)), _context(CAP_REGISTERED_TOOL)
     ).reason.startswith("invalid_nmap_target:")
 
-    cpanel_scan = _invocation(
-        "cpanel_exploit",
-        argv=("cpanel_exploit", "10.0.0.5", "scan"),
-    )
-    cpanel_cmd = _invocation(
-        "cpanel_exploit",
-        argv=("cpanel_exploit", "10.0.0.5", "cmd"),
-    )
     plugin_scan = _invocation(
         "plugin",
         argv=("plugin", "demo", "10.0.0.5", "scan"),
@@ -342,8 +368,6 @@ def test_registered_policy_covers_limits_capabilities_special_actions_and_local_
     sqlmap = _invocation("sqlmap")
     automatic = _context(CAP_REGISTERED_TOOL, scope=("10.0.0.5",))
 
-    assert policy.authorize_registered(cpanel_scan, automatic).allowed
-    assert policy.authorize_registered(cpanel_cmd, automatic).reason == "active_tool_requires_approval"
     assert policy.authorize_registered(plugin_scan, automatic).allowed
     assert policy.authorize_registered(plugin_exploit, automatic).reason == "active_tool_requires_approval"
     assert policy.authorize_registered(sqlmap, automatic).reason == "active_tool_requires_approval"
@@ -422,6 +446,20 @@ def test_shell_policy_covers_every_authority_gate_without_execution():
         approved=True,
     )
     assert policy.authorize_shell("/bin/rm /tmp/example", destructive).allowed
+
+
+def test_shell_policy_denies_credentials_before_the_managed_shell_boundary():
+    policy = ExecutionPolicy()
+    context = _context(CAP_MANAGED_SHELL, origin="operator", approved=True)
+
+    decision = policy.authorize_shell(
+        "curl --user alice:credential-canary https://example.test",
+        context,
+    )
+
+    assert not decision.allowed
+    assert decision.reason == "credential_material_forbidden_in_managed_shell"
+    assert "credential-canary" not in str(decision.to_dict())
 
 
 def test_shell_policy_fails_closed_when_shell_target_lexer_fails(monkeypatch):

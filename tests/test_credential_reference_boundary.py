@@ -118,8 +118,8 @@ def test_full_orchestrator_reveals_only_to_each_provider_and_sanitizes_results(
     calls = []
 
     def provider(name):
-        def run(target, username, password, port):
-            calls.append((name, target, username, password, port))
+        def run(target, username, password, port, **kwargs):
+            calls.append((name, target, username, password, port, kwargs))
             return f"{name}:provider-result:{password}:{secret_ref}"
 
         return run
@@ -138,6 +138,7 @@ def test_full_orchestrator_reveals_only_to_each_provider_and_sanitizes_results(
         HOST,
         credential=credential.handle,
         port=2222,
+        callback_host="Callback.Example.",
     )
 
     assert [call[0] for call in calls] == [
@@ -147,10 +148,46 @@ def test_full_orchestrator_reveals_only_to_each_provider_and_sanitizes_results(
         "data_exfil",
         "cleanup",
     ]
-    assert all(call[1:] == (HOST, "support", CANARY, 2222) for call in calls)
+    assert all(call[1:5] == (HOST, "support", CANARY, 2222) for call in calls)
+    assert [call[5] for call in calls] == [
+        {},
+        {"callback_host": "callback.example"},
+        {},
+        {},
+        {},
+    ]
     assert CANARY not in output
     assert secret_ref not in output
     assert output.count("[REDACTED]") >= len(calls) * 2
+
+
+@pytest.mark.parametrize(
+    ("callback_host", "expected_error"),
+    [
+        ("", "explicit callback_host is required"),
+        ("https://callback.example/path", "callback_host must be one host without URL syntax"),
+        ("callback.example:4444", "callback_host must be one host without URL syntax"),
+    ],
+)
+def test_full_orchestrator_rejects_callback_before_credential_resolution(
+    monkeypatch,
+    callback_host,
+    expected_error,
+):
+    from core.killchain import orchestrator
+
+    calls = []
+    monkeypatch.setattr(orchestrator, "master_gate_message", lambda: "")
+    monkeypatch.setattr(
+        orchestrator,
+        "_resolve_killchain_credential",
+        lambda *_args, **_kwargs: calls.append((_args, _kwargs)) or (None, ""),
+    )
+
+    output = orchestrator.run_full_killchain(HOST, callback_host=callback_host)
+
+    assert expected_error in output
+    assert calls == []
 
 
 @pytest.mark.parametrize(
@@ -208,6 +245,7 @@ def test_full_orchestrator_rejects_mismatched_credential_scope_before_provider(
         user=call_user,
         credential=credential,
         port=call_port,
+        callback_host="callback.example",
     )
 
     assert expected_error in output
@@ -280,8 +318,8 @@ def test_full_wrapper_passes_only_reference_and_sanitizes_provider_result(
     )
     seen = []
 
-    def fake_orchestrator(target, *, credential):
-        seen.append((target, credential))
+    def fake_orchestrator(target, *, credential, callback_host):
+        seen.append((target, credential, callback_host))
         return f"provider-result:{CANARY}:{secret_ref}"
 
     monkeypatch.setattr(policy, "master_gate_message", lambda: "")
@@ -291,9 +329,10 @@ def test_full_wrapper_passes_only_reference_and_sanitizes_provider_result(
         HOST,
         user="support",
         pwd=credential.handle,
+        callback_host="callback.example",
     )
 
-    assert seen == [(HOST, credential)]
+    assert seen == [(HOST, credential, "callback.example")]
     assert isinstance(seen[0][1], CredentialRef)
     assert not hasattr(seen[0][1], "secret_ref")
     assert CANARY not in output

@@ -7,7 +7,7 @@ import json
 import re
 from urllib.parse import urlparse, urlunparse
 
-HTTPS_PORTS = {"443", "8443", "1443", "2083", "2087", "2096", "9443"}
+HTTPS_PORTS = {"443", "8443", "1443", "9443"}
 
 
 def ensure_url(target: str, scheme: str = "http") -> str:
@@ -68,7 +68,6 @@ def nmap_service_looks_web(service: str, banner: str = "") -> bool:
         "golang net/http", "node.js", "express", "php", "wordpress",
         "tomcat", "jetty", "gunicorn", "uwsgi", "werkzeug", "flask",
         "django", "rails", "sinatra", "grafana", "kibana", "prometheus",
-        "cpanel", "whm",
     )
     return any(marker in text for marker in web_markers)
 
@@ -281,7 +280,4 @@ def target_in_authorized_scope(target: str, scopes: list[str]) -> bool:
 def service_fact_looks_tls(value: str = "") -> bool:
     """Return whether service evidence uses one of the pipeline's TLS markers."""
     text = (value or "").lower()
-    return any(
-        marker in text
-        for marker in ("ssl/http", "https", "tls", "ssl ", "cpanel", "whm")
-    )
+    return any(marker in text for marker in ("ssl/http", "https", "tls", "ssl "))

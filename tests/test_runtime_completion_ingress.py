@@ -181,6 +181,55 @@ def test_completion_orders_evidence_result_projection_and_attempt_provenance(
     )
 
 
+def test_completion_never_returns_or_callbacks_plaintext_credential_facts(
+    tmp_path: Path,
+) -> None:
+    runtime = PipelineRuntime(
+        str(tmp_path / "credential-boundary.db"),
+        runner=lambda _command: "",
+        parser=OneFactParser(),
+    )
+    canary = "completion-plaintext-canary-91f2"
+    callback_facts: list[tuple[dict, ...]] = []
+
+    completion = runtime.complete_execution(
+        "scan",
+        "host",
+        "probe host",
+        "probe host",
+        _execution(runtime, "exec-credential-boundary"),
+        prepare_facts=lambda _facts: [
+            {
+                "type": "credential",
+                "value": f"support:{canary}",
+                "confidence": 100,
+            }
+        ],
+        after_facts=lambda facts: callback_facts.append(tuple(facts)),
+        initial_facts=[
+            {
+                "type": "credential",
+                "value": f"initial:{canary}",
+                "confidence": 90,
+                "password": canary,
+            }
+        ],
+        command_result_fields={"credential_note": f"password={canary}"},
+        idempotency_key="execution:exec-credential-boundary",
+        completion_fence=runtime.facts.capture_scan_completion_fence("scan"),
+    )
+
+    assert canary not in repr(completion)
+    assert canary not in repr(callback_facts)
+    safe_value = completion["facts"][1]["value"]
+    assert safe_value.startswith("support:secret://")
+    assert completion["command_result"]["fact_pairs"] == [
+        ("credential", safe_value)
+    ]
+    assert callback_facts[0][0]["value"] == safe_value
+    assert completion["stored_base_facts"][0]["fact"]["value"] == safe_value
+
+
 def test_completion_replay_is_idempotent_without_executing_a_tool(
     tmp_path: Path,
 ) -> None:

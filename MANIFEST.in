@@ -1,1 +1,7 @@
 include config.yaml
+include data/octopus-c2.service
+include core/c2/go.mod
+include core/c2/go.sum
+include core/c2/implant.go
+include core/c2/toolchain.json
+include core/opsec/ja3_client.go

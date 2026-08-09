@@ -105,10 +105,18 @@ def load_manifest(path: Path) -> VendorManifest:
 
     raw_submodules = payload["submodules"]
     raw_artifacts = payload["artifacts"]
-    if not isinstance(raw_submodules, list) or not raw_submodules:
-        raise VendorVerificationError("manifest.submodules must be a non-empty list")
-    if not isinstance(raw_artifacts, list) or not raw_artifacts:
-        raise VendorVerificationError("manifest.artifacts must be a non-empty list")
+    if not isinstance(raw_submodules, list):
+        raise VendorVerificationError("manifest.submodules must be a list")
+    if not isinstance(raw_artifacts, list):
+        raise VendorVerificationError("manifest.artifacts must be a list")
+    if not raw_submodules and raw_artifacts:
+        raise VendorVerificationError(
+            "manifest.submodules must be non-empty when manifest.artifacts is non-empty"
+        )
+    if raw_submodules and not raw_artifacts:
+        raise VendorVerificationError(
+            "manifest.artifacts must be non-empty when manifest.submodules is non-empty"
+        )
 
     submodules: list[SubmoduleSpec] = []
     submodule_paths = set()
@@ -307,7 +315,7 @@ def verify_repository(
         selected_artifacts = tuple(
             artifact for artifact in manifest.artifacts if artifact.platform == selected_platform
         )
-    if not selected_artifacts:
+    if manifest.artifacts and not selected_artifacts:
         raise VendorVerificationError(f"manifest has no approved artifacts for {selected_platform}")
     for artifact in selected_artifacts:
         _verify_artifact(root, manifest, artifact)

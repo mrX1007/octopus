@@ -535,7 +535,7 @@ def test_critical_candidate_is_a_hard_tier_above_configured_soft_score(tmp_path)
     pipeline._reset_runtime_state()
     pipeline._current_scan_id = "scan-critical-task-scoring"
     pipeline.task_history.extend(
-        ["DiscoveryAgent:cpanel_assessment"] * 3
+        ["DiscoveryAgent:template_verification"] * 3
     )
     pipeline.task_scorer = TaskScorer(
         TaskScoringWeights(
@@ -551,17 +551,17 @@ def test_critical_candidate_is_a_hard_tier_above_configured_soft_score(tmp_path)
     )
 
     ranked = pipeline._rank_candidate_tasks(
-        ["external_intelligence", "cpanel_assessment"],
+        ["external_intelligence", "template_verification"],
         {"state": "recon_completed", "open_questions": []},
-        {"cpanel_assessment"},
+        {"template_verification"},
     )
 
-    assert ranked == ["cpanel_assessment", "external_intelligence"]
+    assert ranked == ["template_verification", "external_intelligence"]
     event = pipeline.decision_trace.list_events(
         scan_id="scan-critical-task-scoring",
         event_type="task_scoring",
     )[0]
     assert event["expected_outcome"]["critical_candidates"] == [
-        "cpanel_assessment"
+        "template_verification"
     ]
     assert event["actual_outcome"]["ranking"][0]["priority_tier"] == "critical"

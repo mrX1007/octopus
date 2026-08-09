@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import base64
-import builtins
-import importlib.util
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from modules.evasion.payload_keying import PayloadKeying, PayloadKeyingPlugin
 from modules.persistence.systemd import SystemdPersistence
-from payloads import agent as agent_module
 
 pytestmark = [pytest.mark.unit, pytest.mark.security]
 
@@ -226,174 +222,6 @@ def test_systemd_persistence_reuses_external_client_and_contains_execution_error
     assert client.closed is False
 
 
-class Response:
-    def __init__(self, status_code: int, payload: dict | None = None) -> None:
-        self.status_code = status_code
-        self._payload = payload or {}
-
-    def json(self) -> dict:
-        return self._payload
-
-
-class Session:
-    def __init__(self) -> None:
-        self.verify = True
-        self.responses: list[Response | Exception] = []
-        self.posts = []
-
-    def post(self, url, **kwargs):
-        self.posts.append((url, kwargs))
-        response = self.responses.pop(0)
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-
-def _agent(monkeypatch, *, tls: bool = False):
-    session = Session()
-    monkeypatch.setattr(agent_module.requests, "Session", lambda: session)
-    agent = agent_module.BeaconAgent("c2.test", 8443, "01" * 32, use_tls=tls)
-    return agent, session
-
-
-def test_beacon_agent_crypto_initialization_and_system_information(monkeypatch) -> None:
-    agent, session = _agent(monkeypatch)
-    secure, secure_session = _agent(monkeypatch, tls=True)
-    assert agent.c2_url == "http://c2.test:8443"
-    assert secure.c2_url == "https://c2.test:8443"
-    assert session.verify is False and secure_session.verify is False
-
-    encrypted = agent.encrypt({"fixture": True})
-    assert agent.decrypt(encrypted) == {"fixture": True}
-    assert agent.decrypt(base64.b64encode(b"short").decode()) == {}
-
-    monkeypatch.setattr(agent_module.socket, "gethostname", lambda: "host")
-    monkeypatch.setattr(agent_module.platform, "system", lambda: "TestOS")
-    monkeypatch.setattr(agent_module.platform, "release", lambda: "1.0")
-    monkeypatch.setattr(agent_module.platform, "machine", lambda: "arm64")
-    monkeypatch.setenv("USER", "alice")
-    assert agent.collect_sysinfo() == {
-        "hostname": "host",
-        "os": "TestOS 1.0",
-        "user": "alice",
-        "arch": "arm64",
-    }
-    monkeypatch.delenv("USER")
-    monkeypatch.setenv("USERNAME", "bob")
-    assert agent.collect_sysinfo()["user"] == "bob"
-    monkeypatch.delenv("USERNAME")
-    assert agent.collect_sysinfo()["user"] == "unknown"
-
-
-def test_beacon_agent_registration_success_non_success_and_exception(monkeypatch, caplog) -> None:
-    agent, session = _agent(monkeypatch)
-    agent.encrypt = lambda data: "encrypted"
-    agent.decrypt = lambda data: {
-        "agent_id": "agent-1",
-        "interval": 15,
-        "jitter": 3,
-    }
-    session.responses.append(Response(200, {"data": "reply"}))
-    assert agent.register() is True
-    assert (agent.agent_id, agent.interval, agent.jitter) == ("agent-1", 15, 3)
-
-    default_agent, default_session = _agent(monkeypatch)
-    default_agent.encrypt = lambda data: "encrypted"
-    default_agent.decrypt = lambda data: {}
-    default_session.responses.append(Response(200, {}))
-    assert default_agent.register() is True
-    assert (default_agent.interval, default_agent.jitter) == (60, 10)
-
-    denied_agent, denied_session = _agent(monkeypatch)
-    denied_session.responses.append(Response(503))
-    assert denied_agent.register() is False
-
-    error_agent, error_session = _agent(monkeypatch)
-    error_session.responses.append(RuntimeError("offline"))
-    with caplog.at_level("DEBUG"):
-        assert error_agent.register() is False
-    assert "offline" in caplog.text
-
-
-def test_beacon_agent_execute_task_classifies_all_subprocess_outcomes(monkeypatch) -> None:
-    agent, _session = _agent(monkeypatch)
-    monkeypatch.setattr(agent_module.subprocess, "check_output", lambda *args, **kwargs: b"ok\xff")
-    assert agent.execute_task("ok") == {"command": "ok", "output": "ok�"}
-
-    def called_process(*_args, **_kwargs):
-        raise subprocess.CalledProcessError(1, "bad", output=b"failed")
-
-    monkeypatch.setattr(agent_module.subprocess, "check_output", called_process)
-    assert agent.execute_task("bad")["output"] == "failed"
-    monkeypatch.setattr(
-        agent_module.subprocess,
-        "check_output",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(subprocess.TimeoutExpired("slow", 60)),
-    )
-    assert agent.execute_task("slow")["output"] == "[!] Command timed out."
-    monkeypatch.setattr(
-        agent_module.subprocess,
-        "check_output",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("broken")),
-    )
-    assert agent.execute_task("broken")["output"] == "[!] Execution failed: broken"
-
-
-def test_beacon_handles_state_results_tasks_recursion_and_network_errors(monkeypatch) -> None:
-    agent, session = _agent(monkeypatch)
-    assert agent.beacon() is None
-
-    agent.agent_id = "agent-1"
-    agent.encrypt = lambda data: f"encrypted:{sorted(data)}"
-    agent.decrypt = lambda data: (
-        {"tasks": [{"task_id": "task-1", "command": "whoami"}]} if data == "tasks" else {"tasks": []}
-    )
-    agent.execute_task = lambda command: {"command": command, "output": "alice"}
-    session.responses.extend(
-        [
-            Response(200, {"data": "tasks"}),
-            Response(204),
-            Response(200, {"data": "empty"}),
-            Response(503),
-        ]
-    )
-    agent.beacon()
-    assert len(session.posts) == 2
-    recursive_payload = session.posts[1][1]["json"]["data"]
-    assert "results" in recursive_payload
-
-    agent.beacon(results=[])
-    agent.beacon()
-    session.responses.append(RuntimeError("offline"))
-    assert agent.beacon(results=[{"task_id": "x"}]) is None
-
-
-def test_beacon_run_retries_registration_then_applies_minimum_jitter(monkeypatch) -> None:
-    agent, _session = _agent(monkeypatch)
-    registrations = iter((False, True))
-    agent.register = lambda: next(registrations)
-    sleeps = []
-    monkeypatch.setattr(agent_module.time, "sleep", lambda value: sleeps.append(value))
-    monkeypatch.setattr(agent_module.random, "uniform", lambda low, high: -1000)
-    agent.beacon = lambda: (_ for _ in ()).throw(RuntimeError("stop loop"))
-
-    with pytest.raises(RuntimeError, match="stop loop"):
-        agent.run()
-    assert sleeps == [60, 10]
-
-
-def test_agent_module_tolerates_missing_optional_http_dependency(monkeypatch) -> None:
-    path = Path(agent_module.__file__)
-    real_import = builtins.__import__
-
-    def missing_requests(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "requests":
-            raise ImportError("requests unavailable")
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", missing_requests)
-    spec = importlib.util.spec_from_file_location("payload_agent_without_requests", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert hasattr(module, "BeaconAgent")
+def test_legacy_payload_agent_is_removed() -> None:
+    repository_root = Path(__file__).resolve().parents[1]
+    assert not (repository_root / "payloads" / "agent.py").exists()

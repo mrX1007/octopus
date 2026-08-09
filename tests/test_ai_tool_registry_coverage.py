@@ -83,6 +83,25 @@ def test_recursive_task_expansion_and_command_resolution_stop_on_cycles(capsys):
     assert "No tools available for task 'outer'" in output
 
 
+def test_command_resolution_rejects_plaintext_credentials(capsys):
+    registry = ToolRegistry()
+    registry.task_map = {"probe": [("probe {target}", "probe")]}
+    registry._is_tool_available = lambda _name: True
+    canary = "command-expansion-secret-canary"
+
+    commands = registry.get_commands_for_task(
+        "probe",
+        "127.0.0.1",
+        user="alice",
+        password=canary,
+    )
+
+    output = capsys.readouterr().out
+    assert commands == []
+    assert "Credential-bearing command expansion is disabled" in output
+    assert canary not in output
+
+
 def test_provider_expansion_stops_cycles_and_deduplicates_records():
     registry = ToolRegistry()
     registry.task_map = {

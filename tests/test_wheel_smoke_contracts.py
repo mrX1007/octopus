@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from core.version import APPLICATION_VERSION
 from scripts.quality import wheel_smoke
 
 pytestmark = pytest.mark.contract
@@ -25,6 +26,12 @@ REQUIRED_WHEEL_FILES = {
     "benchmarks/competitors/labs/discovery-lab-v3/compose.yaml",
     "core/benchmarks/v3/fixture.py",
     "core/benchmarks/v3/publication.py",
+    "core/c2/go.mod",
+    "core/c2/go.sum",
+    "core/c2/implant.go",
+    "core/c2/toolchain.json",
+    f"octopus_security-{APPLICATION_VERSION}.dist-info/METADATA",
+    f"octopus_security-{APPLICATION_VERSION}.data/data/share/octopus-security/systemd/octopus-c2.service",
 }
 
 
@@ -45,7 +52,12 @@ def _wheel_names(*, scenarios: int = 10, missing: str | None = None) -> set[str]
 def _write_wheel(path: Path, names: set[str]) -> None:
     with zipfile.ZipFile(path, mode="w") as archive:
         for name in sorted(names):
-            archive.writestr(name, "{}")
+            payload = (
+                f"Metadata-Version: 2.1\nName: octopus-security\nVersion: {APPLICATION_VERSION}\n"
+                if name.endswith(".dist-info/METADATA")
+                else "{}"
+            )
+            archive.writestr(name, payload)
 
 
 def _write_sdist(path: Path, names: tuple[str, ...]) -> None:
@@ -62,7 +74,7 @@ def _patch_wheel_runtime(
     *,
     os_name: str = "posix",
     config_output: str = "config.yaml\n",
-    version_output: str = "octopus 1.1.0\n",
+    version_output: str = f"octopus {APPLICATION_VERSION}\n",
     help_output: str = "usage: command\n",
     output_count: int = 11,
 ) -> tuple[list[list[str]], list[tuple[Path, str, Path]]]:
@@ -88,6 +100,8 @@ def _patch_wheel_runtime(
             code = argv[argv.index("-c") + 1]
             if "find_spec('config')" in code:
                 return config_output
+            if "OpsecClient" in code:
+                return "PythonTransport\n"
             if "sysconfig.get_path('purelib')" in code:
                 return "/isolated/purelib\n"
         if "--version" in argv:
@@ -157,6 +171,86 @@ def test_validate_wheel_rejects_incomplete_data(
     assert expected in str(raised.value)
 
 
+def test_validate_wheel_rejects_sdist_only_go_tls_source(
+    tmp_path: Path,
+) -> None:
+    wheel = tmp_path / "orphan-source.whl"
+    names = _wheel_names()
+    names.add("core/opsec/ja3_client.go")
+    _write_wheel(wheel, names)
+
+    with pytest.raises(
+        wheel_smoke.WheelSmokeError,
+        match=r"wheel_data_forbidden:core/opsec/ja3_client\.go",
+    ):
+        wheel_smoke.validate_wheel(wheel)
+
+
+@pytest.mark.parametrize(
+    ("metadata_name", "metadata_payload", "expected"),
+    (
+        (None, None, "wheel_metadata_count:0"),
+        ("second.dist-info/METADATA", "Name: other\nVersion: 1\n", "wheel_metadata_count:2"),
+        (
+            f"octopus_security-{APPLICATION_VERSION}.dist-info/METADATA",
+            f"Metadata-Version: 2.1\nName: another-project\nVersion: {APPLICATION_VERSION}\n",
+            "wheel_metadata_project_invalid:another-project",
+        ),
+        (
+            f"octopus_security-{APPLICATION_VERSION}.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: octopus-security\n",
+            "wheel_metadata_version_invalid",
+        ),
+    ),
+)
+def test_validate_wheel_rejects_missing_or_invalid_metadata(
+    tmp_path: Path,
+    metadata_name: str | None,
+    metadata_payload: str | None,
+    expected: str,
+) -> None:
+    wheel = tmp_path / "metadata.whl"
+    names = _wheel_names()
+    canonical_metadata = f"octopus_security-{APPLICATION_VERSION}.dist-info/METADATA"
+    if metadata_name is None:
+        names.remove(canonical_metadata)
+    with zipfile.ZipFile(wheel, mode="w") as archive:
+        for name in sorted(names):
+            payload = (
+                f"Metadata-Version: 2.1\nName: octopus-security\nVersion: {APPLICATION_VERSION}\n"
+                if name == canonical_metadata
+                else "{}"
+            )
+            if name == metadata_name and metadata_payload is not None:
+                payload = metadata_payload
+            archive.writestr(name, payload)
+        if metadata_name is not None and metadata_name not in names:
+            archive.writestr(metadata_name, metadata_payload or "")
+
+    with pytest.raises(wheel_smoke.WheelSmokeError, match=expected):
+        wheel_smoke.validate_wheel(wheel)
+
+
+def test_validate_wheel_uses_metadata_version_for_installed_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    wheel = tmp_path / "metadata-version.whl"
+    names = _wheel_names()
+    metadata_name = f"octopus_security-{APPLICATION_VERSION}.dist-info/METADATA"
+    with zipfile.ZipFile(wheel, mode="w") as archive:
+        for name in sorted(names):
+            payload = (
+                "Metadata-Version: 2.1\nName: octopus-security\nVersion: 7.8.9\n"
+                if name == metadata_name
+                else "{}"
+            )
+            archive.writestr(name, payload)
+    _patch_wheel_runtime(monkeypatch, version_output="octopus 7.8.9\n")
+
+    assert wheel_smoke.validate_wheel(wheel)["scenarios"] == 10
+
+
 @pytest.mark.parametrize(
     ("runtime_options", "expected"),
     (
@@ -185,25 +279,50 @@ def test_validate_wheel_rejects_unclean_installed_behavior(
 def test_validate_sdist_requires_one_top_level_config(tmp_path: Path) -> None:
     valid = tmp_path / "valid.tar.gz"
     valid_names = (
-        "octopus-1.1.0/config.yaml",
-        "octopus-1.1.0/not-config.yaml",
-        "octopus-1.1.0/nested/config.yaml",
+        f"octopus-{APPLICATION_VERSION}/config.yaml",
+        f"octopus-{APPLICATION_VERSION}/core/c2/go.mod",
+        f"octopus-{APPLICATION_VERSION}/core/c2/go.sum",
+        f"octopus-{APPLICATION_VERSION}/core/c2/implant.go",
+        f"octopus-{APPLICATION_VERSION}/core/c2/toolchain.json",
+        f"octopus-{APPLICATION_VERSION}/core/opsec/ja3_client.go",
+        f"octopus-{APPLICATION_VERSION}/data/octopus-c2.service",
+        f"octopus-{APPLICATION_VERSION}/not-config.yaml",
+        f"octopus-{APPLICATION_VERSION}/nested/config.yaml",
     )
     _write_sdist(valid, valid_names)
-    assert wheel_smoke.validate_sdist(valid) == {"files": 3, "configs": 1}
+    assert wheel_smoke.validate_sdist(valid) == {"files": 9, "configs": 1}
 
     missing = tmp_path / "missing.tar.gz"
-    _write_sdist(missing, ("octopus-1.1.0/not-config.yaml",))
+    _write_sdist(missing, (f"octopus-{APPLICATION_VERSION}/not-config.yaml",))
     with pytest.raises(wheel_smoke.WheelSmokeError, match="sdist_config_count:0"):
         wheel_smoke.validate_sdist(missing)
 
     duplicate = tmp_path / "duplicate.tar.gz"
     _write_sdist(
         duplicate,
-        ("octopus-1.1.0/config.yaml", "octopus-1.1.0-copy/config.yaml"),
+        (
+            f"octopus-{APPLICATION_VERSION}/config.yaml",
+            f"octopus-{APPLICATION_VERSION}-copy/config.yaml",
+        ),
     )
     with pytest.raises(wheel_smoke.WheelSmokeError, match="sdist_config_count:2"):
         wheel_smoke.validate_sdist(duplicate)
+
+
+def test_validate_sdist_rejects_missing_runtime_resource(tmp_path: Path) -> None:
+    incomplete = tmp_path / "incomplete.tar.gz"
+    names = (
+        f"octopus-{APPLICATION_VERSION}/config.yaml",
+        f"octopus-{APPLICATION_VERSION}/core/c2/go.mod",
+        f"octopus-{APPLICATION_VERSION}/core/c2/go.sum",
+        f"octopus-{APPLICATION_VERSION}/core/c2/implant.go",
+        f"octopus-{APPLICATION_VERSION}/core/c2/toolchain.json",
+        f"octopus-{APPLICATION_VERSION}/data/octopus-c2.service",
+    )
+    _write_sdist(incomplete, names)
+
+    with pytest.raises(wheel_smoke.WheelSmokeError, match=r"sdist_data_missing:core/opsec/ja3_client\.go"):
+        wheel_smoke.validate_sdist(incomplete)
 
 
 def _completed(
@@ -376,3 +495,28 @@ def test_wheel_smoke_script_exits_nonzero_for_missing_archive(
 
     assert raised.value.code == 1
     assert "wheel smoke failed:" in capsys.readouterr().err
+
+
+def test_wheel_smoke_help_runs_from_clean_checkout_without_project_imports(tmp_path: Path) -> None:
+    script = ROOT / "scripts" / "quality" / "wheel_smoke.py"
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"PYTHONHOME", "PYTHONPATH"}
+    }
+
+    completed = subprocess.run(
+        [sys.executable, "-I", str(script), "--help"],
+        cwd=tmp_path,
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        check=False,
+        text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0
+    assert "usage:" in completed.stdout
+    assert completed.stderr == ""
+    assert "Traceback" not in completed.stdout

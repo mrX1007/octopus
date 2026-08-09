@@ -406,7 +406,13 @@ def test_evaluate_diff_rejects_missing_arcs_and_uncovered_changed_branch(
     fake_coverage.report_values = [100.0]
     fake_coverage.branch_values = {1: (10**16, 10**16 - 1)}
     with pytest.raises(gate.CoverageGateError, match="diff coverage regression"):
-        gate.evaluate_coverage(root, config, 100.0, diff_base="a" * 40)
+        gate.evaluate_coverage(
+            root,
+            config,
+            100.0,
+            diff_base="a" * 40,
+            diff_fail_under=100.0,
+        )
 
 
 def test_real_coverage_data_counts_branch_exits_from_changed_origin_line(

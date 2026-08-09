@@ -135,7 +135,7 @@ def test_nmap_parser_handles_open_port_without_version() -> None:
 
 
 def test_plugin_parser_records_unavailable_tool() -> None:
-    facts = PluginParser().parse("plugin cpanel_check", "tool_unavailable: not installed", "session")
+    facts = PluginParser().parse("plugin demo_check", "tool_unavailable: not installed", "session")
 
     assert _pairs(facts) == {("tool_unavailable", "plugin")}
 

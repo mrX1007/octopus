@@ -7,6 +7,7 @@ from types import ModuleType
 
 import pytest
 
+from core.tools import dependencies as dependency_model
 from core.tools import registry
 
 pytestmark = pytest.mark.unit
@@ -23,74 +24,20 @@ def _isolated_registry():
         registry._REGISTRY.update(original)
 
 
-def _shardbrowser_module(*, installed: bool = False, raises: bool = False) -> ModuleType:
-    module = ModuleType("core.osint.shardbrowser")
-
-    class ShardBrowser:
-        def __init__(self) -> None:
-            if raises:
-                raise RuntimeError("unavailable")
-
-        @staticmethod
-        def get_status() -> dict[str, bool]:
-            return {"installed": installed}
-
-    module.ShardBrowser = ShardBrowser  # type: ignore[attr-defined]
-    return module
-
-
-def test_tool_availability_covers_any_shard_python_and_binary_dependencies(
+def test_tool_availability_covers_any_python_and_binary_dependencies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with monkeypatch.context() as scoped:
-        scoped.setattr(
-            registry,
-            "_dependency_available",
-            lambda dependency: dependency == "present",
-        )
-        assert registry.ToolDef(name="empty-any", requires=["any:"]).is_available() is False
-        assert (
-            registry.ToolDef(
-                name="some-any",
-                requires=["any:missing, present"],
-            ).is_available()
-            is True
-        )
-        assert (
-            registry.ToolDef(
-                name="missing-any",
-                requires=["any:missing,also-missing"],
-            ).is_available()
-            is False
-        )
-
-    monkeypatch.setitem(
-        sys.modules,
-        "core.osint.shardbrowser",
-        _shardbrowser_module(installed=False),
+    monkeypatch.setattr(
+        dependency_model.shutil,
+        "which",
+        lambda dependency: "/bin/present" if dependency == "present" else None,
     )
-    dependency = registry.ToolDef(
-        name="shard",
-        requires=["octopus:shardbrowser"],
-    )
-    assert dependency.is_available() is False
-
-    monkeypatch.setitem(
-        sys.modules,
-        "core.osint.shardbrowser",
-        _shardbrowser_module(installed=True),
-    )
-    assert dependency.is_available() is True
-
-    monkeypatch.setitem(
-        sys.modules,
-        "core.osint.shardbrowser",
-        _shardbrowser_module(raises=True),
-    )
-    assert dependency.is_available() is False
+    assert registry.ToolDef(name="empty-any", requires=["any:"]).is_available() is False
+    assert registry.ToolDef(name="some-any", requires=["any:missing, present"]).is_available() is True
+    assert registry.ToolDef(name="missing-any", requires=["any:missing,also-missing"]).is_available() is False
 
     monkeypatch.setattr(
-        registry.importlib.util,
+        dependency_model.importlib.util,
         "find_spec",
         lambda name: object() if name == "present_module" else None,
     )
@@ -104,7 +51,7 @@ def test_tool_availability_covers_any_shard_python_and_binary_dependencies(
     ).is_available()
 
     monkeypatch.setattr(
-        registry.shutil,
+        dependency_model.shutil,
         "which",
         lambda name: f"/bin/{name}" if name == "present-bin" else None,
     )
@@ -122,14 +69,8 @@ def test_tool_availability_covers_any_shard_python_and_binary_dependencies(
     assert str(available) == "[✓] binary-present — available tool"
     assert unavailable.status_icon == "✗"
 
-    monkeypatch.setitem(
-        sys.modules,
-        "core.osint.shardbrowser",
-        _shardbrowser_module(installed=True),
-    )
     for special_dependency in (
         "any:python:present_module",
-        "octopus:shardbrowser",
         "python:present_module",
     ):
         assert not registry.ToolDef(
@@ -141,27 +82,8 @@ def test_tool_availability_covers_any_shard_python_and_binary_dependencies(
 def test_dependency_helper_covers_each_dependency_family(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setitem(
-        sys.modules,
-        "core.osint.shardbrowser",
-        _shardbrowser_module(installed=True),
-    )
-    assert registry._dependency_available("octopus:shardbrowser") is True
-    monkeypatch.setitem(
-        sys.modules,
-        "core.osint.shardbrowser",
-        _shardbrowser_module(installed=False),
-    )
-    assert registry._dependency_available("octopus:shardbrowser") is False
-    monkeypatch.setitem(
-        sys.modules,
-        "core.osint.shardbrowser",
-        _shardbrowser_module(raises=True),
-    )
-    assert registry._dependency_available("octopus:shardbrowser") is False
-
     monkeypatch.setattr(
-        registry.importlib.util,
+        dependency_model.importlib.util,
         "find_spec",
         lambda name: object() if name == "present_module" else None,
     )
@@ -169,7 +91,7 @@ def test_dependency_helper_covers_each_dependency_family(
     assert registry._dependency_available("python:missing_module") is False
 
     monkeypatch.setattr(
-        registry.shutil,
+        dependency_model.shutil,
         "which",
         lambda name: f"/bin/{name}" if name == "present-bin" else None,
     )

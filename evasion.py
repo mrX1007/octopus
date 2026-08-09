@@ -30,6 +30,8 @@ import socket
 import time
 from typing import Optional
 
+from core.version import APPLICATION_VERSION
+
 try:
     import paramiko
     _PARAMIKO_OK = True
@@ -1004,7 +1006,7 @@ def credential_spray(targets: list, creds: list, service: str = "ssh", delay: fl
 # QUICK TEST
 
 if __name__ == "__main__":
-    print(f"{C_RED}OCTOPUS Evasion Engine v4.1{C_RESET}")
+    print(f"{C_RED}OCTOPUS Evasion Engine v{APPLICATION_VERSION}{C_RESET}")
     print(f"  paramiko: {'✓' if _PARAMIKO_OK else '✗'}")
     print(f"  requests: {'✓' if _REQUESTS_OK else '✗'}")
     print(f"  PySocks:  {'✓' if _SOCKS_OK else '✗'}")

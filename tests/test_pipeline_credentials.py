@@ -38,7 +38,7 @@ def test_runtime_credential_sync_preserves_legacy_fact_rules():
             {"type": "credential", "value": "ssh_key_available:wrong@10.0.0.6"},
             {"type": "credential", "value": f"support:{SSH_PASSWORD_REF} (cached)"},
             {"type": "credential", "value": "ignored:fixture-password (cached)"},
-            {"type": "credential", "value": "whm_session:token (cached)"},
+            {"type": "credential", "value": "session_marker:token (cached)"},
             {"type": "service_status", "value": "support:ignored (cached)"},
         ],
     )

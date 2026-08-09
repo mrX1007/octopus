@@ -16,43 +16,36 @@ class OpsecClient:
         resp = client.request("GET", "https://example.com")
     """
 
-    def __init__(self, profile: str = "updater", browser: str = "chrome",
-                 use_go_tls: bool = True):
+    def __init__(
+        self,
+        profile: str = "updater",
+        browser: str = "chrome",
+        use_go_tls: bool = False,
+        go_binary: Optional[str] = None,
+    ):
         """
         Args:
             profile: Traffic profile name (updater, browser, scraper, stealth)
             browser: JA3 fingerprint to mimic (chrome, firefox, safari, edge)
-            use_go_tls: If True, use Go uTLS binary. If False, use Python requests.
+            use_go_tls: If True, explicitly opt into the deployment-managed,
+                prebuilt Go uTLS binary. The portable default uses Python
+                requests. Runtime compilation is intentionally forbidden.
+            go_binary: Exact deployed uTLS binary path. When omitted, opt-in
+                mode reads ``OCTOPUS_GO_TLS_BINARY`` and otherwise fails closed.
         """
         policy = get_profile(profile)
 
         if use_go_tls:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            go_bin = os.path.join(base_dir, "ja3_client")
-
-            if not os.path.exists(go_bin):
-                self._compile_go_client(base_dir, go_bin)
-
+            go_bin = go_binary if go_binary is not None else os.environ.get("OCTOPUS_GO_TLS_BINARY")
+            if not go_bin or not go_bin.strip():
+                raise RuntimeError(
+                    "Go TLS opt-in requires go_binary or OCTOPUS_GO_TLS_BINARY"
+                )
             self._transport: Transport = GoTLSTransport(
                 go_binary=go_bin, browser=browser, policy=policy
             )
         else:
             self._transport: Transport = PythonTransport(policy=policy)
-
-    def _compile_go_client(self, base_dir: str, go_bin: str):
-        """Compile the Go JA3 client if it doesn't exist."""
-        import subprocess
-        print("[*] Compiling Go JA3 client...")
-        src = os.path.join(base_dir, "ja3_client.go")
-        try:
-            subprocess.run(
-                ["go", "build", "-o", go_bin, src],
-                check=True,
-                cwd=base_dir,
-                timeout=180,
-            )
-        except Exception as e:
-            print(f"[!] Failed to compile JA3 client: {e}")
 
     def request(self, method: str, url: str,
                 headers: Optional[dict[str, str]] = None,

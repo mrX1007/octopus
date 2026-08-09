@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Canonical parser-family and normalization contracts."""
 
+from types import SimpleNamespace
+
 import pytest
 
 pytestmark = pytest.mark.contract
@@ -37,7 +39,7 @@ def test_pipeline_derives_normalized_endpoint_and_network_graph_facts():
     assert any(edge["type"] == "attached_subnet" and edge["to"] == "172.25.0.1/16" for edge in edge_values)
 
 
-def test_runner_parses_web_scanner_target_flags_without_passing_flags_as_targets():
+def test_runner_parses_web_scanner_target_flags_without_passing_flags_as_targets(monkeypatch):
     import core.tools.exploit_tools
     import core.tools.recon_tools  # noqa: F401 - registers web scanner tools
     from core.execution import ExecutionContext
@@ -51,7 +53,6 @@ def test_runner_parses_web_scanner_target_flags_without_passing_flags_as_targets
         "jmx2rce_scan": "jmx2rce_scan http://10.0.0.5:8080/manager",
     }
     captured = []
-    old_funcs = {}
     context = ExecutionContext.operator(
         actor="parser-contract",
         approval_id="parser-contract-active-tools",
@@ -63,16 +64,16 @@ def test_runner_parses_web_scanner_target_flags_without_passing_flags_as_targets
         captured.append(target)
         return "ok"
 
-    try:
-        for tool_name, command in commands.items():
-            tool_def = get_tool(tool_name)
-            old_funcs[tool_name] = tool_def.func
-            tool_def.func = fake_url_tool
-            result = run_tool_by_command(command, context)
-            assert result == "ok"
-    finally:
-        for tool_name, old_func in old_funcs.items():
-            get_tool(tool_name).func = old_func
+    for tool_name, command in commands.items():
+        tool_def = get_tool(tool_name)
+        monkeypatch.setattr(tool_def, "func", fake_url_tool)
+        monkeypatch.setattr(
+            tool_def,
+            "availability",
+            lambda *_args, **_kwargs: SimpleNamespace(available=True, missing=()),
+        )
+        result = run_tool_by_command(command, context)
+        assert result == "ok"
 
     assert captured == [
         "http://10.0.0.5",

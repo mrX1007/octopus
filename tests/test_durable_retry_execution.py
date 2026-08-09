@@ -31,7 +31,11 @@ def _make_registered_tools_hermetic(monkeypatch, *names: str) -> None:
     for name in names:
         tool_def = get_tool(name)
         assert tool_def is not None
-        monkeypatch.setattr(tool_def, "is_available", lambda: True)
+        monkeypatch.setattr(
+            tool_def,
+            "availability",
+            lambda *_args, **_kwargs: SimpleNamespace(available=True, missing=()),
+        )
 
 
 def _failed(agent: str, task: str) -> TaskOutcome:

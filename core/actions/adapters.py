@@ -204,6 +204,11 @@ class RegisteredToolAdapter(ActionAdapter):
             aliases=tuple(str(item) for item in getattr(tool_def, "aliases", ()) or ()),
             requirements=ActionRequirements(
                 system_dependencies=tuple(str(item) for item in getattr(tool_def, "requires", ()) or ()),
+                dependency_expression=(
+                    tool_def.dependency_manifest()
+                    if callable(getattr(tool_def, "dependency_manifest", None))
+                    else None
+                ),
                 target_required=bool(getattr(tool_def, "needs_target", True)),
                 active=active,
             ),
@@ -215,9 +220,22 @@ class RegisteredToolAdapter(ActionAdapter):
             missing.append("target")
         if not bool(getattr(self.tool_def, "enabled", True)):
             missing.append("provider_disabled")
-        if not self.tool_def.is_available():
-            missing.extend(f"dependency:{item}" for item in self.descriptor.requirements.system_dependencies)
-            if not self.descriptor.requirements.system_dependencies:
+        availability = None
+        availability_probe = getattr(self.tool_def, "availability", None)
+        try:
+            if callable(availability_probe):
+                availability = availability_probe()
+                provider_available = bool(getattr(availability, "available", False))
+            else:
+                provider_available = bool(self.tool_def.is_available())
+        except (OSError, TypeError, ValueError):
+            provider_available = False
+        if not provider_available:
+            dependency_labels = tuple(getattr(availability, "missing", ()) or ())
+            if not dependency_labels:
+                dependency_labels = self.descriptor.requirements.system_dependencies
+            missing.extend(f"dependency:{item}" for item in dependency_labels)
+            if not dependency_labels:
                 missing.append("provider_unavailable")
         return ApplicabilityResult(
             applicable=not missing,

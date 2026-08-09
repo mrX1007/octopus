@@ -49,7 +49,7 @@ canonical action ID.
 
 Registered-tool active risk is classified by the same pure policy rule used by
 the final approval gate, including ordinary manual-gated registry tools and
-argument-sensitive plugin/cPanel gateways. The trace carries both the numeric
+argument-sensitive plugin gateways. The trace carries both the numeric
 penalty and the typed `read_only`/`active` class.
 
 `ProviderSelection` contains the chosen ID, ranked eligible candidates, rejected

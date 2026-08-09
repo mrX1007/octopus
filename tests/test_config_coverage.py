@@ -169,7 +169,7 @@ def test_wordlist_and_tool_helpers_cover_defensive_and_success_paths(
 
 
 def test_get_secret_covers_yaml_and_malformed_sections(monkeypatch):
-    for name in ("SHODAN_API_KEY", "OCTOPUS_DB_PASS", "OCTOPUS_C2_PSK"):
+    for name in ("SHODAN_API_KEY", "OCTOPUS_DB_PASS"):
         monkeypatch.delenv(name, raising=False)
 
     monkeypatch.setattr(config, "CFG", {"shodan": {"api_key": "from-yaml"}})
@@ -178,8 +178,8 @@ def test_get_secret_covers_yaml_and_malformed_sections(monkeypatch):
     monkeypatch.setattr(config, "CFG", {"db": "not-a-mapping"})
     assert config.get_secret("OCTOPUS_DB_PASS", "fallback") == "fallback"
 
-    monkeypatch.setattr(config, "CFG", {"c2": {"psk": ""}})
-    assert config.get_secret("OCTOPUS_C2_PSK", "fallback") == "fallback"
+    monkeypatch.setattr(config, "CFG", {})
+    assert config.get_secret("UNKNOWN_SECRET", "fallback") == "fallback"
 
 
 def test_module_entrypoint_loads_first_dotenv_and_prints_summary(

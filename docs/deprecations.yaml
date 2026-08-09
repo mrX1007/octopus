@@ -74,9 +74,8 @@ entries:
   - symbol_or_path: "core/opsec/ja3_client.go"
     current_owner: "legacy Go TLS helper source"
     replacement: "supported provider-owned transport implementation, if retained"
-    internal_callers:
-      - "core/transport/base.py"
-    public_compatibility_status: "source-only compatibility artifact; binary path remains dynamically referenced"
+    internal_callers: []
+    public_compatibility_status: "orphaned source-only compatibility artifact; runtime accepts only a deployment-managed binary path"
     warning_introduced_version: "1.1.0"
     planned_removal_version: "2.0.0"
 

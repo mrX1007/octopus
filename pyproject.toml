@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "octopus-security"
-version = "1.1.0"
+dynamic = ["version"]
 description = "Evidence-driven, policy-gated security assessment orchestration"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,9 +32,7 @@ reporting = [
 osint-browser = [
     "beautifulsoup4>=4.12.0",
     "ddgs>=9.14.4",
-    "httpx[socks]>=0.27.0",
     "lxml>=5.1.0",
-    "patchright>=1.49.0",
     "primp>=0.6.0",
     "scrapling>=0.2.0",
     "shodan>=1.31.0",
@@ -90,6 +88,25 @@ namespaces = true
     "scenarios/*.example",
     "systems/*.example",
 ]
+"core.c2" = [
+    "go.mod",
+    "go.sum",
+    "implant.go",
+    "toolchain.json",
+]
+
+[tool.setuptools.exclude-package-data]
+"core.opsec" = [
+    "ja3_client.go",
+]
+
+[tool.setuptools.data-files]
+"share/octopus-security/systemd" = [
+    "data/octopus-c2.service",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "core.version.__version__"}
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers"
@@ -198,7 +215,6 @@ files = [
     "core/knowledge",
     "core/observability/__init__.py",
     "core/opsec/artifact_mgr.py",
-    "core/osint",
     "core/plugins",
     "core/runtime_config.py",
     "core/secrets.py",

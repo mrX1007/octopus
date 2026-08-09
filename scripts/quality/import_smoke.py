@@ -25,7 +25,7 @@ PROFILE_MODULES = {
     "runtime": DEFAULT_MODULES,
     "c2": ("core.c2", "core.c2.builder", "core.c2.daemon"),
     "reporting": ("export",),
-    "osint-browser": ("search", "shodan_module", "core.osint.shardbrowser"),
+    "osint-browser": ("search", "shodan_module"),
     "mysql": ("db",),
 }
 

@@ -259,7 +259,7 @@ class CapabilityResolver:
             return bool(services)
         if requirement == "web":
             return bool(
-                services.intersection({"http", "https", "cpanel", "tomcat"})
+                services.intersection({"http", "https", "tomcat"})
                 or target_model.get("endpoints")
                 or surface_states.get("web") == "confirmed_present"
             )
@@ -588,7 +588,7 @@ class CapabilityResolver:
 
     @staticmethod
     def _is_system_access_exploit_value(value: str) -> bool:
-        app_only_markers = ("cpanel", "whm", "webmin", "joomla", "wordpress")
+        app_only_markers = ("webmin", "joomla", "wordpress")
         if any(marker in value for marker in app_only_markers):
             return False
         return any(

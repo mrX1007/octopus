@@ -69,10 +69,6 @@ def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: i
                     banner_timeout=10,
                     auth_timeout=15,
                 )
-                try:
-                    _ssh_exec(client, "unset HISTFILE; export HISTFILE=/dev/null; export HISTSIZE=0", timeout=5)
-                except Exception as _exc:
-                    logging.debug(f"Suppressed in ssh_helpers.py: {_exc}")
                 return client, None
             except Exception as e:
                 return None, f"Key auth failed: {user}@{host}: {e}"
@@ -91,11 +87,6 @@ def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: i
             banner_timeout=10,
             auth_timeout=15,
         )
-        # Disable history immediately
-        try:
-            _ssh_exec(client, "unset HISTFILE; export HISTFILE=/dev/null; export HISTSIZE=0", timeout=5)
-        except Exception as _exc:
-            logging.debug(f"Suppressed in ssh_helpers.py: {_exc}")
         return client, None
     except paramiko.AuthenticationException:
         # Fall back to key authentication for root.
@@ -117,10 +108,6 @@ def _ssh_connect(host: str, user: str, password: str, port: int = 22, timeout: i
                         banner_timeout=10,
                         auth_timeout=15,
                     )
-                    try:
-                        _ssh_exec(client2, "unset HISTFILE; export HISTFILE=/dev/null; export HISTSIZE=0", timeout=5)
-                    except Exception as _exc:
-                        logging.debug(f"Suppressed in ssh_helpers.py: {_exc}")
                     print(f"  {C_GREEN}[+] Password auth failed but SSH key auth succeeded for root{C_RESET}")
                     return client2, None
                 except Exception as _exc:

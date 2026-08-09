@@ -582,11 +582,13 @@ def create_ssh_chain(
                     auth_timeout=15,
                 )
 
-            # Disable history on the hop
+            # Shell-history hardening is best effort and must not make an
+            # otherwise healthy hop unusable.  Some restricted shells reject
+            # these environment changes even though command execution works.
             try:
                 _ssh_exec(client, "unset HISTFILE; export HISTFILE=/dev/null", timeout=5)
-            except Exception as _exc:
-                logging.debug(f"Suppressed in pivot.py: {_exc}")
+            except Exception as exc:
+                logger.debug("SSH chain history setup failed for hop %d: %s", idx + 1, exc)
 
             whoami = _ssh_exec(client, "id; hostname", timeout=5)
             output += f"  [+] {hop_label} — connected\n"
@@ -683,12 +685,12 @@ def scan_through_proxy(
 
         if proxychains_bin and nmap_bin:
             port_str = ",".join(str(p) for p in ports)
-            cmd = f"{proxychains_bin} -q {nmap_bin} -sT -Pn -p {port_str} {target}"
+            cmd = [proxychains_bin, "-q", nmap_bin, "-sT", "-Pn", "-p", port_str, target]
             output += "  (via proxychains + nmap)\n"
             try:
                 result = subprocess.run(
                     cmd,
-                    shell=True,
+                    shell=False,
                     capture_output=True,
                     text=True,
                     timeout=len(ports) * timeout,

@@ -24,10 +24,10 @@ def test_global_coverage_floor_matches_recorded_baseline() -> None:
 
     assert floor == 94.0
     assert coverage_gate._argument_parser().parse_args([]).fail_under == floor
-    assert coverage_gate._argument_parser().parse_args([]).diff_fail_under == 0.0
+    assert coverage_gate._argument_parser().parse_args([]).diff_fail_under == 90.0
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert f"--fail-under {floor:.2f}" in workflow
-    assert "--diff-fail-under 0" in workflow
+    assert "--diff-fail-under 90" in workflow
     package_floors = {
         "core/actions": 95,
         "core/execution": 92,
@@ -60,6 +60,7 @@ def test_global_coverage_floor_matches_recorded_baseline() -> None:
         assert "94.00%" in documentation
         assert "95.41%" in documentation
         assert "92.59%" in documentation
+        assert "--diff-fail-under 90" in documentation
         for package, package_floor in package_floors.items():
             assert f"--package-fail-under {package}={package_floor}" in documentation
 
@@ -92,7 +93,7 @@ def test_mysql_ci_uses_application_environment_contract() -> None:
     assert "requirements/locks/linux-x86_64/cp310/mysql.txt" in workflow
 
 
-def test_go_checks_keep_nonblocking_coverage_evidence() -> None:
+def test_go_checks_enforce_offline_graph_and_complete_profile() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     parser = go_coverage_gate._argument_parser()
 
@@ -102,11 +103,20 @@ def test_go_checks_keep_nonblocking_coverage_evidence() -> None:
     assert "-covermode=atomic" in workflow
     assert "-coverpkg=./..." in workflow
     assert '-coverprofile="${RUNNER_TEMP}/c2-go.coverage.out"' in workflow
-    assert "scripts/quality/go_coverage_gate.py" not in workflow
-    assert "Enforce complete first-party Go statement coverage" not in workflow
+    assert "scripts/quality/go_coverage_gate.py" in workflow
+    assert "Validate complete Go source coverage evidence" in workflow
+    assert "--root core/c2" in workflow
+    assert "--fail-under 0" in workflow
+    assert 'GOPROXY: "off"' in workflow
+    assert 'GOSUMDB: "off"' in workflow
+    assert "go list -mod=readonly -deps ./... > /dev/null" in workflow
     assert "name: coverage-go" in workflow
+    assert "if-no-files-found: error" in workflow
     assert "go vet -mod=readonly ./..." in workflow
-    assert "go build -mod=readonly -trimpath" in workflow
+    assert "go build -mod=readonly -trimpath -buildvcs=false" in workflow
+    assert "-ldflags=-buildid=" in workflow
+    assert 'CGO_ENABLED: "0"' in workflow
+    assert 'GOWORK: "off"' in workflow
     assert "git diff --exit-code -- go.mod go.sum" in workflow
     assert "working-directory: ${{ github.workspace }}" in workflow
     assert "git ls-files -z -- ':(top,glob)**/*.go'" in workflow
@@ -115,9 +125,14 @@ def test_go_checks_keep_nonblocking_coverage_evidence() -> None:
 
 def test_nightly_external_tool_smoke_is_fail_closed() -> None:
     workflow = (ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
+    smoke = (ROOT / "tests" / "test_external_tools_smoke.py").read_text(encoding="utf-8")
 
     assert 'OCTOPUS_REQUIRE_EXTERNAL_TOOLS: "1"' in workflow
     assert "OCTOPUS_STRICT_EXTERNAL_TOOLS" not in workflow
+    assert "--yes curl nmap" in workflow
+    assert "dispatch_registered_tool" in smoke
+    assert "ThreadingHTTPServer((\"127.0.0.1\", 0)" in smoke
+    assert "subprocess.run" not in smoke
 
 
 def test_live_ollama_lab_lane_is_opt_in_and_loopback_contained() -> None:
@@ -188,6 +203,16 @@ def test_sbom_is_deterministic_and_contains_every_hash(tmp_path: Path) -> None:
     assert first == second
     assert first["components"][0]["purl"] == "pkg:pypi/example-pkg@1.2.3"
     assert len(first["components"][0]["hashes"]) == 2
+
+
+def test_ci_generates_full_multi_ecosystem_sbom() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "Generate deterministic full-repository CycloneDX SBOM" in workflow
+    assert "--go-mod core/c2/go.mod" in workflow
+    assert "--vendor-manifest quality/vendor-manifest.json" in workflow
+    assert "--include-tool-dependencies" in workflow
+    assert "if-no-files-found: error" in workflow
 
 
 def test_checked_in_docs_and_portable_scenarios_validate() -> None:

@@ -30,6 +30,31 @@ _POSITIONAL_SECRET_TOOLS = {
     "psexec", "ssh_exec", "ssh_inventory", "ssh_session", "wmiexec",
 }
 
+_CREDENTIAL_ASSIGNMENT_RE = re.compile(
+    r"(?ix)(?:^|[\s;&|])"
+    r"(?:[A-Z][A-Z0-9_-]*_)?"
+    r"(?:PASSWORD|PASSWD|PASS|PWD|TOKEN|SECRET|PSK|API[_-]?KEY|"
+    r"AUTHORIZATION|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY)\s*="
+)
+_CREDENTIAL_FLAG_RE = re.compile(
+    r"(?ix)(?:^|\s)--(?:password|passwd|pass|token|secret|api-key|"
+    r"authorization|private-key)(?:-stdin)?(?:=|\s|$)"
+)
+_AUTHORIZATION_VALUE_RE = re.compile(
+    r"(?i)\b(?:proxy-)?authorization\s*:\s*(?:basic|bearer)\s+\S+"
+)
+_URL_CREDENTIAL_RE = re.compile(
+    r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/@:]+:[^\s/@]+@"
+)
+_SHELL_CREDENTIAL_CONSUMER_RE = re.compile(
+    r"(?ix)(?:^|[\s;&|])(?:[^\s;&|]*/)?(?:sshpass|chpasswd)(?:\s|$)|"
+    r"(?:^|[\s;&|])(?:[^\s;&|]*/)?sudo\s+-S(?:\s|$)|"
+    r"(?:^|[\s;&|])(?:[^\s;&|]*/)?passwd\s+--stdin(?:\s|$)"
+)
+_OPAQUE_SECRET_REFERENCE_RE = re.compile(
+    r"(?i)(?:credential|secret|credential-auth)://[A-Za-z0-9._~-]+"
+)
+
 
 def redact_sensitive_command(command: str) -> str:
     """Remove common named and positional secrets from audit metadata."""
@@ -56,6 +81,76 @@ def redact_sensitive_command(command: str) -> str:
         parts[3] = "[REDACTED]"
         return shlex.join(parts)
     return redacted
+
+
+def contains_sensitive_command_material(
+    command: str,
+    *,
+    argv: Optional[tuple[str, ...]] = None,
+) -> bool:
+    """Return whether free-form command text carries credential material.
+
+    The managed-shell boundary accepts shell language, not typed provider
+    inputs. Consequently it rejects plaintext credential forms and opaque
+    secret handles alike. Credentials may only be revealed inside a
+    provider-specific execution context.
+    """
+
+    raw = str(command or "")
+    if not raw:
+        return False
+    if any(
+        pattern.search(raw)
+        for pattern in (
+            _CREDENTIAL_ASSIGNMENT_RE,
+            _CREDENTIAL_FLAG_RE,
+            _AUTHORIZATION_VALUE_RE,
+            _URL_CREDENTIAL_RE,
+            _SHELL_CREDENTIAL_CONSUMER_RE,
+            _OPAQUE_SECRET_REFERENCE_RE,
+        )
+    ):
+        return True
+    if "-----BEGIN" in raw.upper() and "PRIVATE KEY-----" in raw.upper():
+        return True
+
+    if argv is None:
+        try:
+            parts = shlex.split(raw, posix=True)
+        except ValueError:
+            return False
+    else:
+        parts = list(argv)
+    lowered = [part.casefold() for part in parts]
+    basenames = [part.rsplit("/", 1)[-1] for part in lowered]
+    if "sshpass" in basenames:
+        return True
+    if basenames and basenames[0] in _POSITIONAL_SECRET_TOOLS and len(parts) >= 4:
+        return True
+    if basenames and basenames[0] == "curl":
+        return any(part in {"-u", "--user"} or part.startswith("--user=") for part in lowered[1:])
+    if basenames and basenames[0] == "docker" and len(lowered) > 1 and lowered[1] == "login":
+        return any(
+            part in {"-p", "--password", "--password-stdin"} or part.startswith("--password=")
+            for part in lowered[2:]
+        )
+    if basenames and basenames[0] in {"mysql", "mariadb"}:
+        return any(part == "-p" or (part.startswith("-p") and len(part) > 2) for part in lowered[1:])
+    if basenames and basenames[0] in {"ssh", "scp", "sftp"}:
+        return any(
+            part in {"-i", "-oidentityfile"} or part.startswith("-oidentityfile=")
+            for part in lowered[1:]
+        )
+    credential_flags = {
+        "ldapsearch": {"-w", "-y"},
+        "redis-cli": {"-a", "--pass"},
+        "rpcclient": {"-u", "--user"},
+        "smbclient": {"-u", "--user"},
+        "sqlcmd": {"-p"},
+    }
+    if basenames and basenames[0] in credential_flags:
+        return any(part in credential_flags[basenames[0]] for part in lowered[1:])
+    return False
 
 
 def _request_id() -> str:

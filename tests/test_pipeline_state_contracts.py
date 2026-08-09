@@ -145,7 +145,7 @@ def test_exploit_select_context_filters_offscope_web_urls():
     assert "nginx.com" not in command
 
 
-def test_context_builder_detects_web_login_and_cpanel_capabilities():
+def test_context_builder_detects_web_login_capabilities():
     import uuid
 
     from core.ai.context_builder import ContextBuilder
@@ -157,13 +157,13 @@ def test_context_builder_detects_web_login_and_cpanel_capabilities():
     resolver = StateResolver(store)
     scan_id = "scan-web"
     host = "10.0.0.5"
-    store.add_fact(scan_id, host, "port_open", "2087/tcp (https) [WHM cPanel]", "test")
+    store.add_fact(scan_id, host, "port_open", "8443/tcp (https) [Admin portal]", "test")
     store.add_fact(scan_id, host, "web_surface", "login_form_detected", "test")
 
     context = ContextBuilder(store, resolver).build_context(scan_id, host)
 
-    assert "cpanel" in context["services"]
-    assert "cpanel_auth_bypass_unknown" in context["open_questions"]
+    assert "https" in context["services"]
+    assert "web_vulnerabilities_unknown" in context["open_questions"]
     assert "web_credentials_unknown" in context["open_questions"]
 
 

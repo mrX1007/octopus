@@ -168,28 +168,6 @@ def test_pipeline_does_not_truncate_verification_followup_fanout_to_three():
     assert any("RPORT=49158" in cmd for cmd in msf_calls)
 
 
-def test_cpanel_commands_use_discovered_panel_port():
-    import uuid
-
-    from core.ai.pipeline import AIPipeline
-
-    db_path = f"/tmp/octopus_pipeline_cpanel_port_{uuid.uuid4().hex}.db"
-    pipeline = AIPipeline(db_path)
-    scan_id = "scan-cpanel-port"
-    host = "10.0.0.5"
-    pipeline.fact_store.add_fact(scan_id, host, "port_open", "2083/tcp (ssl/http) [cPanel]", "test")
-
-    plugin_cmd = pipeline._augment_command_with_context(
-        "plugin cpanel_auth_bypass 10.0.0.5 scan", scan_id, host
-    )
-    direct_cmd = pipeline._augment_command_with_context(
-        "cpanel_exploit 10.0.0.5 scan", scan_id, host
-    )
-
-    assert plugin_cmd == "plugin cpanel_auth_bypass 10.0.0.5:2083 scan"
-    assert direct_cmd == "cpanel_exploit 10.0.0.5:2083 scan"
-
-
 def test_web_mapping_commands_expand_across_discovered_http_endpoints():
     import uuid
 
@@ -207,7 +185,7 @@ def test_web_mapping_commands_expand_across_discovered_http_endpoints():
         "3000/tcp (http) [Node.js Express]",
         "3030/tcp (http-alt) [Golang net/http server]",
         "5432/tcp (postgresql) [PostgreSQL DB]",
-        "2087/tcp (ssl/http) [cPanel WHM]",
+        "9443/tcp (ssl/http) [Admin portal]",
     ]:
         pipeline.fact_store.add_fact(scan_id, host, "port_open", value, "test")
 
@@ -222,7 +200,7 @@ def test_web_mapping_commands_expand_across_discovered_http_endpoints():
         "http://10.0.0.5:51234",
         "http://10.0.0.5:3000",
         "http://10.0.0.5:3030",
-        "https://10.0.0.5:2087",
+        "https://10.0.0.5:9443",
     ]
     assert f"http://{host}:5432" not in endpoints
     assert expanded == [f"whatweb {endpoint}" for endpoint in endpoints]

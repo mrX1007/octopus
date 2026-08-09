@@ -19,7 +19,6 @@ pytestmark = pytest.mark.contract
 def test_legacy_followup_groups_keep_exact_composite_order_and_first_seen_dedupe():
     families = FollowupRuleFamilies()
     ssh = ["ssh_inventory 10.0.0.5"]
-    cpanel = ["plugin cpanel_auth_bypass 10.0.0.5 scan"]
     intelligence = [
         "exploit_select 10.0.0.5",
         "searchsploit nginx 1.24",
@@ -41,7 +40,6 @@ def test_legacy_followup_groups_keep_exact_composite_order_and_first_seen_dedupe
 
     proposals = families.from_legacy_groups(
         ssh_inventory_commands=ssh,
-        cpanel_commands=cpanel,
         service_intelligence_commands=intelligence,
         protocol_service_commands=protocol,
         web_path_commands=paths,
@@ -51,7 +49,6 @@ def test_legacy_followup_groups_keep_exact_composite_order_and_first_seen_dedupe
 
     assert [proposal.command for proposal in proposals] == [
         "ssh_inventory 10.0.0.5",
-        "plugin cpanel_auth_bypass 10.0.0.5 scan",
         "exploit_select 10.0.0.5",
         "searchsploit nginx 1.24",
         "ftp_anonymous_check 10.0.0.5 21",
@@ -64,7 +61,6 @@ def test_legacy_followup_groups_keep_exact_composite_order_and_first_seen_dedupe
     ]
     assert [(proposal.family, proposal.rule_id) for proposal in proposals] == [
         ("post_access", "post_access.ssh_inventory"),
-        ("service", "service.cpanel"),
         ("service", "service.intelligence"),
         ("service", "service.intelligence"),
         ("service", "service.protocol"),
@@ -81,16 +77,14 @@ def test_legacy_followup_groups_keep_exact_composite_order_and_first_seen_dedupe
 def test_service_and_web_rules_are_bounded_without_mutating_command_groups():
     service = ServiceFollowupRules()
     web = WebAPIFollowupRules()
-    cpanel = ["cpanel-1"]
     intelligence = ["intel-1", "intel-2"]
     protocol = ["protocol-1"]
     paths = ["path-1", "path-2"]
     links = ["link-1"]
     surface = ["surface-1"]
-    before = tuple(tuple(group) for group in (cpanel, intelligence, protocol, paths, links, surface))
+    before = tuple(tuple(group) for group in (intelligence, protocol, paths, links, surface))
 
     service_proposals = service.propose(
-        cpanel_commands=cpanel,
         intelligence_commands=intelligence,
         protocol_commands=protocol,
         limit=2,
@@ -102,27 +96,26 @@ def test_service_and_web_rules_are_bounded_without_mutating_command_groups():
         limit=3,
     )
 
-    assert [proposal.command for proposal in service_proposals] == ["cpanel-1", "intel-1"]
+    assert [proposal.command for proposal in service_proposals] == ["intel-1", "intel-2"]
     assert [proposal.command for proposal in web_proposals] == ["path-1", "path-2", "link-1"]
-    assert tuple(tuple(group) for group in (cpanel, intelligence, protocol, paths, links, surface)) == before
-    assert service.propose(cpanel_commands=cpanel, limit=0) == []
+    assert tuple(tuple(group) for group in (intelligence, protocol, paths, links, surface)) == before
+    assert service.propose(intelligence_commands=intelligence, limit=0) == []
     assert web.propose(path_commands=paths, limit=0) == []
 
 
 def test_composite_limit_applies_after_legacy_ordering_without_executing_commands():
     runner_calls = []
-    commands = ["ssh_inventory host", "plugin cpanel host scan", "exploit_select host"]
+    commands = ["ssh_inventory host", "exploit_select host", "searchsploit nginx"]
 
     proposals = FollowupRuleFamilies().from_legacy_groups(
         ssh_inventory_commands=commands[:1],
-        cpanel_commands=commands[1:2],
-        service_intelligence_commands=commands[2:],
+        service_intelligence_commands=commands[1:],
         limit=2,
     )
 
     assert [proposal.command for proposal in proposals] == commands[:2]
     assert runner_calls == []
-    assert commands == ["ssh_inventory host", "plugin cpanel host scan", "exploit_select host"]
+    assert commands == ["ssh_inventory host", "exploit_select host", "searchsploit nginx"]
 
 
 def test_followup_proposal_is_frozen():
@@ -130,4 +123,3 @@ def test_followup_proposal_is_frozen():
 
     with pytest.raises(FrozenInstanceError):
         proposal.command = "changed"  # type: ignore[misc]
-

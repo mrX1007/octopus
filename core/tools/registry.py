@@ -37,13 +37,23 @@ Architecture:
     └───────────────────┘
 """
 
-import importlib
-import importlib.util
+from __future__ import annotations
+
 import logging
 import os
-import shutil
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any
+
+from core.tools.dependencies import (
+    DependencyContext,
+    DependencyEvaluation,
+    DependencySpec,
+    dependency_to_dict,
+    evaluate_dependency,
+    normalize_dependencies,
+    requirement_labels,
+)
 
 logger = logging.getLogger("octopus.registry")
 
@@ -57,35 +67,42 @@ class ToolDef:
     name: str
     aliases: list[str] = field(default_factory=list)
     category: str = "recon"  # recon | exploit | post | osint | util
-    func: Optional[Callable[..., Any]] = None
+    func: Callable[..., Any] | None = None
     description: str = ""
     requires: list[str] = field(default_factory=list)  # system binary deps
+    dependencies: DependencySpec | None = None
     needs_target: bool = True
     enabled: bool = True
+    provider_path: str = ""
+    disabled_reason: str = ""
     menu_group: str = ""  # for grouping in interactive menu
 
     def is_available(self) -> bool:
-        """Check if all required system binaries are installed."""
-        for dep in self.requires:
-            if dep.startswith("any:"):
-                options = [item.strip() for item in dep.split(":", 1)[1].split(",") if item.strip()]
-                if not options or not any(_dependency_available(option) for option in options):
-                    return False
-            elif dep == "octopus:shardbrowser":
-                try:
-                    from core.osint.shardbrowser import ShardBrowser
+        """Return whether the complete dependency expression is satisfied."""
+        try:
+            return self.availability().available
+        except (TypeError, ValueError):
+            return False
 
-                    status = ShardBrowser().get_status()
-                    if not status.get("installed"):
-                        return False
-                except Exception:
-                    return False
-            elif dep.startswith("python:"):
-                if importlib.util.find_spec(dep.split(":", 1)[1]) is None:
-                    return False
-            elif shutil.which(dep) is None:
-                return False
-        return True
+    @property
+    def dependency_expression(self) -> DependencySpec:
+        """Return the canonical typed expression, adapting legacy tokens."""
+
+        source = self.dependencies if self.dependencies is not None else self.requires
+        return normalize_dependencies(source)
+
+    def availability(self, context: DependencyContext | None = None) -> DependencyEvaluation:
+        """Evaluate dependencies without running binaries or contacting services."""
+
+        return evaluate_dependency(self.dependency_expression, context)
+
+    def dependency_manifest(self) -> dict[str, Any]:
+        """Return stable metadata for preflight, action descriptors, and docs."""
+
+        return dependency_to_dict(self.dependency_expression)
+
+    def requirement_labels(self) -> tuple[str, ...]:
+        return requirement_labels(self.dependency_expression)
 
     @property
     def status_icon(self) -> str:
@@ -109,26 +126,24 @@ def _registry_key(value: str) -> str:
 
 def _dependency_available(dep: str) -> bool:
     """Return availability for one dependency token used in ToolDef.requires."""
-    if dep == "octopus:shardbrowser":
-        try:
-            from core.osint.shardbrowser import ShardBrowser
-
-            return bool(ShardBrowser().get_status().get("installed"))
-        except Exception:
-            return False
-    if dep.startswith("python:"):
-        return importlib.util.find_spec(dep.split(":", 1)[1]) is not None
-    return shutil.which(dep) is not None
+    try:
+        return evaluate_dependency(normalize_dependencies(dep)).available
+    except (TypeError, ValueError):
+        return False
 
 
 def tool(
     name: str,
     *,
-    aliases: Optional[list[str]] = None,
+    aliases: list[str] | None = None,
     category: str = "recon",
     description: str = "",
-    requires: Optional[list[str]] = None,
+    requires: list[str] | None = None,
+    dependencies: DependencySpec | None = None,
     needs_target: bool = True,
+    enabled: bool = True,
+    provider_path: str = "",
+    disabled_reason: str = "",
     menu_group: str = "",
 ):
     """Decorator to register a function as an OCTOPUS tool.
@@ -138,8 +153,13 @@ def tool(
         aliases: Alternative names that also resolve to this tool.
         category: Tool category for menu grouping.
         description: Human-readable description shown in menus.
-        requires: System binaries that must be in PATH.
+        requires: Legacy dependency tokens (adapted into the typed model).
+        dependencies: Typed dependency expression. Mutually exclusive with
+            ``requires``.
         needs_target: Whether the tool requires a target argument.
+        enabled: Whether the provider is executable through the runtime.
+        provider_path: Import-style source owner for capability inventory.
+        disabled_reason: Stable reason for a deliberately quarantined provider.
         menu_group: Logical group for interactive menu display.
 
     Returns:
@@ -151,6 +171,10 @@ def tool(
     """
 
     def decorator(func: Callable) -> Callable:
+        if requires is not None and dependencies is not None:
+            raise ValueError("Use either requires or dependencies, not both")
+        if not enabled and not str(disabled_reason or "").strip():
+            raise ValueError("Disabled tools require a stable disabled_reason")
         canonical_name = _registry_key(name)
         normalized_aliases = [_registry_key(alias) for alias in aliases or []]
         declared_names = [canonical_name, *normalized_aliases]
@@ -174,14 +198,22 @@ def tool(
             )
             raise ValueError(f"Tool registration collision: {collisions}")
 
+        typed_dependencies = normalize_dependencies(dependencies) if dependencies is not None else None
+        compatibility_requires = list(requires or [])
+        if typed_dependencies is not None:
+            compatibility_requires = list(requirement_labels(typed_dependencies))
         tool_def = ToolDef(
             name=canonical_name,
             aliases=normalized_aliases,
             category=category,
             func=func,
             description=description,
-            requires=requires or [],
+            requires=compatibility_requires,
+            dependencies=typed_dependencies,
             needs_target=needs_target,
+            enabled=bool(enabled),
+            provider_path=str(provider_path or "").strip(),
+            disabled_reason=str(disabled_reason or "").strip(),
             menu_group=menu_group,
         )
         _REGISTRY.update(dict.fromkeys(declared_names, tool_def))
@@ -195,7 +227,7 @@ def tool(
 # ─── Lookup Functions ────────────────────────────────────
 
 
-def get_tool(name: str) -> Optional[ToolDef]:
+def get_tool(name: str) -> ToolDef | None:
     """Look up a tool by name or alias.
 
     Args:
@@ -210,7 +242,7 @@ def get_tool(name: str) -> Optional[ToolDef]:
     return None
 
 
-def list_tools(category: Optional[str] = None, available_only: bool = False) -> list[ToolDef]:
+def list_tools(category: str | None = None, available_only: bool = False) -> list[ToolDef]:
     """List all registered tools, optionally filtered.
 
     Args:
@@ -235,7 +267,7 @@ def list_tools(category: Optional[str] = None, available_only: bool = False) -> 
     return sorted(tools, key=lambda t: (t.category, t.name))
 
 
-def build_menu(category: Optional[str] = None) -> dict[int, ToolDef]:
+def build_menu(category: str | None = None) -> dict[int, ToolDef]:
     """Build numbered menu dict for interactive tool selection.
 
     Args:
@@ -259,10 +291,35 @@ def get_all_names() -> list[str]:
     return sorted(names)
 
 
+def dependency_inventory(tool_defs: Iterable[ToolDef] | None = None) -> dict[str, Any]:
+    """Return deterministic declared dependencies for SBOM and diagnostics."""
+
+    definitions = list_tools() if tool_defs is None else sorted(tool_defs, key=lambda item: item.name)
+    records = []
+    seen = set()
+    for tool_def in definitions:
+        if tool_def.name in seen:
+            continue
+        seen.add(tool_def.name)
+        record = {
+            "aliases": sorted(dict.fromkeys(tool_def.aliases)),
+            "category": str(tool_def.category),
+            "dependencies": tool_def.dependency_manifest(),
+            "enabled": bool(tool_def.enabled),
+            "name": tool_def.name,
+        }
+        if tool_def.provider_path:
+            record["provider_path"] = tool_def.provider_path
+        if tool_def.disabled_reason:
+            record["disabled_reason"] = tool_def.disabled_reason
+        records.append(record)
+    return {"schema_version": "1.0", "tools": records}
+
+
 # ─── Plugin Discovery ───────────────────────────────────
 
 
-def discover_plugins(plugin_dir: Optional[str] = None) -> int:
+def discover_plugins(plugin_dir: str | None = None) -> int:
     """Discover class plugins through isolated metadata workers.
 
     Dynamic extension code is never imported into this process. Plugins are

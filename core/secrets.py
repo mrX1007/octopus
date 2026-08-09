@@ -368,7 +368,7 @@ class Redactor:
                 text = f"{cached.group(1)}:{ref} (cached)"
             else:
                 session = re.match(
-                    r"^((?:access|auth|cpanel|refresh|session|whm)[_-]?(?:session|token)):(.{4,})$",
+                    r"^((?:access|auth|refresh|session)[_-]?(?:session|token)):(.{4,})$",
                     text,
                     re.IGNORECASE,
                 )
@@ -376,7 +376,7 @@ class Redactor:
                     ref = self.protect(session.group(2), kind=session.group(1).lower())
                     text = f"{session.group(1)}:{ref}"
                 elif not re.match(
-                    r"^(?:cpanel_auth_bypass_session|login_success|"
+                    r"^(?:login_success|"
                     r"(?:pth_auth_success|ssh_key_available|ssh_login_success):[^\s]+|"
                     r"cracked_password_for:[^\s]+)$",
                     text,

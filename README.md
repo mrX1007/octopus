@@ -227,7 +227,7 @@ from positive verification and final `ExecutionPolicy` authorization.
 | Reporting/trace | `core/ai/report_schema.py`, `core/ai/decision_trace.py`, `export.py` | Versioned evidence report, bounded decisions/metrics and exports |
 | Benchmarks | `core/benchmarks/`, `benchmarks/scenarios/`, `benchmarks/results/`, `benchmarks/competitors/` | Built-in hermetic replay plus a separate manifest-driven, authorized competitor matrix and published comparison data |
 | C2 | `core/c2/` | Optional daemon, implants, operators and channels |
-| OSINT/browser | `shodan_module.py`, `core/osint/shardbrowser.py` | Shodan and ShardBrowser integrations |
+| OSINT | `shodan_module.py` | Shodan integration |
 
 Current physical line-count snapshot (2026-07-30):
 
@@ -505,8 +505,12 @@ Secrets should come from the environment or `.env`, not from committed files.
 ```bash
 export SHODAN_API_KEY=...
 export OCTOPUS_API_KEY=...
-export OCTOPUS_C2_PSK=...
 ```
+
+C2 protocol v11 uses single-use enrollment tokens and per-agent session keys;
+there is no shared C2 PSK. The daemon creates its protected local key material
+on first start unless `OCTOPUS_C2_KEY_PASSPHRASE` is supplied securely at
+runtime.
 
 ## Running
 
@@ -1184,7 +1188,11 @@ First-party Go is not yet at a reportable coverage floor: the repository has
 two production `.go` files and no `*_test.go` files, while
 `core/opsec/ja3_client.go` is outside every checked-in Go module. CI still runs
 Go formatting, module verification, test, vet, and build checks and uploads the
-native `core/c2` coverprofile, but that evidence is currently non-blocking.
+native `core/c2` coverprofile. CI now validates that the profile accounts for
+every production source in that module, while retaining a 0% numeric floor
+until Go tests exist; this is a blocking completeness gate, not a coverage
+claim. Locked verification, tests, vet, and build run with module resolution
+disabled after the one download step.
 
 Generate and enforce Python coverage:
 
@@ -1195,7 +1203,9 @@ Generate and enforce Python coverage:
   --root . --config quality/coverage-ci.ini --fail-under 94.00 \
   --package-fail-under core/actions=95 \
   --package-fail-under core/execution=92 \
-  --package-fail-under core/benchmarks=100
+  --package-fail-under core/benchmarks=100 \
+  --diff-base /full/base/commit/sha \
+  --diff-fail-under 90
 ```
 
 Run the optional strict Go audit (requires Go 1.21 and a profile generated with
@@ -1210,10 +1220,10 @@ repository-wide audit fail):
 The CI workflow is configured for a 94.00% global Python floor, a 95% floor for
 `core/actions`, a 92% floor for `core/execution`, and an exact 100% floor for
 `core/benchmarks`.
-Changed executable lines and their branch exits are still reported, with a
-temporary non-blocking 0% floor until a post-formatting diff baseline is
-recorded. Go coverage evidence is uploaded without a blocking floor. These
-settings describe regression controls, not 100% project coverage. Details and
+Changed executable lines and their originating branch exits have a blocking
+90% floor. Go profile completeness is blocking while its numeric coverage floor
+remains 0%. These settings describe regression controls, not 100% project
+coverage. Details and
 denominator rules are documented in
 [`docs/quality/ci-and-vendor-integrity.md`](docs/quality/ci-and-vendor-integrity.md).
 
@@ -1243,7 +1253,6 @@ denominator rules are documented in
 │   ├── knowledge/          # SQLite knowledge graph
 │   ├── observability/      # legacy compatibility; retirement is audited
 │   ├── opsec/              # artifact helpers; network.py is legacy compatibility
-│   ├── osint/              # ShardBrowser integration
 │   ├── plugins/            # plugin SDK and loader
 │   ├── recon/              # legacy recon compatibility; retirement is audited
 │   ├── tools/              # @tool implementations
@@ -1354,14 +1363,6 @@ the missing binary or Python package and restart OCTOPUS.
 ```bash
 pip install shodan
 export SHODAN_API_KEY=...
-```
-
-### ShardBrowser Is Unavailable
-
-Install Python dependencies and verify the vendor SDK path:
-
-```text
-vendor/shardbrowser/sdks/python/
 ```
 
 ### pytest Is Missing

@@ -1435,13 +1435,8 @@ class AIPipeline(
         if self._auto_ssh_inventory_enabled() and not inventory_seen and (ssh_creds_available or ssh_access_confirmed):
             ssh_inventory_commands.append(f"ssh_inventory {target}")
 
-        cpanel_commands = []
-        if self._facts_indicate_cpanel_surface(facts) and not self._cpanel_already_verified(all_pairs):
-            cpanel_commands.append(f"plugin cpanel_auth_bypass {target} scan")
-
         proposals = FollowupRuleFamilies().from_legacy_groups(
             ssh_inventory_commands=ssh_inventory_commands,
-            cpanel_commands=cpanel_commands,
             service_intelligence_commands=self._service_intelligence_commands(scan_id, target, facts, all_pairs),
             protocol_service_commands=self._service_action_commands(target, facts, all_pairs),
             web_path_commands=self._web_path_action_commands(scan_id, target, facts),
@@ -1692,28 +1687,6 @@ class AIPipeline(
                 return True
         return False
 
-    def _facts_indicate_cpanel_surface(self, facts: list[dict[str, Any]]) -> bool:
-        for fact in facts:
-            ftype = str(fact.get("type", "")).lower()
-            value = str(fact.get("value", "")).lower()
-            if ftype == "application_access" and "cpanel" in value:
-                return False
-            if ftype in {"port_open", "web_surface", "web_server", "web_redirect"} and any(
-                marker in value for marker in ("cpanel", "whm", ":2082", ":2083", ":2086", ":2087")
-            ):
-                return True
-        return False
-
-    def _cpanel_already_verified(self, fact_pairs: set) -> bool:
-        for ftype, value in fact_pairs:
-            if ftype == "application_access" and "cpanel_whm_authenticated" in value:
-                return True
-            if ftype == "vulnerability" and "cpanel_auth_bypass" in value:
-                return True
-            if ftype == "credential" and ("whm_session:" in value or "cpanel_session:" in value):
-                return True
-        return False
-
     def _service_action_commands(self, target: str, facts: list[dict[str, Any]], all_pairs: set) -> list[str]:
         """Add deterministic protocol-specific probes for newly observed services."""
         commands = []
@@ -1820,7 +1793,7 @@ class AIPipeline(
     def _web_surface_action_commands(
         self, scan_id: str, target: str, facts: list[dict[str, Any]], all_pairs: set
     ) -> list[str]:
-        """Render/crawl discovered web surfaces once, using ShardBrowser fallback when needed."""
+        """Fetch and crawl discovered web surfaces once."""
         if not self._facts_include_web_surface(facts):
             return []
         endpoints = self._web_endpoints_from_facts(scan_id, target)
@@ -2187,8 +2160,6 @@ class AIPipeline(
     def _augment_command_with_context(self, cmd: str, scan_id: str, target: str) -> str:
         """Attach known recon evidence to tools that can consume it."""
         parts = (cmd or "").strip().split(maxsplit=2)
-        if parts and parts[0] in {"plugin", "cpanel_exploit"}:
-            return self._augment_cpanel_command(cmd, scan_id, target)
         if len(parts) != 2 or parts[0] != "exploit_select":
             return cmd
 
@@ -2314,36 +2285,6 @@ class AIPipeline(
         if re.match(r"^https?://", value, re.IGNORECASE):
             return self._endpoint_in_target_scope(value, target)
         return True
-
-    def _augment_cpanel_command(self, cmd: str, scan_id: str, target: str) -> str:
-        """Use the discovered WHM/cPanel port instead of blindly defaulting to 2087."""
-        port = self._best_cpanel_port(scan_id, target)
-        if not port:
-            return cmd
-        target_with_port = f"{target}:{port}"
-        parts = cmd.split()
-        if len(parts) >= 4 and parts[0] == "plugin" and parts[1] == "cpanel_auth_bypass":
-            parts[2] = target_with_port
-            return " ".join(parts)
-        if len(parts) >= 2 and parts[0] == "cpanel_exploit":
-            parts[1] = target_with_port
-            return " ".join(parts)
-        return cmd
-
-    def _best_cpanel_port(self, scan_id: str, target: str) -> str:
-        preferred = ["2087", "2083", "2086", "2082", "2096", "2095"]
-        found = set()
-        for fact in self._accepted_task_decision_facts(scan_id, target):
-            value = str(fact.get("value", "")).lower()
-            if fact.get("type") != "port_open":
-                continue
-            for port in preferred:
-                if value.startswith(f"{port}/") or f":{port}" in value:
-                    found.add(port)
-        for port in preferred:
-            if port in found:
-                return port
-        return ""
 
     def _output_text(self, output: Any) -> str:
         from core.execution.normalization import output_text

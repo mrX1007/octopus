@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 import tarfile
@@ -12,6 +13,8 @@ import tempfile
 import venv
 import zipfile
 from collections.abc import Sequence
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 
 
@@ -19,10 +22,54 @@ class WheelSmokeError(RuntimeError):
     """The built distribution is incomplete or cannot run after installation."""
 
 
+_REQUIRED_WHEEL_RESOURCES = {
+    "core/c2/go.mod",
+    "core/c2/go.sum",
+    "core/c2/implant.go",
+    "core/c2/toolchain.json",
+}
+_REQUIRED_SDIST_RESOURCES = {
+    *_REQUIRED_WHEEL_RESOURCES,
+    "core/opsec/ja3_client.go",
+}
+_FORBIDDEN_WHEEL_RESOURCES = {
+    "core/opsec/ja3_client.go",
+}
+_SYSTEMD_RESOURCE_SUFFIX = ".data/data/share/octopus-security/systemd/octopus-c2.service"
+
+
+def _canonical_project_name(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _wheel_version(archive: zipfile.ZipFile, names: set[str]) -> str:
+    metadata_files = {
+        name
+        for name in names
+        if len(PurePosixPath(name).parts) == 2
+        and PurePosixPath(name).parts[0].endswith(".dist-info")
+        and PurePosixPath(name).name == "METADATA"
+    }
+    if len(metadata_files) != 1:
+        raise WheelSmokeError(f"wheel_metadata_count:{len(metadata_files)}")
+
+    metadata = BytesParser(policy=policy.default).parsebytes(
+        archive.read(next(iter(metadata_files)))
+    )
+    project_name = str(metadata.get("Name", "")).strip()
+    version = str(metadata.get("Version", "")).strip()
+    if _canonical_project_name(project_name) != "octopus-security":
+        raise WheelSmokeError(f"wheel_metadata_project_invalid:{project_name or 'missing'}")
+    if not version or "\n" in version or "\r" in version:
+        raise WheelSmokeError("wheel_metadata_version_invalid")
+    return version
+
+
 def validate_wheel(path: str | Path) -> dict[str, int]:
     wheel = Path(path).resolve(strict=True)
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
+        wheel_version = _wheel_version(archive, names)
     scenarios = {name for name in names if name.startswith("benchmarks/scenarios/") and name.endswith(".json")}
     required = {
         "config.yaml",
@@ -33,8 +80,15 @@ def validate_wheel(path: str | Path) -> dict[str, int]:
         "benchmarks/competitors/labs/discovery-lab-v3/compose.yaml",
         "core/benchmarks/v3/fixture.py",
         "core/benchmarks/v3/publication.py",
+        *_REQUIRED_WHEEL_RESOURCES,
     }
     missing = required - names
+    forbidden = _FORBIDDEN_WHEEL_RESOURCES & names
+    if forbidden:
+        raise WheelSmokeError("wheel_data_forbidden:" + ",".join(sorted(forbidden)))
+    service_files = {name for name in names if name.endswith(_SYSTEMD_RESOURCE_SUFFIX)}
+    if len(service_files) != 1:
+        missing.add(f"systemd_service_count={len(service_files)}")
     if len(scenarios) != 10 or missing:
         raise WheelSmokeError("wheel_data_missing:" + ",".join(sorted({*missing, f"scenario_count={len(scenarios)}"})))
 
@@ -69,6 +123,27 @@ def validate_wheel(path: str | Path) -> dict[str, int]:
         )
         if config_output != "config.yaml\n":
             raise WheelSmokeError("installed_config_not_adjacent")
+        transport_output = _run(
+            [
+                str(python),
+                "-c",
+                (
+                    "import os\n"
+                    "os.environ.pop('OCTOPUS_GO_TLS_BINARY', None)\n"
+                    "from core.opsec.network import OpsecClient\n"
+                    "client = OpsecClient()\n"
+                    "assert type(client.transport).__name__ == 'PythonTransport'\n"
+                    "try:\n    OpsecClient(use_go_tls=True)\n"
+                    "except RuntimeError as exc:\n    assert 'OCTOPUS_GO_TLS_BINARY' in str(exc)\n"
+                    "else:\n    raise AssertionError('Go TLS opt-in did not fail closed')\n"
+                    "print(type(client.transport).__name__)"
+                ),
+            ],
+            cwd=root,
+            require_empty_stderr=True,
+        )
+        if transport_output != "PythonTransport\n":
+            raise WheelSmokeError("installed_opsec_default_not_portable")
         purelib = _run(
             [
                 str(python),
@@ -84,7 +159,7 @@ def validate_wheel(path: str | Path) -> dict[str, int]:
             cwd=root,
             require_empty_stderr=True,
         )
-        if version_output != "octopus 1.1.0\n":
+        if version_output != f"octopus {wheel_version}\n":
             raise WheelSmokeError("installed_version_output_not_clean")
         for command in ("octopus", "octobench", "octobench-competitors"):
             executable = scripts / (f"{command}.exe" if os.name == "nt" else command)
@@ -115,6 +190,19 @@ def validate_sdist(path: str | Path) -> dict[str, int]:
     }
     if len(config_files) != 1:
         raise WheelSmokeError(f"sdist_config_count:{len(config_files)}")
+    relative_names = {
+        str(PurePosixPath(*PurePosixPath(name).parts[1:]))
+        for name in names
+        if len(PurePosixPath(name).parts) > 1
+    }
+    required = {
+        "config.yaml",
+        "data/octopus-c2.service",
+        *_REQUIRED_SDIST_RESOURCES,
+    }
+    missing = required - relative_names
+    if missing:
+        raise WheelSmokeError("sdist_data_missing:" + ",".join(sorted(missing)))
     return {"files": len(names), "configs": len(config_files)}
 
 
@@ -162,6 +250,7 @@ def _run(
             stdin=subprocess.DEVNULL,
             capture_output=True,
             check=True,
+            env={key: value for key, value in os.environ.items() if key not in {"PYTHONHOME", "PYTHONPATH"}},
             timeout=120,
             text=True,
         )

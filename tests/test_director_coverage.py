@@ -206,7 +206,7 @@ def test_next_chain_handles_unknown_skipped_and_exhausted_goals():
         ("vulnerabilities_found", ["verification_needed"], [], [], "vulnerability_assessment"),
         ("vulnerabilities_found", [], [], [], "credential_harvesting"),
         ("credentials_found", ["service_discovery_needed"], [], [], "service_discovery"),
-        ("credentials_found", ["cpanel_session"], [], [], "vulnerability_assessment"),
+        ("credentials_found", ["vulnerability_verification_needed"], [], [], "vulnerability_assessment"),
         ("credentials_found", [], [], ["privilege_escalation"], "conclude"),
         ("credentials_found", ["privilege_escalation_path_unknown"], [], [], "privilege_escalation"),
         ("credentials_found", [], [], [], "vulnerability_assessment"),

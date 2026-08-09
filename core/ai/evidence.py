@@ -15,6 +15,7 @@ from core.ai.fact_predicates import (
     fact_is_decision_critical,
 )
 from core.ai.parsers import ParserFamilyPipeline
+from core.secrets import Redactor, get_redactor
 
 logger = logging.getLogger("octopus.evidence")
 
@@ -429,7 +430,6 @@ class EvidenceVerifier:
                 "postgresql",
                 "mongodb",
                 "tomcat",
-                "cpanel",
                 "dns",
                 "ftp",
                 "smtp",
@@ -699,7 +699,45 @@ class RegexParser:
     - persistence:             100% confidence, from persistence mechanism confirmation
     """
 
-    def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[dict[str, Any]]:
+    def __init__(self, redactor: Optional[Redactor] = None) -> None:
+        self._redactor = redactor
+
+    def _credential_fact(
+        self,
+        value: str,
+        *,
+        confidence: int,
+        session_id: str,
+        allow_secret_material: bool,
+    ) -> Optional[dict[str, Any]]:
+        """Seal a trusted credential observation before constructing a fact."""
+
+        if not allow_secret_material:
+            return None
+        redactor = self._redactor or get_redactor()
+        safe_value, refs = redactor.redact_fact("credential", value)
+        fact: dict[str, Any] = {
+            "type": "credential",
+            "value": safe_value,
+            "confidence": confidence,
+            "session_id": session_id,
+        }
+        if refs:
+            fact["secret_refs"] = list(refs)
+        return fact
+
+    @staticmethod
+    def _credential_token(value: str) -> str:
+        reference = re.search(r"secret://[A-Za-z0-9_-]+", str(value or ""))
+        return reference.group(0) if reference is not None else str(value or "").strip()
+
+    def parse(
+        self,
+        tool_name: str,
+        raw_output: str,
+        session_id: str,
+        allow_secret_material: bool = False,
+    ) -> list[dict[str, Any]]:
         facts = []
         # Benchmark v3 evidence is a native observation, not automatically a
         # reported claim.  The competitor adapter derives claims only from the
@@ -733,7 +771,7 @@ class RegexParser:
         # ── Nmap/rustscan-style port detection ──
         # Manual recon blobs are passed as "manual_recon", so detect the table
         # shape in the output too. Otherwise real nmap ports are lost before
-        # StateResolver/ContextBuilder can route web/cPanel/MSF follow-ups.
+        # StateResolver/ContextBuilder can route web and MSF follow-ups.
         port_line_re = re.compile(
             r"(?m)^\s*(?:\[[^\]\n]+\]\s*)?(\d+)/(tcp|udp)[ \t]+"
             r"(open|filtered)[ \t]+(\S+)(?:[ \t]+([^\n]+))?"
@@ -797,7 +835,7 @@ class RegexParser:
 
         for detected in re.finditer(r"Web ports detected\s+\[([^\]]+)\]", raw_output, re.IGNORECASE):
             for port in re.findall(r"\d{2,5}", detected.group(1)):
-                service = "https" if port in {"443", "8443", "2083", "2087", "2096", "9443"} else "http"
+                service = "https" if port in {"443", "8443", "9443"} else "http"
                 facts.append(
                     {
                         "type": "port_open",
@@ -857,93 +895,6 @@ class RegexParser:
                     "session_id": session_id,
                 }
             )
-
-        # ── cPanel/WHM exploit output (cpanel_sniper) ──
-        if "VULNERABLE" in raw_output and ("cpsess" in raw_output or "cPanel" in raw_output or "WHM" in raw_output):
-            panel_url = re.search(r"https?://([^/\s:]+):(\d+)(?:/|\s|$)", raw_output)
-            if panel_url:
-                _panel_host, panel_port = panel_url.groups()
-                facts.append(
-                    {
-                        "type": "port_open",
-                        "value": f"{panel_port}/tcp (cpanel) [cPanel/WHM]",
-                        "confidence": 95,
-                        "session_id": session_id,
-                    }
-                )
-                facts.append(
-                    {
-                        "type": "web_surface",
-                        "value": f"cpanel_whm:{panel_port}",
-                        "confidence": 95,
-                        "session_id": session_id,
-                    }
-                )
-
-            # Extract the CVE and mark as CONFIRMED exploit
-            cve_match = re.search(r"(CVE-\d{4}-\d{4,7})\s*[—\-]+\s*(.+?)(?:\n|$)", raw_output)
-            if cve_match:
-                facts.append(
-                    {
-                        "type": "exploit_success",
-                        "value": f"{cve_match.group(1)} — {cve_match.group(2).strip()}",
-                        "confidence": 100,
-                        "session_id": session_id,
-                    }
-                )
-                facts.append(
-                    {
-                        "type": "vulnerability",
-                        "value": cve_match.group(1).upper(),
-                        "confidence": 100,
-                        "session_id": session_id,
-                    }
-                )
-
-            # Extract session token
-            sess_match = re.search(r"(?:Session:\s*|whostmgrsession=)([:A-Za-z0-9_.=/+-]+)", raw_output)
-            if sess_match:
-                session_value = sess_match.group(1).lstrip(":")
-                if session_value:
-                    facts.append(
-                        {
-                            "type": "credential",
-                            "value": f"whm_session:{session_value}",
-                            "confidence": 100,
-                            "session_id": session_id,
-                        }
-                    )
-
-            # Extract cPanel version
-            ver_match = re.search(r"Version:\s*([\d.]+)", raw_output)
-            if ver_match:
-                facts.append(
-                    {
-                        "type": "service_version",
-                        "value": f"cPanel {ver_match.group(1)}",
-                        "confidence": 100,
-                        "session_id": session_id,
-                    }
-                )
-
-            # Mark as authenticated session = credential
-            if "authenticated session obtained" in raw_lower:
-                facts.append(
-                    {
-                        "type": "credential",
-                        "value": "cpanel_auth_bypass_session",
-                        "confidence": 100,
-                        "session_id": session_id,
-                    }
-                )
-                facts.append(
-                    {
-                        "type": "application_access",
-                        "value": "cpanel_whm_authenticated",
-                        "confidence": 100,
-                        "session_id": session_id,
-                    }
-                )
 
         # ── Exploit selector / Metasploit planning facts ──
         if "exploit_select" in tool_lower or "exploit selection" in raw_lower:
@@ -1429,11 +1380,22 @@ class RegexParser:
         if "login success" in raw_lower or "password found" in raw_lower:
             facts.append({"type": "credential", "value": "login_success", "confidence": 100, "session_id": session_id})
 
-        for m in re.finditer(r"Known:\s*([^\s:]+):([^\s]+)", raw_output, re.IGNORECASE):
-            user, pwd = m.groups()
-            facts.append(
-                {"type": "credential", "value": f"{user}:{pwd} (cached)", "confidence": 95, "session_id": session_id}
+        for m in re.finditer(
+            r"Known:\s*(?P<user>[^\s:]+):"
+            r"(?P<secret>\[REDACTED\s+secret://[A-Za-z0-9_-]+\]|secret://[A-Za-z0-9_-]+|[^\s]+)",
+            raw_output,
+            re.IGNORECASE,
+        ):
+            user = m.group("user")
+            pwd = self._credential_token(m.group("secret"))
+            credential_fact = self._credential_fact(
+                f"{user}:{pwd} (cached)",
+                confidence=95,
+                session_id=session_id,
+                allow_secret_material=allow_secret_material,
             )
+            if credential_fact is not None:
+                facts.append(credential_fact)
 
         for m in re.finditer(r"SSH connected as\s+([^\s@]+)@([^\s:]+)", raw_output, re.IGNORECASE):
             user, target = m.groups()
@@ -1660,15 +1622,21 @@ class RegexParser:
                 )
 
         # ── Hydra / brute force results ──
-        for m in re.finditer(r"\[(\d+)\]\[(\w+)\]\s+host:\s*\S+\s+login:\s*(\S+)\s+password:\s*(\S+)", raw_output):
-            facts.append(
-                {
-                    "type": "credential",
-                    "value": f"{m.group(3)}:{m.group(4)} ({m.group(2)} port {m.group(1)})",
-                    "confidence": 100,
-                    "session_id": session_id,
-                }
+        for m in re.finditer(
+            r"\[(?P<port>\d+)\]\[(?P<service>\w+)\]\s+host:\s*\S+\s+"
+            r"login:\s*(?P<user>\S+)\s+password:\s*"
+            r"(?P<secret>\[REDACTED\s+secret://[A-Za-z0-9_-]+\]|secret://[A-Za-z0-9_-]+|\S+)",
+            raw_output,
+        ):
+            secret = self._credential_token(m.group("secret"))
+            credential_fact = self._credential_fact(
+                f"{m.group('user')}:{secret} ({m.group('service')} port {m.group('port')})",
+                confidence=100,
+                session_id=session_id,
+                allow_secret_material=allow_secret_material,
             )
+            if credential_fact is not None:
+                facts.append(credential_fact)
 
         # ── Persistence ──
         if "persistence" in raw_lower and ("success" in raw_lower or "planted" in raw_lower):
@@ -3067,8 +3035,8 @@ class RegexParser:
                     }
                 )
 
-        # ── ShardBrowser / browser-rendered web analysis ──
-        if "browser_surface" in tool_lower or "shardbrowser" in tool_lower or "shardx direct browse" in raw_lower:
+        # ── Scoped browser-surface web analysis ──
+        if "browser_surface" in tool_lower:
             url_match = re.search(r"^URL:\s*(\S+)", raw_output, re.MULTILINE)
             if url_match:
                 url_value = url_match.group(1)
@@ -3078,9 +3046,6 @@ class RegexParser:
                         "requests fallback failed",
                         "all scrapling/requests attempts failed",
                         "page fetch failed",
-                        "shardx browse failed",
-                        "shardbrowser not ready",
-                        "shardbrowser module not found",
                     )
                 )
                 has_positive_render = any(
@@ -3171,38 +3136,6 @@ class RegexParser:
             for m in re.finditer(r"^\s*link:\s*(\S.+)$", raw_output, re.MULTILINE):
                 facts.append(
                     {"type": "web_link", "value": m.group(1).strip()[:200], "confidence": 80, "session_id": session_id}
-                )
-
-        if "shardx osint search" in raw_lower:
-            query_match = re.search(r"\[ShardX OSINT Search\s*-\s*(.+?)\]", raw_output)
-            if query_match:
-                facts.append(
-                    {
-                        "type": "osint_query",
-                        "value": query_match.group(1).strip()[:160],
-                        "confidence": 85,
-                        "session_id": session_id,
-                    }
-                )
-            for m in re.finditer(r'"([^"]+)":\s*\{[^{}]*?"content_length":\s*(\d+)', raw_output, re.DOTALL):
-                engine, length = m.groups()
-                facts.append(
-                    {
-                        "type": "osint_result",
-                        "value": f"{engine}:content_length:{length}",
-                        "confidence": 80,
-                        "session_id": session_id,
-                    }
-                )
-            for m in re.finditer(r'"([^"]+)":\s*\{\s*"error":\s*"([^"]+)"', raw_output, re.DOTALL):
-                engine, error = m.groups()
-                facts.append(
-                    {
-                        "type": "osint_status",
-                        "value": f"{engine}:error:{error[:100]}",
-                        "confidence": 70,
-                        "session_id": session_id,
-                    }
                 )
 
         # ── Internal network / pivot reconnaissance ──
@@ -3686,10 +3619,10 @@ class OutputParser:
         }
     )
 
-    def __init__(self):
+    def __init__(self, redactor: Optional[Redactor] = None):
         self.web_endpoint_parser = WebEndpointParser()
         self.family_pipeline = ParserFamilyPipeline()
-        self.regex_parser = RegexParser()
+        self.regex_parser = RegexParser(redactor=redactor)
         self.structured_parser = StructuredParser()
         self.llm_extractor = LLMExtractor()
         self.family_owned_tool_markers = (
@@ -4192,7 +4125,12 @@ class OutputParser:
             facts.extend(
                 self._stamp_parser_facts(
                     tool_name,
-                    self.regex_parser.parse(tool_name, raw_output, session_id),
+                    self.regex_parser.parse(
+                        tool_name,
+                        raw_output,
+                        session_id,
+                        not target_controlled_ingress,
+                    ),
                     observation_method=method("deterministic_legacy_parser"),
                     default_trust=parser_trust,
                 )

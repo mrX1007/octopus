@@ -140,8 +140,7 @@ def test_adapt_state_bounds_confirmed_facts_and_potential_examples(monkeypatch):
 
 
 def test_secret_fact_state_and_unique_value_helpers():
-    masked = app._mask_secret_value("whm_session:abcdefgh user:supersecret (cached) ssh_credential:bob@example")
-    assert "abcd***" in masked
+    masked = app._mask_secret_value("user:supersecret (cached) ssh_credential:bob@example")
     assert "user:su*** (cached)" in masked
     assert app._mask_secret_value(None) == ""
 
@@ -228,23 +227,6 @@ def test_outcome_summary_covers_present_absent_duplicate_and_bounded_sections():
 @pytest.mark.parametrize(
     ("item", "related", "expected"),
     (
-        ({"source": "cpanel_sniper"}, [], True),
-        ({"source": "cpanel_exploit"}, [], True),
-        ({"value": "CVE-2026-41940"}, [], True),
-        ({"value": "cPanel/WHM issue"}, [], True),
-        ({}, [{"value": "cpanel_auth_bypass_session"}], True),
-        ({}, [{"value": "whm_session:token"}], True),
-        ({}, [{"type": "service_version", "value": "cpanel"}], True),
-        ({"source": "other", "value": "other"}, [], False),
-    ),
-)
-def test_cpanel_evidence_short_circuit_terms(item, related, expected):
-    assert app._is_cpanel_evidence(item, related) is expected
-
-
-@pytest.mark.parametrize(
-    ("item", "related", "expected"),
-    (
         ({"value": "PwnKit"}, [], True),
         ({"value": "CVE-2021-4034"}, [], True),
         ({"value": "other"}, [{"type": "privesc_vector", "value": "suid_pkexec"}], True),
@@ -300,8 +282,6 @@ def test_service_endpoint_and_vulnerability_metadata_boundaries(monkeypatch):
     assert default_https["port"] == "443"
     assert app._endpoint_metadata_for_vulnerability(tomcat, []) == {}
 
-    cpanel = app._vulnerability_metadata(fact("vulnerability", "cPanel/WHM"), [], {})
-    assert cpanel["service"] == "cPanel/WHM"
     pwnkit = app._vulnerability_metadata(fact("vulnerability", "PwnKit"), [], {})
     assert pwnkit["port"] == "local"
     assert app._vulnerability_metadata(msf, msf_facts, {})["confidence"] == "VERIFIED"
@@ -318,19 +298,6 @@ def test_service_endpoint_and_vulnerability_metadata_boundaries(monkeypatch):
 
 
 def test_exploit_success_metadata_provider_and_fallback_variants():
-    cpanel_with_source = app._exploit_success_metadata(
-        fact("exploit_success", "cPanel/WHM", source="custom"),
-        [],
-        {},
-    )
-    assert cpanel_with_source["evidence_tool"] == "custom"
-    cpanel_default = app._exploit_success_metadata(
-        fact("exploit_success", "cPanel/WHM", source=""),
-        [],
-        {},
-    )
-    assert cpanel_default["evidence_tool"] == "cpanel_sniper"
-
     pwnkit_high = app._exploit_success_metadata(
         fact("exploit_success", "PwnKit", source=""),
         [],
@@ -421,6 +388,7 @@ def test_save_and_show_results_persists_fixes_exploits_and_optional_actions(monk
         "raw_scan": "raw",
         "full_response": "response",
         "risk_level": "HIGH",
+        "machine_report": {"canonical": True},
     }
     app._save_and_show_results(7, result, "00:00:01")
     assert save_fix.call_args_list == [
@@ -429,7 +397,7 @@ def test_save_and_show_results_persists_fixes_exploits_and_optional_actions(monk
     ]
     save_exploit.assert_called_once()
     save_summary.assert_called_once_with(7, "raw", "response", "HIGH")
-    export.assert_called_once_with({"history": (7,)})
+    export.assert_called_once_with({"canonical": True})
     edit.assert_called_once_with(7)
 
     save_summary.side_effect = RuntimeError("duplicate")

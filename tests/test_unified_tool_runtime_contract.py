@@ -20,10 +20,13 @@ from core.tools.runner import run_tool_by_command
 
 pytestmark = [pytest.mark.contract, pytest.mark.security]
 
-EXPECTED_BUILTIN_TOOL_COUNT = 96
+EXPECTED_BUILTIN_TOOL_COUNT = 109
+EXPECTED_ENABLED_TOOL_COUNT = 95
+EXPECTED_DISABLED_TOOL_COUNT = 14
 TARGET = "192.0.2.10"
 CALLBACK_TARGET = "192.0.2.11"
 PROFILE_ONLY_BUILTINS = {
+    "cve_lookup",
     "deploy_c2_beacon",
     "jmx2rce_cleanup",
     "jmx2rce_rce",
@@ -64,6 +67,7 @@ def _provider_command(tool_def, lookup_name: str) -> str:
         "build_ps_stager": f"http://{TARGET}",
         "build_python_implant": f"http://{TARGET}",
         "deploy_c2_beacon": f"{TARGET} fixture-user fixture-password {CALLBACK_TARGET}",
+        "killchain_full": f"{TARGET} fixture-user fixture-password {CALLBACK_TARGET}",
         "killchain_persist": f"{TARGET} fixture-user fixture-password {CALLBACK_TARGET}",
         "plugin": f"fixture {TARGET}",
         "port_forward": f"{TARGET} 8080 {TARGET} 80",
@@ -75,20 +79,26 @@ def _provider_command(tool_def, lookup_name: str) -> str:
 def test_builtin_registry_ai_classification_and_action_catalog_are_complete():
     definitions = _builtin_tool_defs()
     names = tuple(tool_def.name for tool_def in definitions)
+    enabled_definitions = tuple(tool_def for tool_def in definitions if tool_def.enabled)
+    disabled_definitions = tuple(tool_def for tool_def in definitions if not tool_def.enabled)
 
     assert len(core.tools.BUILTIN_TOOL_NAMES) == EXPECTED_BUILTIN_TOOL_COUNT
     assert len(set(core.tools.BUILTIN_TOOL_NAMES)) == EXPECTED_BUILTIN_TOOL_COUNT
+    assert len(enabled_definitions) == EXPECTED_ENABLED_TOOL_COUNT
+    assert len(disabled_definitions) == EXPECTED_DISABLED_TOOL_COUNT
+    assert {tool_def.name for tool_def in disabled_definitions} == set(core.tools.QUARANTINED_CAPABILITY_NAMES)
     assert set(names).issubset({tool_def.name for tool_def in list_tools()})
 
     coverage = ToolRegistry().get_coverage_report(list(names))
     assert coverage["registered"] == EXPECTED_BUILTIN_TOOL_COUNT
     assert coverage["covered"] == EXPECTED_BUILTIN_TOOL_COUNT
+    assert set(coverage["disabled"]) == set(core.tools.QUARANTINED_CAPABILITY_NAMES)
     assert coverage["unknown"] == []
 
     catalog = build_action_catalog(lambda _command, _context: "unused", tool_defs=definitions)
     assert len(catalog) == EXPECTED_BUILTIN_TOOL_COUNT
     descriptor_kinds = [descriptor.kind.value for descriptor in catalog.descriptors()]
-    assert descriptor_kinds.count("registered_tool") == 88
+    assert descriptor_kinds.count("registered_tool") == 101
     assert descriptor_kinds.count("killchain") == 8
     assert set(descriptor_kinds) == {"registered_tool", "killchain"}
     for tool_def in definitions:
@@ -101,20 +111,51 @@ def test_builtin_registry_ai_classification_and_action_catalog_are_complete():
             assert resolved.adapter is canonical.adapter
             assert resolved.alias_used is True
 
+    for tool_def in disabled_definitions:
+        applicability = catalog.require(tool_def.name).adapter.applicability(
+            ActionRequest(target=TARGET, execution_context=_approved_context())
+        )
+        assert "provider_disabled" in applicability.missing_requirements
+
 
 def test_ai_leaf_provider_namespace_is_registry_complete():
     registry = ToolRegistry()
-    builtin_names = set(core.tools.BUILTIN_TOOL_NAMES)
+    enabled_names = {tool_def.name for tool_def in _builtin_tool_defs() if tool_def.enabled}
+    disabled_names = {tool_def.name for tool_def in _builtin_tool_defs() if not tool_def.enabled}
     leaf_providers = {provider for task in registry.task_map for provider in registry._tool_names_for_task(task)}
 
-    assert leaf_providers <= builtin_names
-    assert builtin_names - leaf_providers == PROFILE_ONLY_BUILTINS
+    assert leaf_providers <= enabled_names
+    assert leaf_providers.isdisjoint(disabled_names)
+    assert enabled_names - leaf_providers == PROFILE_ONLY_BUILTINS
 
     for task, entries in registry.task_map.items():
         for command_template, provider in entries:
             if provider in registry.task_map and provider != task:
                 continue
             assert shlex.split(command_template)[0] == provider
+
+
+def test_pass_the_hash_name_and_alias_are_quarantined_without_exposing_raw_hash():
+    canary = "0123456789abcdef0123456789abcdef"
+    canonical = get_tool("pass_the_hash")
+    registry = ToolRegistry()
+
+    assert canonical is not None
+    assert canonical.enabled is False
+    assert get_tool("pth") is canonical
+    assert "pass_the_hash" not in {
+        provider
+        for task in registry.task_map
+        for provider in registry._tool_names_for_task(task)
+    }
+
+    for name in ("pass_the_hash", "pth"):
+        result = run_tool_by_command(
+            f"{name} {TARGET} alice {canary} CORP",
+            _approved_context(),
+        )
+        assert "provider_disabled" in result
+        assert canary not in result
 
 
 def test_every_task_map_entry_has_explicit_fail_closed_scheduling_metadata():
@@ -172,17 +213,16 @@ def test_registry_and_action_catalog_reject_undeclared_fuzzy_names():
 
 
 def test_every_legacy_numeric_menu_entry_resolves_to_registered_policy_identity():
-    assert len(tool_runner.TOOLS_MENU) == 48
+    assert len(tool_runner.TOOLS_MENU) == 46
     assert set(tool_runner._MENU_TOOL_IDS) == set(tool_runner.TOOLS_MENU)
-    assert {key: tool_runner._MENU_TOOL_IDS[key] for key in ("1", "13", "16", "33", "45", "50")} == {
+    assert {key: tool_runner._MENU_TOOL_IDS[key] for key in ("1", "13", "16", "45", "50")} == {
         "1": "nmap",
         "13": "scrapling",
         "16": "bruteforce",
-        "33": "cpanel_exploit",
         "45": "build_go_implant",
         "50": "smtp_probe",
     }
-    assert {"14", "48"}.isdisjoint(tool_runner.TOOLS_MENU)
+    assert {"14", "33", "34", "48"}.isdisjoint(tool_runner.TOOLS_MENU)
     with pytest.raises(TypeError):
         tool_runner._MENU_TOOL_IDS["1"] = "web_login_brute"
 
@@ -231,6 +271,8 @@ def test_legacy_numeric_menu_obeys_policy_before_stubbed_provider_dispatch(
         policy_name = tool_runner._MENU_TOOL_IDS[key]
         tool_def = get_tool(policy_name)
         assert tool_def is not None
+        monkeypatch.setattr(tool_def, "dependencies", None)
+        monkeypatch.setattr(tool_def, "requires", [])
 
         def marker(*args, _key=key, **_kwargs):
             calls.append((_key, args))
@@ -240,6 +282,10 @@ def test_legacy_numeric_menu_obeys_policy_before_stubbed_provider_dispatch(
         call_count = len(calls)
         result = tool_runner.run_single_tool(key, TARGET, context)
         arguments, argument_error = tool_runner._legacy_menu_arguments(key, TARGET)
+        if not tool_def.enabled:
+            assert len(calls) == call_count
+            assert "provider_disabled" in result
+            continue
         if argument_error:
             assert len(calls) == call_count
             assert argument_error in result
@@ -266,6 +312,8 @@ def test_mutating_only_the_legacy_menu_callable_cannot_change_provider_identity(
     rogue_calls: list[str] = []
     tool_def = get_tool("nmap")
     assert tool_def is not None
+    monkeypatch.setattr(tool_def, "dependencies", None)
+    monkeypatch.setattr(tool_def, "requires", [])
 
     def canonical(target, extra_flags=None):
         del extra_flags
@@ -311,7 +359,11 @@ def test_legacy_menu_special_arguments_are_explicit_and_hermetic(monkeypatch):
 
 
 def test_every_builtin_name_and_alias_dispatches_through_one_runtime(tmp_path):
-    definitions = tuple(replace(tool_def, requires=[], enabled=True) for tool_def in _builtin_tool_defs())
+    definitions = tuple(
+        replace(tool_def, requires=[], dependencies=None)
+        for tool_def in _builtin_tool_defs()
+        if tool_def.enabled
+    )
     context = _approved_context()
     calls: list[tuple[str, ExecutionContext]] = []
 
@@ -355,7 +407,11 @@ def test_every_builtin_name_and_alias_dispatches_through_one_runtime(tmp_path):
 
 
 def test_every_builtin_name_and_alias_crosses_scheduler_and_action_catalog(tmp_path):
-    definitions = tuple(replace(tool_def, requires=[], enabled=True) for tool_def in _builtin_tool_defs())
+    definitions = tuple(
+        replace(tool_def, requires=[], dependencies=None)
+        for tool_def in _builtin_tool_defs()
+        if tool_def.enabled
+    )
     context = _approved_context()
     calls: list[tuple[str, ExecutionContext]] = []
 
@@ -394,7 +450,11 @@ def test_every_builtin_name_and_alias_crosses_scheduler_and_action_catalog(tmp_p
 
 
 def test_automatic_context_never_dispatches_policy_active_builtin_or_alias(tmp_path):
-    definitions = tuple(replace(tool_def, requires=[], enabled=True) for tool_def in _builtin_tool_defs())
+    definitions = tuple(
+        replace(tool_def, requires=[], dependencies=None)
+        for tool_def in _builtin_tool_defs()
+        if tool_def.enabled
+    )
     context = ExecutionContext.automatic(target_scope=(TARGET, CALLBACK_TARGET))
     calls: list[str] = []
 
@@ -446,6 +506,8 @@ def test_real_command_facade_reaches_all_builtin_providers_without_external_io(
 
     for tool_def in definitions:
         assert tool_def.func is not None
+        monkeypatch.setattr(tool_def, "dependencies", None)
+        monkeypatch.setattr(tool_def, "requires", [])
         provider_signature = inspect.signature(tool_def.func)
         tool_name = tool_def.name
 
@@ -459,9 +521,12 @@ def test_real_command_facade_reaches_all_builtin_providers_without_external_io(
     expected_names = []
     for tool_def in definitions:
         for lookup_name in (tool_def.name, *tool_def.aliases):
-            expected_names.append(tool_def.name)
             result = run_tool_by_command(_provider_command(tool_def, lookup_name), context)
-            assert result == f"provider-stub:{tool_def.name}"
+            if tool_def.enabled:
+                expected_names.append(tool_def.name)
+                assert result == f"provider-stub:{tool_def.name}"
+            else:
+                assert "provider_disabled" in result
 
     assert [name for name, _context in called] == expected_names
     assert all(bound_context is context for _name, bound_context in called)
@@ -476,7 +541,7 @@ def test_legacy_one_argument_runtime_runner_keeps_bound_context(tmp_path):
         return "legacy-ok"
 
     runtime = PipelineRuntime(str(tmp_path / "legacy-runtime.db"), runner=legacy_runner)
-    nmap = replace(get_tool("nmap"), requires=[], enabled=True)
+    nmap = replace(get_tool("nmap"), requires=[], dependencies=None, enabled=True)
     runtime._action_catalog = build_action_catalog(
         runtime._dispatch_runner,
         tool_defs=(nmap,),

@@ -7,7 +7,7 @@ import importlib
 import runpy
 import sys
 from types import ModuleType
-from unittest.mock import Mock, mock_open
+from unittest.mock import Mock
 
 import pytest
 
@@ -160,180 +160,31 @@ def test_linpeas_poll_timeout_without_cves(monkeypatch):
     sleep.assert_called_once_with(5)
 
 
-def _credential_responder(_client, command, **_kwargs):
-    if command == "cat /etc/shadow 2>/dev/null":
-        return "root:$6$hash:1:2:3\nuser:$6$other:1:2:3"
-    if command.startswith("find /root /home -name 'id_rsa'"):
-        return "/root/.ssh/id_rsa\n   \n/home/user/.ssh/id_ed25519"
-    if command == "cat '/root/.ssh/id_rsa' 2>/dev/null":
-        return "-----BEGIN PRIVATE KEY-----\nsecret"
-    if command == "cat '/home/user/.ssh/id_ed25519' 2>/dev/null":
-        return "not a key"
-    if command.startswith("grep -rn"):
-        return "DB_PASS=secret"
-    if command.startswith("find /etc/NetworkManager"):
-        return "/etc/NetworkManager/a\n/etc/NetworkManager/b"
-    if command == "cat '/etc/NetworkManager/a' 2>/dev/null":
-        return "psk=wifi-secret"
-    if command == "cat '/etc/NetworkManager/b' 2>/dev/null":
-        return ""
-    if "Login Data" in command:
-        return "/home/user/Login Data\n/home/user/key4.db"
-    if command.startswith("find /tmp -name 'krb5cc_"):
-        return "/tmp/krb5cc_1000"
-    return ""
-
-
-def test_credential_harvest_full_success_is_in_process(monkeypatch):
-    registered = []
-
-    class HashCracker:
-        timeout = 600
-
-        def smart_crack(self, shadow_dump):
-            assert "$6$hash" in shadow_dump
-            return "CRACKED"
-
-        @staticmethod
-        def get_cracked_pairs():
-            return [("root", "secret"), ("user", "password")]
-
-        def cleanup(self):
-            self.cleaned = True
-
-    hash_module = ModuleType("hash_cracker")
-    hash_module.HashCracker = HashCracker
-    credential_module = ModuleType("core.credentials")
-    credential_module.register_credential = lambda *args: registered.append(args)
-    monkeypatch.setitem(sys.modules, "hash_cracker", hash_module)
-    monkeypatch.setitem(sys.modules, "core.credentials", credential_module)
+def test_credential_harvest_is_fail_closed_without_reading_or_serializing_secrets(
+    monkeypatch,
+):
+    canary = "post-privesc-plaintext-canary"
+    calls = []
     monkeypatch.setattr(
         privesc,
-        "CFG",
-        {
-            "killchain": {
-                "credential_harvest_timeout": 45,
-                "auto_crack_after_privesc": True,
-            }
-        },
+        "_ssh_exec",
+        lambda *_args, **_kwargs: calls.append((_args, _kwargs)) or canary,
     )
-    monkeypatch.setattr(privesc, "_ssh_exec", _credential_responder)
-    monkeypatch.setattr(privesc.time, "time", lambda: 0)
-    file_mock = mock_open()
-    monkeypatch.setattr(builtins, "open", file_mock)
 
     output = privesc._harvest_credentials(object(), "10.0.0.5")
 
-    assert "SHADOW DUMP" in output
-    assert "CRACKED" in output
-    assert "SSH PRIVATE KEYS" in output
-    assert "DATABASE CREDENTIALS" in output
-    assert "WIFI CONFIG" in output
-    assert "BROWSER CREDENTIAL FILES" in output
-    assert "KERBEROS TICKETS" in output
-    assert len(registered) == 2
-    file_mock().write.assert_called_once()
-
-
-def test_credential_harvest_empty_results_and_sudo_shadow_fallback(monkeypatch):
-    calls = []
-
-    def ssh_exec(_client, command, **_kwargs):
-        calls.append(command)
-        return ""
-
-    monkeypatch.setattr(privesc, "CFG", {"killchain": {}})
-    monkeypatch.setattr(privesc, "_ssh_exec", ssh_exec)
-    monkeypatch.setattr(privesc.time, "time", lambda: 0)
-    file_mock = mock_open()
-    monkeypatch.setattr(builtins, "open", file_mock)
-
-    output = privesc._harvest_credentials(object(), "host")
-
-    assert "SHADOW DUMP" not in output
-    assert any(command.startswith("sudo -n cat /etc/shadow") for command in calls)
-    file_mock.assert_not_called()
-
-
-def test_credential_harvest_auto_crack_import_and_save_errors(monkeypatch):
-    real_import = builtins.__import__
-
-    def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "hash_cracker":
-            raise ImportError("hash cracker unavailable")
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", blocked_import)
-    monkeypatch.setattr(
-        privesc,
-        "CFG",
-        {
-            "killchain": {
-                "credential_harvest_timeout": 45,
-                "auto_crack_after_privesc": True,
-            }
-        },
-    )
-    monkeypatch.setattr(privesc, "_ssh_exec", _credential_responder)
-    monkeypatch.setattr(privesc.time, "time", lambda: 0)
-    monkeypatch.setattr(
-        builtins,
-        "open",
-        Mock(side_effect=OSError("read-only filesystem")),
-    )
-
-    output = privesc._harvest_credentials(object(), "host")
-
-    assert "Failed to save shadow" in output
-
-    file_mock = mock_open()
-    monkeypatch.setattr(builtins, "open", file_mock)
-    output = privesc._harvest_credentials(object(), "host")
-    assert "Use [TOOL: crack_hashes" in output
-
-
-def test_credential_harvest_disabled_auto_crack_formats_hint(monkeypatch):
-    monkeypatch.setattr(
-        privesc,
-        "CFG",
-        {
-            "killchain": {
-                "credential_harvest_timeout": 45,
-                "auto_crack_after_privesc": False,
-            }
-        },
-    )
-    monkeypatch.setattr(privesc, "_ssh_exec", _credential_responder)
-    monkeypatch.setattr(privesc.time, "time", lambda: 0)
-    monkeypatch.setattr(builtins, "open", mock_open())
-
-    output = privesc._harvest_credentials(object(), "host")
-
-    assert "Use [TOOL: crack_hashes" in output
-
-
-@pytest.mark.parametrize("budget_check", [1, 2, 3, 4, 5])
-def test_credential_harvest_budget_can_stop_each_remaining_stage(
-    monkeypatch,
-    budget_check,
-):
-    clock = iter([0, *([0] * (budget_check - 1)), 99])
-    monkeypatch.setattr(
-        privesc,
-        "CFG",
-        {
-            "killchain": {
-                "credential_harvest_timeout": 10,
-                "auto_crack_after_privesc": False,
-            }
-        },
-    )
-    monkeypatch.setattr(privesc, "_ssh_exec", lambda *_args, **_kwargs: "")
-    monkeypatch.setattr(privesc.time, "time", lambda: next(clock))
-
-    output = privesc._harvest_credentials(object(), "host")
-
-    assert "Credential harvest budget reached" in output
+    assert calls == []
+    assert "Automatic credential harvesting is disabled" in output
+    assert "No credential material was read, retained, cracked, or added" in output
+    assert canary not in output
+    for forbidden in (
+        "/etc/shadow",
+        "PRIVATE KEY",
+        "DATABASE CREDENTIALS",
+        "WIFI CONFIG",
+        "KERBEROS TICKETS",
+    ):
+        assert forbidden not in output
 
 
 class _AuthenticationException(Exception):

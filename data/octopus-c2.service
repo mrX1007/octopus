@@ -1,15 +1,26 @@
 [Unit]
-Description=METATRON C2 Daemon
-After=network.target
+Description=OCTOPUS C2 daemon
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=simple
-User=root
-WorkingDirectory=/Users/admin/Downloads/octopus
-ExecStart=/usr/bin/env python3 core/c2/daemon.py
-Restart=always
+DynamicUser=yes
+StateDirectory=octopus
+RuntimeDirectory=octopus
+ConfigurationDirectory=octopus
+WorkingDirectory=/var/lib/octopus
+Environment=OCTOPUS_DATA_DIR=/var/lib/octopus
+Environment=OCTOPUS_C2_SOCKET=/run/octopus/octopus-c2.sock
+EnvironmentFile=-/etc/octopus/octopus-c2.env
+ExecStart=/usr/bin/env octopus-c2
+Restart=on-failure
 RestartSec=3
-KillMode=process
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
 
 [Install]
 WantedBy=multi-user.target

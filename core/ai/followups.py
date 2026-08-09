@@ -91,7 +91,6 @@ class ServiceFollowupRules:
     def propose(
         self,
         *,
-        cpanel_commands: Sequence[str] = (),
         intelligence_commands: Sequence[str] = (),
         protocol_commands: Sequence[str] = (),
         limit: int | None = None,
@@ -99,7 +98,6 @@ class ServiceFollowupRules:
         return _proposals_from_groups(
             self.FAMILY,
             (
-                ("service.cpanel", cpanel_commands),
                 ("service.intelligence", intelligence_commands),
                 ("service.protocol", protocol_commands),
             ),
@@ -288,7 +286,6 @@ class FollowupRuleFamilies:
         self,
         *,
         ssh_inventory_commands: Sequence[str] = (),
-        cpanel_commands: Sequence[str] = (),
         service_intelligence_commands: Sequence[str] = (),
         protocol_service_commands: Sequence[str] = (),
         web_path_commands: Sequence[str] = (),
@@ -300,7 +297,6 @@ class FollowupRuleFamilies:
 
         post_access = self.post_access.from_commands(ssh_inventory_commands)
         service = self.service.propose(
-            cpanel_commands=cpanel_commands,
             intelligence_commands=service_intelligence_commands,
             protocol_commands=protocol_service_commands,
         )

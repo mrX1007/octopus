@@ -13,11 +13,13 @@ Usage::
     result = run_ad_enum("10.10.10.100", creds={"user": "admin", "password": "P@ss", "domain": "CORP"})
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import shutil
 import subprocess
-from typing import Any, Optional
+from typing import Any
 
 # ── Logging ──────────────────────────────────────────────────────────────
 logger = logging.getLogger("octopus.killchain.ad.enumeration")
@@ -56,7 +58,7 @@ GPO_ATTRS = ["displayName", "gPCFileSysPath", "versionNumber",
 
 # Helper: Credential normalization
 
-def _normalize_creds(creds: Optional[dict[str, str]]) -> dict[str, str]:
+def _normalize_creds(creds: dict[str, str] | None) -> dict[str, str]:
     """Return a dict with guaranteed keys: user, password, domain, nthash."""
     defaults: dict[str, str] = {
         "user": "",
@@ -81,7 +83,7 @@ def _build_base_dn(domain: str) -> str:
 def _ldap_search_impacket(
     target: str, base_dn: str, search_filter: str,
     attributes: list[str], creds: dict[str, str],
-) -> Optional[list[dict[str, Any]]]:
+) -> list[dict[str, Any]] | None:
     """Perform an LDAP search via impacket's ``ldap`` module.
 
     Returns a list of entry dicts or ``None`` on failure.
@@ -136,7 +138,7 @@ def _ldap_search_impacket(
 def _ldap_search_ldap3(
     target: str, base_dn: str, search_filter: str,
     attributes: list[str], creds: dict[str, str],
-) -> Optional[list[dict[str, Any]]]:
+) -> list[dict[str, Any]] | None:
     """Perform an LDAP search via the ``ldap3`` library.
 
     Returns a list of entry dicts or ``None`` on failure.
@@ -185,22 +187,24 @@ def _ldap_search_ldap3(
         return None
 
 
-def _run_cli(cmd: str, timeout: int = LDAP_TIMEOUT) -> str:
-    """Run a CLI command and return stdout, or an error string."""
+def _run_cli(cmd: list[str] | tuple[str, ...], timeout: int = LDAP_TIMEOUT) -> str:
+    """Run an explicit argv vector without a shell."""
+    if isinstance(cmd, (str, bytes)) or not cmd:
+        return "[!] Unsafe CLI command rejected: an argv sequence is required"
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True,
+            list(cmd), shell=False, capture_output=True, text=True,
             timeout=timeout,
         )
         return (result.stdout + result.stderr).strip()
     except subprocess.TimeoutExpired:
-        logger.warning("CLI command timed out: %s", cmd[:80])
+        logger.warning("CLI command timed out: %s", cmd[0])
         return f"[!] Command timed out after {timeout}s"
     except FileNotFoundError:
         return "[!] Command not found"
     except Exception as exc:
-        logger.error("CLI command failed: %s", exc)
-        return f"[!] Command error: {exc}"
+        logger.error("CLI command failed (%s)", type(exc).__name__)
+        return f"[!] Command error: {type(exc).__name__}"
 
 
 def _ldap_search_cli(
@@ -211,22 +215,11 @@ def _ldap_search_cli(
     if not shutil.which("ldapsearch"):
         return "[!] ldapsearch not found in PATH"
 
-    attr_str = " ".join(attributes)
-    bind_dn = ""
-    auth_args = ""
-    if creds["user"] and creds["domain"]:
-        bind_dn = f"{creds['user']}@{creds['domain']}"
-        auth_args = f'-D "{bind_dn}" -w "{creds["password"]}"'
-    elif creds["user"]:
-        auth_args = f'-D "{creds["user"]}" -w "{creds["password"]}"'
-    else:
-        auth_args = "-x"  # anonymous bind
-
-    cmd = (
-        f'ldapsearch -H ldap://{target} -b "{base_dn}" '
-        f'{auth_args} "{search_filter}" {attr_str}'
+    if creds["user"] or creds["password"]:
+        return "[!] Credential-bearing ldapsearch CLI fallback is disabled"
+    return _run_cli(
+        ["ldapsearch", "-H", f"ldap://{target}", "-b", base_dn, "-x", search_filter, *attributes]
     )
-    return _run_cli(cmd)
 
 
 def _format_entries(entries: list[dict[str, Any]], label: str) -> str:
@@ -250,7 +243,7 @@ def _format_entries(entries: list[dict[str, Any]], label: str) -> str:
 
 # Public API
 
-def run_ad_enum(target: str, creds: Optional[dict[str, str]] = None) -> str:
+def run_ad_enum(target: str, creds: dict[str, str] | None = None) -> str:
     """Run comprehensive AD enumeration against a Domain Controller.
 
     Executes ``ldapsearch``, ``enum4linux``, and ``rpcclient`` as
@@ -270,11 +263,10 @@ def run_ad_enum(target: str, creds: Optional[dict[str, str]] = None) -> str:
     # ── enum4linux ────────────────────────────────────────────────
     if shutil.which("enum4linux"):
         print(f"    {C_CYAN}[*] Running enum4linux...{C_RESET}")
-        auth = ""
-        if creds["user"]:
-            auth = f'-u "{creds["user"]}" -p "{creds["password"]}"'
-        e4l_result = _run_cli(
-            f"enum4linux -a {auth} {target}", timeout=ENUM4LINUX_TIMEOUT,
+        e4l_result = (
+            "[!] Credential-bearing enum4linux CLI fallback is disabled"
+            if creds["user"] or creds["password"]
+            else _run_cli(["enum4linux", "-a", target], timeout=ENUM4LINUX_TIMEOUT)
         )
         output += f"[enum4linux]\n{e4l_result[:3000]}\n\n"
     else:
@@ -283,11 +275,14 @@ def run_ad_enum(target: str, creds: Optional[dict[str, str]] = None) -> str:
     # ── rpcclient ─────────────────────────────────────────────────
     if shutil.which("rpcclient"):
         print(f"    {C_CYAN}[*] Running rpcclient queries...{C_RESET}")
-        rpc_auth = f'-U "{creds["user"]}%{creds["password"]}"' if creds["user"] else "-N"
         for rpc_cmd in ("enumdomusers", "enumdomgroups", "querydominfo"):
-            rpc_out = _run_cli(
-                f'rpcclient {rpc_auth} {target} -c "{rpc_cmd}"',
-                timeout=LDAP_TIMEOUT,
+            rpc_out = (
+                "[!] Credential-bearing rpcclient CLI fallback is disabled"
+                if creds["user"] or creds["password"]
+                else _run_cli(
+                    ["rpcclient", "-N", target, "-c", rpc_cmd],
+                    timeout=LDAP_TIMEOUT,
+                )
             )
             output += f"[rpcclient — {rpc_cmd}]\n{rpc_out[:1500]}\n\n"
     else:
@@ -304,7 +299,7 @@ def run_ad_enum(target: str, creds: Optional[dict[str, str]] = None) -> str:
     return output
 
 
-def enumerate_users(target: str, creds: Optional[dict[str, str]] = None) -> str:
+def enumerate_users(target: str, creds: dict[str, str] | None = None) -> str:
     """Pull user list from Active Directory.
 
     Tries impacket → ldap3 → ldapsearch CLI.
@@ -342,7 +337,7 @@ def enumerate_users(target: str, creds: Optional[dict[str, str]] = None) -> str:
     return output
 
 
-def enumerate_groups(target: str, creds: Optional[dict[str, str]] = None) -> str:
+def enumerate_groups(target: str, creds: dict[str, str] | None = None) -> str:
     """Pull group memberships from Active Directory.
 
     Args:
@@ -375,7 +370,7 @@ def enumerate_groups(target: str, creds: Optional[dict[str, str]] = None) -> str
     return output
 
 
-def enumerate_computers(target: str, creds: Optional[dict[str, str]] = None) -> str:
+def enumerate_computers(target: str, creds: dict[str, str] | None = None) -> str:
     """List domain-joined computers from Active Directory.
 
     Args:
@@ -408,7 +403,7 @@ def enumerate_computers(target: str, creds: Optional[dict[str, str]] = None) -> 
     return output
 
 
-def enumerate_gpo(target: str, creds: Optional[dict[str, str]] = None) -> str:
+def enumerate_gpo(target: str, creds: dict[str, str] | None = None) -> str:
     """List Group Policy Objects from Active Directory.
 
     Args:
@@ -441,7 +436,7 @@ def enumerate_gpo(target: str, creds: Optional[dict[str, str]] = None) -> str:
     return output
 
 
-def bloodhound_ingest(target: str, creds: Optional[dict[str, str]] = None) -> str:
+def bloodhound_ingest(target: str, creds: dict[str, str] | None = None) -> str:
     """Run the BloodHound Python ingestor to collect AD relationship data.
 
     Tries the ``bloodhound`` Python package first, then falls back to
@@ -500,13 +495,7 @@ def bloodhound_ingest(target: str, creds: Optional[dict[str, str]] = None) -> st
     # ── Fall back to CLI ──────────────────────────────────────────
     bh_bin = shutil.which("bloodhound-python") or shutil.which("bloodhound.py")
     if bh_bin:
-        cmd = (
-            f'{bh_bin} -u "{creds["user"]}" -p "{creds["password"]}" '
-            f'-d "{creds["domain"]}" -ns {target} '
-            f'-c all --zip -op {loot_dir}'
-        )
-        cli_out = _run_cli(cmd, timeout=BLOODHOUND_TIMEOUT)
-        output += f"  (via CLI: {bh_bin})\n{cli_out[:2000]}\n"
+        output += "  [!] Credential-bearing BloodHound CLI fallback is disabled\n"
     else:
         output += "  [!] No BloodHound ingestor available (install bloodhound Python package)\n"
 

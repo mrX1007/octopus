@@ -45,7 +45,7 @@ from core.cli.history import (
     DEFAULT_HISTORY_FILE,
     OctopusCompleter,
 )
-from core.version import __version__
+from core.version import APPLICATION_VERSION
 
 # Load config
 try:
@@ -181,7 +181,7 @@ def _setup_logging():
     from core.secrets import install_logging_redaction
 
     install_logging_redaction()
-    logging.info(f"OCTOPUS v{__version__} started")
+    logging.info(f"OCTOPUS v{APPLICATION_VERSION} started")
     logging.info(f"Log file: {log_file}")
     return log_file
 
@@ -271,7 +271,7 @@ def preflight_checks() -> bool:
     """Verify critical dependencies before starting."""
     import shutil
 
-    import requests
+    import requests  # type: ignore[import-untyped]
 
     all_ok = True
 
@@ -764,7 +764,7 @@ def _new_scan_shodan():
     global _current_sl_no
 
     print(f"\n  \033[95m{'=' * 60}\033[0m")
-    print("  \033[95m    SHODAN DISCOVERY ENGINE v8.1\033[0m")
+    print(f"  \033[95m    SHODAN DISCOVERY ENGINE v{APPLICATION_VERSION}\033[0m")
     print(f"  \033[95m{'=' * 60}\033[0m")
 
     try:
@@ -1348,7 +1348,7 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
         "risk_level": risk,
         "summary": summary_text,
         "raw_scan": raw_scan,
-        "full_response": summary_text,  # v12: required by save_summary
+        "full_response": summary_text,  # Required by the persisted summary contract
         "confirmed_facts": confirmed_facts,
         "outcome_summary": outcome_summary,
     }
@@ -1374,11 +1374,6 @@ def _adapt_state_to_result(state, fact_store, scan_id, target, raw_scan):
 
 def _mask_secret_value(value: str) -> str:
     text = str(value or "")
-    text = _re.sub(
-        r"((?:whm|cpanel)_session:)(:?)([A-Za-z0-9_-]{4})[A-Za-z0-9_-]+",
-        r"\1\2\3***",
-        text,
-    )
     text = _re.sub(
         r"\b([^:\s]{1,40}):([^:\s]{3,})(\s+\(cached\))",
         lambda m: f"{m.group(1)}:{m.group(2)[:2]}***{m.group(3)}",
@@ -1563,21 +1558,6 @@ def _fact_text(facts) -> str:
     return "\n".join(f"{f.get('type', '')}:{f.get('value', '')}:{f.get('source', '')}" for f in facts).lower()
 
 
-def _is_cpanel_evidence(f, facts) -> bool:
-    text = _fact_text([f, *list(facts)])
-    source = str(f.get("source", "")).lower()
-    value = str(f.get("value", "")).lower()
-    return (
-        "cpanel_sniper" in source
-        or "cpanel_exploit" in source
-        or "cve-2026-41940" in value
-        or "cpanel/whm" in value
-        or "cpanel_auth_bypass_session" in text
-        or "whm_session:" in text
-        or "service_version:cpanel" in text
-    )
-
-
 def _is_pwnkit_evidence(f, facts) -> bool:
     text = _fact_text([f, *list(facts)])
     value = str(f.get("value", "")).lower()
@@ -1642,13 +1622,6 @@ def _endpoint_metadata_for_vulnerability(f, facts) -> dict:
 
 
 def _vulnerability_metadata(f, facts, state) -> dict:
-    if _is_cpanel_evidence(f, facts):
-        return {
-            "severity": "CRITICAL",
-            "port": "2087",
-            "service": "cPanel/WHM",
-            "description": "Confirmed cPanel/WHM vulnerability",
-        }
     if _is_pwnkit_evidence(f, facts):
         return {
             "severity": "HIGH",
@@ -1677,18 +1650,6 @@ def _vulnerability_metadata(f, facts, state) -> dict:
 
 
 def _exploit_success_metadata(f, facts, state) -> dict:
-    if _is_cpanel_evidence(f, facts):
-        return {
-            "cvss": 9.8,
-            "severity": "CRITICAL",
-            "port": "2087",
-            "service": "cPanel/WHM",
-            "description": "Exploit confirmed: cPanel/WHM authenticated session obtained",
-            "evidence_tool": f.get("source") or "cpanel_sniper",
-            "tool_used": "cpanel_sniper",
-            "payload": "auth_bypass",
-            "result": "Success — session obtained",
-        }
     if _is_pwnkit_evidence(f, facts):
         return {
             "cvss": 7.8,
@@ -1770,9 +1731,13 @@ def _save_and_show_results(sl_no: int, result: dict, duration_str: str = ""):
     data = get_session(sl_no)
     print_session(data)
 
-    auto_exported = _auto_export_session(data)
+    # The live pipeline already owns the canonical report.  Keep the DB session
+    # for display/editing, but never rebuild an export from its lossy tuples when
+    # the canonical machine_report is available.
+    export_input = result.get("machine_report") or data
+    auto_exported = _auto_export_session(export_input)
     if not auto_exported and confirm("Export this session?"):
-        export_menu(data)
+        export_menu(export_input)
 
     if confirm("Edit or delete anything in this session?"):
         edit_delete_menu(sl_no)

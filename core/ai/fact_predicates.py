@@ -171,8 +171,6 @@ _WEB_SERVICES = frozenset(
         "http-alt",
         "http-proxy",
         "https-alt",
-        "cpanel",
-        "whm",
         "tomcat",
     }
 )
@@ -180,10 +178,6 @@ _WEB_PORTS = frozenset(
     {
         80,
         443,
-        2082,
-        2083,
-        2086,
-        2087,
         8000,
         8008,
         8080,

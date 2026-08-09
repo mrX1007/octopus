@@ -60,10 +60,6 @@ def _approved(*scope: str) -> ExecutionContext:
             "multiple_c2_targets_not_supported",
         ),
         (
-            "cpanel_exploit inside cmd 'curl https://outside'",
-            "unapproved_remote_command:cpanel_exploit",
-        ),
-        (
             "browser_surface_analysis inside https 80@outside",
             "invalid_browser_port",
         ),
@@ -76,19 +72,20 @@ def test_indirect_provider_endpoints_fail_closed(command: str, reason: str) -> N
     assert decision.reason == reason
 
 
-def test_callback_is_host_only_and_scoped_as_a_secondary_endpoint() -> None:
+@pytest.mark.parametrize("tool_name", ["killchain_persist", "killchain_full"])
+def test_callback_is_host_only_and_scoped_as_a_secondary_endpoint(tool_name: str) -> None:
     policy = ExecutionPolicy()
 
     injected = policy.authorize_command(
-        "killchain_persist inside user password 'http://inside/\";id;#'",
+        f"{tool_name} inside user password 'http://inside/\";id;#'",
         _approved(),
     )
     outside = policy.authorize_command(
-        "killchain_persist inside user password callback",
+        f"{tool_name} inside user password callback",
         _approved(),
     )
     allowed = policy.authorize_command(
-        "killchain_persist inside user password callback",
+        f"{tool_name} inside user password callback",
         _approved("inside", "callback"),
     )
 

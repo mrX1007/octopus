@@ -14,7 +14,7 @@ def test_post_access_prefers_confirmed_access_and_does_not_mutate_inputs():
     facts = [
         {"type": "credential", "value": "support:secret://cached (cached)"},
         {"type": "credential", "value": "ssh_login_success:support@10.0.0.5"},
-        {"type": "credential", "value": "cpanel_session:cpsess123"},
+        {"type": "application_access", "value": "authenticated_access_confirmed"},
     ]
     executed = {"unrelated command"}
     facts_before = [dict(fact) for fact in facts]
@@ -88,8 +88,8 @@ def test_post_access_does_not_promote_application_sessions_or_unrelated_facts():
     proposals = PostAccessFollowupRules().propose(
         "10.0.0.5",
         [
-            {"type": "credential", "value": "whm_session:session-id"},
-            {"type": "credential", "value": "cpanel_session:session-id"},
+            {"type": "credential", "value": "session_token:session-id"},
+            {"type": "application_access", "value": "authenticated_access_confirmed"},
             {"type": "service_status", "value": "web_authenticated"},
         ],
         enabled=True,
@@ -184,4 +184,3 @@ def test_active_promotion_dedupes_candidates_before_applying_candidate_cap():
     )
 
     assert [proposal.command for proposal in proposals] == [first, second]
-

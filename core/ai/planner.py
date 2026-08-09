@@ -101,7 +101,7 @@ RULES:
 1. Do NOT specify exact tools like 'nmap' or 'whatweb'. Use high-level conceptual tasks.
 2. Keep the plan focused. A maximum of 3 steps per plan.
 3. Include an AnalysisAgent step for discovery/vulnerability goals. Do NOT add AnalysisAgent for persistence, data_exfiltration, or cleanup goals.
-4. VALID TASKS ONLY: service_discovery, vulnerability_assessment, analyze_vulnerabilities, exploit_selection, metasploit_verification, web_application_mapping, browser_surface_analysis, web_vulnerability_testing, web_content_discovery, web_credential_testing, transport_security_assessment, firewall_detection, external_intelligence, browser_osint, windows_enumeration, active_directory_enumeration, kerberos_assessment, ssh_user_enumeration, credential_harvesting, hash_cracking, test_credentials, find_privesc_vectors, exploit_privesc, post_access_inventory, payload_generation, establish_persistence, internal_network_recon, internal_service_discovery, pivot_setup, lateral_movement, domain_credential_extraction, ad_remote_execution, cpanel_assessment, plugin_assessment, exfiltrate_data, stealth_cleanup.
+4. VALID TASKS ONLY: service_discovery, vulnerability_assessment, analyze_vulnerabilities, exploit_selection, metasploit_verification, web_application_mapping, browser_surface_analysis, web_vulnerability_testing, web_content_discovery, web_credential_testing, transport_security_assessment, firewall_detection, external_intelligence, windows_enumeration, active_directory_enumeration, kerberos_assessment, ssh_user_enumeration, credential_harvesting, hash_cracking, test_credentials, find_privesc_vectors, exploit_privesc, post_access_inventory, payload_generation, establish_persistence, internal_network_recon, internal_service_discovery, pivot_setup, lateral_movement, domain_credential_extraction, ad_remote_execution, plugin_assessment, exfiltrate_data, stealth_cleanup.
 """
 
     def create_plan(self, goal: str, context: dict[str, Any], task_history: list[str]) -> dict[str, Any]:
@@ -123,7 +123,7 @@ Output your plan in JSON format. Keep thought under 180 characters."""
             )
             response = ask_ollama(full_prompt, json_mode=True)
 
-            # v12: check the error contract
+            # Enforce the current LLM error contract.
             if response.startswith("[!]"):
                 raise ValueError(response)
 

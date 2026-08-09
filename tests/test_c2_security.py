@@ -206,6 +206,9 @@ def test_python_client_requires_enrollment_and_verified_tls():
     assert namespace["_server_pub"] == base64.b64decode(server_public)
     assert "enrollment_token" in source
     assert "ssl.CERT_NONE" not in source
+    assert "shell=True" not in source
+    assert "shlex.split" in source
+    assert "shell=False" in source
 
 
 def _encrypt_message(key, payload, sequence_number=1):

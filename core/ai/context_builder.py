@@ -37,7 +37,6 @@ SERVICE_PATTERNS = {
         "php",
     ],
     "https": ["ssl/http", "https"],
-    "cpanel": ["cpanel", "whm"],
     "tomcat": ["tomcat", "ajp13"],
     "jmx": ["jmx"],
     "ftp": ["ftp"],
@@ -276,7 +275,6 @@ class ContextBuilder:
         has_login_form = "login_form_detected" in fact_text or any(
             f.get("type") == "web_input" and "password:" in str(f.get("value", "")).lower() for f in facts
         )
-        has_cpanel_surface = "cpanel" in services or "whm" in fact_text or "cpanel" in fact_text
         has_jmx_surface = "jmx" in services or "tomcat" in services or "jmx" in fact_text
         has_ssh_access = (
             "ssh_login_success:" in fact_text or "ssh_authenticated" in fact_text or "ssh_key_available:" in fact_text
@@ -322,8 +320,6 @@ class ContextBuilder:
             if not state.get("recon_completed"):
                 questions.append("service_discovery_needed")
             questions.append("vulnerability_verification_needed")
-            if has_cpanel_surface:
-                questions.append("cpanel_auth_bypass_unknown")
             if has_jmx_surface:
                 questions.append("jmx_exposure_unknown")
             return list(dict.fromkeys(questions))
@@ -331,8 +327,6 @@ class ContextBuilder:
         if primary_state == "credentials_found":
             if not state.get("recon_completed"):
                 questions.append("service_discovery_needed")
-            if has_cpanel_surface:
-                questions.append("cpanel_authenticated_session_present")
             if has_ssh_access and not state.get("root_access_confirmed"):
                 questions.append("privilege_escalation_path_unknown")
             elif not questions:
@@ -342,8 +336,6 @@ class ContextBuilder:
         if not state.get("vulnerabilities_found"):
             if "http" in services or "https" in services:
                 questions.append("web_vulnerabilities_unknown")
-            if has_cpanel_surface:
-                questions.append("cpanel_auth_bypass_unknown")
             if has_jmx_surface:
                 questions.append("jmx_exposure_unknown")
             if "ftp" in services:
@@ -386,7 +378,7 @@ class ContextBuilder:
         web_present = (
             surface_states.get("web") == "confirmed_present"
             or bool(target_model.get("endpoints") or [])
-            or bool(service_set.intersection({"http", "https", "cpanel", "tomcat"}))
+            or bool(service_set.intersection({"http", "https", "tomcat"}))
         )
         api_present_or_unknown = surface_states.get("api") != "confirmed_absent"
         root_or_access = bool(
@@ -554,7 +546,6 @@ class ContextBuilder:
             "web_content_discovery_pending",
             "template_verification_pending",
             "api_security_testing_pending",
-            "cpanel_authenticated_session_present",
         }
         if any(q in vuln_questions or "vulnerabilit" in q for q in open_questions):
             return "vulnerability_assessment"

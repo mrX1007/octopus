@@ -35,7 +35,13 @@ $ find / -perm -4000 -type f 2>/dev/null | head -80
     facts = OutputParser().parse_tool_output("ssh_session", output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
-    assert ("credential", "support:fixture-password-123 (cached)") in pairs
+    cached_credentials = [
+        value
+        for fact_type, value in pairs
+        if fact_type == "credential" and value.startswith("support:secret://")
+    ]
+    assert len(cached_credentials) == 1
+    assert "fixture-password-123" not in repr(facts)
     assert ("credential", "ssh_login_success:support@83.166.241.164") in pairs
     assert ("port_open", "22/tcp (ssh)") in pairs
     assert ("service_status", "ssh_authenticated") in pairs
@@ -212,32 +218,6 @@ root:$6$hash
     assert ("credential", "ssh_key_available:root@83.166.241.164") in pairs
 
 
-def test_cpanel_sniper_output_becomes_app_access_not_ssh_root():
-    from core.ai.evidence import OutputParser
-
-    output = """
-║  CVE-2026-41940 — cPanel/WHM Auth Bypass         ║
-  Target:   https://67.215.12.67:2087
-  Status:   VULNERABLE
-  Token:    /cpsess3282187461
-  Session:  :nllWuSD9KpP7C1kL
-  Version:  11.120.0.11
-  API URL:  https://67.215.12.67:2087/cpsess3282187461/json-api/version
-
-  TARGET IS VULNERABLE — authenticated session obtained
-  Cookie:      whostmgrsession=:nllWuSD9KpP7C1kL
-"""
-
-    facts = OutputParser().parse_tool_output("cpanel_exploit 67.215.12.67", output)
-    pairs = {(fact["type"], fact["value"]) for fact in facts}
-
-    assert ("port_open", "2087/tcp (cpanel) [cPanel/WHM]") not in pairs
-    assert ("web_surface", "cpanel_whm:2087") not in pairs
-    assert ("credential", "whm_session:nllWuSD9KpP7C1kL") not in pairs
-    assert ("application_access", "cpanel_whm_authenticated") not in pairs
-    assert ("system_access", "root_access_confirmed") not in pairs
-
-
 def test_exfil_stage_output_marks_exfiltration_completed():
     from core.ai.evidence import OutputParser
 
@@ -323,11 +303,11 @@ def test_timestamped_nmap_output_becomes_ports_and_versions():
     assert ("port_filtered", "3000/tcp (ppp)") in pairs
 
 
-def test_shardbrowser_surface_output_becomes_web_facts():
+def test_browser_surface_output_becomes_web_facts():
     from core.ai.evidence import OutputParser
 
     output = """
-[ShardX Direct Browse - https://example.test]
+[Browser Surface Analysis - https://example.test]
 URL: https://example.test
 Content size: 4123 bytes
 Page title: Example Admin Portal
@@ -355,10 +335,9 @@ def test_failed_browser_surface_does_not_mark_rendered():
     from core.ai.evidence import OutputParser
 
     output = """
-[Browser Surface Fallback - http://77.105.177.122]
+[Browser Surface Analysis - http://77.105.177.122]
 URL: http://77.105.177.122
-ShardBrowser status: [!] ShardBrowser not ready: missing engine
-Fallback: scrapling/requests
+Backend: scrapling/requests
 
 [!] Requests fallback failed: HTTPConnectionPool(host='77.105.177.122', port=80)
 [!] All scrapling/requests attempts failed for http://77.105.177.122.
@@ -557,7 +536,7 @@ def test_manual_recon_nmap_table_becomes_ports_and_versions():
 [ NMAP OUTPUT ]
 21/tcp   open  ftp        Pure-FTPd
 80/tcp   open  http       Golang net/http server
-2087/tcp open  ssl/http   cPanel WHM
+8443/tcp open  ssl/http   Admin portal
 3000/tcp filtered http
 5432/tcp open  postgresql PostgreSQL DB 9.6.0 or later
 Service Info: Host: test-app.example
@@ -567,7 +546,7 @@ Service Info: Host: test-app.example
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("port_open", "21/tcp (ftp) [Pure-FTPd]") in pairs
-    assert ("port_open", "2087/tcp (ssl/http) [cPanel WHM]") in pairs
+    assert ("port_open", "8443/tcp (ssl/http) [Admin portal]") in pairs
     assert ("port_filtered", "3000/tcp (http)") in pairs
     assert ("service_version", "postgresql:5432:PostgreSQL DB 9.6.0 or later") in pairs
     assert ("hostname", "test-app.example") in pairs
@@ -752,12 +731,12 @@ def test_plugin_json_and_payload_artifacts_become_facts():
 
     plugin_output = """
 {
-  "plugin": "cpanel_auth_bypass",
+  "plugin": "demo_extension",
   "success": true,
   "data": {"status": "vulnerable"},
   "artifacts": ["/tmp/report.json"],
   "credentials": [],
-  "sessions": [{"type": "cpanel", "session": "cpsess123"}],
+  "sessions": [{"type": "web", "session": "opaque-session"}],
   "error": ""
 }
 
@@ -770,14 +749,14 @@ Size: 1234 bytes
 C2: http://127.0.0.1:8443
 """
 
-    facts = OutputParser().parse_tool_output("plugin cpanel_auth_bypass 10.0.0.5 scan", plugin_output)
+    facts = OutputParser().parse_tool_output("plugin demo_extension 10.0.0.5 scan", plugin_output)
     facts += OutputParser().parse_tool_output("build_python_implant", artifact_output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
-    assert ("plugin_result", "cpanel_auth_bypass:success") in pairs
+    assert ("plugin_result", "demo_extension:success") in pairs
     assert ("plugin_artifact", "/tmp/report.json") in pairs
-    assert ("credential", "cpanel_session:cpsess123") not in pairs
-    assert ("vulnerability", "cpanel_auth_bypass_confirmed") not in pairs
+    assert ("credential", "web_session:opaque-session") not in pairs
+    assert ("vulnerability", "demo_extension_confirmed") not in pairs
     assert (
         "payload_artifact",
         "python_implant:/Users/admin/Downloads/Octopus2/data/generated/implant_python.py",
@@ -790,26 +769,26 @@ def test_mixed_plugin_json_keeps_structured_facts_when_regex_matches_cve():
 
     output = """
 {
-  "plugin": "cpanel_auth_bypass",
+  "plugin": "demo_extension",
   "success": true,
-  "data": {"status": "vulnerable", "cve": "CVE-2026-41940"},
-  "artifacts": ["/tmp/cpanel.json"],
-  "sessions": [{"type": "cpanel", "session": "cpsess456"}],
+  "data": {"status": "vulnerable", "cve": "CVE-2025-12345"},
+  "artifacts": ["/tmp/demo.json"],
+  "sessions": [{"type": "web", "session": "opaque-session"}],
   "error": ""
 }
 
 --- plugin output ---
-CVE-2026-41940 detected during scan
+CVE-2025-12345 detected during scan
 """
 
-    facts = OutputParser().parse_tool_output("plugin cpanel_auth_bypass 10.0.0.5 scan", output)
+    facts = OutputParser().parse_tool_output("plugin demo_extension 10.0.0.5 scan", output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
-    assert ("potential_vulnerability", "CVE-2026-41940") not in pairs
-    assert ("plugin_result", "cpanel_auth_bypass:success") in pairs
-    assert ("plugin_artifact", "/tmp/cpanel.json") in pairs
-    assert ("credential", "cpanel_session:cpsess456") not in pairs
-    assert ("vulnerability", "cpanel_auth_bypass_confirmed") not in pairs
+    assert ("potential_vulnerability", "CVE-2025-12345") not in pairs
+    assert ("plugin_result", "demo_extension:success") in pairs
+    assert ("plugin_artifact", "/tmp/demo.json") in pairs
+    assert ("credential", "web_session:opaque-session") not in pairs
+    assert ("vulnerability", "demo_extension_confirmed") not in pairs
 
 
 def test_legacy_killchain_stage_outputs_become_stage_status_facts():
@@ -1121,19 +1100,19 @@ def test_browser_surface_partial_fallback_is_rendered_not_fetch_failed():
     from core.ai.evidence import OutputParser
 
     output = """
-URL: https://67.215.12.67:2087
+URL: https://67.215.12.67:8443
   [!] Requests fallback failed: HTTPConnectionPool(host='67.215.12.67', port=42084)
-Page title: WHM Login
+Page title: Admin Login
 Forms: 3
   link: ?locale=en
 """
 
-    facts = OutputParser().parse_tool_output("browser_surface_analysis https://67.215.12.67:2087", output)
+    facts = OutputParser().parse_tool_output("browser_surface_analysis https://67.215.12.67:8443", output)
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
-    assert ("browser_rendered", "https://67.215.12.67:2087") in pairs
-    assert ("service_status", "web_fetch_failed:https://67.215.12.67:2087") not in pairs
-    assert any(ftype == "web_endpoint" and "https://67.215.12.67:2087/" in value for ftype, value in pairs)
+    assert ("browser_rendered", "https://67.215.12.67:8443") in pairs
+    assert ("service_status", "web_fetch_failed:https://67.215.12.67:8443") not in pairs
+    assert any(ftype == "web_endpoint" and "https://67.215.12.67:8443/" in value for ftype, value in pairs)
 
 
 def test_network_recon_pivot_output_marks_network_recon_completed():

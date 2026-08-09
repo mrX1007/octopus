@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import builtins
 import sys
 from contextlib import contextmanager
@@ -232,12 +231,29 @@ def test_killchain_menu_helpers(monkeypatch):
         "stealth_cleanup",
     ):
         monkeypatch.setattr(killchain, name, lambda target, user, password, n=name: f"{n}:{user}")
-    monkeypatch.setattr(killchain, "run_full_killchain", lambda target, credential: f"full:{credential.username}")
+    monkeypatch.setattr(
+        killchain,
+        "run_full_killchain",
+        lambda target, credential, callback_host: (
+            f"full:{credential.username}:{callback_host}"
+        ),
+    )
     monkeypatch.setattr(post_tools, "call_credential_provider", _call_provider)
     known = _ref()
     monkeypatch.setattr(post_tools, "get_best_credential_ref", lambda *args, **kwargs: known)
+    answers = iter(["callback.example", ""])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert post_tools._run_killchain_interactive("full", "host") == (
+        "full:alice:callback.example"
+    )
+
     monkeypatch.setattr("builtins.input", lambda prompt="": "")
-    assert post_tools._run_killchain_interactive("full", "host") == "full:alice"
+    assert "explicit callback_host is required" in post_tools._run_killchain_interactive(
+        "full", "host"
+    )
+    assert "must be one host" in post_tools._run_killchain_interactive(
+        "full", "host", "https://callback.example/path"
+    )
 
     for stage, expected in (
         ("privesc", "run_privesc"),
@@ -359,311 +375,6 @@ def test_default_recon_is_process_and_network_free(monkeypatch):
     assert "shodan" not in post_tools.run_default_recon("example.test")
     shodan.run_shodan_host = lambda target: (_ for _ in ()).throw(RuntimeError("offline"))
     assert "shodan" not in post_tools.run_default_recon("10.0.0.1")
-
-
-def test_cpanel_browser_verification_paths(monkeypatch):
-    with _blocked_import("core.osint.shardbrowser"):
-        assert "not available" in post_tools._verify_cpanel_in_browser("host", 2087, "/token", "session")
-
-    class Browser:
-        responses: ClassVar[list] = []
-
-        def get_status(self):
-            return self.responses.pop(0) if self.responses else {"installed": True}
-
-        def browse_with_cookies(self, url, cookies, **kwargs):
-            response = self.responses.pop(0)
-            if isinstance(response, Exception):
-                raise response
-            return response
-
-    _module(monkeypatch, "core.osint.shardbrowser", ShardBrowser=Browser)
-    Browser.responses = [{"installed": False, "error": "missing"}]
-    assert "not ready: missing" in post_tools._verify_cpanel_in_browser("host", 2087, "/token", "session")
-
-    monkeypatch.setattr(post_tools.os, "makedirs", lambda *args, **kwargs: None)
-    monkeypatch.setattr(post_tools.os.path, "isfile", lambda path: True)
-    import time
-
-    monkeypatch.setattr(time, "time", lambda: 1)
-    rich_html = (
-        '<td class="cell">admin@example.test</td>'
-        " hostname: panel.example.test "
-        '<a href="/cpsess1/scripts/list"> Accounts </a>'
-        '<a href="/cpsess1/scripts/other"> Accounts </a>'
-        "<script>hidden</script><style>css</style>" + "visible " * 50
-    )
-    Browser.responses = [
-        {"installed": True},
-        {"content": '{"version":"11.0"}', "status_code": 200, "title": "API"},
-        {
-            "content": rich_html,
-            "title": "Dashboard",
-            "status_code": 200,
-            "url_final": "https://final",
-            "cookies_after": [{"name": "cookie", "value": "value"}],
-        },
-    ]
-    output = post_tools._verify_cpanel_in_browser("host", 2087, "/token", "session")
-    assert "cPanel version: 11.0" in output
-    assert "ACCOUNTS FOUND" in output
-    assert "WHM PANEL SECTIONS" in output
-    assert "SESSION COOKIES" in output
-    assert "PAGE TEXT" in output
-
-    monkeypatch.setattr(post_tools.os.path, "isfile", lambda path: False)
-    Browser.responses = [
-        {"installed": True},
-        {"content": "{}", "status_code": 200},
-        {"content": 'acct[0] = {"user":"acctuser"}', "status_code": 201},
-    ]
-    output = post_tools._verify_cpanel_in_browser("host", 2087, "/token", "session")
-    assert "API responded" in output
-    assert "acctuser" in output
-    assert "(empty)" in output
-
-    Browser.responses = [
-        {"installed": True},
-        {"content": "{}", "status_code": 503},
-        {"content": '{"user":"jsonuser"}', "status_code": 200},
-    ]
-    output = post_tools._verify_cpanel_in_browser("host", 2087, "/token", "session")
-    assert "API status" in output
-    assert "jsonuser" in output
-
-    Browser.responses = [
-        {"installed": True},
-        {"content": "{}", "status_code": 204},
-        {"content": "", "status_code": 204},
-    ]
-    assert "ACCOUNTS FOUND" not in post_tools._verify_cpanel_in_browser("host", 2087, "/token", "session")
-
-    Browser.responses = [
-        {"installed": True},
-        RuntimeError("api offline"),
-        RuntimeError("dashboard offline"),
-    ]
-    output = post_tools._verify_cpanel_in_browser("host", 2087, "/token", "session")
-    assert "API check failed" in output
-    assert "Dashboard browse failed" in output
-
-
-def test_interactive_cpanel_exploit_paths(monkeypatch, capsys):
-    class Context:
-        def __init__(self, target):
-            self.target = target
-
-    class Manager:
-        check_result = SimpleNamespace(vulnerable=False, version="1", details="raw", evidence=[])
-        execute_result = SimpleNamespace(
-            success=True,
-            data={
-                "token": "/token",
-                "session": "session",
-                "version": "2",
-                "api_url": "api",
-                "hostname": "panel",
-                "elapsed_s": 1,
-                "exit_code": 0,
-                "cmd_output": "uid=0\nroot",
-                "accounts": [{"user": "root", "domain": "example.test"}],
-                "raw_output": "binary line",
-            },
-            error="",
-        )
-
-        def __init__(self, path):
-            self.path = path
-
-        def check(self, *args, **kwargs):
-            return self.check_result
-
-        def execute(self, *args, **kwargs):
-            return self.execute_result
-
-    import core.plugins.base as plugin_base
-    import core.plugins.loader as plugin_loader
-
-    monkeypatch.setattr(plugin_base, "PluginContext", Context)
-    monkeypatch.setattr(plugin_loader, "PluginManager", Manager)
-
-    answers = iter(["", "1"])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    output = post_tools._run_cpanel_exploit("host")
-    assert "NOT_VULNERABLE" in output
-    assert "RAW BINARY OUTPUT" in output
-
-    monkeypatch.setattr(post_tools, "_verify_cpanel_in_browser", lambda *args: "browser verified")
-    answers = iter(["2088", "2", "whoami", ""])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    output = post_tools._run_cpanel_exploit("host")
-    printed = capsys.readouterr().out
-    assert "browser verified" in output
-    assert "COMMAND OUTPUT" in printed
-    assert "ACCOUNTS" in printed
-
-    answers = iter(["2088", "2", "id", "n"])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    assert "RAW BINARY OUTPUT" in post_tools._run_cpanel_exploit("host")
-
-    Manager.execute_result = SimpleNamespace(success=False, data={}, error="failed")
-    answers = iter(["2088", "2", "id"])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    assert "ERROR" in post_tools._run_cpanel_exploit("host")
-
-    Manager.execute_result = SimpleNamespace(
-        success=True,
-        data={"status": "vulnerable"},
-        error="",
-    )
-    answers = iter(["2088", "2", "id"])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    assert "VULNERABLE" in post_tools._run_cpanel_exploit("host")
-
-
-def test_interactive_shardbrowser_paths(monkeypatch):
-    with _blocked_import("core.osint.shardbrowser"):
-        assert "module not found" in post_tools._run_shardbrowser_osint("query")
-
-    class Session:
-        cdp_url = "ws://fake"
-
-        def __init__(self, close_error=False):
-            self.close_error = close_error
-            self.stopped = False
-
-        def stop(self):
-            self.stopped = True
-            if self.close_error:
-                raise RuntimeError("stop")
-
-    class Browser:
-        installed = True
-        error = "missing"
-        content = ""
-        browse_error = None
-        session = Session()
-
-        def get_status(self):
-            return {"installed": self.installed, "error": self.error}
-
-        def launch_profile(self, **kwargs):
-            return self.session
-
-        async def _browse_async(self, cdp_url, url, wait):
-            if self.browse_error:
-                raise self.browse_error
-            return self.content
-
-        def osint_target(self, query, engines=None):
-            return {"query": query, "engines": engines}
-
-    _module(monkeypatch, "core.osint.shardbrowser", ShardBrowser=Browser)
-    Browser.installed = False
-    assert "not ready" in post_tools._run_shardbrowser_osint("query")
-    Browser.installed = True
-
-    Browser.content = (
-        '<title> Title </title><meta name="description" content="desc">'
-        '<a href="/a">A</a><a href="/a">A2</a>'
-        '<form action="/login"></form>'
-        '<input type="password" name="password">'
-        "Server: nginx\nX-Powered-By: Python\nvisible"
-    )
-    Browser.session = Session(close_error=True)
-    answers = iter(["", "http", "8080"])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    output = post_tools._run_shardbrowser_osint("host.example")
-    assert "Page title" in output
-    assert "Meta tags" in output
-    assert "Links" in output
-    assert "Forms" in output
-    assert "Input fields" in output
-    assert "Server" in output
-    assert "X-Powered-By" in output
-
-    Browser.session = Session()
-    Browser.content = ""
-    answers = iter(["", "https", ""])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    assert "Content size" in post_tools._run_shardbrowser_osint("https://host.example")
-
-    Browser.browse_error = RuntimeError("browse")
-    answers = iter(["", "https", ""])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    assert "browse failed" in post_tools._run_shardbrowser_osint("host.example")
-    Browser.browse_error = None
-
-    answers = iter(["custom query", "google,bing"])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    assert '"engines"' in post_tools._run_shardbrowser_osint("search words")
-    answers = iter(["2", "", ""])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    assert "OSINT Search" in post_tools._run_shardbrowser_osint("host.example")
-
-    class RunningLoop:
-        def is_running(self):
-            return True
-
-    Browser.content = "thread content"
-    monkeypatch.setattr(asyncio, "get_running_loop", lambda: RunningLoop())
-    answers = iter(["", "https", ""])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    assert "thread content" in post_tools._run_shardbrowser_osint("host.example")
-
-
-def test_direct_browser_and_summary_helpers(monkeypatch):
-    assert post_tools._build_browser_url("https://host", "http", "80") == "https://host"
-    assert post_tools._build_browser_url("host", "http://", "80") == "http://host:80"
-    assert post_tools._build_browser_url("host", "", "") == "https://host"
-
-    html = (
-        '<title> A  Title </title><meta name="description" content=" desc ">'
-        '<a href="/a">A</a><a href="/a">A2</a>'
-        '<form action=""></form><input type="email" name="mail">'
-        "<script>hidden</script><style>css</style> visible text"
-    )
-    summary = post_tools._summarize_browser_content("https://host", html)
-    for marker in ("Page title", "Meta tags", "Links", "Forms", "Input fields", "Visible text"):
-        assert marker in summary
-    assert "Visible text" not in post_tools._summarize_browser_content("https://host", "")
-
-    with _blocked_import("core.osint.shardbrowser"):
-        assert "module not found" in post_tools._run_shardbrowser_direct("host")
-
-    class Session:
-        def __init__(self, error=False):
-            self.error = error
-
-        def stop(self):
-            if self.error:
-                raise RuntimeError("stop")
-
-    class Browser:
-        status: ClassVar[dict] = {"installed": True}
-        result = "<title>ok</title>"
-        session = Session()
-
-        def get_status(self):
-            return self.status
-
-        def launch_profile(self, **kwargs):
-            return self.session
-
-        def browse_sync(self, session, url, wait):
-            if isinstance(self.result, Exception):
-                raise self.result
-            return self.result
-
-    _module(monkeypatch, "core.osint.shardbrowser", ShardBrowser=Browser)
-    Browser.status = {"installed": False, "error": "deps"}
-    assert "not ready" in post_tools._run_shardbrowser_direct("host")
-    Browser.status = {"installed": True}
-    Browser.session = Session(error=True)
-    assert "Page title" in post_tools._run_shardbrowser_direct("host")
-    Browser.session = Session()
-    Browser.result = RuntimeError("offline")
-    assert "browse failed" in post_tools._run_shardbrowser_direct("host")
 
 
 def test_credential_reference_resolution_and_ad_shapes(monkeypatch):
@@ -1002,9 +713,14 @@ def test_msf_login_preparation_and_provider_gates(monkeypatch):
     monkeypatch.setattr(post_tools, "sanitize_credential_result", lambda cred, value: str(value).replace("secret", "X"))
     assert (
         post_tools._run_full_killchain_credential_provider(
-            "host", None, None, lambda *args, **kwargs: "ok secret", missing_message="missing"
+            "host",
+            None,
+            None,
+            lambda *args, **kwargs: f"ok secret:{kwargs['callback_host']}",
+            missing_message="missing",
+            provider_kwargs={"callback_host": "callback"},
         )
-        == "ok X"
+        == "ok X:callback"
     )
     failure = post_tools._run_full_killchain_credential_provider(
         "host",
@@ -1046,86 +762,27 @@ def test_active_msf_and_killchain_ai_wrappers(monkeypatch):
         post_tools.ai_deploy_c2_beacon,
     ):
         assert wrapper("host") == "wrapped"
-    assert post_tools.ai_full_killchain("host") == "full"
+    assert post_tools.ai_full_killchain("host", callback_host="callback") == "full"
+    assert captured[-1][1]["provider_kwargs"] == {"callback_host": "callback"}
     assert len(captured) == 7
 
 
-def test_cpanel_shodan_browser_hash_ai_wrappers(monkeypatch):
-    class Context:
-        def __init__(self, target):
-            self.target = target
-
-    class Manager:
-        result = SimpleNamespace(
-            success=True,
-            data={"value": 1},
-            sessions=["session"],
-            error="",
-            output="details",
-        )
-
-        def __init__(self, path):
-            pass
-
-        def execute(self, *args, **kwargs):
-            if isinstance(self.result, Exception):
-                raise self.result
-            return self.result
-
-    import core.plugins.base as plugin_base
-    import core.plugins.loader as plugin_loader
-
-    monkeypatch.setattr(plugin_base, "PluginContext", Context)
-    monkeypatch.setattr(plugin_loader, "PluginManager", Manager)
-    output = post_tools.ai_cpanel_exploit("host")
-    assert "PLUGIN OUTPUT" in output and '"success": true' in output
-    Manager.result = SimpleNamespace(success=True, data={}, sessions=[], error="", output="")
-    assert "PLUGIN OUTPUT" not in post_tools.ai_cpanel_exploit("host", "scan")
-    Manager.result = RuntimeError("plugin failure")
-    assert "cPanel exploit error" in post_tools.ai_cpanel_exploit("host")
-
+def test_shodan_browser_and_hash_ai_wrappers(monkeypatch):
     _module(monkeypatch, "shodan_module", run_shodan_smart=lambda query: f"smart:{query}")
     assert post_tools.ai_shodan_smart("query") == "smart:query"
     with _blocked_import("shodan_module"):
         assert "not found" in post_tools.ai_shodan_smart("query")
 
-    monkeypatch.setattr(post_tools, "_run_shardbrowser_direct", lambda *args, **kwargs: "rendered")
+    monkeypatch.setattr(post_tools, "run_scrapling_fetch", lambda url: f"fetched:{url}")
     context = ExecutionContext.automatic(
         ("host",),
         actor="post-tools-browser-contract",
         origin="tests",
     )
     with bind_execution_context(context):
-        assert post_tools.ai_browser_surface_analysis("host") == "rendered"
-        monkeypatch.setattr(
-            post_tools,
-            "_run_shardbrowser_direct",
-            lambda *args, **kwargs: "[!] failed",
-        )
-        monkeypatch.setattr(post_tools, "run_scrapling_fetch", lambda url: "fallback")
-        assert "fallback" in post_tools.ai_browser_surface_analysis("host")
-
-    class Browser:
-        installed = False
-        fail = False
-
-        def get_status(self):
-            return {"installed": self.installed, "error": "deps"}
-
-        def osint_target(self, query, **kwargs):
-            if self.fail:
-                raise RuntimeError("offline")
-            return {"query": query, **kwargs}
-
-    _module(monkeypatch, "core.osint.shardbrowser", ShardBrowser=Browser)
-    assert "not ready" in post_tools.ai_shardbrowser_osint("query")
-    Browser.installed = True
-    assert '"engines"' in post_tools.ai_shardbrowser_osint("query", "google, bing", "proxy")
-    assert '"engines": null' in post_tools.ai_shardbrowser_osint("query")
-    Browser.fail = True
-    assert "OSINT failed" in post_tools.ai_shardbrowser_osint("query")
-    with _blocked_import("core.osint.shardbrowser"):
-        assert "module not found" in post_tools.ai_shardbrowser_osint("query")
+        output = post_tools.ai_browser_surface_analysis("host")
+        assert "Browser Surface Analysis" in output
+        assert "fetched:https://host" in output
 
     _module(monkeypatch, "hash_cracker", run_crack_hashes=lambda path: f"+ alice:secret\n{path}")
     monkeypatch.setattr(post_tools, "_candidate_hash_files_for_target", lambda target: ["hashes"])
@@ -1364,12 +1021,6 @@ def test_ad_ai_wrappers_error_requirements_and_success(monkeypatch):
     assert post_tools.ai_dcsync("host") == "dcsync"
     assert post_tools.ai_psexec("host", command='"whoami"') == "psexec:whoami"
     assert post_tools.ai_wmiexec("host", command="'hostname'") == "wmiexec:hostname"
-
-    assert "requires target" in post_tools.ai_pass_the_hash("host")
-    monkeypatch.setattr(ad_credential, "pass_the_hash", lambda target, user, nthash, domain: f"pth:{domain}")
-    assert post_tools.ai_pass_the_hash("host", "alice", "hash") == "pth:"
-    assert post_tools.ai_pass_the_hash("host", "alice", "hash", "CORP") == "pth:CORP"
-
 
 def test_adcs_review_binary_credentials_and_provider(monkeypatch):
     @contextmanager

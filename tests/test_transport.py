@@ -242,7 +242,11 @@ def test_python_transport_maps_success_timeout_dependency_and_other_errors(
 
 def test_go_tls_transport_serializes_requests_and_maps_adapter_failures(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
+    go_binary = tmp_path / "ja3_client"
+    go_binary.write_text("fixture", encoding="utf-8")
+    go_binary.chmod(0o700)
     outcomes: list[Any] = [
         SimpleNamespace(
             returncode=0,
@@ -257,7 +261,7 @@ def test_go_tls_transport_serializes_requests_and_maps_adapter_failures(
     serialized: list[dict[str, Any]] = []
 
     def run(command: list[str], **kwargs: Any) -> Any:
-        assert command[0] == "/test/ja3_client"
+        assert command[0] == str(go_binary)
         assert command[1] == "-in"
         serialized.append(json.loads(Path(command[2]).read_text(encoding="utf-8")))
         assert kwargs["capture_output"] is True
@@ -268,7 +272,7 @@ def test_go_tls_transport_serializes_requests_and_maps_adapter_failures(
         return outcome
 
     monkeypatch.setattr(subprocess, "run", run)
-    transport = GoTLSTransport(go_binary="/test/ja3_client", browser="firefox")
+    transport = GoTLSTransport(go_binary=str(go_binary), browser="firefox")
 
     assert transport._do_request("get", "https://example.invalid") == {
         "status_code": 200,
@@ -284,7 +288,9 @@ def test_go_tls_transport_serializes_requests_and_maps_adapter_failures(
     assert failed["error"] == "Go client failed: bad certificate"
     assert transport._do_request("get", "https://example.invalid", timeout=3.0)["error"] == ("Request timed out")
     assert transport._do_request("get", "https://example.invalid")["error"] == ("Invalid JSON from Go client")
-    assert transport._do_request("get", "https://example.invalid")["error"] == ("Go binary not found: /test/ja3_client")
+    assert transport._do_request("get", "https://example.invalid")["error"] == (
+        f"Go binary not found: {go_binary}"
+    )
     assert serialized[0] == {
         "method": "GET",
         "url": "https://example.invalid",
@@ -297,8 +303,25 @@ def test_go_tls_transport_serializes_requests_and_maps_adapter_failures(
     assert serialized[1]["body"] == "hello"
     assert transport._temp_files == []
 
-    default_binary = GoTLSTransport()
-    assert default_binary.go_binary.endswith("core/opsec/ja3_client")
+
+
+def test_go_tls_transport_fails_closed_for_missing_or_non_executable_binary(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        GoTLSTransport("")
+    with pytest.raises(ValueError, match="must be absolute"):
+        GoTLSTransport("relative/ja3-client")
+
+    missing = tmp_path / "missing"
+    with pytest.raises(FileNotFoundError, match="Go TLS binary not found"):
+        GoTLSTransport(str(missing))
+
+    not_executable = tmp_path / "not-executable"
+    not_executable.write_text("fixture", encoding="utf-8")
+    not_executable.chmod(0o600)
+    with pytest.raises(PermissionError, match="Go TLS binary is not executable"):
+        GoTLSTransport(str(not_executable))
 
 
 @pytest.mark.parametrize(

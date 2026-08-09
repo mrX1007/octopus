@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
 import runpy
 import sqlite3
-import subprocess
 from pathlib import Path
 from typing import ClassVar
 
@@ -120,65 +118,65 @@ def test_opsec_client_selects_transport_and_encodes_body(monkeypatch: pytest.Mon
     _FakePythonTransport.instances.clear()
     policy = object()
     profiles: list[str] = []
-    compile_calls: list[tuple[str, str]] = []
-    exists = iter((False, True))
 
     monkeypatch.setattr(network, "get_profile", lambda name: profiles.append(name) or policy)
     monkeypatch.setattr(network, "GoTLSTransport", _FakeGoTransport)
     monkeypatch.setattr(network, "PythonTransport", _FakePythonTransport)
-    monkeypatch.setattr(network.os.path, "exists", lambda _path: next(exists))
-    monkeypatch.setattr(
-        network.OpsecClient,
-        "_compile_go_client",
-        lambda _self, base, binary: compile_calls.append((base, binary)),
-    )
+    monkeypatch.setenv("OCTOPUS_GO_TLS_BINARY", "/deployment/ja3-client")
 
-    compiled = network.OpsecClient(profile="stealth", browser="firefox", use_go_tls=True)
+    go_client = network.OpsecClient(
+        profile="stealth",
+        browser="firefox",
+        use_go_tls=True,
+        go_binary="/explicit/ja3-client",
+    )
     existing = network.OpsecClient(profile="browser", browser="chrome", use_go_tls=True)
     python_client = network.OpsecClient(profile="scraper", use_go_tls=False)
 
-    assert compiled.request("POST", "https://example.invalid", {"X-Test": "1"}, "payload", ignored=True) == {
+    assert go_client.request("POST", "https://example.invalid", {"X-Test": "1"}, "payload", ignored=True) == {
         "transport": "go"
     }
     assert existing.request("GET", "https://example.invalid") == {"transport": "go"}
     assert python_client.request("GET", "https://example.invalid") == {"transport": "python"}
-    assert compiled.transport is _FakeGoTransport.instances[0]
+    assert go_client.transport is _FakeGoTransport.instances[0]
     assert _FakeGoTransport.instances[0].calls == [("POST", "https://example.invalid", {"X-Test": "1"}, b"payload")]
     assert _FakeGoTransport.instances[1].calls == [("GET", "https://example.invalid", None, None)]
     assert _FakePythonTransport.instances[0].calls == [("GET", "https://example.invalid", None, None)]
+    assert _FakeGoTransport.instances[0].go_binary == "/explicit/ja3-client"
+    assert _FakeGoTransport.instances[1].go_binary == "/deployment/ja3-client"
     assert profiles == ["stealth", "browser", "scraper"]
-    assert len(compile_calls) == 1
-    assert compile_calls[0][1].endswith(os.path.join("core", "opsec", "ja3_client"))
 
 
-def test_compile_go_client_reports_success_and_failure(
+def test_opsec_client_never_compiles_go_at_runtime() -> None:
+    source = Path(network.__file__).read_text(encoding="utf-8")
+
+    assert "_compile_go_client" not in source
+    assert 'subprocess.run' not in source
+    assert '["go", "build"' not in source
+
+
+def test_opsec_client_portable_default_uses_python_transport(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
 ) -> None:
-    calls: list[tuple[list[str], dict[str, object]]] = []
+    policy = object()
+    monkeypatch.setattr(network, "get_profile", lambda _name: policy)
+    monkeypatch.setattr(network, "PythonTransport", _FakePythonTransport)
 
-    def succeed(argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        calls.append((argv, kwargs))
-        return subprocess.CompletedProcess(argv, 0)
+    client = network.OpsecClient()
 
-    monkeypatch.setattr(subprocess, "run", succeed)
-    client = object.__new__(network.OpsecClient)
-    client._compile_go_client(str(tmp_path), str(tmp_path / "ja3_client"))
+    assert client.transport is _FakePythonTransport.instances[-1]
 
-    assert calls == [
-        (
-            ["go", "build", "-o", str(tmp_path / "ja3_client"), str(tmp_path / "ja3_client.go")],
-            {"check": True, "cwd": str(tmp_path), "timeout": 180},
-        )
-    ]
-    assert capsys.readouterr().out == "[*] Compiling Go JA3 client...\n"
 
-    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("no go")))
-    client._compile_go_client(str(tmp_path), str(tmp_path / "ja3_client"))
-    output = capsys.readouterr().out
-    assert "[*] Compiling Go JA3 client..." in output
-    assert "[!] Failed to compile JA3 client: no go" in output
+def test_opsec_client_go_tls_opt_in_requires_an_exact_deployment_binary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OCTOPUS_GO_TLS_BINARY", raising=False)
+
+    with pytest.raises(RuntimeError, match="go_binary or OCTOPUS_GO_TLS_BINARY"):
+        network.OpsecClient(use_go_tls=True)
+
+    with pytest.raises(RuntimeError, match="go_binary or OCTOPUS_GO_TLS_BINARY"):
+        network.OpsecClient(use_go_tls=True, go_binary="   ")
 
 
 def test_network_script_reports_error_and_success_without_network(

@@ -14,7 +14,7 @@ DEFAULT_COMPLETIONS = (
     "nmap", "whois", "whatweb", "curl", "dig", "sslscan", "ffuf",
     "enum4linux", "smbclient", "wpscan", "sqlmap", "nikto",
     "scrapling", "jmx2rce", "bruteforce", "ssh_session", "ssh_exec",
-    "killchain", "shodan", "crack_hashes", "cpanel",
+    "killchain", "shodan", "crack_hashes",
     "ad_enum", "asrep_roast", "kerberoast", "dcsync", "psexec", "wmiexec",
     "socks_proxy", "port_forward", "network_recon",
     "build_go_implant", "build_python_implant", "build_ps_stager",

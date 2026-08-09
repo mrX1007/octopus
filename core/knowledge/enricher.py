@@ -190,7 +190,6 @@ class KnowledgeEnricher:
             "Apache Tomcat detected": "tomcat",
             "Webmin panel detected": "webmin",
             "GitLab instance detected": "gitlab",
-            "cPanel detected": "cpanel",
             "Cockpit web console detected": "cockpit",
         }
         for pattern, app_name in web_apps.items():

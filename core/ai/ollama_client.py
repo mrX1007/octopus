@@ -12,7 +12,7 @@ from collections.abc import Generator, Iterator
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 
-import requests
+import requests  # type: ignore[import-untyped]
 
 from core.execution import CancellationContext
 
@@ -555,7 +555,7 @@ def _extract_first_valid_json(text: str) -> str:
 
 
 # ─────────────────────────────────────────────
-# STRUCTURED JSON MODE (v9.0)
+# STRUCTURED JSON MODE
 # ─────────────────────────────────────────────
 
 

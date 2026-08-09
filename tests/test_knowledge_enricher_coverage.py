@@ -146,7 +146,6 @@ def test_enricher_routes_every_supported_fact_to_typed_graph_operations() -> Non
         ("Apache Tomcat detected", "tomcat"),
         ("Webmin panel detected", "webmin"),
         ("GitLab instance detected", "gitlab"),
-        ("cPanel detected", "cpanel"),
         ("Cockpit web console detected", "cockpit"),
     ],
 )

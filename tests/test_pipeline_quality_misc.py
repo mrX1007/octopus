@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Remaining focused pipeline compatibility contracts."""
 
+from types import SimpleNamespace
+
 import pytest
 
 pytestmark = pytest.mark.contract
@@ -34,7 +36,7 @@ def test_fact_store_preserves_duplicate_fact_observations():
     ]
 
 
-def test_runner_preserves_discovered_web_page_urls_for_browser_analysis():
+def test_runner_preserves_discovered_web_page_urls_for_browser_analysis(monkeypatch):
     import core.tools.post_tools
     import core.tools.recon_tools  # noqa: F401 - registers URL-aware web tools
     from core.execution import ExecutionContext
@@ -51,29 +53,28 @@ def test_runner_preserves_discovered_web_page_urls_for_browser_analysis():
         "api_auth_check": "api_auth_check https://app.example.com/api/users",
     }
     captured = []
-    old_funcs = {}
 
     def fake_url_tool(target, *args, **kwargs):
         captured.append(target)
         return "ok"
 
-    try:
-        for tool_name, command in commands.items():
-            tool_def = get_tool(tool_name)
-            old_funcs[tool_name] = tool_def.func
-            tool_def.func = fake_url_tool
-            result = run_tool_by_command(
-                command,
-                ExecutionContext.automatic(
-                    ("10.0.0.5", "app.example.com"),
-                    actor="pipeline-quality-contract",
-                    origin="tests",
-                ),
-            )
-            assert result == "ok"
-    finally:
-        for tool_name, old_func in old_funcs.items():
-            get_tool(tool_name).func = old_func
+    for tool_name, command in commands.items():
+        tool_def = get_tool(tool_name)
+        monkeypatch.setattr(tool_def, "func", fake_url_tool)
+        monkeypatch.setattr(
+            tool_def,
+            "availability",
+            lambda *_args, **_kwargs: SimpleNamespace(available=True, missing=()),
+        )
+        result = run_tool_by_command(
+            command,
+            ExecutionContext.automatic(
+                ("10.0.0.5", "app.example.com"),
+                actor="pipeline-quality-contract",
+                origin="tests",
+            ),
+        )
+        assert result == "ok"
 
     assert captured == [
         "http://10.0.0.5/_reports?id=7",
@@ -258,7 +259,7 @@ def test_scrapling_crawl_uses_requests_fallback_when_scrapling_missing(monkeypat
     tool_def = get_tool("scrapling_crawl")
     output = recon_tools.run_scrapling_crawl("http://10.0.0.5", max_pages=2)
 
-    assert tool_def.requires == []
+    assert tool_def.requires == ["python:requests", "python:beautifulsoup4"]
     assert "Mode: requests+bs4 fallback" in output
     assert "http://10.0.0.5/next" in recon_tools._req_get_seen
 

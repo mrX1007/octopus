@@ -16,6 +16,7 @@ from core.cli import application as _application_module
 from core.cli.main import create_app as _create_app
 from core.cli.main import create_parser as create_parser
 from core.cli.main import main as _main
+from core.version import __version__ as __version__
 
 
 def _bind_legacy_namespace() -> tuple[str, ...]:
@@ -78,6 +79,7 @@ __all__ = sorted(
         "create_app",
         "create_parser",
         "main",
+        "__version__",
     }
 )
 

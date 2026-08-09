@@ -155,7 +155,7 @@ def evaluate_coverage(
     xml_path: Path | None = None,
     package_thresholds: Sequence[tuple[str, float]] = (),
     diff_base: str = "",
-    diff_fail_under: float = 100.0,
+    diff_fail_under: float = 90.0,
     data_file: Path | None = None,
 ) -> float:
     """Load measured data, report every source, and enforce the exact floor."""
@@ -253,7 +253,7 @@ def _argument_parser() -> argparse.ArgumentParser:
         metavar="PACKAGE=PERCENT",
     )
     parser.add_argument("--diff-base", default="")
-    parser.add_argument("--diff-fail-under", type=_parse_threshold, default=0.0)
+    parser.add_argument("--diff-fail-under", type=_parse_threshold, default=90.0)
     parser.add_argument("--data-file", type=Path)
     return parser
 

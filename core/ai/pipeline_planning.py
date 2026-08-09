@@ -376,14 +376,13 @@ class PipelinePlanningMixin(PipelineMixinBase):
     def _enrich_plan(self, plan, goal: str, context: dict[str, Any]):
         """Add bounded high-value context-specific tasks when the plan has room."""
         services = set(context.get("services") or [])
-        open_questions = set(context.get("open_questions") or [])
         target_model = context.get("target_model") or {}
         surface_states = target_model.get("surface_states") or context.get("surface_states") or {}
         assets = target_model.get("assets") or {}
         explicit_coverage = "coverage_gaps" in context
         coverage_gaps = set(context.get("coverage_gaps") or context.get("open_questions") or [])
         candidates = []
-        critical_candidates = set()
+        critical_candidates: set[str] = set()
         if goal == "vulnerability_assessment":
             if "external_vulnerability_assessment_pending" in coverage_gaps:
                 candidates.append("vulnerability_assessment")
@@ -393,9 +392,6 @@ class PipelinePlanningMixin(PipelineMixinBase):
                 candidates.append("internal_service_discovery")
             if surface_states.get("asm") != "confirmed_present" and self._target_looks_domain(context.get("host", "")):
                 candidates.append("asm_discovery")
-            if "cpanel_auth_bypass_unknown" in open_questions:
-                candidates.append("cpanel_assessment")
-                critical_candidates.add("cpanel_assessment")
             if services.intersection({"http", "https"}) or coverage_gaps.intersection(
                 {
                     "web_mapping_pending",
@@ -448,9 +444,6 @@ class PipelinePlanningMixin(PipelineMixinBase):
 
         present = {step.get("task") for step in plan}
         enriched = list(plan)
-        short_specialized_vuln_plan = (
-            goal == "vulnerability_assessment" and len(plan) <= 3 and "cpanel_assessment" in candidates
-        )
         enrichment_limit = self._plan_enrichment_limit()
         noncritical_added = 0
         for task in self._rank_candidate_tasks(
@@ -459,18 +452,6 @@ class PipelinePlanningMixin(PipelineMixinBase):
             critical_candidates,
         ):
             task = self.tool_registry.canonical_task(task)
-            if (
-                short_specialized_vuln_plan
-                and "cpanel_assessment" in present
-                and task
-                in {
-                    "web_vulnerability_testing",
-                    "web_app_deep_testing",
-                    "template_verification",
-                    "api_security_testing",
-                }
-            ):
-                continue
             is_critical = task in critical_candidates
             if not is_critical and noncritical_added >= enrichment_limit:
                 continue
@@ -487,9 +468,6 @@ class PipelinePlanningMixin(PipelineMixinBase):
             if not is_critical:
                 noncritical_added += 1
             print(f"[*] Plan enriched with {task} from context services={sorted(services)}")
-            if short_specialized_vuln_plan and task == "cpanel_assessment":
-                self._trim_low_priority_enrichment(enriched, protected={task})
-
         if goal == "vulnerability_assessment" and "external_vulnerability_assessment_pending" in coverage_gaps:
             enriched.sort(key=lambda step: 0 if step.get("task") == "vulnerability_assessment" else 1)
 

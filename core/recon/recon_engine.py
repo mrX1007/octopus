@@ -16,6 +16,8 @@ import time
 from contextlib import suppress
 from typing import Any, Optional
 
+from core.version import APPLICATION_VERSION
+
 C_GREEN  = "\033[92m"
 C_YELLOW = "\033[93m"
 C_CYAN   = "\033[96m"
@@ -258,7 +260,10 @@ class ReconEngine:
 
     async def run_scan(self, targets: list[str]) -> dict[str, dict[str, str]]:
         """Run the async recon engine against a list of targets."""
-        print(f"\n{C_CYAN}[*] Initializing Async Recon Engine v9.0 for {len(targets)} target(s){C_RESET}")
+        print(
+            f"\n{C_CYAN}[*] Initializing Async Recon Engine "
+            f"v{APPLICATION_VERSION} for {len(targets)} target(s){C_RESET}"
+        )
         start_time = time.time()
         
         # Seed initial tasks (priority 10 so they run first but yield to adaptive tasks)

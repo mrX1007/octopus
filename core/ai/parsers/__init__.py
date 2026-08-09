@@ -6,6 +6,7 @@ from .asm import ASMParser
 from .cloud import CloudParser
 from .code import CodeParser
 from .families import ParserFamilyPipeline
+from .intelligence import IntelligenceParser
 from .msf import MSFParser
 from .network import NetworkGraphParser
 from .nmap import NmapParser
@@ -21,6 +22,7 @@ __all__ = [
     "ASMParser",
     "CloudParser",
     "CodeParser",
+    "IntelligenceParser",
     "MSFParser",
     "NetworkGraphParser",
     "NmapParser",

@@ -67,6 +67,49 @@ def test_approved_managed_shell_keeps_pipeline_support():
     assert result.stdout == "OCTOPUS"
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "DB_PASSWORD={canary} psql -h 127.0.0.1",
+        "sshpass -p {canary} ssh alice@127.0.0.1",
+        "curl -u alice:{canary} https://127.0.0.1/",
+        "curl -H 'Authorization: Bearer {canary}' https://127.0.0.1/",
+        "mysql -p{canary} -h 127.0.0.1",
+        "printf secret://opaque-runtime-reference",
+        "killchain_full 127.0.0.1 alice {canary} | tee result.txt",
+    ],
+)
+def test_credential_material_cannot_reach_managed_shell(
+    command,
+    monkeypatch,
+    caplog,
+):
+    from core.execution import ExecutionContext
+    from core.tools import runner
+
+    canary = "managed-shell-credential-canary"
+    context = ExecutionContext.operator(
+        actor="test-operator",
+        approval_id="approval-secret-boundary",
+        target_scope=("127.0.0.1",),
+        allow_shell=True,
+    )
+    executions = []
+    monkeypatch.setattr(
+        runner,
+        "_execute_process",
+        lambda *args, **kwargs: executions.append((args, kwargs)),
+    )
+
+    result = runner.run_managed_shell(command.format(canary=canary), context)
+
+    assert result.exit_code == -1
+    assert "credential_material_forbidden_in_managed_shell" in result.stdout
+    assert executions == []
+    assert canary not in result.stdout
+    assert canary not in caplog.text
+
+
 def test_managed_shell_enforces_scope_across_shell_separators():
     from core.execution import ExecutionContext
     from core.tools.runner import run_managed_shell
@@ -130,13 +173,15 @@ def test_managed_shell_enforces_output_and_time_limits():
     assert timed_out.duration < 2
 
 
-def test_registered_tool_is_bound_to_execution_target_scope():
+def test_registered_tool_is_bound_to_execution_target_scope(monkeypatch):
     import core.tools.recon_tools  # noqa: F401 - registers nmap
     from core.execution import ExecutionContext
+    from core.tools.dependencies import all_of
     from core.tools.registry import get_tool
     from core.tools.runner import run_tool_by_command
 
     tool_def = get_tool("nmap")
+    monkeypatch.setattr(tool_def, "dependencies", all_of())
     old_func = tool_def.func
     calls = []
 
@@ -157,13 +202,15 @@ def test_registered_tool_is_bound_to_execution_target_scope():
     assert calls == [("10.0.0.5", ["-sV"])]
 
 
-def test_target_metacharacters_do_not_reach_registered_tool():
+def test_target_metacharacters_do_not_reach_registered_tool(monkeypatch):
     import core.tools.recon_tools  # noqa: F401 - registers nmap
     from core.execution import ExecutionContext
+    from core.tools.dependencies import all_of
     from core.tools.registry import get_tool
     from core.tools.runner import run_tool_by_command
 
     tool_def = get_tool("nmap")
+    monkeypatch.setattr(tool_def, "dependencies", all_of())
     old_func = tool_def.func
     called = []
 
@@ -202,13 +249,15 @@ def test_url_query_is_passed_as_one_typed_argument_not_shell_syntax():
     assert captured == ["https://app.example.com/?x=1&y=2"]
 
 
-def test_registered_dispatch_preserves_ipv6_target():
+def test_registered_dispatch_preserves_ipv6_target(monkeypatch):
     import core.tools.recon_tools  # noqa: F401 - registers nmap
     from core.execution import ExecutionContext
+    from core.tools.dependencies import all_of
     from core.tools.registry import get_tool
     from core.tools.runner import run_tool_by_command
 
     tool_def = get_tool("nmap")
+    monkeypatch.setattr(tool_def, "dependencies", all_of())
     old_func = tool_def.func
     captured = []
 
@@ -227,9 +276,10 @@ def test_registered_dispatch_preserves_ipv6_target():
     assert captured == ["2001:db8::1"]
 
 
-def test_registered_dispatch_extracts_targets_from_legacy_cli_flags():
+def test_registered_dispatch_extracts_targets_from_legacy_cli_flags(monkeypatch):
     import core.tools.recon_tools  # noqa: F401 - registers tools
     from core.execution import ExecutionContext
+    from core.tools.dependencies import all_of
     from core.tools.registry import get_tool
     from core.tools.runner import run_tool_by_command
 
@@ -238,6 +288,8 @@ def test_registered_dispatch_extracts_targets_from_legacy_cli_flags():
     enum_def = get_tool("enum4linux")
     old_curl = curl_def.func
     old_enum = enum_def.func
+    monkeypatch.setattr(curl_def, "dependencies", all_of())
+    monkeypatch.setattr(enum_def, "dependencies", all_of())
     curl_def.func = lambda target: captured.append(("curl", target)) or "curl-ok"
     enum_def.func = lambda target: captured.append(("enum", target)) or "enum-ok"
     try:

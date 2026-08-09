@@ -10,6 +10,8 @@ import tempfile
 from datetime import datetime
 from typing import Any, Optional
 
+from core.version import APPLICATION_VERSION
+
 shodan: Any
 mysql: Any
 
@@ -637,7 +639,10 @@ def run_shodan_vulns(ip: str) -> str:
 def run_shodan_interactive(target: str = "") -> str:
     """Interactive Shodan interface for terminal menu."""
     print(f"\n  {C_MAGENTA}{'=' * 60}{C_RESET}")
-    print(f"  {C_MAGENTA}    OCTOPUS -- Shodan OSINT Module v8.1{C_RESET}")
+    print(
+        f"  {C_MAGENTA}    OCTOPUS -- Shodan OSINT Module "
+        f"v{APPLICATION_VERSION}{C_RESET}"
+    )
     print(f"  {C_MAGENTA}{'=' * 60}{C_RESET}")
 
     sr = ShodanRecon()

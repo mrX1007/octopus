@@ -32,16 +32,18 @@ def test_json_raw_output_is_controlled_by_reporting_config(
     monkeypatch.setattr(export, "CFG", {"reporting": {"include_raw_output": False}})
     without_raw = Path(export.export_json(sample_session_data, str(tmp_path / "off")))
     payload = json.loads(without_raw.read_text(encoding="utf-8"))
-    assert "raw_output" not in payload["summary"]
-    assert payload["vulnerabilities"][0]["raw_evidence"] == ""
+    assert payload["legacy_adapter"]["raw_output"] == ""
+    candidates = payload["sections"]["hypotheses_candidates"]
+    assert all(item["legacy_fields"]["raw_evidence"] == "" for item in candidates)
     assert "raw scan data..." not in without_raw.read_text(encoding="utf-8")
     assert "HTTP 200 with /etc/passwd" not in without_raw.read_text(encoding="utf-8")
 
     monkeypatch.setattr(export, "CFG", {"reporting": {"include_raw_output": True}})
     with_raw = Path(export.export_json(sample_session_data, str(tmp_path / "on")))
     payload = json.loads(with_raw.read_text(encoding="utf-8"))
-    assert payload["summary"]["raw_output"] == "raw scan data..."
-    assert payload["vulnerabilities"][0]["raw_evidence"] == "HTTP 200 with /etc/passwd"
+    assert payload["legacy_adapter"]["raw_output"] == "raw scan data..."
+    candidates = payload["sections"]["hypotheses_candidates"]
+    assert any(item["legacy_fields"]["raw_evidence"] == "HTTP 200 with /etc/passwd" for item in candidates)
 
 
 def test_auto_export_generates_pdf_without_opening_export_menu(monkeypatch):

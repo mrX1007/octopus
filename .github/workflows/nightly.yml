@@ -37,7 +37,7 @@ jobs:
       - name: Install native smoke dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends --yes nmap
+          sudo apt-get install --no-install-recommends --yes curl nmap
 
       - name: Install locked full Python profile
         run: |

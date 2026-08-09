@@ -189,19 +189,23 @@ class PythonTransport(Transport):
 class GoTLSTransport(Transport):
     """
     Transport implementation using the Go uTLS binary for JA3 spoofing.
-    Wraps core/opsec/ja3_client.go as a subprocess.
+    Wraps an explicitly deployment-managed binary as a subprocess.
     """
 
-    def __init__(self, go_binary: Optional[str] = None, browser: str = "chrome",
+    def __init__(self, go_binary: str, browser: str = "chrome",
                  policy: Optional[TrafficPolicy] = None):
         super().__init__(policy)
         self.browser = browser
-
-        if go_binary:
-            self.go_binary = go_binary
-        else:
-            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            self.go_binary = os.path.join(base, "opsec", "ja3_client")
+        if not go_binary.strip():
+            raise ValueError("Go TLS binary path must not be empty")
+        configured_binary = os.path.expanduser(go_binary.strip())
+        if not os.path.isabs(configured_binary):
+            raise ValueError("Go TLS binary path must be absolute")
+        if not os.path.isfile(configured_binary):
+            raise FileNotFoundError(f"Go TLS binary not found: {configured_binary}")
+        if not os.access(configured_binary, os.X_OK):
+            raise PermissionError(f"Go TLS binary is not executable: {configured_binary}")
+        self.go_binary = configured_binary
 
     def _do_request(self, method: str, url: str,
                     headers: Optional[dict[str, str]] = None,

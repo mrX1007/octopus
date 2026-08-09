@@ -81,6 +81,7 @@ class ActionRequirements:
     system_dependencies: tuple[str, ...] = ()
     python_dependencies: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
+    dependency_expression: dict[str, Any] | None = None
     target_required: bool = True
     active: bool = False
     supports_check: bool = False
@@ -92,6 +93,7 @@ class ActionRequirements:
             "system_dependencies": list(self.system_dependencies),
             "python_dependencies": list(self.python_dependencies),
             "capabilities": list(self.capabilities),
+            "dependency_expression": self.dependency_expression,
             "target_required": self.target_required,
             "active": self.active,
             "supports_check": self.supports_check,

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import sys
 from types import ModuleType
 from unittest.mock import Mock
 
@@ -341,22 +340,17 @@ def test_privesc_closes_client_when_identity_inventory_raises(monkeypatch: pytes
 
 
 @pytest.mark.parametrize("with_adapter", [False, True], ids=["missing-adapters", "negative-adapter"])
-def test_privesc_no_vector_path_times_out_before_authentication_and_closes(
+def test_privesc_no_vector_path_blocks_credential_replay_and_closes(
     monkeypatch: pytest.MonkeyPatch,
     with_adapter: bool,
 ) -> None:
     client = _Client()
     adapter = _SafeExploit()
-    ticks = iter((0.0, 26.0, 27.0))
-    fake_time = ModuleType("time")
-    fake_time.time = lambda: next(ticks)  # type: ignore[attr-defined]
-    fake_time.sleep = Mock(side_effect=AssertionError("timeout must prevent retries"))  # type: ignore[attr-defined]
     fake_paramiko = ModuleType("paramiko")
     fake_paramiko.SSHClient = Mock(side_effect=AssertionError("authentication must not start"))  # type: ignore[attr-defined]
     fake_paramiko.AutoAddPolicy = Mock(side_effect=AssertionError("authentication must not start"))  # type: ignore[attr-defined]
     fake_paramiko.AuthenticationException = RuntimeError  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "time", fake_time)
-    monkeypatch.setitem(sys.modules, "paramiko", fake_paramiko)
+    monkeypatch.setattr(privesc, "paramiko", fake_paramiko)
     monkeypatch.setattr(privesc, "_ssh_connect", lambda *_args: (client, ""))
     monkeypatch.setattr(privesc, "_run_linpeas", lambda *_args, **_kwargs: ("[!] unavailable\n", []))
     monkeypatch.setattr(privesc, "_PRIVESC_CHECKS", [])
@@ -376,7 +370,8 @@ def test_privesc_no_vector_path_times_out_before_authentication_and_closes(
     output = privesc.run_privesc("host.example", "tester", "")
 
     assert "No obvious privesc vectors found" in output
-    assert "Section timeout (25s)" in output
+    assert "Cross-account password testing is disabled" in output
+    assert "Section timeout (25s)" not in output
     assert "No root obtained" in output
     if with_adapter:
         assert "Loaded kernel exploit adapters" in output

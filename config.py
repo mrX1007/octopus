@@ -607,7 +607,6 @@ def get_secret(key: str, default: str = "") -> str:
     _SECRET_MAP = {
         "SHODAN_API_KEY": ("shodan", "api_key"),
         "OCTOPUS_DB_PASS": ("db", "password"),
-        "OCTOPUS_C2_PSK": ("c2", "psk"),
     }
     if key in _SECRET_MAP:
         section, subkey = _SECRET_MAP[key]

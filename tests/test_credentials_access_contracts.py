@@ -179,67 +179,6 @@ def test_root_access_requests_inventory_before_persistence():
     assert goal == "persistence"
 
 
-def test_cpanel_app_session_does_not_trigger_ssh_post_access_chain():
-    import uuid
-
-    from core.ai.context_builder import ContextBuilder
-    from core.ai.director import DirectorLLM
-    from core.ai.fact_store import FactStore
-    from core.ai.state_resolver import StateResolver
-
-    db_path = f"/tmp/octopus_context_cpanel_app_{uuid.uuid4().hex}.db"
-    store = FactStore(db_path)
-    resolver = StateResolver(store)
-    scan_id = "scan-cpanel-app"
-    host = "67.215.12.67"
-    store.add_fact(scan_id, host, "port_open", "2087/tcp (cpanel) [cPanel/WHM]", "test")
-    store.add_fact(scan_id, host, "vulnerability", "CVE-2026-41940", "test")
-    store.add_fact(scan_id, host, "exploit_success", "CVE-2026-41940 - cPanel/WHM Auth Bypass", "test")
-    store.add_fact(scan_id, host, "credential", "whm_session:nllWuSD9KpP7C1kL", "test")
-    store.add_fact(scan_id, host, "application_access", "cpanel_whm_authenticated", "test")
-
-    state = resolver.resolve_state(scan_id, host)
-    context = ContextBuilder(store, resolver).build_context(scan_id, host)
-    goal = DirectorLLM()._fallback_logic(context, []).get("goal")
-
-    assert state["credentials_found"]
-    assert state["vulnerabilities_found"]
-    assert not state["root_access_confirmed"]
-    assert context["state"] == "credentials_found"
-    assert "cpanel" in context["services"]
-    assert context["next_required_capability"] == "vulnerability_assessment"
-    assert goal == "vulnerability_assessment"
-
-
-def test_cpanel_session_on_ssh_host_is_not_treated_as_ssh_access():
-    import uuid
-
-    from core.ai.context_builder import ContextBuilder
-    from core.ai.director import DirectorLLM
-    from core.ai.fact_store import FactStore
-    from core.ai.state_resolver import StateResolver
-
-    db_path = f"/tmp/octopus_context_cpanel_with_ssh_{uuid.uuid4().hex}.db"
-    store = FactStore(db_path)
-    resolver = StateResolver(store)
-    scan_id = "scan-cpanel-with-ssh"
-    host = "67.215.12.67"
-    store.add_fact(scan_id, host, "port_open", "22/tcp (ssh) [OpenSSH]", "test")
-    store.add_fact(scan_id, host, "port_open", "2087/tcp (cpanel) [cPanel/WHM]", "test")
-    store.add_fact(scan_id, host, "credential", "whm_session:nllWuSD9KpP7C1kL", "test")
-    store.add_fact(scan_id, host, "application_access", "cpanel_whm_authenticated", "test")
-
-    context = ContextBuilder(store, resolver).build_context(scan_id, host)
-    goal = DirectorLLM()._fallback_logic(context, []).get("goal")
-
-    assert context["state"] == "credentials_found"
-    assert "ssh" in context["services"]
-    assert "cpanel_authenticated_session_present" in context["open_questions"]
-    assert "privilege_escalation_path_unknown" not in context["open_questions"]
-    assert context["next_required_capability"] == "vulnerability_assessment"
-    assert goal == "vulnerability_assessment"
-
-
 def test_post_exploit_task_templates_do_not_force_root_without_password():
     from core.ai.tool_registry import ToolRegistry
 
@@ -359,7 +298,7 @@ def test_pipeline_syncs_root_key_fact_into_reference_only_credential_store(
         host,
         [
             {"type": "credential", "value": f"ssh_key_available:root@{host}"},
-            {"type": "credential", "value": f"whm_session:{canary}"},
+            {"type": "application_access", "value": f"session:{canary}"},
         ],
     )
 

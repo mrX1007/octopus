@@ -1,0 +1,5 @@
+{
+  "schema_version": 1,
+  "go": "go1.21.13",
+  "garble": "v0.12.1"
+}

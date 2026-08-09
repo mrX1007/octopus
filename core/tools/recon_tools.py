@@ -26,6 +26,7 @@ from core.tools.base import (
     get_tool_config,
     run_tool,
 )
+from core.tools.dependencies import all_of, any_of, python
 from core.tools.registry import tool
 from core.tools.targeting import (
     as_url as _as_url,
@@ -268,6 +269,53 @@ def run_whois(target: str) -> str:
     tc = get_tool_config("whois")
     print(f"  [*] whois {target}")
     return run_tool(["whois", target], timeout=tc.get("timeout", 30))
+
+
+_PASSIVE_SEARCH_DEPENDENCIES = all_of(
+    python("requests"),
+    any_of(
+        python("ddgs"),
+        python("duckduckgo_search", distribution="duckduckgo-search"),
+    ),
+)
+
+
+@tool(
+    name="web_search",
+    aliases=["search_web"],
+    category="recon",
+    description="Run a bounded passive DuckDuckGo search.",
+    dependencies=_PASSIVE_SEARCH_DEPENDENCIES,
+    needs_target=False,
+)
+def run_web_search(query: str) -> str:
+    """Expose the existing passive search provider through canonical dispatch."""
+
+    normalized = " ".join(str(query or "").split())
+    if not normalized or len(normalized) > 500:
+        return "[!] Web search query must contain between 1 and 500 characters."
+    from search import web_search
+
+    return web_search(normalized, max_results=5)
+
+
+@tool(
+    name="cve_lookup",
+    aliases=["search_cve"],
+    category="recon",
+    description="Look up one canonical CVE identifier using passive public sources.",
+    dependencies=_PASSIVE_SEARCH_DEPENDENCIES,
+    needs_target=False,
+)
+def run_cve_lookup(cve_id: str) -> str:
+    """Expose exact CVE lookup without accepting a free-form remote target."""
+
+    normalized = str(cve_id or "").strip().upper()
+    if re.fullmatch(r"CVE-\d{4}-\d{4,7}", normalized) is None:
+        return "[!] CVE lookup requires an identifier like CVE-2024-12345."
+    from search import search_cve
+
+    return search_cve(normalized)
 
 
 @tool(
@@ -1287,6 +1335,10 @@ def run_zap_import(target: str) -> str:
     aliases=["scrapling_fetch"],
     category="recon",
     description="Fetch a URL using scrapling's StealthyFetcher.",
+    dependencies=all_of(
+        python("requests"),
+        python("bs4", distribution="beautifulsoup4"),
+    ),
 )
 def run_scrapling_fetch(url: str) -> str:
     """
@@ -1439,6 +1491,10 @@ def run_scrapling_fetch(url: str) -> str:
     aliases=["crawl"],
     category="recon",
     description="Deep crawl a website using scrapling or requests+BeautifulSoup fallback for link discovery.",
+    dependencies=all_of(
+        python("requests"),
+        python("bs4", distribution="beautifulsoup4"),
+    ),
 )
 def run_scrapling_crawl(url: str, max_pages: Optional[int] = None) -> str:
     """

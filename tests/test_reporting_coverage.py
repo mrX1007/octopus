@@ -254,7 +254,6 @@ def test_remediations_cover_all_service_specific_and_fallback_paths():
     groups = [
         {"module": "redis_issue", "service": "other"},
         {"module": "finding", "service": "ssh"},
-        {"module": "finding", "service": "cpanel"},
         {"module": "finding", "service": "web", "impact_confirmed": True},
         {"class": "generic", "service": ""},
     ]
@@ -264,7 +263,7 @@ def test_remediations_cover_all_service_specific_and_fallback_paths():
         access_findings=[{}],
     )
 
-    assert len(remediations) == 7
+    assert len(remediations) == 6
     assert remediations[-1]["finding"] == "coverage_degraded"
     assert any(item["service"] == "unknown" for item in remediations)
 

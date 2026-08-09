@@ -87,7 +87,7 @@ class RuntimeCredentialSynchronizer:
                     register("ssh", host, user, KEY_AUTH_MARKER)
             else:
                 cached_match = re.match(r"([^:\s]+):([^\s]+)\s+\(cached\)", value)
-                if cached_match and not value.startswith(("whm_session:", "cpanel_session:")):
+                if cached_match:
                     user, legacy_secret_ref = cached_match.groups()
                     if is_secret_ref(legacy_secret_ref):
                         register("ssh", host, user, legacy_secret_ref)

@@ -51,7 +51,7 @@ class _FakeFactStore:
         return []
 
 
-def test_pwnkit_exploit_success_is_not_reported_as_cpanel():
+def test_pwnkit_exploit_success_uses_local_privilege_metadata():
     adapt_state_to_result = _adapt_state_to_result()
 
     facts = [
@@ -100,42 +100,5 @@ def test_pwnkit_exploit_success_is_not_reported_as_cpanel():
     vuln_services = {v["service"] for v in result["vulnerabilities"]}
     exploit_tools = {e["tool_used"] for e in result["exploits"]}
 
-    assert "cPanel/WHM" not in vuln_services
-    assert "cpanel_sniper" not in exploit_tools
     assert "Linux local privilege escalation" in vuln_services
     assert "pwnkit" in exploit_tools
-
-
-def test_cpanel_exploit_success_keeps_cpanel_metadata():
-    adapt_state_to_result = _adapt_state_to_result()
-
-    facts = [
-        {
-            "id": 1,
-            "type": "exploit_success",
-            "value": "CVE-2026-41940 -- cPanel/WHM auth bypass",
-            "confidence": 100,
-            "source": "cpanel_sniper",
-            "session_id": "44",
-        },
-        {
-            "id": 2,
-            "type": "credential",
-            "value": "whm_session:cpsess123",
-            "confidence": 100,
-            "source": "cpanel_sniper",
-            "session_id": "44",
-        },
-    ]
-
-    result = adapt_state_to_result(
-        {"root_access_confirmed": False},
-        _FakeFactStore(facts),
-        "44",
-        "203.0.113.10",
-        "",
-    )
-
-    assert result["vulnerabilities"][0]["service"] == "cPanel/WHM"
-    assert result["vulnerabilities"][0]["port"] == "2087"
-    assert result["exploits"][0]["tool_used"] == "cpanel_sniper"

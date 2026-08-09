@@ -5,6 +5,8 @@ Kill chain orchestrator: runs all stages.
 
 import logging
 import os
+from collections.abc import Mapping
+from typing import Any, Callable, Optional, Union
 
 try:
     import paramiko
@@ -23,8 +25,6 @@ except ImportError:
         return []
 
 
-from typing import Any, Callable, Optional, Union
-
 from core.credentials import (
     CredentialRef,
     call_credential_provider,
@@ -35,6 +35,7 @@ from core.credentials import (
     resolve_credential_handle,
     sanitize_credential_text,
 )
+from core.execution.policy import normalize_host
 from core.killchain.cleanup import stealth_cleanup
 from core.killchain.exfil import data_exfil
 from core.killchain.exploitation import auto_exploit
@@ -44,6 +45,7 @@ from core.killchain.policy import master_gate_message, stage_gate_message
 from core.killchain.privesc import run_privesc
 from core.killchain.ssh_helpers import _ssh_connect
 from core.killchain.vuln_assess import vuln_assess
+from core.version import APPLICATION_VERSION
 
 logger = logging.getLogger("octopus.killchain.orchestrator")
 
@@ -111,6 +113,8 @@ def _call_ssh_provider(
     target: str,
     credential: CredentialRef,
     port: int,
+    *,
+    provider_kwargs: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """Reveal a credential only for one immediate provider invocation."""
 
@@ -121,6 +125,7 @@ def _call_ssh_provider(
             material.username,
             material.password,
             port,
+            **dict(provider_kwargs or {}),
         ),
     )
 
@@ -154,13 +159,21 @@ def _call_configured_ssh_stage(
     target: str,
     credential: CredentialRef,
     port: int,
+    *,
+    provider_kwargs: Optional[Mapping[str, Any]] = None,
 ) -> str:
     """Apply the named stage gate immediately before provider execution."""
 
     denial = stage_gate_message(stage)
     if denial:
         return denial
-    return _call_ssh_provider(provider, target, credential, port)
+    return _call_ssh_provider(
+        provider,
+        target,
+        credential,
+        port,
+        provider_kwargs=provider_kwargs,
+    )
 
 
 def run_full_killchain(
@@ -171,6 +184,7 @@ def run_full_killchain(
     port: int = 22,
     *,
     credential: Optional[_CredentialInput] = None,
+    callback_host: str = "",
 ) -> str:
     """
     Run the complete kill chain in sequence.
@@ -180,6 +194,13 @@ def run_full_killchain(
     master_denial = master_gate_message()
     if master_denial:
         return master_denial
+
+    if not callback_host:
+        return "[!] Full kill chain blocked: explicit callback_host is required."
+    try:
+        callback_host = normalize_host(callback_host)
+    except ValueError:
+        return "[!] Full kill chain blocked: callback_host must be one host without URL syntax."
 
     selected_credential, credential_error = _resolve_killchain_credential(
         target,
@@ -192,7 +213,7 @@ def run_full_killchain(
         return credential_error
 
     print(f"\n  {C_RED}{'=' * 60}{C_RESET}")
-    print(f"  {C_RED}  OCTOPUS FULL KILL CHAIN v8.1 -- {target}{C_RESET}")
+    print(f"  {C_RED}  OCTOPUS FULL KILL CHAIN v{APPLICATION_VERSION} -- {target}{C_RESET}")
     print(f"  {C_RED}{'=' * 60}{C_RESET}")
 
     full_output = ""
@@ -263,6 +284,7 @@ def run_full_killchain(
             target,
             effective_credential,
             port,
+            provider_kwargs={"callback_host": callback_host},
         )
 
         # Lateral movement
@@ -443,7 +465,14 @@ if __name__ == "__main__":
     credential_handle = input("SSH credential:// handle (or Enter to skip): ").strip()
 
     if credential_handle:
-        print(run_full_killchain(target, credential=credential_handle))
+        callback_host = input("Explicit callback host: ").strip()
+        print(
+            run_full_killchain(
+                target,
+                credential=credential_handle,
+                callback_host=callback_host,
+            )
+        )
     else:
         print(vuln_assess(target))
         print(auto_exploit(target))

@@ -151,18 +151,17 @@ def test_vulnerability_and_credential_state_questions_cover_surface_variants():
 
     vulnerability_questions = builder._infer_open_questions(
         {"recon_completed": False},
-        ["cpanel", "jmx"],
+        ["http", "jmx"],
         "vulnerabilities_found",
     )
     assert {
         "service_discovery_needed",
-        "cpanel_auth_bypass_unknown",
         "jmx_exposure_unknown",
     } <= set(vulnerability_questions)
 
     credential_questions = builder._infer_open_questions(
         {"recon_completed": False},
-        ["cpanel", "ssh"],
+        ["http", "ssh"],
         "credentials_found",
         [{"type": "credential", "value": "ssh_login_success:root"}],
     )
@@ -174,7 +173,6 @@ def test_generic_open_questions_cover_every_service_and_state_branch():
     builder = _builder()
     services = [
         "http",
-        "cpanel",
         "jmx",
         "ftp",
         "smtp",

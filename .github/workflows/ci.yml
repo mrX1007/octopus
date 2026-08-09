@@ -215,7 +215,7 @@ jobs:
             --package-fail-under core/execution=92 \
             --package-fail-under core/benchmarks=100 \
             --diff-base "${change_base}" \
-            --diff-fail-under 0 \
+            --diff-fail-under 90 \
             --xml coverage.xml
 
       - name: Report risk-heavy killchain coverage
@@ -348,10 +348,14 @@ jobs:
           -r requirements/locks/linux-x86_64/cp310/full.txt
           --format json --output dependency-audit.json
 
-      - name: Generate deterministic CycloneDX SBOM
+      - name: Generate deterministic full-repository CycloneDX SBOM
         run: >-
           python scripts/quality/sbom.py
           requirements/locks/linux-x86_64/cp310/full.txt
+          --root .
+          --go-mod core/c2/go.mod
+          --vendor-manifest quality/vendor-manifest.json
+          --include-tool-dependencies
           --output octopus-sbom.cdx.json
 
       - name: Upload dependency evidence
@@ -362,11 +366,11 @@ jobs:
           path: |
             dependency-audit.json
             octopus-sbom.cdx.json
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
 
   c2-go:
-    name: Go build, test, vet, format, and coverage evidence
+    name: Locked Go build, test, vet, format, and coverage gate
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     defaults:
@@ -404,12 +408,25 @@ jobs:
             exit 1
           fi
 
-      - name: Download and verify Go modules
+      - name: Download locked Go modules
+        env:
+          GOTOOLCHAIN: local
+        run: go mod download
+
+      - name: Verify the locked Go graph offline
+        env:
+          GOPROXY: "off"
+          GOSUMDB: "off"
+          GOTOOLCHAIN: local
         run: |
-          go mod download
           go mod verify
+          go list -mod=readonly -deps ./... > /dev/null
 
       - name: Run Go tests with statement coverage
+        env:
+          GOPROXY: "off"
+          GOSUMDB: "off"
+          GOTOOLCHAIN: local
         run: >-
           go test
           -mod=readonly
@@ -420,10 +437,31 @@ jobs:
           ./...
 
       - name: Run Go vet
+        env:
+          GOPROXY: "off"
+          GOSUMDB: "off"
+          GOTOOLCHAIN: local
         run: go vet -mod=readonly ./...
 
       - name: Build C2 implant
-        run: go build -mod=readonly -trimpath -o "${RUNNER_TEMP}/octopus-implant" .
+        env:
+          CGO_ENABLED: "0"
+          GOPROXY: "off"
+          GOSUMDB: "off"
+          GOTOOLCHAIN: local
+          GOWORK: "off"
+        run: >-
+          go build -mod=readonly -trimpath -buildvcs=false
+          -ldflags=-buildid=
+          -o "${RUNNER_TEMP}/octopus-implant" .
+
+      - name: Validate complete Go source coverage evidence
+        working-directory: ${{ github.workspace }}
+        run: >-
+          python3 scripts/quality/go_coverage_gate.py
+          --root core/c2
+          --profile "${RUNNER_TEMP}/c2-go.coverage.out"
+          --fail-under 0
 
       - name: Verify Go module metadata stayed immutable
         run: git diff --exit-code -- go.mod go.sum
@@ -434,7 +472,7 @@ jobs:
         with:
           name: coverage-go
           path: ${{ runner.temp }}/c2-go.coverage.out
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
   vendor-integrity:

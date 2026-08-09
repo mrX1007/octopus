@@ -164,8 +164,6 @@ def test_target_authorization_scope_preserves_glob_cidr_and_sentinel_rules(
         "HTTPS service",
         "TLSv1.3",
         "OpenSSL 3",
-        "cPanel admin",
-        "WHM panel",
     ],
 )
 def test_service_tls_markers_match_pipeline_rules(value: str) -> None:

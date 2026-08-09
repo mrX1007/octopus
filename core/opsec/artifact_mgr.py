@@ -78,6 +78,15 @@ class ArtifactManager:
             """, (self.target_ip, user, marker, datetime.now().isoformat()))
             conn.commit()
 
+    def record_file_line(self, file_path: str, marker: str, user: str = ""):
+        """Track one inserted line without treating the containing file as disposable."""
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO artifacts (target_ip, artifact_type, path, user, marker, timestamp)
+                VALUES (?, 'file_line', ?, ?, ?, ?)
+            """, (self.target_ip, file_path, user, marker, datetime.now().isoformat()))
+            conn.commit()
+
     def record_process(self, pid: int, description: str = ""):
         with self._get_conn() as conn:
             conn.execute("""
@@ -116,6 +125,18 @@ class ArtifactManager:
                 WHERE target_ip = ? AND status = 'active'
                   AND (path = ? OR marker = ?)
             """, (self.target_ip, identifier, identifier))
+            conn.commit()
+
+    def mark_cleaned_by_id(self, artifact_id: int):
+        """Mark exactly one tracked artifact as cleaned."""
+        with self._get_conn() as conn:
+            conn.execute(
+                """
+                UPDATE artifacts SET status = 'cleaned'
+                WHERE target_ip = ? AND artifact_id = ? AND status = 'active'
+                """,
+                (self.target_ip, int(artifact_id)),
+            )
             conn.commit()
 
     def mark_all_cleaned(self):

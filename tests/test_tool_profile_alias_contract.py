@@ -49,6 +49,7 @@ def test_coverage_buckets_partition_every_builtin_name_and_alias():
         "followup",
         "manual_gated",
         "legacy_wrappers",
+        "disabled",
         "unknown",
     )
     buckets = {name: set(report[name]) for name in bucket_names}
@@ -59,6 +60,14 @@ def test_coverage_buckets_partition_every_builtin_name_and_alias():
     assert report["registered"] == len(registered)
     assert report["covered"] == len(registered - buckets["unknown"])
     assert buckets["unknown"] == {"unregistered-tool"}
+
+    disabled_spellings = {
+        spelling
+        for tool_def in _builtin_definitions()
+        if not tool_def.enabled
+        for spelling in (tool_def.name, *tool_def.aliases)
+    }
+    assert buckets["disabled"] == disabled_spellings
 
     ssh_inventory = get_tool("ssh_inventory")
     assert ssh_inventory is not None

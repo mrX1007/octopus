@@ -200,13 +200,10 @@ def test_registry_expands_nested_web_and_plugin_capabilities():
         "sqlmap",
         "jmx2rce_scan",
         "plugin",
-        "cpanel_exploit",
     }
     registry._is_tool_available = lambda name: name in available or name in registry.task_map
 
     vuln_cmds = registry.get_commands_for_task("vulnerability_assessment", "10.0.0.5")
-    cpanel_cmds = registry.get_commands_for_task("cpanel_assessment", "10.0.0.5")
-
     assert "exploit_select 10.0.0.5" in vuln_cmds
     assert "wpscan 10.0.0.5" in vuln_cmds
     assert "sqlmap 10.0.0.5" in vuln_cmds
@@ -219,7 +216,6 @@ def test_registry_expands_nested_web_and_plugin_capabilities():
         "sqlmap",
         "jmx2rce_scan",
     ]
-    assert "plugin cpanel_auth_bypass 10.0.0.5 scan" in cpanel_cmds
 
 
 def test_registry_coverage_classifies_gated_and_legacy_tools():
@@ -593,7 +589,7 @@ def test_fact_driven_actions_map_evidence_to_next_commands():
     host = "10.0.0.5"
     facts = [
         {"type": "credential", "value": "support:fixture-password-123 (cached)"},
-        {"type": "port_open", "value": "2087/tcp (cpanel) [cPanel/WHM]"},
+        {"type": "port_open", "value": "8443/tcp (https) [Admin portal]"},
         {"type": "web_path", "value": "/_reports:301"},
     ]
     for fact in facts:
@@ -603,9 +599,8 @@ def test_fact_driven_actions_map_evidence_to_next_commands():
 
     assert f"ssh_inventory {host}" in commands
     assert any(cmd.startswith(f"exploit_select {host}") for cmd in commands)
-    assert f"plugin cpanel_auth_bypass {host}:2087 scan" in commands
-    assert f"curl_headers https://{host}:2087/_reports" in commands
-    assert f"scrapling https://{host}:2087/_reports" in commands
+    assert f"curl_headers https://{host}:8443/_reports" in commands
+    assert f"scrapling https://{host}:8443/_reports" in commands
 
 
 def test_fact_driven_actions_add_protocol_and_db_probes():

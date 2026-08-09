@@ -214,10 +214,11 @@ def test_ad_cli_boundary_combines_captured_output_without_running_a_tool(
     run = Mock(return_value=SimpleNamespace(stdout="standard output", stderr="standard error"))
     monkeypatch.setattr(module.subprocess, "run", run)
 
-    assert module._run_cli("diagnostic-probe", timeout=7) == "standard outputstandard error"
+    assert module._run_cli(["diagnostic-probe"], timeout=7) == "standard outputstandard error"
     run.assert_called_once()
     args, kwargs = run.call_args
-    assert args == ("diagnostic-probe",)
+    assert args == (["diagnostic-probe"],)
+    assert kwargs["shell"] is False
     assert kwargs["capture_output"] is True
     assert kwargs["text"] is True
     assert kwargs["timeout"] == 7
@@ -228,7 +229,7 @@ def test_ad_cli_boundary_combines_captured_output_without_running_a_tool(
     [
         (subprocess.TimeoutExpired("diagnostic-probe", 7), "Command timed out after 7s"),
         (FileNotFoundError(), "Command not found"),
-        (RuntimeError("boundary failure"), "Command error: boundary failure"),
+        (RuntimeError("boundary failure"), "Command error: RuntimeError"),
     ],
     ids=["timeout", "missing", "unexpected"],
 )
@@ -248,7 +249,25 @@ def test_ad_cli_boundary_maps_failures_to_bounded_messages(
 
     monkeypatch.setattr(module.subprocess, "run", fail)
 
-    assert expected in module._run_cli("diagnostic-probe", timeout=7)
+    assert expected in module._run_cli(["diagnostic-probe"], timeout=7)
+
+
+@pytest.mark.parametrize(
+    "module",
+    [credential, enumeration, kerberos, lateral],
+    ids=["credential", "enumeration", "kerberos", "lateral"],
+)
+def test_ad_cli_boundary_rejects_shell_command_strings(
+    monkeypatch: pytest.MonkeyPatch,
+    module: ModuleType,
+) -> None:
+    run = Mock(side_effect=AssertionError("string command must not execute"))
+    monkeypatch.setattr(module.subprocess, "run", run)
+
+    result = module._run_cli("tool user:password; injected")
+
+    assert "argv sequence is required" in result
+    run.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -263,6 +282,21 @@ def test_ad_credential_normalizers_default_every_field(module: ModuleType) -> No
         "domain": "",
         "nthash": "",
     }
+
+
+def test_ad_lateral_does_not_copy_or_serialize_provider_secrets() -> None:
+    canary = "provider-secret-canary-4d91"
+    provider_material = {
+        "user": "fixture",
+        "password": canary,
+        "domain": "EXAMPLE",
+        "nthash": "",
+    }
+
+    assert lateral._normalize_creds(provider_material) is provider_material
+    failure = lateral._provider_failure(RuntimeError(f"failed with {canary}"))
+    assert failure == "RuntimeError"
+    assert canary not in failure
 
 
 @pytest.mark.parametrize(
@@ -293,8 +327,11 @@ def test_ad_actions_fail_closed_when_required_identity_is_missing(
 
 def test_ad_credential_artifact_guards_reject_missing_inputs(tmp_path: Path) -> None:
     missing_ticket = str(tmp_path / "missing.ccache")
+    raw_hash = "0123456789abcdef0123456789abcdef"
 
-    assert "NT hash required" in credential.pass_the_hash("host.example", "tester", "")
+    assert "unsafe_provider_contract_not_mounted" in credential.pass_the_hash("host.example")
+    with pytest.raises(TypeError):
+        credential.pass_the_hash("host.example", "tester", raw_hash)
     assert "Ticket file not found" in credential.pass_the_ticket("host.example", missing_ticket)
     assert "Ticket file not found" in kerberos.crack_tickets(missing_ticket)
 

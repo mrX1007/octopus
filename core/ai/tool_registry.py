@@ -70,7 +70,6 @@ class ToolRegistry:
             "browser_analyze": "browser_surface_analysis",
             "browser_analysis": "browser_surface_analysis",
             "browser_surface": "browser_surface_analysis",
-            "shardbrowser_browse": "browser_surface_analysis",
             "directory_bruteforce": "web_content_discovery",
             "dir_bruteforce": "web_content_discovery",
             "dirb_fuzz": "web_content_discovery",
@@ -138,9 +137,6 @@ class ToolRegistry:
             "cloud_security_assessment": "cloud_security_assessment",
             "prowler": "cloud_security_assessment",
             "scoutsuite": "cloud_security_assessment",
-            "browser_osint": "browser_osint",
-            "shardbrowser": "browser_osint",
-            "shard_osint": "browser_osint",
             "ssh_enumeration": "ssh_user_enumeration",
             "enumerate_ssh_users": "ssh_user_enumeration",
             "ssh_inventory": "post_access_inventory",
@@ -216,9 +212,6 @@ class ToolRegistry:
             "plugin": "plugin_assessment",
             "run_plugin": "plugin_assessment",
             "plugin_assessment": "plugin_assessment",
-            "cpanel": "cpanel_assessment",
-            "cpanel_exploit": "cpanel_assessment",
-            "cpanel_auth_bypass": "cpanel_assessment",
             "payload_generation": "payload_generation",
             "payload_build": "payload_generation",
             "build_payload": "payload_generation",
@@ -253,6 +246,7 @@ class ToolRegistry:
         # follow-up tasks are only run when emitted as verification facts, and
         # manual/gated tasks remain callable from the CLI with explicit intent.
         self.tool_execution_profiles = {
+            "cve_lookup": "followup",
             "msf_check": "followup",
             "plugin": "auto",
             "searchsploit": "auto",
@@ -301,7 +295,6 @@ class ToolRegistry:
             },
             "firewall_detection": {"cost": 2, "time": "short", "risk": "safe", "preconditions": ["web"]},
             "external_intelligence": {"cost": 1, "time": "short", "risk": "passive", "preconditions": []},
-            "browser_osint": {"cost": 2, "time": "medium", "risk": "passive", "preconditions": []},
             "asm_discovery": {"cost": 3, "time": "medium", "risk": "passive", "preconditions": ["domain"]},
             "asm_http_probe": {"cost": 2, "time": "short", "risk": "active", "preconditions": ["domain"]},
             "asm_dns_resolution": {"cost": 1, "time": "short", "risk": "safe", "preconditions": ["domain"]},
@@ -416,7 +409,6 @@ class ToolRegistry:
             "lateral_movement": {"cost": 6, "time": "long", "risk": "active", "preconditions": ["internal_services"]},
             "exfiltrate_data": {"cost": 6, "time": "long", "risk": "post_access_read", "preconditions": ["access"]},
             "stealth_cleanup": {"cost": 5, "time": "medium", "risk": "post_access_change", "preconditions": ["access"]},
-            "cpanel_assessment": {"cost": 2, "time": "short", "risk": "safe", "preconditions": ["web"]},
             "plugin_assessment": {"cost": 1, "time": "short", "risk": "passive", "preconditions": []},
             "analyze_vulnerabilities": {"cost": 1, "time": "short", "risk": "passive", "preconditions": ["services"]},
         }
@@ -427,7 +419,7 @@ class ToolRegistry:
             "service_discovery": [
                 ("nmap -Pn -sV --top-ports 1000 {target}", "nmap"),
                 (
-                    "nmap -Pn -sV -p 2082,2083,2086,2087,2095,2096,8443,8080,3000,3030,9000,5432,465,587,993,995,110,143,21 {target}",
+                    "nmap -Pn -sV -p 8443,8080,3000,3030,9000,5432,465,587,993,995,110,143,21 {target}",
                     "nmap",
                 ),
                 ("rustscan -a {target} -- -sV", "rustscan"),
@@ -496,6 +488,7 @@ class ToolRegistry:
                 ("whois {target}", "whois"),
                 ("dig {target}", "dig"),
                 ("shodan {target}", "shodan"),
+                ("web_search {target}", "web_search"),
             ],
             "asm_discovery": [
                 ("subfinder {target}", "subfinder"),
@@ -541,9 +534,6 @@ class ToolRegistry:
             "cloud_security_assessment": [
                 ("prowler_scan {target}", "prowler_scan"),
                 ("scoutsuite_scan {target}", "scoutsuite_scan"),
-            ],
-            "browser_osint": [
-                ("shardbrowser_osint {target}", "shardbrowser_osint"),
             ],
             "ssh_user_enumeration": [
                 ("ssh_user_enum {target}", "ssh_user_enum"),
@@ -643,10 +633,6 @@ class ToolRegistry:
             "stealth_cleanup": [
                 ("killchain_cleanup {target}", "killchain_cleanup"),
             ],
-            "cpanel_assessment": [
-                ("plugin cpanel_auth_bypass {target} scan", "plugin"),
-                ("cpanel_exploit {target} scan", "cpanel_exploit"),
-            ],
             "plugin_assessment": [
                 ("plugin list", "plugin"),
             ],
@@ -685,7 +671,7 @@ class ToolRegistry:
             tool_def = get_tool(binary_name)
             if tool_def is not None:
                 # If it's a registered tool, check its internal availability (which checks 'requires')
-                available = tool_def.is_available()
+                available = bool(getattr(tool_def, "enabled", True)) and tool_def.is_available()
                 self._available_cache[binary_name] = available
                 return available
         except ImportError:
@@ -708,7 +694,9 @@ class ToolRegistry:
         return available
 
     def _tool_names_for_task(self, task: str, seen: Optional[set[str]] = None) -> list[str]:
-        """Expand a task into concrete tool names, including nested tasks."""
+        """Expand a task into enabled concrete tool names, including nested tasks."""
+        from core.tools.registry import get_tool
+
         task = self.canonical_task(task)
         seen = seen or set()
         if task in seen:
@@ -720,6 +708,9 @@ class ToolRegistry:
             if binary_name in self.task_map and binary_name != task:
                 names.extend(self._tool_names_for_task(binary_name, seen))
             else:
+                tool_def = get_tool(binary_name)
+                if tool_def is not None and not bool(getattr(tool_def, "enabled", True)):
+                    continue
                 names.append(binary_name)
         return list(dict.fromkeys(names))
 
@@ -730,6 +721,12 @@ class ToolRegistry:
         Translate a conceptual task into concrete CLI commands.
         Only returns commands whose binary is actually installed.
         """
+        if password:
+            # Command strings are control-plane data and must never transport
+            # credential material. Authenticated providers consume an opaque
+            # CredentialRef through their dedicated execution adapter instead.
+            print("     [!] Credential-bearing command expansion is disabled.")
+            return []
         task = self.canonical_task(task)
         _seen = _seen or set()
         if task in _seen:
@@ -741,13 +738,18 @@ class ToolRegistry:
 
         for cmd_template, binary_name in entries:
             if binary_name in self.task_map and binary_name != task:
-                nested_cmds = self.get_commands_for_task(binary_name, target, user=user, password=password, _seen=_seen)
+                nested_cmds = self.get_commands_for_task(
+                    binary_name,
+                    target,
+                    user=user,
+                    _seen=_seen,
+                )
                 formatted_cmds.extend(nested_cmds)
                 if not nested_cmds:
                     skipped.append(binary_name)
             else:
                 if self._is_tool_available(binary_name):
-                    formatted_cmds.append(cmd_template.format(target=target, user=user, password=password))
+                    formatted_cmds.append(cmd_template.format(target=target, user=user))
                 else:
                     skipped.append(binary_name)
 
@@ -852,6 +854,8 @@ class ToolRegistry:
         tool_def = get_tool(tool_name)
         if tool_def is None:
             return "unknown"
+        if not bool(getattr(tool_def, "enabled", True)):
+            return "disabled"
         return self.tool_execution_profiles.get(tool_def.name, "auto")
 
     def get_coverage_report(self, registered_tools: Optional[list[str]] = None) -> dict[str, Any]:
@@ -884,9 +888,10 @@ class ToolRegistry:
         legacy_wrappers = {
             name for name in registered if self.tool_execution_profile(name) in {"legacy_wrapper", "alias_wrapper"}
         }
-        explicitly_classified = followup_tools | manual_gated | legacy_wrappers
+        disabled_tools = {name for name in registered if self.tool_execution_profile(name) == "disabled"}
+        explicitly_classified = followup_tools | manual_gated | legacy_wrappers | disabled_tools
         auto_tools = {name for name in registered - explicitly_classified if canonical_names[name] in auto_providers}
-        covered = auto_tools | followup_tools | manual_gated | legacy_wrappers
+        covered = auto_tools | followup_tools | manual_gated | legacy_wrappers | disabled_tools
 
         return {
             "registered": len(registered),
@@ -895,6 +900,7 @@ class ToolRegistry:
             "followup": sorted(followup_tools),
             "manual_gated": sorted(manual_gated),
             "legacy_wrappers": sorted(legacy_wrappers),
+            "disabled": sorted(disabled_tools),
             "unknown": sorted(registered - covered),
         }
 

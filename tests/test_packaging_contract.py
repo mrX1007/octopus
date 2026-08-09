@@ -30,7 +30,12 @@ def test_package_has_build_backend_version_and_console_entrypoints() -> None:
     payload = _pyproject()
 
     assert payload["build-system"]["build-backend"] == "setuptools.build_meta"
-    assert payload["project"]["version"] == APPLICATION_VERSION
+    assert payload["project"]["dynamic"] == ["version"]
+    assert "version" not in payload["project"]
+    assert payload["tool"]["setuptools"]["dynamic"]["version"] == {
+        "attr": "core.version.__version__"
+    }
+    assert APPLICATION_VERSION
     assert payload["project"]["scripts"] == {
         "octobench": "core.benchmarks.__main__:main",
         "octobench-competitors": "core.benchmarks.competitors.__main__:main",
@@ -44,9 +49,52 @@ def test_shipped_config_is_declared_for_sdist_and_installed_beside_module() -> N
 
     assert "config" in payload["tool"]["setuptools"]["py-modules"]
     assert "octopus_c2" in payload["tool"]["setuptools"]["py-modules"]
-    assert (ROOT / "MANIFEST.in").read_text(encoding="utf-8").splitlines() == ["include config.yaml"]
+    assert "include config.yaml" in (ROOT / "MANIFEST.in").read_text(encoding="utf-8").splitlines()
     setup_source = (ROOT / "setup.py").read_text(encoding="utf-8")
     assert 'os.path.join(self.build_lib, "config.yaml")' in setup_source
+
+
+def test_runtime_build_sources_and_service_are_in_wheel_and_sdist_manifests() -> None:
+    payload = _pyproject()["tool"]["setuptools"]
+
+    assert set(payload["package-data"]["core.c2"]) == {
+        "go.mod",
+        "go.sum",
+        "implant.go",
+        "toolchain.json",
+    }
+    assert "core.opsec" not in payload["package-data"]
+    assert payload["exclude-package-data"]["core.opsec"] == ["ja3_client.go"]
+    assert payload["data-files"]["share/octopus-security/systemd"] == [
+        "data/octopus-c2.service"
+    ]
+    manifest = set((ROOT / "MANIFEST.in").read_text(encoding="utf-8").splitlines())
+    assert {
+        "include config.yaml",
+        "include core/c2/go.mod",
+        "include core/c2/go.sum",
+        "include core/c2/implant.go",
+        "include core/c2/toolchain.json",
+        "include core/opsec/ja3_client.go",
+        "include data/octopus-c2.service",
+    } <= manifest
+
+    toolchain = (ROOT / "core" / "c2" / "toolchain.json").read_text(encoding="utf-8")
+    assert '"go": "go1.21.13"' in toolchain
+    assert '"garble": "v0.12.1"' in toolchain
+
+
+def test_systemd_service_template_is_portable_and_non_root() -> None:
+    service = (ROOT / "data" / "octopus-c2.service").read_text(encoding="utf-8")
+
+    assert "DynamicUser=yes" in service
+    assert "StateDirectory=octopus" in service
+    assert "RuntimeDirectory=octopus" in service
+    assert "ExecStart=/usr/bin/env octopus-c2" in service
+    assert "OCTOPUS_DATA_DIR=/var/lib/octopus" in service
+    assert "OCTOPUS_C2_SOCKET=/run/octopus/octopus-c2.sock" in service
+    assert "User=root" not in service
+    assert "/Users/" not in service
 
 
 def test_c2_console_entrypoint_reports_missing_extra_without_traceback() -> None:

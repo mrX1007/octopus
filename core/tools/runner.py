@@ -51,11 +51,9 @@ from core.tools.exploit_tools import (
     run_web_login_bruteforce,
 )
 from core.tools.post_tools import (
-    _run_cpanel_exploit,
     _run_crack_hashes,
     _run_killchain_interactive,
     _run_killchain_stage,
-    _run_shardbrowser_osint,
     _run_shodan_host,
     _run_shodan_interactive,
     _run_shodan_range,
@@ -128,8 +126,6 @@ TOOLS_MENU = {
     "30": ("shodan vulns", lambda t: _run_shodan_vulns(t)),
     "31": ("crack hashes", lambda t: _run_crack_hashes(t)),
     "32": ("shodan range", lambda t: _run_shodan_range(t)),
-    "33": ("cpanel exploit", lambda t: _run_cpanel_exploit(t)),
-    "34": ("shardbrowser", lambda t: _run_shardbrowser_osint(t)),
     # Active Directory
     "35": ("AD enumerate", lambda t: _run_ad_tool("enum", t)),
     "36": ("AS-REP Roast", lambda t: _run_ad_tool("asrep", t)),
@@ -183,8 +179,6 @@ _MENU_TOOL_IDS = MappingProxyType(
         "30": "shodan",
         "31": "crack_hashes",
         "32": "shodan",
-        "33": "cpanel_exploit",
-        "34": "shardbrowser_osint",
         "35": "ad_enum",
         "36": "asrep_roast",
         "37": "kerberoast",
@@ -922,6 +916,23 @@ def run_tool_by_command(
         return _execution_denied("provider_disabled", context.request_id)
 
     if tool_def is not None:
+        availability = None
+        availability_probe = getattr(tool_def, "availability", None)
+        try:
+            if callable(availability_probe):
+                availability = availability_probe()
+                provider_available = bool(getattr(availability, "available", False))
+            else:
+                provider_available = bool(tool_def.is_available())
+        except (OSError, TypeError, ValueError):
+            provider_available = False
+        if not provider_available:
+            missing = tuple(getattr(availability, "missing", ()) or ())
+            reason = "provider_unavailable"
+            if missing:
+                reason = f"{reason}:{','.join(str(item) for item in missing)}"
+            return _execution_denied(reason, context.request_id)
+
         # Authorize the exact textual grammar before binding arguments.  The
         # later bound-argument decision remains in place to catch defaults and
         # normalization.  Together they prevent extra positional targets or
@@ -1782,13 +1793,7 @@ def _run_ad_tool(action: str, target: str) -> str:
             with _credential_dict_for_execution(credential) as creds:
                 return dcsync(target, creds)
         elif action == "pth":
-            from core.killchain.ad.credential import pass_the_hash
-
-            nthash = input("\033[36m  NT Hash: \033[0m").strip()
-            if not nthash:
-                return "[!] Pass-the-Hash requires an NT hash."
-            user, domain = _provider_identity(credential.username if credential else "Administrator")
-            return pass_the_hash(target, user, nthash, domain=domain)
+            return "[!] Execution denied: unsafe_provider_contract_not_mounted"
         elif action == "psexec":
             from core.killchain.ad.lateral import psexec
 

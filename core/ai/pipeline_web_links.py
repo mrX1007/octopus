@@ -203,8 +203,6 @@ class PipelineWebLinksMixin(PipelineMixinBase):
             "_reports",
             "api",
             "dashboard",
-            "cpanel",
-            "whm",
             "wp-admin",
             "phpmyadmin",
             "grafana",

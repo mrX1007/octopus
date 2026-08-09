@@ -136,36 +136,6 @@ def test_exploit_selector_maps_service_banner_to_msf_payload_plan():
     assert "RPORT=80" in output
 
 
-def test_cpanel_enrichment_takes_priority_in_short_vuln_plan():
-    from core.ai.pipeline import AIPipeline
-
-    pipeline = AIPipeline("/tmp/octopus_test_pipeline_cpanel.db")
-    pipeline.tool_registry.task_has_available_tools = lambda task: (
-        task
-        in {
-            "cpanel_assessment",
-            "web_application_mapping",
-            "web_vulnerability_testing",
-        }
-    )
-    context = {
-        "state": "recon_completed",
-        "services": ["http", "https", "cpanel"],
-        "open_questions": ["web_vulnerabilities_unknown", "cpanel_auth_bypass_unknown"],
-    }
-    base_plan = [
-        {"agent": "DiscoveryAgent", "task": "vulnerability_assessment"},
-        {"agent": "DiscoveryAgent", "task": "web_application_mapping"},
-        {"agent": "AnalysisAgent", "task": "analyze_vulnerabilities"},
-    ]
-
-    optimized = pipeline._optimize_plan(base_plan, "vulnerability_assessment", context)
-    tasks = [step["task"] for step in optimized]
-
-    assert "cpanel_assessment" in tasks
-    assert len(tasks) == 3
-
-
 def test_ollama_json_extractor_recovers_valid_json_after_unclosed_think():
     from core.ai.ollama_client import _extract_json
 

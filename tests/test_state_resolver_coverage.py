@@ -225,7 +225,6 @@ def test_exfil_completion_variants(fact_type: str, fact_value: str, expected: bo
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        ("cPanel root shell", False),
         ("ordinary application exploit", False),
         ("Dirty Pipe local privilege escalation", True),
     ],

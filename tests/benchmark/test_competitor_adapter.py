@@ -910,10 +910,21 @@ def test_parent_termination_kills_nested_product_process_group(tmp_path):
     )
     product_pid: int | None = None
     try:
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline and not product_pid_path.exists():
+        # A cold interpreter imports the complete adapter/execution boundary
+        # before it can launch the nested product.  Five seconds proved too
+        # short under a loaded full-suite run even though the same contract
+        # passed immediately in isolation.  Keep the check event-driven, but
+        # give supported CI hosts enough startup room and fail early if the
+        # wrapper itself exits.
+        deadline = time.monotonic() + 15.0
+        while (
+            time.monotonic() < deadline
+            and wrapper.poll() is None
+            and not product_pid_path.exists()
+        ):
             time.sleep(0.05)
-        assert product_pid_path.is_file()
+        assert wrapper.poll() is None, "adapter wrapper exited before starting its product"
+        assert product_pid_path.is_file(), "nested product did not start before the bounded deadline"
         product_pid = int(product_pid_path.read_text(encoding="ascii"))
 
         os.killpg(wrapper.pid, signal.SIGTERM)

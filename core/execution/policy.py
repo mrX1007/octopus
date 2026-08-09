@@ -19,6 +19,7 @@ from core.execution.models import (
     ExecutionContext,
     ExecutionDecision,
     ToolInvocation,
+    contains_sensitive_command_material,
 )
 
 logger = logging.getLogger("octopus.execution")
@@ -96,7 +97,6 @@ _TOOL_NETWORK_PARAMETER_NAMES = {
     "build_go_implant": frozenset({"c2_url"}),
     "build_ps_stager": frozenset({"c2_url"}),
     "build_python_implant": frozenset({"c2_url"}),
-    "shardbrowser_osint": frozenset({"query", "proxy"}),
     "shodan": frozenset({"query"}),
 }
 
@@ -130,7 +130,6 @@ _REMOTE_COMMAND_ARGUMENT = {
     "wmiexec": 4,
 }
 _REMOTE_SAFE_COMMANDS = {
-    "cpanel_exploit": frozenset({"hostname", "id", "uname -a", "whoami"}),
     "psexec": frozenset({"whoami", "hostname", "ipconfig", "whoami && hostname && ipconfig"}),
     "wmiexec": frozenset({"whoami", "hostname", "ipconfig", "whoami && hostname && ipconfig"}),
     "ssh_exec": frozenset(
@@ -468,7 +467,7 @@ def _special_registered_targets(
                     msf_targets.append(item)
         return tuple(msf_targets)
 
-    if name in {"deploy_c2_beacon", "killchain_persist"}:
+    if name in {"deploy_c2_beacon", "killchain_full", "killchain_persist"}:
         callback_targets = [args[0]] if args and validate_target(args[0]) else []
         callback_host = args[3].strip() if len(args) > 3 else ""
         if not callback_host or not validate_host(callback_host):
@@ -507,16 +506,6 @@ def _special_registered_targets(
         if not validate_target(url):
             raise InvalidInvocation("invalid_browser_target")
         return (url,)
-
-    if name == "cpanel_exploit":
-        cpanel_targets = (args[0],) if args and validate_target(args[0]) else ()
-        action = args[1].strip().casefold() if len(args) > 1 else "cmd"
-        if action not in {"check", "cmd", "scan"}:
-            raise InvalidInvocation("unsupported_cpanel_action")
-        command = " ".join(args[2:]).strip() if len(args) > 2 else "id"
-        if action == "cmd" and not remote_command_is_code_owned(name, command):
-            raise InvalidInvocation("unapproved_remote_command:cpanel_exploit")
-        return cpanel_targets
 
     command_index = _REMOTE_COMMAND_ARGUMENT.get(name)
     if command_index is not None:
@@ -706,9 +695,6 @@ def registered_tool_requires_approval(
     normalized = str(name or "").strip().casefold()
     arguments = tuple(str(item) for item in argv)
     requires_approval = normalized in _MANUAL_APPROVAL_TOOLS
-    if normalized == "cpanel_exploit":
-        action = arguments[2].casefold() if len(arguments) > 2 else "cmd"
-        requires_approval = action not in {"scan", "check"}
     if normalized == "plugin":
         action = arguments[3].casefold() if len(arguments) > 3 else "scan"
         requires_approval = action not in {"list", "ls", "scan", "check", "summary"}
@@ -1269,6 +1255,13 @@ class ExecutionPolicy:
             invocation = parse_invocation(command, allow_executable_path=True)
         except InvalidInvocation as exc:
             return self._decision(False, str(exc), context)
+        if contains_sensitive_command_material(command, argv=invocation.argv):
+            return self._decision(
+                False,
+                "credential_material_forbidden_in_managed_shell",
+                context,
+                invocation,
+            )
         try:
             shell_targets = _command_text_network_targets(command)
         except InvalidInvocation as exc:

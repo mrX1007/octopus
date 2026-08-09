@@ -93,7 +93,7 @@ class PipelineRuntime:
         self.assessments = self.facts.assessments
         self.missions = MissionStore(self.facts.db_path, redactor=self.facts.redactor)
         self.scheduler = scheduler or CommandScheduler()
-        self.parser = parser or OutputParser()
+        self.parser = parser or OutputParser(redactor=self.facts.redactor)
         self.reporter = TraceReporter(self.facts)
         self.knowledge_graph = knowledge_graph or KnowledgeGraph(self._knowledge_graph_path(self.facts.db_path))
         self.graph_projector = GraphProjectionService(self.facts, self.knowledge_graph)
@@ -907,6 +907,34 @@ class PipelineRuntime:
         normalized = " ".join(str(output or "").split())
         return hashlib.sha256(normalized.encode("utf-8", "ignore")).hexdigest()
 
+    def _redact_fact_payload(self, fact: Mapping[str, Any]) -> dict[str, Any]:
+        """Return a fact payload that is safe for persistence and callbacks."""
+
+        prepared = dict(fact)
+        raw_value = prepared.pop("value", "")
+        recursively_safe = self.facts.redactor.redact_data(prepared)
+        safe_fact = dict(recursively_safe) if isinstance(recursively_safe, Mapping) else {}
+        safe_value, secret_refs = self.facts.redactor.redact_fact(
+            str(safe_fact.get("type", "")),
+            raw_value,
+        )
+        safe_fact["value"] = safe_value
+        existing_refs = safe_fact.get("secret_refs", ())
+        if not isinstance(existing_refs, (list, tuple, set)):
+            existing_refs = ()
+        refs = tuple(
+            dict.fromkeys(
+                str(item)
+                for item in (*existing_refs, *secret_refs)
+                if str(item).startswith("secret://")
+            )
+        )
+        if refs:
+            safe_fact["secret_refs"] = list(refs)
+        else:
+            safe_fact.pop("secret_refs", None)
+        return safe_fact
+
     def _persist_completion_fact(
         self,
         scan_id: str,
@@ -921,14 +949,7 @@ class PipelineRuntime:
         """Persist one prepared fact tree without projecting a partial view."""
 
         prepared = dict(fact)
-        safe_fact = dict(prepared)
-        safe_value, secret_refs = self.facts.redactor.redact_fact(
-            str(safe_fact.get("type", "")),
-            safe_fact.get("value", ""),
-        )
-        safe_fact["value"] = safe_value
-        if secret_refs:
-            safe_fact["secret_refs"] = list(secret_refs)
+        safe_fact = self._redact_fact_payload(prepared)
 
         fact_id, created = self.facts.add_fact_with_status(
             scan_id,
@@ -948,14 +969,7 @@ class PipelineRuntime:
         new_facts = int(created)
         safe_derived_items: list[dict[str, Any]] = []
         for derived in derived_facts:
-            safe_derived = dict(derived)
-            derived_value, derived_refs = self.facts.redactor.redact_fact(
-                str(safe_derived.get("type", "observation")),
-                safe_derived.get("value", ""),
-            )
-            safe_derived["value"] = derived_value
-            if derived_refs:
-                safe_derived["secret_refs"] = list(derived_refs)
+            safe_derived = self._redact_fact_payload(derived)
             derived_id, derived_created = self.facts.add_fact_with_status(
                 scan_id,
                 host,
@@ -1030,7 +1044,9 @@ class PipelineRuntime:
             "fact_pairs": [(fact.get("type"), fact.get("value")) for fact in facts],
         }
         if command_result_fields:
-            command_result.update(dict(command_result_fields))
+            command_result.update(
+                dict(self.facts.redactor.redact_data(dict(command_result_fields)))
+            )
         return {
             "facts": facts,
             "new_facts": 0,
@@ -1148,10 +1164,11 @@ class PipelineRuntime:
         execution_ids = (result.execution_id,) if result.execution_id else ()
         fact_ids = [int(item) for item in initial_fact_ids]
         new_fact_count = max(0, int(initial_new_facts))
-        stored_facts = [dict(item) for item in initial_facts]
+        stored_facts = [self._redact_fact_payload(item) for item in initial_facts]
         stored_base_facts: list[dict[str, Any]] = []
+        safe_prepared_facts: list[dict[str, Any]] = []
         self.facts.renew_command_completion_claim(completion_claim)
-        for fact, (normalized, derived) in zip(prepared, prepared_trees):
+        for _fact, (normalized, derived) in zip(prepared, prepared_trees):
             self.facts.renew_command_completion_claim(completion_claim)
             stored = self._persist_completion_fact(
                 scan_id,
@@ -1164,13 +1181,15 @@ class PipelineRuntime:
             )
             new_fact_count += int(stored["new_facts"])
             fact_ids.extend(int(item) for item in stored["fact_ids"])
-            stored_facts.append(dict(fact))
+            safe_fact = dict(stored["fact"])
+            safe_prepared_facts.append(safe_fact)
+            stored_facts.append(safe_fact)
             stored_facts.extend(dict(item) for item in stored["derived_facts"])
             stored_base_facts.append(stored)
 
         if after_facts is not None:
             self.facts.renew_command_completion_claim(completion_claim)
-            after_facts(tuple(prepared))
+            after_facts(tuple(safe_prepared_facts))
             self.facts.renew_command_completion_claim(completion_claim)
 
         unique_fact_ids = tuple(dict.fromkeys(fact_ids))
@@ -1207,7 +1226,7 @@ class PipelineRuntime:
             )
 
         command_result = {
-            "command": command,
+            "command": self.facts.redactor.redact_text(command, kind="command"),
             "failed": failed_value,
             "schema_version": result.schema_version,
             "status": result.status.value,
@@ -1226,10 +1245,15 @@ class PipelineRuntime:
             "parsed_facts": parsed_fact_count,
             "new_facts": new_fact_count,
             "fact_ids": list(unique_fact_ids),
-            "fact_pairs": [(fact.get("type"), fact.get("value")) for fact in prepared],
+            "fact_pairs": [
+                (fact.get("type"), fact.get("value"))
+                for fact in safe_prepared_facts
+            ],
         }
         if command_result_fields:
-            command_result.update(dict(command_result_fields))
+            command_result.update(
+                dict(self.facts.redactor.redact_data(dict(command_result_fields)))
+            )
         return {
             "facts": stored_facts,
             "new_facts": new_fact_count,

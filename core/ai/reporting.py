@@ -330,8 +330,6 @@ def build_remediations(
             fix = "Restrict Redis to trusted networks, require authentication, and disable dangerous unauthenticated replication paths."
         elif service in {"ssh", "openssh"}:
             fix = "Restrict SSH exposure, rotate credentials, disable password login where possible, and enforce MFA/key hygiene."
-        elif "cpanel" in service or "cpanel" in module.lower():
-            fix = "Patch cPanel/WHM, rotate sessions, restrict management ports, and review account activity."
         elif group.get("impact_confirmed"):
             fix = "Treat host as compromised: rotate credentials, patch the exploited component, and perform forensic review."
         else:
@@ -566,7 +564,7 @@ def _module_from_success(value: str) -> str:
 
 def _service_for_module(module: str, facts: list[dict[str, Any]]) -> str:
     text = (module or "").lower()
-    for service in ("redis", "ssh", "apache", "nginx", "tomcat", "cpanel", "mysql", "postgresql", "mongodb"):
+    for service in ("redis", "ssh", "apache", "nginx", "tomcat", "mysql", "postgresql", "mongodb"):
         if service in text:
             return service
     for fact in facts:

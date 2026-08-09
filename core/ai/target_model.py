@@ -324,10 +324,6 @@ class TargetModel:
                 str(f.get("value", ""))
                 for f in self.facts
                 if f.get("type") == "application_access"
-                or (
-                    f.get("type") == "credential"
-                    and str(f.get("value", "")).startswith(("whm_session:", "cpanel_session:"))
-                )
             ],
         }
 

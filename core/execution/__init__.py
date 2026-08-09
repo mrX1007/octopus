@@ -16,6 +16,7 @@ from core.execution.models import (
     ExecutionDecision,
     ToolInvocation,
     bind_execution_context,
+    contains_sensitive_command_material,
     current_execution_context,
     redact_sensitive_command,
 )
@@ -46,6 +47,7 @@ __all__ = [
     "adapt_execution_result",
     "bind_execution_context",
     "cancellation_reason_code",
+    "contains_sensitive_command_material",
     "current_execution_context",
     "redact_sensitive_command",
     "validate_target",

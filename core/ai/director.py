@@ -74,7 +74,7 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
             )
             response = ask_ollama(full_prompt, json_mode=True)
 
-            # v12: check the error contract
+            # Enforce the current LLM error contract.
             if response.startswith("[!]"):
                 raise ValueError(response)
 
@@ -339,7 +339,7 @@ Based on the context, output the next goal in JSON format. Keep thought under 18
                 return self._pick(
                     "service_discovery", goal_history, "credentials exist but service recon is incomplete"
                 )
-            if any("vulnerabilit" in q or "cpanel" in q for q in open_questions):
+            if any("vulnerabilit" in q for q in open_questions):
                 return self._pick(
                     "vulnerability_assessment", goal_history, "application credentials need scoped verification"
                 )
