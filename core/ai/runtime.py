@@ -8,6 +8,7 @@ import inspect
 import json
 import logging
 import os
+import shlex
 import subprocess
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -88,6 +89,7 @@ class PipelineRuntime:
         scheduler: CommandScheduler | None = None,
         parser: OutputParser | None = None,
         knowledge_graph: KnowledgeGraph | None = None,
+        plugin_manager: Any | None = None,
     ) -> None:
         self.facts = fact_store or FactStore(db_path)
         self.assessments = self.facts.assessments
@@ -100,6 +102,7 @@ class PipelineRuntime:
         self.facts.register_assessment_projection_handler(self.graph_projector.project_fact_ids)
         self.facts.drain_assessment_projection_outbox()
         self._runner = runner
+        self._plugin_manager = plugin_manager
         self._action_catalog: ActionCatalog | None = None
         self._action_executor: ActionExecutor | None = None
         self._provider_telemetry: ProviderTelemetryStore | None = None
@@ -110,8 +113,44 @@ class PipelineRuntime:
     @property
     def action_catalog(self) -> ActionCatalog:
         if self._action_catalog is None:
-            self._action_catalog = build_action_catalog(self._dispatch_runner)
+            self._action_catalog = build_action_catalog(
+                self._dispatch_runner,
+                plugin_manager=self.plugin_manager,
+            )
         return self._action_catalog
+
+    @staticmethod
+    def _default_plugin_root() -> str:
+        from core.plugins.loader import default_modules_dir
+
+        return default_modules_dir()
+
+    @classmethod
+    def _create_default_plugin_manager(cls) -> Any:
+        plugin_root = cls._default_plugin_root()
+        if not os.path.isdir(plugin_root):
+            raise RuntimeError(f"plugin_catalog_root_missing:{plugin_root}")
+        try:
+            from core.plugins.loader import PluginManager
+
+            manager = PluginManager(plugin_root)
+        except Exception as exc:
+            raise RuntimeError(f"plugin_catalog_discovery_failed:{type(exc).__name__}") from exc
+        plugins = getattr(manager, "plugins", None)
+        if not isinstance(plugins, Mapping):
+            raise RuntimeError("plugin_catalog_invalid:plugins_not_mapping")
+        if not plugins:
+            skipped = len(getattr(manager, "skipped_plugins", {}) or {})
+            raise RuntimeError(f"plugin_catalog_empty:skipped={skipped}")
+        return manager
+
+    @property
+    def plugin_manager(self) -> Any:
+        """Return injected metadata manager or lazily build the production one."""
+
+        if self._plugin_manager is None:
+            self._plugin_manager = self._create_default_plugin_manager()
+        return self._plugin_manager
 
     def _dispatch_runner(self, command: str, context: ExecutionContext) -> Any:
         """Call old one-argument and new context-aware runners through one seam.
@@ -121,6 +160,28 @@ class PipelineRuntime:
         runner signature.  The context variable remains bound for legacy
         providers and for nested execution helpers.
         """
+
+        try:
+            command_parts = shlex.split(str(command or "").strip(), posix=True)
+        except ValueError:
+            command_parts = []
+        if command_parts:
+            from core.tools.registry import get_tool
+
+            tool_def = get_tool(command_parts[0].casefold())
+            if tool_def is not None and tool_def.name == "plugin_inventory":
+                if len(command_parts) != 1:
+                    raise ValueError("plugin_inventory_invalid_arity")
+                manager = self.plugin_manager
+                return json.dumps(
+                    {
+                        "plugins": manager.list_plugins(),
+                        "skipped": manager.list_skipped_plugins(),
+                    },
+                    indent=2,
+                    default=str,
+                    sort_keys=True,
+                )
 
         with bind_execution_context(context):
             try:
@@ -559,7 +620,76 @@ class PipelineRuntime:
         catalog = getattr(self, "_action_catalog", None)
         if catalog is None and hasattr(self, "_runner"):
             catalog = self.action_catalog
-        resolved = catalog.resolve(invocation.registered_name) if catalog is not None else None
+        plugin_action_id = ""
+        plugin_action_command = ""
+        plugin_requested_action = ""
+        request_parameters: dict[str, Any] = {}
+        invocation_argv = tuple(str(item) for item in invocation.argv)
+        invalid_plugin_request = ""
+        if invocation.registered_name == "plugin_inventory" and len(invocation_argv) != 1:
+            invalid_plugin_request = "plugin_inventory_invalid_arity"
+        plugin_namespace_owned = False
+        if invocation.registered_name == "plugin" and catalog is not None:
+            descriptors = getattr(catalog, "descriptors", None)
+            if callable(descriptors):
+                plugin_namespace_owned = any(
+                    str(descriptor.action_id).strip().casefold().startswith("plugin:") for descriptor in descriptors()
+                )
+        if invocation.registered_name == "plugin" and plugin_namespace_owned:
+            inventory_request = len(invocation_argv) >= 2 and invocation_argv[1].strip().casefold() in {
+                "list",
+                "ls",
+                "summary",
+            }
+            if inventory_request:
+                if len(invocation_argv) != 2:
+                    invalid_plugin_request = "plugin_command_invalid_arity"
+                else:
+                    plugin_action_id = "plugin_inventory"
+                    plugin_action_command = "plugin_inventory"
+            elif len(invocation_argv) not in {3, 4}:
+                invalid_plugin_request = "plugin_command_invalid_arity"
+            else:
+                plugin_requested_action = invocation_argv[3].strip().casefold() if len(invocation_argv) == 4 else "scan"
+                if plugin_requested_action not in {"check", "run", "scan"}:
+                    invalid_plugin_request = "plugin_action_undeclared"
+                else:
+                    plugin_action_id = f"plugin:{invocation_argv[1]}"
+                    request_parameters["action"] = plugin_requested_action
+                    target = invocation_argv[2]
+
+        if invalid_plugin_request:
+            request_denial = PolicyDenial.create(
+                "action_request",
+                invalid_plugin_request,
+                policy_ref,
+            )
+            return self._normalize_result(
+                {
+                    "status": ExecutionStatus.BLOCKED,
+                    "error_class": "ExecutionBlocked",
+                    "error_message": request_denial.reason_code,
+                    "metadata": {
+                        "action_catalog": True,
+                        "action_id": (
+                            "tool:plugin_inventory"
+                            if invocation.registered_name == "plugin_inventory"
+                            else "tool:plugin"
+                        ),
+                        "authorization_phase": "action_request",
+                        "decision_reason": request_denial.reason_code,
+                        "policy_denial": request_denial.to_dict(),
+                    },
+                },
+                decision=decision,
+                context=context,
+                execution_id=execution_id,
+                policy_ref=policy_ref,
+                duration=0.0,
+                executed=False,
+            )
+        resolved_name = plugin_action_id or str(invocation.registered_name)
+        resolved = catalog.resolve(resolved_name) if catalog is not None else None
         if not target and resolved is not None and resolved.adapter.descriptor.requirements.target_required:
             request_denial = PolicyDenial.create(
                 "action_request",
@@ -585,27 +715,38 @@ class PipelineRuntime:
                 executed=False,
             )
         fact_items = tuple(dict(item) for item in facts)
-        candidate_names, command_by_action = self._registered_provider_candidates(
-            invocation,
-            context,
-            target=str(target),
-            facts=fact_items,
-            provider_commands=provider_commands,
-        )
+        candidate_names: tuple[str, ...]
+        command_by_action: dict[str, str]
+        if plugin_action_id:
+            primary_action_id = str(resolved.canonical_id if resolved is not None else plugin_action_id)
+            candidate_names = (primary_action_id,)
+            command_by_action = {primary_action_id: plugin_action_command or invocation.raw_command}
+        else:
+            candidate_names, command_by_action = self._registered_provider_candidates(
+                invocation,
+                context,
+                target=str(target),
+                facts=fact_items,
+                provider_commands=provider_commands,
+            )
         request = ActionRequest(
             target=str(target),
             execution_context=context,
+            parameters=request_parameters,
             command=invocation.raw_command,
             provider_commands=command_by_action,
             facts=fact_items,
         )
         started = time.monotonic()
-        action_id = str(invocation.registered_name)
+        action_id = resolved_name
         run = self.execute_with_fallback(
             capability or action_id,
             request,
             candidate_names,
             partial_ingest=partial_result_ingest,
+            action_options=(
+                {"run_check": False} if plugin_action_id and plugin_requested_action in {"check", "scan"} else None
+            ),
         )
         report = run.final_report
         effective = run.effective_result

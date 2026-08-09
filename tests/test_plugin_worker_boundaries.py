@@ -285,9 +285,12 @@ def test_enum_metadata_and_plugin_selection_boundaries() -> None:
         "python_deps": ["package"],
         "capabilities": ["a", "z"],
         "hooks": ["on_credential_found"],
+        "supports_check": False,
     }
     assert worker._metadata(empty)["requires"] == []
     assert worker._metadata(empty)["capabilities"] == []
+    checked = _plugin_class(module, "Checked", "checked", check=lambda *_args, **_kwargs: CheckResult())
+    assert worker._metadata(checked)["supports_check"] is True
     assert worker._select_plugin(module, "complete") is complete
     with pytest.raises(LookupError, match="Plugin 'missing' not found"):
         worker._select_plugin(module, "missing")
@@ -415,6 +418,30 @@ def test_execute_rejects_non_object_context_and_arguments(
     _plugin_class(module, "Plugin", "plugin")
     with pytest.raises(ValueError, match=message):
         worker._execute(module, request_payload)
+
+
+def test_execute_rejects_check_only_action_before_plugin_run() -> None:
+    module = ModuleType("worker_execute_action_module")
+    calls: list[str] = []
+
+    def run(self, **_kwargs: Any) -> PluginResult:
+        calls.append("run")
+        return PluginResult(success=True)
+
+    _plugin_class(module, "Plugin", "plugin", run=run)
+
+    with pytest.raises(ValueError, match="requires action=run"):
+        worker._execute(
+            module,
+            {
+                "plugin": "plugin",
+                "action": "scan",
+                "context": {},
+                "kwargs": {},
+            },
+        )
+
+    assert calls == []
 
 
 def test_execute_cleanup_runs_when_setup_or_run_raises() -> None:

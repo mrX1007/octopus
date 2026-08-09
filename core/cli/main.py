@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 from collections.abc import Sequence
 from typing import Any
@@ -113,21 +112,12 @@ class OctopusCLIApplication:
         return True
 
     def _discover_extensions(self) -> None:
-        try:
-            from core.tools.registry import discover_plugins, print_registry_stats
+        """Keep plugin discovery lazy and owned by the first live pipeline.
 
-            root = self.workflows.PROJECT_ROOT
-            discovered_plugins = discover_plugins(os.path.join(root, "plugins"))
-            discovered_modules = discover_plugins(os.path.join(root, "modules"))
-            if discovered_plugins or discovered_modules:
-                self.workflows.info(
-                    f"Discovered metadata for {discovered_plugins} plugins and "
-                    f"{discovered_modules} modules; execution remains behind "
-                    "the registered plugin gateway."
-                )
-                print_registry_stats()
-        except Exception as exc:
-            self.workflows.warn(f"Error during plugin discovery: {exc}")
+        The lifecycle hook remains for compatibility, but startup must not
+        construct throwaway PluginManager snapshots before AIPipeline creates
+        its runtime-owned catalog.
+        """
 
 
 def create_app(workflows: Any | None = None) -> OctopusCLIApplication:

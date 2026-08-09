@@ -175,7 +175,7 @@ def test_default_coverage_discovery_supports_success_and_failure(monkeypatch):
 def test_plugin_summary_caches_success_and_degrades_to_empty(monkeypatch):
     class Manager:
         def __init__(self, path):
-            assert path == "modules/"
+            assert path == plugin_loader_module.default_modules_dir()
 
         def list_plugins(self):
             return [{"name": "demo", "description": "fixture"}]
@@ -194,3 +194,17 @@ def test_plugin_summary_caches_success_and_degrades_to_empty(monkeypatch):
 
     failed = ToolRegistry()
     assert failed.get_discovered_plugins_summary() == []
+
+
+def test_plugin_summary_uses_injected_runtime_manager_snapshot() -> None:
+    calls = []
+    manager = SimpleNamespace(
+        list_plugins=lambda: calls.append("list") or [{"name": "runtime-plugin", "type": "recon"}]
+    )
+    registry = ToolRegistry(plugin_manager_provider=lambda: calls.append("provider") or manager)
+
+    first = registry.get_discovered_plugins_summary()
+
+    assert first == [{"name": "runtime-plugin", "type": "recon"}]
+    assert registry.get_discovered_plugins_summary() is first
+    assert calls == ["provider", "list"]

@@ -15,6 +15,7 @@ from core.ai.fact_predicates import (
     fact_is_decision_critical,
 )
 from core.ai.parsers import ParserFamilyPipeline
+from core.ai.parsers.common import tool_identity as canonical_tool_identity
 from core.secrets import Redactor, get_redactor
 
 logger = logging.getLogger("octopus.evidence")
@@ -3245,11 +3246,6 @@ class RegexParser:
 
 
 class StructuredParser:
-    _PLUGIN_COMMAND = re.compile(
-        r"^\s*plugin\s+(?P<name>[a-z0-9_.-]+)(?:\s|$)",
-        re.IGNORECASE,
-    )
-
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[dict[str, Any]]:
         """Parse the bounded, tool-bound portion of a plugin JSON envelope.
 
@@ -3261,10 +3257,14 @@ class StructuredParser:
         """
 
         facts: list[dict[str, Any]] = []
-        command_match = self._PLUGIN_COMMAND.match(tool_name or "")
-        if command_match is None:
+        command = str(tool_name or "").strip().split()
+        if (
+            canonical_tool_identity(tool_name) != "plugin"
+            or len(command) < 2
+            or re.fullmatch(r"[a-z0-9_.-]+", command[1], re.IGNORECASE) is None
+        ):
             return facts
-        declared_plugin = command_match.group("name").casefold()
+        declared_plugin = command[1].casefold()
         raw_strip = raw_output.strip()
         json_text = raw_strip
         if "--- plugin output ---" in json_text:
@@ -3280,8 +3280,9 @@ class StructuredParser:
                 if not isinstance(data, dict):
                     return facts
                 plugin_name = str(data.get("plugin") or "").strip()
-                if plugin_name.casefold() == declared_plugin:
-                    status = "success" if data.get("success") is True else "failed"
+                success = data.get("success")
+                if plugin_name.casefold() == declared_plugin and isinstance(success, bool):
+                    status = "success" if success else "failed"
                     facts.append(
                         {
                             "type": "plugin_result",
@@ -3383,9 +3384,7 @@ class WebEndpointParser:
         return match.group(0) if match else ""
 
     def _tool_name_is_web_facing(self, tool_name: str) -> bool:
-        parts = (tool_name or "").strip().split(maxsplit=1)
-        first = parts[0].lower() if parts else ""
-        return first in {
+        return canonical_tool_identity(tool_name) in {
             "whatweb",
             "curl_headers",
             "scrapling",
@@ -3529,7 +3528,9 @@ class OutputParser:
             "browser_surface_analysis",
             "curl",
             "curl_headers",
+            "dirb",
             "ffuf",
+            "gobuster",
             "httpx",
             "nikto",
             "scrapling",
@@ -3625,47 +3626,55 @@ class OutputParser:
         self.regex_parser = RegexParser(redactor=redactor)
         self.structured_parser = StructuredParser()
         self.llm_extractor = LLMExtractor()
-        self.family_owned_tool_markers = (
-            "nmap",
-            "rustscan",
-            "msf_check",
-            "msf_run",
-            "msfconsole",
-            "metasploit",
-            "subfinder",
-            "amass",
-            "dnsx",
-            "httpx",
-            "naabu",
-            "tlsx",
-            "wayback",
-            "gau",
-            "katana",
-            "nuclei",
-            "openapi_import",
-            "graphql_check",
-            "api_auth_check",
-            "security_headers",
-            "curl_headers",
-            "cors_check",
-            "session_profile_import",
-            "session_import",
-            "authenticated_crawl",
-            "jwt_analyze",
-            "js_route_extract",
-            "burp_import",
-            "zap_import",
-            "gitleaks",
-            "trufflehog",
-            "semgrep",
-            "trivy",
-            "checkov",
-            "prowler",
-            "scoutsuite",
-            "ad_security_review",
-            "bloodhound_ingest",
-            "gpo_review",
-            "adcs_review",
+        self.family_owned_tool_identities = frozenset(
+            {
+                "nmap",
+                "rustscan",
+                "msf_check",
+                "msf_run",
+                "subfinder",
+                "amass_enum",
+                "dnsx",
+                "httpx_probe",
+                "naabu",
+                "tlsx",
+                "wayback_urls",
+                "gau_urls",
+                "katana_crawl",
+                "nuclei",
+                "nuclei_safe",
+                "openapi_import",
+                "graphql_check",
+                "api_auth_check",
+                "security_headers_check",
+                "curl_headers",
+                "cors_check",
+                "session_profile_import",
+                "session_import",
+                "authenticated_crawl",
+                "jwt_analyze",
+                "js_route_extract",
+                "burp_import",
+                "zap_import",
+                "gitleaks_scan",
+                "trufflehog_scan",
+                "semgrep_scan",
+                "trivy_scan",
+                "checkov_scan",
+                "prowler_scan",
+                "scoutsuite_scan",
+                "ad_security_review",
+                "bloodhound_ingest",
+                "gpo_review",
+                "adcs_review",
+                "dirb",
+                "gobuster",
+                "plugin_inventory",
+                "smbclient",
+                "sslscan",
+                "waf_detect",
+                "whois",
+            }
         )
         self.family_owned_raw_markers = (
             "[asm subfinder",
@@ -3962,11 +3971,29 @@ class OutputParser:
                 payload = json.loads(str(fact.get("value") or ""))
             except (TypeError, ValueError, json.JSONDecodeError):
                 return False
+            if not isinstance(payload, dict):
+                return False
+            expected_kinds = {
+                "dirb": "web_content_discovery",
+                "gobuster": "web_content_discovery",
+                "nikto": "web_vulnerability",
+                "nuclei_safe": "template_verification",
+                "plugin": "plugin_assessment",
+                "plugin_inventory": "plugin_assessment",
+                "smbclient": "smb_enumeration",
+                "sslscan": "transport_security_assessment",
+                "waf_detect": "firewall_detection",
+                "whois": "external_intelligence",
+            }
+            scope = payload.get("scope")
             return (
-                isinstance(payload, dict)
-                and str(payload.get("tool") or "").strip().casefold() == tool
-                and tool in {"nikto", "nuclei_safe"}
-                and str(payload.get("status") or "").strip().casefold() in {"completed", "timeout"}
+                str(payload.get("tool") or "").strip().casefold() == tool
+                and str(payload.get("kind") or "").strip().casefold() == expected_kinds.get(tool)
+                and str(payload.get("mode") or "").strip().casefold() == "check_only"
+                and str(payload.get("status") or "").strip().casefold() in {"completed", "partial", "timeout"}
+                and isinstance(scope, dict)
+                and str(scope.get("type") or "").strip().casefold() in {"endpoint", "host", "service", "unknown"}
+                and bool(str(scope.get("value") or "").strip())
             )
         if fact_type == "exploit_reference":
             return tool == "searchsploit"
@@ -4069,11 +4096,27 @@ class OutputParser:
 
     def _should_run_legacy_regex(self, tool_name: str, raw_output: str) -> bool:
         """Keep the broad regex fallback away from parser-family-owned tools."""
-        tool_lower = (tool_name or "").lower()
+        identity = self._tool_identity(tool_name)
+        command = str(tool_name or "").strip().casefold().split()
         raw_lower = (raw_output or "").lower()
-        if any(marker in tool_lower for marker in self.family_owned_tool_markers):
+        family_owned_identity = identity in self.family_owned_tool_identities
+        plugin_inventory_command = (
+            identity == "plugin"
+            and len(command) >= 2
+            and command[1]
+            in {
+                "list",
+                "ls",
+                "summary",
+            }
+        )
+        plugin_check_command = (
+            identity == "plugin" and len(command) >= 3 and (len(command) < 4 or command[3] in {"check", "scan"})
+        )
+        if family_owned_identity or plugin_inventory_command or plugin_check_command:
             return False
-        return not any(marker in raw_lower for marker in self.family_owned_raw_markers)
+        aggregate_family_output = identity in {"manual_recon", "tool"}
+        return not (aggregate_family_output and any(marker in raw_lower for marker in self.family_owned_raw_markers))
 
     def parse_tool_output(self, tool_name: str, raw_output: str) -> list[dict[str, Any]]:
         """
@@ -4156,9 +4199,10 @@ class OutputParser:
 
     def _parse_negative_status(self, tool_name: str, raw_output: str, session_id: str) -> list[dict[str, Any]]:
         facts = []
-        tool_lower = (tool_name or "").lower()
         raw_lower = (raw_output or "").lower()
-        first_tool = (tool_name or "tool").split()[0]
+        raw_first_tool = (tool_name or "tool").split()[0].casefold()
+        aggregate_invocation = raw_first_tool in {"manual_recon", "tool"}
+        first_tool = raw_first_tool if aggregate_invocation else self._tool_identity(tool_name) or raw_first_tool
 
         if (
             re.search(r"\[(?:TIMEOUT|timeout)\]", raw_output or "")
@@ -4167,10 +4211,14 @@ class OutputParser:
         ):
             timeout_events = _timeout_tool_events(raw_output)
             labels = _timeout_tool_labels(raw_output)
-            if not labels:
+            if not aggregate_invocation:
+                # A concrete invocation owns its timeout regardless of whether
+                # the captured runner line used a registry alias.  Emitting the
+                # canonical identity keeps the fact aligned with the decision-
+                # fact allowlist and prevents alias-only evidence loss.
                 labels = [first_tool]
-            elif first_tool not in {"manual_recon", "tool"}:
-                labels = [first_tool if label in first_tool else label for label in labels]
+            elif not labels:
+                labels = [first_tool]
             for tool_label in labels:
                 facts.append(
                     {
@@ -4182,14 +4230,14 @@ class OutputParser:
                 )
             for event in timeout_events or [{"tool": first_tool, "position": len(raw_output or "")}]:
                 event_tool_label = str(event.get("tool") or first_tool)
-                if first_tool not in {"manual_recon", "tool"} and event_tool_label not in first_tool:
+                if not aggregate_invocation:
                     event_tool_label = first_tool
                 if event_tool_label in {"nuclei", "nuclei_safe", "nikto"}:
                     target = _tool_target_before_timeout(
                         event_tool_label, tool_name, raw_output, event.get("position", 0)
                     )
                     facts.append(_check_result_fact(event_tool_label, "timeout", target, session_id))
-        if "nuclei" in tool_lower or "[nuclei safe" in raw_lower:
+        if first_tool == "nuclei_safe" or "[nuclei safe" in raw_lower:
             for match in re.finditer(r"\[NUCLEI COMPLETE - ([^\]]+)\]", raw_output or "", re.IGNORECASE):
                 target = _canonical_scope_url(match.group(1))
                 facts.append(
@@ -4201,7 +4249,7 @@ class OutputParser:
                     }
                 )
                 facts.append(_check_result_fact("nuclei_safe", "completed", target, session_id))
-        if "nikto" in tool_lower or "[nikto" in raw_lower:
+        if first_tool == "nikto" or "[nikto" in raw_lower:
             for match in re.finditer(r"\[NIKTO COMPLETE - ([^\]]+)\]", raw_output or "", re.IGNORECASE):
                 target = _canonical_scope_url(match.group(1))
                 facts.append(
@@ -4214,7 +4262,7 @@ class OutputParser:
                 )
                 facts.append(_check_result_fact("nikto", "completed", target, session_id))
         if (
-            "shodan" in tool_lower or "shodan host" in raw_lower
+            first_tool == "shodan" or "shodan host" in raw_lower
         ) and "no information available for that ip" in raw_lower:
             facts.append(
                 {
@@ -4224,7 +4272,7 @@ class OutputParser:
                     "session_id": session_id,
                 }
             )
-        if "sqlmap" in tool_lower and ("no usable links found" in raw_lower or "no get parameters" in raw_lower):
+        if first_tool == "sqlmap" and ("no usable links found" in raw_lower or "no get parameters" in raw_lower):
             facts.append(
                 {
                     "type": "service_status",
@@ -4233,7 +4281,7 @@ class OutputParser:
                     "session_id": session_id,
                 }
             )
-        if ("graphql_check" in tool_lower or "[graphql check" in raw_lower) and (
+        if (first_tool == "graphql_check" or "[graphql check" in raw_lower) and (
             "not accessible" in raw_lower or "no response" in raw_lower or "connection" in raw_lower
         ):
             facts.append(

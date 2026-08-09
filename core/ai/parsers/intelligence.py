@@ -6,7 +6,7 @@ from __future__ import annotations
 import re
 from urllib.parse import urlsplit
 
-from .common import BaseParser, Fact, fact, tool_lower
+from .common import BaseParser, Fact, fact, tool_identity
 
 _TOOL_NAMES = frozenset({"cve_lookup", "search_cve", "search_web", "web_search"})
 _CVE = re.compile(r"\bCVE-\d{4}-\d{4,7}\b", re.IGNORECASE)
@@ -19,7 +19,7 @@ class IntelligenceParser(BaseParser):
     family = "intelligence"
 
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
-        identity = tool_lower(tool_name).split(maxsplit=1)[0]
+        identity = tool_identity(tool_name)
         if identity not in _TOOL_NAMES:
             return []
 

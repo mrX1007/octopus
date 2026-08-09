@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import shutil
@@ -581,7 +582,7 @@ class PluginActionAdapter(ActionAdapter):
                 python_dependencies=tuple(descriptor.python_deps),
                 capabilities=tuple(descriptor.capabilities),
                 active=active,
-                supports_check=True,
+                supports_check=bool(getattr(descriptor, "supports_check", False)),
                 supports_cleanup=True,
             ),
         )
@@ -601,10 +602,18 @@ class PluginActionAdapter(ActionAdapter):
         if phase == "check":
             return "check"
         default = "run" if self.descriptor.requirements.active else "scan"
-        action = str(request.parameters.get("action") or default).lower()
-        if action not in {"check", "cleanup", "list", "ls", "run", "scan", "summary"}:
+        action = str(request.parameters.get("action") or default).strip().casefold()
+        if action not in {"check", "run", "scan"}:
             raise ValueError("plugin_action_undeclared")
         return action
+
+    def active_risk_class(
+        self,
+        request: ActionRequest,
+        phase: str = "execute",
+    ) -> ActiveRiskClass:
+        action = self._action(request, phase)
+        return ActiveRiskClass.ACTIVE if action == "run" else ActiveRiskClass.READ_ONLY
 
     def invocation(self, request: ActionRequest, phase: str):
         command = shlex.join(("plugin", self.plugin_name, request.target, self._action(request, phase)))
@@ -657,13 +666,38 @@ class PluginActionAdapter(ActionAdapter):
         if parameter:
             raise ValueError(f"plugin_network_parameter_undeclared:{parameter}")
         parameters = dict(request.parameters)
-        action = parameters.pop("action", self._action(request, "execute"))
+        action = self._action(request, "execute")
+        parameters.pop("action", None)
         parameters.pop("timeout", None)
+        if action in {"check", "scan"}:
+            checked = self.manager.check(
+                self.plugin_name,
+                request.target,
+                timeout=request.execution_context.max_runtime_seconds,
+            )
+            payload = {
+                "action": "check",
+                "confidence": float(getattr(checked, "confidence", 0.0) or 0.0),
+                "details": str(getattr(checked, "details", "") or ""),
+                "evidence": str(getattr(checked, "evidence", "") or ""),
+                "plugin": self.plugin_name,
+                "supports_check": self.descriptor.requirements.supports_check,
+                "version": str(getattr(checked, "version", "") or ""),
+                "vulnerable": bool(getattr(checked, "vulnerable", False)),
+            }
+            return {
+                "status": "succeeded",
+                "stdout": json.dumps(payload, separators=(",", ":"), sort_keys=True),
+                "executed": True,
+                "metadata": {"plugin_action": "check", "plugin_run_invoked": False},
+            }
+        if action != "run":
+            raise ValueError("plugin_action_not_executable")
         return self.manager.execute(
             self.plugin_name,
             context=PluginContext(target=request.target),
             target=request.target,
-            action=action,
+            action="run",
             timeout=request.execution_context.max_runtime_seconds,
             **parameters,
         )

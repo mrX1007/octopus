@@ -2,7 +2,7 @@
 
 import re
 
-from .common import BaseParser, Fact, fact, tool_lower
+from .common import BaseParser, Fact, fact, tool_identity
 
 
 class NmapParser(BaseParser):
@@ -13,11 +13,7 @@ class NmapParser(BaseParser):
     )
 
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
-        if (
-            "nmap" not in tool_lower(tool_name)
-            and "rustscan" not in tool_lower(tool_name)
-            and not self.port_line_re.search(raw_output or "")
-        ):
+        if tool_identity(tool_name) not in {"nmap", "rustscan"} and not self.port_line_re.search(raw_output or ""):
             return []
         facts: list[Fact] = []
         for match in self.port_line_re.finditer(raw_output or ""):

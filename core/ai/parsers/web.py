@@ -4,14 +4,14 @@ import json
 import re
 from urllib.parse import urlparse, urlunparse
 
-from .common import BaseParser, Fact, fact, tool_lower
+from .common import BaseParser, Fact, fact, tool_identity
 
 
 class WebParser(BaseParser):
     family = "web"
 
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
-        tool = tool_lower(tool_name)
+        tool = tool_identity(tool_name)
         raw = raw_output or ""
         lower = raw.lower()
         facts: list[Fact] = []
@@ -20,7 +20,18 @@ class WebParser(BaseParser):
                 endpoint = self._endpoint(url)
                 if endpoint:
                     facts.append(fact("web_endpoint", endpoint, 85, session_id))
-        if any(marker in tool for marker in ("curl_headers", "security_headers", "cors_check", "scrapling", "browser_surface", "katana", "js_route")):
+        if any(
+            marker in tool
+            for marker in (
+                "curl_headers",
+                "security_headers",
+                "cors_check",
+                "scrapling",
+                "browser_surface",
+                "katana",
+                "js_route",
+            )
+        ):
             title = re.search(r"(?im)^(?:Page title|Title):\s*(.+)$", raw)
             if title:
                 facts.append(fact("web_title", title.group(1).strip()[:180], 85, session_id))
@@ -33,9 +44,15 @@ class WebParser(BaseParser):
                 facts.append(fact("tool_unavailable", f"{tool.split()[0] or 'web_tool'}", 80, session_id))
 
         if "security_headers" in tool or "curl_headers" in tool:
-            headers = {m.group(1).lower(): m.group(2).strip() for m in re.finditer(r"(?im)^([A-Za-z0-9-]+):\s*(.+)$", raw)}
+            headers = {
+                m.group(1).lower(): m.group(2).strip() for m in re.finditer(r"(?im)^([A-Za-z0-9-]+):\s*(.+)$", raw)
+            }
             if headers:
-                for header, fact_type in (("server", "web_server"), ("location", "web_redirect"), ("x-powered-by", "web_powered_by")):
+                for header, fact_type in (
+                    ("server", "web_server"),
+                    ("location", "web_redirect"),
+                    ("x-powered-by", "web_powered_by"),
+                ):
                     if headers.get(header):
                         facts.append(fact(fact_type, headers[header][:160], 80, session_id))
                 for header, note in {
@@ -54,11 +71,15 @@ class WebParser(BaseParser):
                     cookie_l = cookie.lower()
                     cookie_name = cookie.split("=", 1)[0][:80]
                     if "httponly" not in cookie_l:
-                        facts.append(fact("web_security_note", f"cookie_missing_httponly:{cookie_name}", 75, session_id))
+                        facts.append(
+                            fact("web_security_note", f"cookie_missing_httponly:{cookie_name}", 75, session_id)
+                        )
                     if "secure" not in cookie_l:
                         facts.append(fact("web_security_note", f"cookie_missing_secure:{cookie_name}", 75, session_id))
                     if "samesite" not in cookie_l:
-                        facts.append(fact("web_security_note", f"cookie_missing_samesite:{cookie_name}", 75, session_id))
+                        facts.append(
+                            fact("web_security_note", f"cookie_missing_samesite:{cookie_name}", 75, session_id)
+                        )
 
         if "cors_check" in tool:
             origin = re.search(r"(?im)^origin:\s*(.+)$", raw)
@@ -76,7 +97,14 @@ class WebParser(BaseParser):
             header_count = re.search(r"(?im)^Headers:\s*(\d+)", raw)
             cookie_count = re.search(r"(?im)^Cookies:\s*(\d+)", raw)
             if header_count or cookie_count:
-                facts.append(fact("web_session", f"profile_imported:headers={header_count.group(1) if header_count else 0}:cookies={cookie_count.group(1) if cookie_count else 0}", 85, session_id))
+                facts.append(
+                    fact(
+                        "web_session",
+                        f"profile_imported:headers={header_count.group(1) if header_count else 0}:cookies={cookie_count.group(1) if cookie_count else 0}",
+                        85,
+                        session_id,
+                    )
+                )
         if "authenticated_crawl" in tool or "[authenticated crawl" in lower:
             status = re.search(r"(?im)^Status:\s*(\d{3})", raw)
             if status:
@@ -89,7 +117,9 @@ class WebParser(BaseParser):
                 facts.append(fact("web_surface", f"forms:{forms.group(1)}", 85, session_id))
             csrf = re.search(r"(?im)^CSRF token observed:\s*(yes|no)", raw)
             if csrf:
-                value = "csrf_token_observed" if csrf.group(1).lower() == "yes" else "csrf_token_not_observed_authenticated"
+                value = (
+                    "csrf_token_observed" if csrf.group(1).lower() == "yes" else "csrf_token_not_observed_authenticated"
+                )
                 facts.append(fact("web_security_note", value, 70, session_id))
             for link in re.findall(r"(?im)^LINK\s+(https?://\S+)", raw):
                 facts.append(fact("web_link", link[:300], 75, session_id))
@@ -115,7 +145,9 @@ class WebParser(BaseParser):
                     facts.append(fact("js_route", line[:300], 75, session_id))
                     if any(marker in line.lower() for marker in ("/api/", "/graphql", "/admin", "/user", "/account")):
                         facts.append(fact("api_endpoint", f"UNKNOWN:{line}:source=js", 65, session_id))
-                    if re.search(r"(?:^|[/?&])(id|user_id|account_id|tenant_id|order_id)=", line, re.IGNORECASE) or re.search(r"\{[^}]*id[^}]*\}", line, re.IGNORECASE):
+                    if re.search(
+                        r"(?:^|[/?&])(id|user_id|account_id|tenant_id|order_id)=", line, re.IGNORECASE
+                    ) or re.search(r"\{[^}]*id[^}]*\}", line, re.IGNORECASE):
                         facts.append(fact("api_security_note", f"idor_candidate:UNKNOWN:{line[:160]}", 60, session_id))
         if "burp_import" in tool or "zap_import" in tool or "[burp import" in lower or "[zap import" in lower:
             for match in re.finditer(r"^(?:URL)\s+(https?://\S+)", raw, re.MULTILINE):
@@ -141,13 +173,16 @@ class WebParser(BaseParser):
             netloc = f"{netloc}:{port}"
         path = parsed.path or "/"
         canonical = urlunparse((parsed.scheme.lower(), netloc, path, "", parsed.query, ""))
-        return json.dumps({
-            "url": canonical,
-            "scheme": parsed.scheme.lower(),
-            "host": parsed.hostname.lower(),
-            "port": str(port),
-            "path": path,
-            "service": "",
-            "status": "",
-            "title": "",
-        }, sort_keys=True)
+        return json.dumps(
+            {
+                "url": canonical,
+                "scheme": parsed.scheme.lower(),
+                "host": parsed.hostname.lower(),
+                "port": str(port),
+                "path": path,
+                "service": "",
+                "status": "",
+                "title": "",
+            },
+            sort_keys=True,
+        )

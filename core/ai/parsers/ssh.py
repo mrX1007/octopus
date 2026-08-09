@@ -2,14 +2,14 @@
 
 import re
 
-from .common import BaseParser, Fact, fact, raw_lower, tool_lower
+from .common import BaseParser, Fact, fact, raw_lower, tool_identity
 
 
 class SSHParser(BaseParser):
     family = "ssh"
 
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
-        identity = tool_lower(tool_name).split(maxsplit=1)[0]
+        identity = tool_identity(tool_name)
         if identity not in {"ssh_inventory", "ssh_session"}:
             return []
         facts: list[Fact] = []

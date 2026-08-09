@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import shlex
 from dataclasses import replace
 
@@ -20,8 +21,8 @@ from core.tools.runner import run_tool_by_command
 
 pytestmark = [pytest.mark.contract, pytest.mark.security]
 
-EXPECTED_BUILTIN_TOOL_COUNT = 109
-EXPECTED_ENABLED_TOOL_COUNT = 95
+EXPECTED_BUILTIN_TOOL_COUNT = 110
+EXPECTED_ENABLED_TOOL_COUNT = 96
 EXPECTED_DISABLED_TOOL_COUNT = 14
 TARGET = "192.0.2.10"
 CALLBACK_TARGET = "192.0.2.11"
@@ -36,6 +37,7 @@ PROFILE_ONLY_BUILTINS = {
     "killchain_vuln_assess",
     "msf_check",
     "msf_run",
+    "plugin",
     "ssh_exec",
     "ssh_session",
     "stealth_brute",
@@ -61,7 +63,7 @@ def _approved_context() -> ExecutionContext:
 
 
 def _provider_command(tool_def, lookup_name: str) -> str:
-    bound_arguments = {
+    explicit_arguments = {
         "bruteforce": f"ssh {TARGET}",
         "build_go_implant": f"http://{TARGET}",
         "build_ps_stager": f"http://{TARGET}",
@@ -72,8 +74,12 @@ def _provider_command(tool_def, lookup_name: str) -> str:
         "plugin": f"fixture {TARGET}",
         "port_forward": f"{TARGET} 8080 {TARGET} 80",
         "stealth_brute": f"ssh {TARGET}",
-    }.get(tool_def.name, TARGET)
-    return f"{lookup_name} {bound_arguments}"
+    }
+    bound_arguments = explicit_arguments.get(
+        tool_def.name,
+        TARGET if tool_def.needs_target else "",
+    )
+    return " ".join(item for item in (lookup_name, bound_arguments) if item)
 
 
 def test_builtin_registry_ai_classification_and_action_catalog_are_complete():
@@ -98,7 +104,7 @@ def test_builtin_registry_ai_classification_and_action_catalog_are_complete():
     catalog = build_action_catalog(lambda _command, _context: "unused", tool_defs=definitions)
     assert len(catalog) == EXPECTED_BUILTIN_TOOL_COUNT
     descriptor_kinds = [descriptor.kind.value for descriptor in catalog.descriptors()]
-    assert descriptor_kinds.count("registered_tool") == 101
+    assert descriptor_kinds.count("registered_tool") == 102
     assert descriptor_kinds.count("killchain") == 8
     assert set(descriptor_kinds) == {"registered_tool", "killchain"}
     for tool_def in definitions:
@@ -377,7 +383,6 @@ def test_every_builtin_name_and_alias_dispatches_through_one_runtime(tmp_path):
     expected_calls = 0
     for tool_def in definitions:
         for lookup_name in (tool_def.name, *tool_def.aliases):
-            expected_calls += 1
             command = _provider_command(tool_def, lookup_name)
             report = runtime.execute_action(
                 lookup_name,
@@ -397,7 +402,11 @@ def test_every_builtin_name_and_alias_dispatches_through_one_runtime(tmp_path):
             assert report.execution_result.request_id == context.request_id
             assert report.execution_result.tool_name == tool_def.name
             assert report.lifecycle.outcome is OutcomeStatus.SUCCEEDED
-            assert calls[-1] == (command, context)
+            if tool_def.name == "plugin_inventory":
+                assert json.loads(report.execution_result.stdout)["plugins"]
+            else:
+                expected_calls += 1
+                assert calls[-1] == (command, context)
 
     assert len(calls) == expected_calls
 
@@ -423,7 +432,6 @@ def test_every_builtin_name_and_alias_crosses_scheduler_and_action_catalog(tmp_p
     expected_calls = 0
     for tool_def in definitions:
         for lookup_name in (tool_def.name, *tool_def.aliases):
-            expected_calls += 1
             command = _provider_command(tool_def, lookup_name)
             decision = runtime.decide(command, (), set(), context)
             result = runtime.execute(
@@ -438,7 +446,11 @@ def test_every_builtin_name_and_alias_crosses_scheduler_and_action_catalog(tmp_p
             assert result.status is ExecutionStatus.SUCCEEDED
             assert result.metadata["action_catalog"] is True
             assert result.metadata["action_id"] == (runtime.action_catalog.require(tool_def.name).canonical_id)
-            assert calls[-1] == (command, context)
+            if tool_def.name == "plugin_inventory":
+                assert json.loads(result.stdout)["plugins"]
+            else:
+                expected_calls += 1
+                assert calls[-1] == (command, context)
 
     assert len(calls) == expected_calls
 
@@ -483,6 +495,10 @@ def test_automatic_context_never_dispatches_policy_active_builtin_or_alias(tmp_p
                 assert len(calls) == call_count
                 assert [denial.reason_code for denial in report.policy_denials] == ["active_tool_requires_approval"]
                 assert report.lifecycle.outcome is OutcomeStatus.BLOCKED
+            elif tool_def.name == "plugin_inventory":
+                assert len(calls) == call_count
+                assert report.policy_denials == []
+                assert report.lifecycle.outcome is OutcomeStatus.SUCCEEDED
             else:
                 assert calls[-1] == command
                 assert report.policy_denials == []

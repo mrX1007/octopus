@@ -25,7 +25,7 @@ class ActionCatalog:
     def _key(value: str) -> str:
         return str(value or "").strip().casefold()
 
-    def register(self, adapter: ActionAdapter) -> None:
+    def _register(self, adapter: ActionAdapter, *, claim_display_name: bool) -> None:
         descriptor = adapter.descriptor
         action_id = self._key(descriptor.action_id)
         if not action_id:
@@ -35,9 +35,10 @@ class ActionCatalog:
             raise ValueError(f"Duplicate action_id: {descriptor.action_id}")
         names = {
             action_id,
-            self._key(descriptor.name),
             *(self._key(alias) for alias in descriptor.aliases),
         }
+        if claim_display_name:
+            names.add(self._key(descriptor.name))
         for name in names:
             if not name:
                 continue
@@ -48,6 +49,16 @@ class ActionCatalog:
         for name in names:
             if name:
                 self._names[name] = action_id
+
+    def register(self, adapter: ActionAdapter) -> None:
+        self._register(adapter, claim_display_name=True)
+
+    @staticmethod
+    def _is_disabled_registry_adapter(adapter: ActionAdapter) -> bool:
+        """Read the wrapped registry metadata without probing the provider."""
+
+        tool_def = getattr(adapter, "tool_def", None)
+        return tool_def is not None and getattr(tool_def, "enabled", True) is False
 
     def resolve(self, name: str) -> ResolvedAction | None:
         requested = self._key(name)
@@ -97,7 +108,15 @@ class ActionCatalog:
         staged._adapters = dict(self._adapters)
         staged._names = dict(self._names)
         for adapter in adapters:
-            staged.register(adapter)
+            display_name = staged._key(adapter.descriptor.name)
+            action_id = staged._key(adapter.descriptor.action_id)
+            display_owner = staged._names.get(display_name)
+            preserve_disabled_owner = (
+                display_owner is not None
+                and display_owner != action_id
+                and staged._is_disabled_registry_adapter(staged._adapters[display_owner])
+            )
+            staged._register(adapter, claim_display_name=not preserve_disabled_owner)
         self._adapters = staged._adapters
         self._names = staged._names
         return adapters

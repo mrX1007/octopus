@@ -67,6 +67,7 @@ def build_action_catalog(
     dispatch: Callable[[str, Any], Any],
     *,
     tool_defs: Iterable[Any] | None = None,
+    plugin_manager: Any | None = None,
 ) -> ActionCatalog:
     """Build adapters for the current decorator registry without replacing it."""
 
@@ -75,9 +76,18 @@ def build_action_catalog(
 
         tool_defs = list_tools()
     definitions = tuple(tool_defs)
+    catalog_definitions = tuple(
+        tool_def
+        for tool_def in definitions
+        if not (plugin_manager is not None and str(getattr(tool_def, "name", "")).strip().casefold() == "plugin")
+    )
     catalog = ActionCatalog()
-    register_tool_adapters(catalog, definitions, dispatch)
-    expected = {str(tool_def.name).strip().casefold() for tool_def in definitions}
+    # With a runtime-owned manager, ``plugin`` is command grammar rather than
+    # an executable provider.  Publishing its legacy registry adapter would
+    # let direct action callers construct a second PluginManager and bypass the
+    # concrete ``plugin:<name>`` adapters mounted below.
+    register_tool_adapters(catalog, catalog_definitions, dispatch)
+    expected = {str(tool_def.name).strip().casefold() for tool_def in catalog_definitions}
     covered = {descriptor.name.strip().casefold() for descriptor in catalog.descriptors()}
     if expected != covered:
         missing = ", ".join(sorted(expected - covered)) or "none"
@@ -85,6 +95,8 @@ def build_action_catalog(
         raise RuntimeError(
             f"Action catalog does not match the decorator registry: missing={missing}; unexpected={unexpected}"
         )
+    if plugin_manager is not None:
+        catalog.register_plugins(plugin_manager)
     return catalog
 
 

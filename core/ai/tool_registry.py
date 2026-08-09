@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 
 import shutil
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 
 class ToolRegistry:
-    def __init__(self):
+    def __init__(self, plugin_manager_provider: Optional[Callable[[], Any]] = None):
+        self._plugin_manager_provider = plugin_manager_provider
         # LLMs and plugins often describe the same work with slightly different
         # names. Keep that vocabulary normalized at the registry boundary so the
         # rest of the pipeline can track completed work reliably.
@@ -249,6 +250,7 @@ class ToolRegistry:
             "cve_lookup": "followup",
             "msf_check": "followup",
             "plugin": "auto",
+            "plugin_inventory": "auto",
             "searchsploit": "auto",
             "msf_run": "manual_gated",
             "deploy_c2_beacon": "manual_gated",
@@ -634,7 +636,7 @@ class ToolRegistry:
                 ("killchain_cleanup {target}", "killchain_cleanup"),
             ],
             "plugin_assessment": [
-                ("plugin list", "plugin"),
+                ("plugin_inventory", "plugin_inventory"),
             ],
             "analyze_vulnerabilities": [
                 # AnalysisAgent doesn't run CLI tools — this is handled by the agent itself
@@ -642,8 +644,8 @@ class ToolRegistry:
         }
 
         # Cache of available tools (checked once)
-        self._available_cache = {}
-        self._plugin_summary_cache = None
+        self._available_cache: dict[str, bool] = {}
+        self._plugin_summary_cache: Optional[list[dict[str, Any]]] = None
 
     def canonical_task(self, task: str) -> str:
         """Return the canonical registry task for a planner/agent task name."""
@@ -882,6 +884,7 @@ class ToolRegistry:
         auto_providers = set()
         for task in self.task_map:
             auto_providers.update(self._tool_names_for_task(task))
+        auto_providers.update(name for name, profile in self.tool_execution_profiles.items() if profile == "auto")
 
         followup_tools = {name for name in registered if self.tool_execution_profile(name) == "followup"}
         manual_gated = {name for name in registered if self.tool_execution_profile(name) == "manual_gated"}
@@ -904,15 +907,18 @@ class ToolRegistry:
             "unknown": sorted(registered - covered),
         }
 
-    def get_discovered_plugins_summary(self) -> list[dict[str, str]]:
+    def get_discovered_plugins_summary(self) -> list[dict[str, Any]]:
         """Return metadata for class-based plugins discovered under modules/."""
         if self._plugin_summary_cache is not None:
             return self._plugin_summary_cache
 
         try:
-            from core.plugins.loader import PluginManager
+            if self._plugin_manager_provider is not None:
+                manager = self._plugin_manager_provider()
+            else:
+                from core.plugins.loader import PluginManager, default_modules_dir
 
-            manager = PluginManager("modules/")
+                manager = PluginManager(default_modules_dir())
             self._plugin_summary_cache = manager.list_plugins()
         except Exception:
             self._plugin_summary_cache = []

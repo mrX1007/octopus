@@ -202,40 +202,23 @@ def test_start_supervisor_handles_clean_state_running_instance_and_missing_modul
     missing_workflows.warn.assert_called_once_with("Supervisor not available (core/supervisor.py missing)")
 
 
-def test_extension_discovery_reports_loaded_counts_and_failures(
+def test_extension_discovery_is_deferred_to_the_runtime_manager(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workflows = _workflow_double()
     app = cli_main.OctopusCLIApplication(workflows)
     registry = ModuleType("core.tools.registry")
-    paths: list[str] = []
-
-    def discover(path: str) -> int:
-        paths.append(path)
-        return 0 if path.endswith("plugins") else 2
-
-    registry.discover_plugins = discover  # type: ignore[attr-defined]
+    registry.discover_plugins = MagicMock(  # type: ignore[attr-defined]
+        side_effect=AssertionError("CLI startup must not construct plugin managers")
+    )
     registry.print_registry_stats = MagicMock()  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "core.tools.registry", registry)
 
     app._discover_extensions()
-    assert paths == ["/fixture/project/plugins", "/fixture/project/modules"]
-    workflows.info.assert_called_once_with(
-        "Discovered metadata for 0 plugins and 2 modules; execution remains behind the registered plugin gateway."
-    )
-    registry.print_registry_stats.assert_called_once_with()  # type: ignore[attr-defined]
-
-    paths.clear()
-    workflows.info.reset_mock()
-    registry.print_registry_stats.reset_mock()  # type: ignore[attr-defined]
-    registry.discover_plugins = lambda _path: 0  # type: ignore[attr-defined]
-    app._discover_extensions()
-    workflows.info.assert_not_called()
+    registry.discover_plugins.assert_not_called()  # type: ignore[attr-defined]
     registry.print_registry_stats.assert_not_called()  # type: ignore[attr-defined]
-
-    registry.discover_plugins = MagicMock(side_effect=RuntimeError("bad plugin"))  # type: ignore[attr-defined]
-    app._discover_extensions()
-    workflows.warn.assert_called_once_with("Error during plugin discovery: bad plugin")
+    workflows.info.assert_not_called()
+    workflows.warn.assert_not_called()
 
 
 def test_create_app_uses_explicit_or_default_workflows() -> None:

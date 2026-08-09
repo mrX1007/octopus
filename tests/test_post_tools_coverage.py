@@ -1132,6 +1132,8 @@ def test_builders_waf_search_and_plugin_wrappers(monkeypatch, tmp_path):
 
     with _blocked_import("core.plugins.base"):
         assert "Plugin system unavailable" in post_tools.ai_run_plugin("list")
+    with _blocked_import("core.plugins.loader"):
+        assert "Plugin system unavailable" in post_tools.ai_plugin_inventory()
 
     class Context:
         def __init__(self, target):
@@ -1140,6 +1142,7 @@ def test_builders_waf_search_and_plugin_wrappers(monkeypatch, tmp_path):
     class Manager:
         plugins: ClassVar[dict] = {"demo": object()}
         output = "details"
+        calls: ClassVar[list[str]] = []
 
         def __init__(self, path):
             pass
@@ -1147,10 +1150,24 @@ def test_builders_waf_search_and_plugin_wrappers(monkeypatch, tmp_path):
         def list_plugins(self):
             return ["demo"]
 
+        def list_skipped_plugins(self):
+            return []
+
         def get_plugin(self, name):
             return self.plugins.get(name)
 
+        def check(self, name, target, timeout=60):
+            self.calls.append(f"check:{name}:{target}:{timeout}")
+            return SimpleNamespace(
+                vulnerable=False,
+                confidence=0.75,
+                details="checked",
+                evidence="fixture",
+                version="1.0",
+            )
+
         def execute(self, *args, **kwargs):
+            self.calls.append(f"run:{args[0]}")
             return SimpleNamespace(
                 success=True,
                 data={"ok": True},
@@ -1166,10 +1183,17 @@ def test_builders_waf_search_and_plugin_wrappers(monkeypatch, tmp_path):
 
     monkeypatch.setattr(plugin_base, "PluginContext", Context)
     monkeypatch.setattr(plugin_loader, "PluginManager", Manager)
+    inventory = post_tools.ai_plugin_inventory()
+    assert '"plugins": [' in inventory and "demo" in inventory
     assert "demo" in post_tools.ai_run_plugin("list")
     assert "demo" in post_tools.ai_run_plugin("summary")
     assert "not found" in post_tools.ai_run_plugin("missing")
     output = post_tools.ai_run_plugin("demo", "host", "scan")
+    assert '"action": "check"' in output
+    assert Manager.calls == ["check:demo:host:60"]
+    assert "not declared" in post_tools.ai_run_plugin("demo", "host", "summary")
+    output = post_tools.ai_run_plugin("demo", "host", "run")
     assert "plugin output" in output
+    assert Manager.calls[-1] == "run:demo"
     Manager.output = ""
-    assert "plugin output" not in post_tools.ai_run_plugin("demo")
+    assert "plugin output" not in post_tools.ai_run_plugin("demo", action="run")

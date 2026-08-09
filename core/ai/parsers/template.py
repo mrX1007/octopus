@@ -3,14 +3,14 @@
 import json
 import re
 
-from .common import BaseParser, Fact, fact, raw_lower, tool_lower
+from .common import BaseParser, Fact, fact, raw_lower, tool_identity
 
 
 class TemplateParser(BaseParser):
     family = "template"
 
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
-        if "nuclei" not in tool_lower(tool_name) and "[nuclei" not in raw_lower(raw_output):
+        if tool_identity(tool_name) not in {"nuclei", "nuclei_safe"} and "[nuclei" not in raw_lower(raw_output):
             return []
         facts: list[Fact] = []
         for line in (raw_output or "").splitlines():

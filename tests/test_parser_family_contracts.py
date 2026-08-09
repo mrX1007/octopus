@@ -318,3 +318,140 @@ def test_output_parser_keeps_legacy_regex_for_legacy_killchain_outputs():
     pairs = {(fact["type"], fact["value"]) for fact in facts}
 
     assert ("stage_status", "vulnerability_assessment:findings:2") in pairs
+
+
+@pytest.mark.parametrize(
+    ("canonical", "alias", "output"),
+    [
+        (
+            "msf_check 192.0.2.10 exploit/test",
+            "msf 192.0.2.10 exploit/test",
+            "The target does not appear to be vulnerable",
+        ),
+        ("subfinder example.com", "subdomain_discovery example.com", "app.example.com"),
+        ("dnsx example.com", "dns_resolve example.com", "app.example.com CNAME edge.example.net"),
+        ("naabu example.com", "port_discovery example.com", "app.example.com:443"),
+        ("tlsx example.com", "tls_probe example.com", "SAN app.example.com api.example.com"),
+        (
+            "openapi_import schema.json",
+            "swagger_import schema.json",
+            "GET /users/{id} auth=unknown_or_none",
+        ),
+        (
+            "cors_check https://example.com",
+            "cors https://example.com",
+            "Origin: https://origin.test\nAccess-Control-Allow-Origin: *",
+        ),
+        (
+            "curl_headers https://example.com",
+            "curl https://example.com",
+            "Server: nginx",
+        ),
+    ],
+)
+def test_family_owned_aliases_emit_the_same_evidence_as_canonical_tools(
+    canonical: str,
+    alias: str,
+    output: str,
+) -> None:
+    from core.ai.evidence import OutputParser
+
+    parser = OutputParser()
+
+    canonical_facts = parser.parse_tool_output(canonical, output)
+    alias_facts = parser.parse_tool_output(alias, output)
+
+    assert alias_facts == canonical_facts
+    assert alias_facts
+    assert parser._should_run_legacy_regex(alias, output) is False
+
+
+@pytest.mark.parametrize(
+    ("canonical", "alias"),
+    [
+        ("msf_check 192.0.2.10 exploit/test", "msf 192.0.2.10 exploit/test"),
+        ("subfinder example.com", "subdomain_discovery example.com"),
+        ("dnsx example.com", "dns_resolve example.com"),
+        ("naabu example.com", "port_discovery example.com"),
+        ("tlsx example.com", "tls_probe example.com"),
+        ("openapi_import schema.json", "swagger_import schema.json"),
+        ("cors_check https://example.com", "cors https://example.com"),
+        ("curl_headers https://example.com", "curl https://example.com"),
+        ("nuclei_safe https://example.com", "nuclei https://example.com"),
+        ("plugin_inventory", "plugin_list"),
+        ("plugin_inventory", "list_plugins"),
+        ("plugin demo 192.0.2.10 check", "run_plugin demo 192.0.2.10 check"),
+        ("plugin demo 192.0.2.10 check", "octopus_plugin demo 192.0.2.10 check"),
+    ],
+)
+def test_family_owned_alias_timeouts_use_canonical_identity(canonical: str, alias: str) -> None:
+    from core.ai.evidence import OutputParser
+
+    parser = OutputParser()
+    canonical_identity = canonical.split()[0]
+    alias_identity = alias.split()[0]
+
+    canonical_facts = parser.parse_tool_output(
+        canonical,
+        f"[TIMEOUT] {canonical_identity} killed after 30s",
+    )
+    alias_facts = parser.parse_tool_output(
+        alias,
+        f"[TIMEOUT] {alias_identity} killed after 30s",
+    )
+    expected = ("service_status", f"tool_timeout:{canonical_identity}")
+
+    assert expected in {(item["type"], item["value"]) for item in canonical_facts}
+    assert alias_facts == canonical_facts
+    if canonical_identity == "nuclei_safe":
+        assert any(item["type"] == "check_result" for item in alias_facts)
+
+
+def test_graphql_negative_status_alias_uses_canonical_identity() -> None:
+    from core.ai.evidence import OutputParser
+
+    parser = OutputParser()
+    output = "GraphQL endpoint connection failed"
+
+    canonical = parser.parse_tool_output("graphql_check https://example.com/graphql", output)
+    aliased = parser.parse_tool_output("graphql_introspection https://example.com/graphql", output)
+
+    assert aliased == canonical
+    assert ("service_status", "graphql_introspection_not_confirmed") in {
+        (item["type"], item["value"]) for item in aliased
+    }
+
+
+@pytest.mark.parametrize("alias", ["run_plugin", "octopus_plugin"])
+def test_plugin_unavailable_alias_uses_canonical_identity(alias: str) -> None:
+    from core.ai.parsers.plugin import PluginParser
+
+    facts = PluginParser().parse(
+        f"{alias} demo_check",
+        "tool_unavailable: not installed",
+        "session",
+    )
+
+    assert ("tool_unavailable", "plugin") in {(item["type"], item["value"]) for item in facts}
+
+
+@pytest.mark.parametrize("alias", ["run_plugin", "octopus_plugin"])
+def test_plugin_gateway_aliases_keep_bounded_run_audit_facts(alias: str) -> None:
+    import json
+
+    from core.ai.evidence import OutputParser
+
+    output = json.dumps(
+        {
+            "artifacts": [],
+            "plugin": "demo",
+            "success": False,
+        }
+    )
+    parser = OutputParser()
+
+    canonical = parser.parse_tool_output("plugin demo 192.0.2.10 run", output)
+    aliased = parser.parse_tool_output(f"{alias} demo 192.0.2.10 run", output)
+
+    assert aliased == canonical
+    assert any(item["type"] == "plugin_result" for item in aliased)

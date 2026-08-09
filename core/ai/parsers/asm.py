@@ -2,15 +2,17 @@
 
 import re
 
-from .common import BaseParser, Fact, fact, tool_lower
+from .common import BaseParser, Fact, fact, tool_identity
 
 
 class ASMParser(BaseParser):
     family = "asm"
 
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
-        tool = tool_lower(tool_name)
-        if not any(marker in tool for marker in ("subfinder", "amass", "dnsx", "httpx", "naabu", "tlsx", "wayback", "gau")):
+        tool = tool_identity(tool_name)
+        if not any(
+            marker in tool for marker in ("subfinder", "amass", "dnsx", "httpx", "naabu", "tlsx", "wayback", "gau")
+        ):
             return []
         facts: list[Fact] = []
         for line in (raw_output or "").splitlines():
@@ -36,7 +38,14 @@ class ASMParser(BaseParser):
                     facts.append(fact("technology", tech[:160], 75, session_id))
             service_match = re.search(r"((?:\d{1,3}\.){3}\d{1,3}|(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}):(\d{1,5})", line)
             if service_match:
-                facts.append(fact("asset_service", f"{service_match.group(1).lower()}:{service_match.group(2)}/tcp", 80, session_id))
+                facts.append(
+                    fact(
+                        "asset_service",
+                        f"{service_match.group(1).lower()}:{service_match.group(2)}/tcp",
+                        80,
+                        session_id,
+                    )
+                )
             if any(marker in tool for marker in ("tlsx", "tls_probe")):
                 for san in re.findall(r"\b(?:[a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}\b", line):
                     facts.append(fact("asset_dns_record", f"tls_san:{san.lower().strip('.')}", 75, session_id))

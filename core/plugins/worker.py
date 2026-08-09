@@ -156,6 +156,7 @@ def _metadata(plugin_class: type[OctopusPlugin]) -> dict[str, Any]:
         "python_deps": list(getattr(plugin_class, "python_deps", []) or []),
         "capabilities": sorted(str(item) for item in (getattr(plugin_class, "capabilities", set()) or set())),
         "hooks": [name for name in _HOOKS if name in plugin_class.__dict__],
+        "supports_check": plugin_class.check is not OctopusPlugin.check,
     }
 
 
@@ -199,6 +200,10 @@ def _execute(module: ModuleType, request: dict[str, Any]) -> dict[str, Any]:
     kwargs = request.get("kwargs", {})
     if not isinstance(kwargs, dict):
         raise ValueError("plugin arguments must be a JSON object")
+    kwargs = dict(kwargs)
+    action = str(request.get("action") or kwargs.pop("action", "run")).strip().casefold()
+    if action != "run":
+        raise ValueError("plugin execute operation requires action=run")
     context = _context_from_payload(context_payload, event_bus)
 
     setup_complete = False

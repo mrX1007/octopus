@@ -88,7 +88,7 @@ class AIPipeline(
         self.graph_projector = self.runtime.graph_projector
         self.command_scheduler = self.runtime.scheduler
         self.state_resolver = StateResolver(self.fact_store)
-        self.tool_registry = ToolRegistry()
+        self.tool_registry = ToolRegistry(plugin_manager_provider=lambda: self.runtime.plugin_manager)
         self.capability_resolver = CapabilityResolver(
             self.tool_registry,
             self.command_scheduler.execution_policy,

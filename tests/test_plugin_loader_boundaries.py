@@ -282,6 +282,7 @@ def test_discover_file_rejects_invalid_response_metadata(monkeypatch: pytest.Mon
             _WorkerReply(ok=True, payload={"plugins": {}}),
             _WorkerReply(ok=True, payload={"plugins": ["not-an-object"]}),
             _WorkerReply(ok=True, payload={"plugins": [{"name": "same"}, {"name": "same"}]}),
+            _WorkerReply(ok=True, payload={"plugins": [{"name": "invalid", "supports_check": "yes"}]}),
         )
     )
     monkeypatch.setattr(manager, "_invoke_worker", lambda *_args, **_kwargs: next(replies))
@@ -289,11 +290,13 @@ def test_discover_file_rejects_invalid_response_metadata(monkeypatch: pytest.Mon
     manager._discover_file("/plugins", "/plugins/shape.py")
     manager._discover_file("/plugins", "/plugins/object.py")
     manager._discover_file("/plugins", "/plugins/duplicate.py")
+    manager._discover_file("/plugins", "/plugins/supports.py")
 
     assert manager.skipped_plugins == {
         "shape": "invalid discovery response",
         "object": "plugin metadata must be an object",
         "duplicate": "duplicate plugin name 'same' in /plugins/duplicate.py",
+        "supports": "plugin metadata field 'supports_check' must be a boolean",
     }
 
 
@@ -315,6 +318,7 @@ def test_discover_file_builds_and_registers_complete_descriptors(
                 "python_deps": ["package"],
                 "capabilities": ["network"],
                 "hooks": ["on_session_opened"],
+                "supports_check": True,
             }
         ]
     }
@@ -328,6 +332,7 @@ def test_discover_file_builds_and_registers_complete_descriptors(
     assert descriptor.description == "7"
     assert descriptor.author == "8"
     assert descriptor.requires == ["nmap"]
+    assert descriptor.supports_check is True
     assert descriptor.depends_on == ["base"]
     assert descriptor.python_deps == ["package"]
     assert descriptor.capabilities == ["network"]
@@ -781,11 +786,13 @@ def test_execute_handles_timeout_crash_cleanup_events_credentials_and_sessions(
     )
     monkeypatch.setattr(manager, "_invoke_worker", lambda *_args, **_kwargs: next(replies))
 
+    check_only = manager.execute("plugin", action="scan")
     timeout = manager.execute("plugin", timeout=1.5)
     crash = manager.execute("plugin")
     success = manager.execute("plugin", context=PluginContext(credentials={"password": "input"}))
     no_cleanup = manager.execute("plugin")
 
+    assert "check-only" in check_only.error
     assert "timed out after 1.5s" in timeout.error
     assert "plugin stdout" in timeout.output and "plugin stderr" in timeout.output
     assert crash.error == "Plugin 'plugin' crashed: plugin worker failed"

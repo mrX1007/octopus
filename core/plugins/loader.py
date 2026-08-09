@@ -47,6 +47,13 @@ _CREDENTIAL_IDENTITY_FIELDS = {
 }
 
 
+def default_modules_dir() -> str:
+    """Return the installed/source-tree class-plugin directory."""
+
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.realpath(os.path.join(project_root, "modules"))
+
+
 @dataclass(frozen=True)
 class PluginDescriptor:
     """Inert metadata returned by discovery; it contains no executable code."""
@@ -65,6 +72,7 @@ class PluginDescriptor:
     python_deps: list[str] = field(default_factory=list)
     capabilities: list[str] = field(default_factory=list)
     hooks: list[str] = field(default_factory=list)
+    supports_check: bool = False
 
 
 @dataclass
@@ -84,10 +92,10 @@ class PluginManager:
 
     def __init__(
         self,
-        modules_dir: str = "modules/",
+        modules_dir: str | None = None,
         event_bus: PluginEventBus | None = None,
     ) -> None:
-        self.modules_dir = modules_dir
+        self.modules_dir = modules_dir or default_modules_dir()
         self.plugins: dict[str, PluginDescriptor] = {}
         self.skipped_plugins: dict[str, str] = {}
         self.event_bus = event_bus or PluginEventBus()
@@ -110,9 +118,7 @@ class PluginManager:
             return
         for current, directories, files in os.walk(root, followlinks=False):
             directories[:] = sorted(
-                directory
-                for directory in directories
-                if not os.path.islink(os.path.join(current, directory))
+                directory for directory in directories if not os.path.islink(os.path.join(current, directory))
             )
             for filename in sorted(files):
                 if not filename.endswith(".py") or filename.startswith("__"):
@@ -208,6 +214,9 @@ class PluginManager:
         plugin_type = raw.get("type", PluginType.AUXILIARY.value)
         if not isinstance(plugin_type, str):
             raise ValueError("plugin metadata field 'type' must be a string")
+        supports_check = raw.get("supports_check", False)
+        if not isinstance(supports_check, bool):
+            raise ValueError("plugin metadata field 'supports_check' must be a boolean")
         return PluginDescriptor(
             name=name,
             path=path,
@@ -223,6 +232,7 @@ class PluginManager:
             python_deps=self._string_list(raw.get("python_deps", []), "python_deps"),
             capabilities=self._string_list(raw.get("capabilities", []), "capabilities"),
             hooks=self._string_list(raw.get("hooks", []), "hooks"),
+            supports_check=supports_check,
         )
 
     def _register_descriptor(self, descriptor: PluginDescriptor) -> None:
@@ -411,10 +421,7 @@ class PluginManager:
         return invalid
 
     def list_skipped_plugins(self) -> list[dict[str, str]]:
-        return [
-            {"module": module, "reason": reason}
-            for module, reason in sorted(self.skipped_plugins.items())
-        ]
+        return [{"module": module, "reason": reason} for module, reason in sorted(self.skipped_plugins.items())]
 
     @staticmethod
     def _context_payload(context: PluginContext | None) -> dict[str, Any]:
@@ -488,15 +495,17 @@ class PluginManager:
     def _sanitize_result(self, result: PluginResult) -> PluginResult:
         redactor = get_redactor()
         credentials = self._safe_credentials(redactor, list(result.credentials or []))
-        safe = redactor.redact_data({
-            "success": result.success,
-            "data": result.data,
-            "output": result.output,
-            "artifacts": result.artifacts,
-            "credentials": credentials,
-            "sessions": result.sessions,
-            "error": result.error,
-        })
+        safe = redactor.redact_data(
+            {
+                "success": result.success,
+                "data": result.data,
+                "output": result.output,
+                "artifacts": result.artifacts,
+                "credentials": credentials,
+                "sessions": result.sessions,
+                "error": result.error,
+            }
+        )
         return PluginResult(
             success=bool(safe.get("success")),
             data=dict(safe.get("data", {}) or {}),
@@ -521,6 +530,11 @@ class PluginManager:
         descriptor = self.get_plugin(plugin_name)
         if descriptor is None:
             return self._safe_error_result(f"Plugin '{plugin_name}' not found")
+        action = str(kwargs.pop("action", "run") or "run").strip().casefold()
+        if action != "run":
+            return self._safe_error_result(
+                f"Plugin action '{action or 'unknown'}' is check-only; use PluginManager.check()",
+            )
         errors = self.validate(plugin_name)
         if errors:
             return self._safe_error_result(f"Validation failed: {'; '.join(errors)}")
@@ -535,6 +549,7 @@ class PluginManager:
         reply = self._invoke_worker(
             {
                 "operation": "execute",
+                "action": "run",
                 "root": descriptor.root,
                 "path": descriptor.path,
                 "plugin": plugin_name,
@@ -588,25 +603,31 @@ class PluginManager:
         """Run a plugin check in a fresh worker with a hard timeout."""
         descriptor = self.get_plugin(plugin_name)
         if descriptor is None:
-            return self._sanitize_check(CheckResult(
-                vulnerable=False,
-                details=f"Plugin '{plugin_name}' not found",
-            ))
+            return self._sanitize_check(
+                CheckResult(
+                    vulnerable=False,
+                    details=f"Plugin '{plugin_name}' not found",
+                )
+            )
         errors = self.validate(plugin_name)
         if errors:
-            return self._sanitize_check(CheckResult(
-                vulnerable=False,
-                details=f"Validation failed: {'; '.join(errors)}",
-            ))
+            return self._sanitize_check(
+                CheckResult(
+                    vulnerable=False,
+                    details=f"Validation failed: {'; '.join(errors)}",
+                )
+            )
         plugin_kwargs = dict(kwargs)
         plugin_kwargs.setdefault("timeout", timeout)
         try:
             dumps_message(plugin_kwargs)
         except WireError as exc:
-            return self._sanitize_check(CheckResult(
-                vulnerable=False,
-                details=f"Plugin check input is not serializable: {exc}",
-            ))
+            return self._sanitize_check(
+                CheckResult(
+                    vulnerable=False,
+                    details=f"Plugin check input is not serializable: {exc}",
+                )
+            )
         get_redactor().redact_data(plugin_kwargs, field="plugin_check_arguments")
         reply = self._invoke_worker(
             {
@@ -620,15 +641,19 @@ class PluginManager:
             timeout=timeout,
         )
         if reply.timed_out:
-            return self._sanitize_check(CheckResult(
-                vulnerable=False,
-                details=f"Plugin '{plugin_name}' timed out after {timeout:g}s",
-            ))
+            return self._sanitize_check(
+                CheckResult(
+                    vulnerable=False,
+                    details=f"Plugin '{plugin_name}' timed out after {timeout:g}s",
+                )
+            )
         if not reply.ok:
-            return self._sanitize_check(CheckResult(
-                vulnerable=False,
-                details=f"Check failed: {reply.error_type}: {reply.error}",
-            ))
+            return self._sanitize_check(
+                CheckResult(
+                    vulnerable=False,
+                    details=f"Check failed: {reply.error_type}: {reply.error}",
+                )
+            )
         self._apply_worker_events(reply.payload.get("events", []), plugin_name)
         return self._sanitize_check(self._normalize_check(reply.payload.get("result")))
 
@@ -769,6 +794,7 @@ class PluginManager:
                 "author": descriptor.author,
                 "requires": list(descriptor.requires),
                 "depends_on": list(descriptor.depends_on),
+                "supports_check": descriptor.supports_check,
             }
-            for descriptor in self.plugins.values()
+            for descriptor in (self.plugins[name] for name in sorted(self.plugins))
         ]

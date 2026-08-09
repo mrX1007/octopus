@@ -361,15 +361,15 @@ def test_registered_policy_covers_limits_capabilities_special_actions_and_local_
         "plugin",
         argv=("plugin", "demo", "10.0.0.5", "scan"),
     )
-    plugin_exploit = _invocation(
+    plugin_run = _invocation(
         "plugin",
-        argv=("plugin", "demo", "10.0.0.5", "exploit"),
+        argv=("plugin", "demo", "10.0.0.5", "run"),
     )
     sqlmap = _invocation("sqlmap")
     automatic = _context(CAP_REGISTERED_TOOL, scope=("10.0.0.5",))
 
     assert policy.authorize_registered(plugin_scan, automatic).allowed
-    assert policy.authorize_registered(plugin_exploit, automatic).reason == "active_tool_requires_approval"
+    assert policy.authorize_registered(plugin_run, automatic).reason == "active_tool_requires_approval"
     assert policy.authorize_registered(sqlmap, automatic).reason == "active_tool_requires_approval"
     assert policy.authorize_registered(
         sqlmap,
@@ -383,6 +383,27 @@ def test_registered_policy_covers_limits_capabilities_special_actions_and_local_
     assert policy.authorize_registered(
         _invocation("prowler_scan", targets=("not a network target",)), automatic
     ).allowed
+
+
+@pytest.mark.parametrize("gateway", ["plugin", "run_plugin", "octopus_plugin"])
+def test_plugin_inventory_gateway_is_targetless_read_only(gateway: str) -> None:
+    invocation = ToolInvocation(
+        executable=gateway,
+        argv=(gateway, "list"),
+        raw_command=f"{gateway} list",
+        registered_name="plugin",
+        targets=(),
+    )
+
+    decision = ExecutionPolicy().authorize_registered(
+        invocation,
+        _context(CAP_REGISTERED_TOOL),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason == "registered_tool_authorized"
+    assert decision.invocation is not None
+    assert decision.invocation.targets == ()
 
 
 def test_registered_policy_rejects_forged_and_mismatched_registry_identity():

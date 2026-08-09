@@ -258,6 +258,8 @@ def test_registry_coverage_classifies_gated_and_legacy_tools():
     assert "ssh_inventory" in report["followup"]
     assert "deploy_c2_beacon" in report["manual_gated"]
     assert "jmx2rce_rce" in report["manual_gated"]
+    assert "plugin" in report["auto"]
+    assert "plugin" not in report["manual_gated"]
     assert "killchain_full" in report["legacy_wrappers"]
     assert "stealth_brute" in report["legacy_wrappers"]
     assert "ftp_anonymous_check" in report["auto"]

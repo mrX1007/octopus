@@ -11,6 +11,7 @@ from .msf import MSFParser
 from .network import NetworkGraphParser
 from .nmap import NmapParser
 from .plugin import PluginParser
+from .recon import ReconEvidenceParser
 from .secrets import SecretsParser
 from .ssh import SSHParser
 from .template import TemplateParser
@@ -28,6 +29,7 @@ __all__ = [
     "NmapParser",
     "ParserFamilyPipeline",
     "PluginParser",
+    "ReconEvidenceParser",
     "SSHParser",
     "SecretsParser",
     "TemplateParser",

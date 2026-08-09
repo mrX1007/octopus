@@ -1188,15 +1188,25 @@ class ExecutionPolicy:
                 invocation,
             )
         name = registered_tool.name
-        uses_network_scope = _registered_tool_uses_network_scope(registered_tool)
-        try:
-            declared_targets = _declared_network_targets(
-                registered_tool,
-                invocation.argv,
-                alias_tokens,
-            )
-        except InvalidInvocation as exc:
-            return self._decision(False, str(exc), context, invocation)
+        registered_arguments = tuple(str(item) for item in invocation.argv[alias_tokens:])
+        plugin_inventory_gateway = bool(
+            name == "plugin"
+            and registered_arguments
+            and registered_arguments[0].strip().casefold() in {"list", "ls", "summary"}
+        )
+        uses_network_scope = _registered_tool_uses_network_scope(registered_tool) and not plugin_inventory_gateway
+        declared_targets: tuple[str, ...]
+        if plugin_inventory_gateway:
+            declared_targets = ()
+        else:
+            try:
+                declared_targets = _declared_network_targets(
+                    registered_tool,
+                    invocation.argv,
+                    alias_tokens,
+                )
+            except InvalidInvocation as exc:
+                return self._decision(False, str(exc), context, invocation)
         effective_targets = tuple(dict.fromkeys((*declared_targets, *invocation.targets)))
         if effective_targets != invocation.targets:
             invocation = ToolInvocation(

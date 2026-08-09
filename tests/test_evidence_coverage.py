@@ -810,7 +810,13 @@ def test_structured_web_llm_and_output_parser_boundaries(
     )
     assert sanitized == [{"type": "observation", "value": "valid", "session_id": "s"}]
     assert output._should_run_legacy_regex("nuclei", "") is False
-    assert output._should_run_legacy_regex("custom", "[NUCLEI RESULTS]") is False
+    assert output._should_run_legacy_regex("custom", "[NUCLEI RESULTS]") is True
+    assert output._should_run_legacy_regex("manual_recon", "[NUCLEI RESULTS]") is False
+    mixed_legacy = output.parse_tool_output(
+        "ssh_inventory 192.0.2.10",
+        "[+] SSH connected as alice@192.0.2.10:22\n[NUCLEI RESULTS]",
+    )
+    assert any(item["type"] == "service_status" and item["value"] == "ssh_inventory_completed" for item in mixed_legacy)
 
     output.family_pipeline.parse = MagicMock(return_value=[])
     output.web_endpoint_parser.parse = MagicMock(return_value=[])

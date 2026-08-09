@@ -476,6 +476,7 @@ class PluginManagerFixture:
         self.plugin_type = plugin_type
         self.validation = validation
         self.calls: list[dict[str, Any]] = []
+        self.check_calls: list[dict[str, Any]] = []
 
     def get_plugin(self, name: str):
         if name == "missing":
@@ -492,7 +493,8 @@ class PluginManagerFixture:
     def validate(self, _name: str):
         return self.validation
 
-    def check(self, *_args, **_kwargs):
+    def check(self, *args, **kwargs):
+        self.check_calls.append({"args": args, "kwargs": kwargs})
         return SimpleNamespace(vulnerable=True, details="details", evidence="evidence")
 
     def execute(self, _name: str, **kwargs: Any):
@@ -537,9 +539,36 @@ def test_plugin_adapter_actions_execution_and_cleanup():
     )
     assert adapter.invocation(request, "check").registered_name == "plugin"
     assert adapter.check(request).applicable is True
-    assert adapter.execute(request) == "executed"
-    assert manager.calls[0]["action"] == "scan"
+    scan_result = adapter.execute(request)
+    assert scan_result["status"] == "succeeded"
+    assert scan_result["metadata"] == {
+        "plugin_action": "check",
+        "plugin_run_invoked": False,
+    }
+    assert manager.calls == []
+    assert len(manager.check_calls) == 2
+
+    run_request = ActionRequest(
+        "example.com",
+        automatic(),
+        parameters={"action": "run", "timeout": 1},
+    )
+    assert adapter.active_risk_class(request) is ActiveRiskClass.READ_ONLY
+    assert adapter.active_risk_class(run_request) is ActiveRiskClass.ACTIVE
+    assert adapter.execute(run_request) == "executed"
+    assert manager.calls[0]["action"] == "run"
     assert "timeout" in manager.calls[0]
+
+    for passive_alias in ("list", "ls", "summary", "cleanup"):
+        with pytest.raises(ValueError, match="plugin_action_undeclared"):
+            adapter._action(
+                ActionRequest(
+                    "example.com",
+                    automatic(),
+                    parameters={"action": passive_alias},
+                ),
+                "execute",
+            )
 
     active_adapter = PluginActionAdapter(PluginManagerFixture(plugin_type="exploit"), "fixture")
     assert active_adapter._action(ActionRequest("example.com", automatic()), "execute") == "run"

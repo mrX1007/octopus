@@ -2229,6 +2229,36 @@ def ai_searchsploit(query: str) -> str:
 
 
 @tool(
+    name="plugin_inventory",
+    aliases=["plugin_list", "list_plugins"],
+    category="util",
+    description="List isolated class-plugin metadata without invoking plugin actions.",
+    dependencies=resource("", "modules", resource_type=ResourceType.DIRECTORY),
+    needs_target=False,
+)
+def ai_plugin_inventory() -> str:
+    """Return real discovery metadata for the plugin-assessment task."""
+
+    try:
+        import json as _json
+
+        from core.plugins.loader import PluginManager, default_modules_dir
+    except ImportError as exc:
+        return f"[!] Plugin system unavailable: {exc}"
+
+    manager = PluginManager(default_modules_dir())
+    return _json.dumps(
+        {
+            "plugins": manager.list_plugins(),
+            "skipped": manager.list_skipped_plugins(),
+        },
+        indent=2,
+        default=str,
+        sort_keys=True,
+    )
+
+
+@tool(
     name="plugin",
     aliases=["run_plugin", "octopus_plugin"],
     category="util",
@@ -2245,24 +2275,45 @@ def ai_run_plugin(plugin_name: str, target: str = "", action: str = "scan") -> s
         import json as _json
 
         from core.plugins.base import PluginContext
-        from core.plugins.loader import PluginManager
+        from core.plugins.loader import PluginManager, default_modules_dir
     except ImportError as e:
         return f"[!] Plugin system unavailable: {e}"
 
-    manager = PluginManager("modules/")
+    manager = PluginManager(default_modules_dir())
     if plugin_name in ("list", "ls", "summary"):
         return _json.dumps(manager.list_plugins(), indent=2, default=str)
 
-    if not manager.get_plugin(plugin_name):
+    descriptor = manager.get_plugin(plugin_name)
+    if descriptor is None:
         available = ", ".join(sorted(manager.plugins)) or "none"
         return f"[!] Plugin '{plugin_name}' not found. Available: {available}"
+
+    normalized_action = str(action or "scan").strip().casefold()
+    if normalized_action not in {"check", "run", "scan"}:
+        return f"[!] Plugin action '{normalized_action or 'unknown'}' is not declared."
+    if normalized_action in {"check", "scan"}:
+        checked = manager.check(plugin_name, target, timeout=60)
+        return _json.dumps(
+            {
+                "action": "check",
+                "confidence": checked.confidence,
+                "details": checked.details,
+                "evidence": checked.evidence,
+                "plugin": plugin_name,
+                "supports_check": bool(getattr(descriptor, "supports_check", False)),
+                "version": checked.version,
+                "vulnerable": checked.vulnerable,
+            },
+            indent=2,
+            default=str,
+        )
 
     ctx = PluginContext(target=target or "")
     result = manager.execute(
         plugin_name,
         context=ctx,
         target=target,
-        action=action or "scan",
+        action="run",
         timeout=60,
     )
     payload = {

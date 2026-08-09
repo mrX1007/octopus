@@ -190,10 +190,10 @@ def test_web_parser_does_not_flag_non_reflective_cors_origin() -> None:
 
 
 def test_web_parser_empty_session_profile_and_authenticated_crawl_fields() -> None:
-    output = "LINK https://example.test/plain\nalg: RS256\nkid: signing-key"
-    tool = "session_profile_import authenticated_crawl jwt_analyze"
-
-    facts = WebParser().parse(tool, output, "session")
+    parser = WebParser()
+    facts = parser.parse("session_profile_import", "Headers: none\nCookies: none", "session")
+    facts += parser.parse("auth_crawl", "LINK https://example.test/plain", "session")
+    facts += parser.parse("jwt", "alg: RS256\nkid: signing-key", "session")
 
     assert ("web_link", "https://example.test/plain") in _pairs(facts)
     assert ("jwt_metadata", "alg:RS256") in _pairs(facts)

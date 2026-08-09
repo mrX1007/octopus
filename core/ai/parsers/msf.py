@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 
 import re
+import shlex
 
-from .common import BaseParser, Fact, fact, raw_lower, tool_lower
+from .common import BaseParser, Fact, fact, raw_lower, tool_identity
 
 
 class MSFParser(BaseParser):
     family = "msf"
 
     def parse(self, tool_name: str, raw_output: str, session_id: str) -> list[Fact]:
-        tool = tool_lower(tool_name)
-        identity = tool.split(maxsplit=1)[0]
+        identity = tool_identity(tool_name)
         raw = raw_lower(raw_output)
         if identity not in {"msf_check", "msf_run"}:
             return []
-        module_match = re.search(r"\b(?:msf_check|msf_run)\s+\S+\s+(\S+)", tool_name or "", re.IGNORECASE) or re.search(
-            r"(?im)^\s*\[\*\]\s*MSF Module:\s*(\S+)\s*$", raw_output or ""
-        )
-        module = module_match.group(1) if module_match else "unknown"
+        try:
+            arguments = shlex.split(str(tool_name or ""))[1:]
+        except ValueError:
+            arguments = str(tool_name or "").split()[1:]
+        output_module = re.search(r"(?im)^\s*\[\*\]\s*MSF Module:\s*(\S+)\s*$", raw_output or "")
+        module = arguments[1] if len(arguments) >= 2 else output_module.group(1) if output_module else "unknown"
         module_l = module.lower()
         facts: list[Fact] = []
         login_success = re.search(
