@@ -448,18 +448,6 @@ class PipelinePlanningMixin(PipelineMixinBase):
             if "internal_service_assessment_pending" in coverage_gaps:
                 candidates.append("internal_service_discovery")
 
-        plugin_inputs = (context.get("task_inputs") or {}).get("plugin_actions") or []
-        for plugin_item in plugin_inputs:
-            p_name = str(plugin_item.get("plugin") or "").strip()
-            if p_name:
-                candidates.append(f"plugin:{p_name}")
-
-        for reach in self.tool_registry.get_discovered_plugin_action_reachability(context.get("host", ""), context.get("task_inputs")):
-            if reach.get("planner_visible"):
-                p_task = reach.get("action_id", "")
-                if p_task and p_task not in candidates:
-                    candidates.append(p_task)
-
         readiness_list = context.get("plugin_action_readiness") or []
         if isinstance(readiness_list, list):
             for item in readiness_list:
@@ -510,9 +498,13 @@ class PipelinePlanningMixin(PipelineMixinBase):
             readiness_list = context.get("plugin_action_readiness") or []
             if isinstance(readiness_list, list):
                 for item in readiness_list:
-                    if isinstance(item, dict) and (item.get("action_id") == canon or item.get("action") == canon):
-                        if item.get("state") == "blocked_by_input":
-                            return True
+                    if (
+                        isinstance(item, dict)
+                        and (item.get("action_id") == canon or item.get("action") == canon)
+                        and item.get("input_state", item.get("state"))
+                        in {"blocked_by_input", "blocked_by_target"}
+                    ):
+                        return True
             return False
         return self._task_input_state(task, context) == "blocked_by_input"
 

@@ -17,6 +17,7 @@ Usage:
 
 import base64
 import hashlib
+import json
 import os
 from typing import ClassVar
 
@@ -234,7 +235,7 @@ class PayloadKeyingPlugin(OctopusPlugin):
     kill_chain_stage = KillChainStage.EXPLOITATION
     python_deps: ClassVar[list[str]] = ["cryptography"]
     capabilities: ClassVar[set[str]] = {"crypto"}
-    input_schema = {
+    input_schema: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             "payload": {"type": "string"},

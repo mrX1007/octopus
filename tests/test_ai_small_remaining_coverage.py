@@ -68,7 +68,9 @@ def test_analysis_exception_and_verification_delegation(capsys):
     }
     assert "AnalysisAgent Error: RuntimeError" in capsys.readouterr().out
 
-    registry = SimpleNamespace(get_commands_for_task=lambda task, target: [f"{task}:{target}"])
+    registry = SimpleNamespace(
+        get_commands_for_task=lambda task, target, *, task_inputs=None: [f"{task}:{target}"]
+    )
     verifier = SimpleNamespace(verify_claim=lambda *args: {"verified": True, "args": args})
     verification = VerificationAgent(registry, verifier)
 

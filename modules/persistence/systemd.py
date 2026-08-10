@@ -21,7 +21,7 @@ class SystemdPersistence(OctopusPlugin):
     plugin_type = PluginType.PERSISTENCE
     kill_chain_stage = KillChainStage.PERSISTENCE
     capabilities: ClassVar[set[str]] = {"ssh", "file_write", "service_control"}
-    input_schema = {
+    input_schema: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             "payload_path": {"type": "string", "format": "path-ref"},
@@ -39,6 +39,7 @@ class SystemdPersistence(OctopusPlugin):
         payload_path = kwargs.get("payload_path", "/var/tmp/.octopus_agent")
         service_name = kwargs.get("service_name", "systemd-timesyncd-update.service")
         client = kwargs.get("ssh_client")
+        error: str | None = None
         owns_client = False
 
         if not client:
@@ -50,7 +51,7 @@ class SystemdPersistence(OctopusPlugin):
             port = int(kwargs.get("port", 22))
 
             if is_credential_handle(password):
-                cred = resolve_credential_handle(password)
+                cred = resolve_credential_handle(str(password))
                 if cred is None:
                     return PluginResult(success=False, error="Credential handle resolution failed")
                 username = cred.username
