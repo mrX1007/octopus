@@ -21,6 +21,18 @@ class SystemdPersistence(OctopusPlugin):
     plugin_type = PluginType.PERSISTENCE
     kill_chain_stage = KillChainStage.PERSISTENCE
     capabilities: ClassVar[set[str]] = {"ssh", "file_write", "service_control"}
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "payload_path": {"type": "string", "format": "path-ref"},
+            "service_name": {"type": "string"},
+            "username": {"type": "string"},
+            "password": {"type": "string", "format": "credential-ref"},
+            "port": {"type": "integer"},
+        },
+        "required": [],
+        "additionalProperties": False,
+    }
 
     def run(self, **kwargs) -> PluginResult:
         target = kwargs.get("target")
@@ -30,17 +42,31 @@ class SystemdPersistence(OctopusPlugin):
         owns_client = False
 
         if not client:
+            from core.credentials import call_credential_provider, is_credential_handle, resolve_credential_handle
             from core.killchain.ssh_helpers import _ssh_connect
 
             username = kwargs.get("username") or kwargs.get("user")
-            password = kwargs.get("password") or kwargs.get("pwd")
+            password = kwargs.get("password") or kwargs.get("pwd") or kwargs.get("credential_ref")
             port = int(kwargs.get("port", 22))
-            if not target or not username or not password:
-                return PluginResult(
-                    success=False,
-                    error="Requires target plus serializable SSH credentials",
-                )
-            client, error = _ssh_connect(str(target), str(username), str(password), port)
+
+            if is_credential_handle(password):
+                cred = resolve_credential_handle(password)
+                if cred is None:
+                    return PluginResult(success=False, error="Credential handle resolution failed")
+                username = cred.username
+
+                def _connect_with_mat(mat):
+                    nonlocal client, error
+                    client, error = _ssh_connect(str(target), str(mat.username), str(mat.password), port)
+
+                call_credential_provider(cred, _connect_with_mat)
+            else:
+                if not target or not username or not password:
+                    return PluginResult(
+                        success=False,
+                        error="Requires target plus serializable SSH credentials",
+                    )
+                client, error = _ssh_connect(str(target), str(username), str(password), port)
             if error:
                 return PluginResult(success=False, error=f"SSH connection failed: {error}")
             owns_client = True

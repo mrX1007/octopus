@@ -25,6 +25,11 @@ from core.execution.policy import (
     registered_tool_uses_network_scope,
     targets_equivalent,
 )
+from core.plugins.schema import (
+    empty_input_schema,
+    normalize_input_schema,
+    validate_input_parameters,
+)
 
 from .base import ActionAdapter
 from .models import (
@@ -543,24 +548,6 @@ class PluginActionAdapter(ActionAdapter):
         "persistence",
         "lateral",
     }
-    _UNDECLARED_NETWORK_KEYS: ClassVar[set[str]] = {
-        "callback",
-        "callback_host",
-        "c2",
-        "c2_url",
-        "command",
-        "endpoint",
-        "host",
-        "lhost",
-        "proxy",
-        "query",
-        "remote_host",
-        "rhost",
-        "session",
-        "target",
-        "url",
-        "vhost",
-    }
 
     def __init__(self, manager: Any, plugin_name: str):
         descriptor = manager.get_plugin(plugin_name)
@@ -568,6 +555,9 @@ class PluginActionAdapter(ActionAdapter):
             raise KeyError(f"Unknown plugin: {plugin_name}")
         self.manager = manager
         self.plugin_name = plugin_name
+        self.input_schema = normalize_input_schema(
+            getattr(descriptor, "input_schema", empty_input_schema())
+        )
         active = str(descriptor.plugin_type) in self._ACTIVE_TYPES
         self.descriptor = ActionDescriptor(
             action_id=f"plugin:{plugin_name}",
@@ -619,17 +609,12 @@ class PluginActionAdapter(ActionAdapter):
         command = shlex.join(("plugin", self.plugin_name, request.target, self._action(request, phase)))
         return self.registered_invocation(command, "plugin")
 
-    @classmethod
-    def _undeclared_network_parameter(cls, parameters: Mapping[str, Any]) -> str:
-        # Plugin descriptors have no code-owned typed parameter schema yet.
-        # Any provider kwarg is therefore opaque; a deny-list cannot cover
-        # single-label or nested endpoints, so only lifecycle metadata passes.
-        for key in parameters:
-            normalized = str(key).strip().casefold()
-            if normalized in {"action", "timeout"}:
-                continue
-            return normalized or "unknown"
-        return ""
+    def _provider_parameters(self, request: ActionRequest) -> dict[str, Any]:
+        parameters = dict(request.parameters)
+        parameters.pop("action", None)
+        parameters.pop("timeout", None)
+        validate_input_parameters(self.input_schema, parameters)
+        return parameters
 
     def authorize(
         self,
@@ -637,21 +622,24 @@ class PluginActionAdapter(ActionAdapter):
         request: ActionRequest,
         phase: str,
     ) -> ExecutionDecision:
-        parameter = self._undeclared_network_parameter(request.parameters)
-        if parameter:
+        try:
+            self._provider_parameters(request)
+        except ValueError as exc:
             return ExecutionDecision(
                 False,
-                f"plugin_network_parameter_undeclared:{parameter}",
+                str(exc),
                 request.execution_context,
                 self.invocation(request, phase),
             )
         return super().authorize(policy, request, phase)
 
     def check(self, request: ActionRequest) -> ActionCheckResult:
+        parameters = self._provider_parameters(request)
         raw = self.manager.check(
             self.plugin_name,
             request.target,
             timeout=request.execution_context.max_runtime_seconds,
+            **parameters,
         )
         return ActionCheckResult(
             result=raw,
@@ -662,18 +650,14 @@ class PluginActionAdapter(ActionAdapter):
     def execute(self, request: ActionRequest) -> Any:
         from core.plugins.base import PluginContext
 
-        parameter = self._undeclared_network_parameter(request.parameters)
-        if parameter:
-            raise ValueError(f"plugin_network_parameter_undeclared:{parameter}")
-        parameters = dict(request.parameters)
+        parameters = self._provider_parameters(request)
         action = self._action(request, "execute")
-        parameters.pop("action", None)
-        parameters.pop("timeout", None)
         if action in {"check", "scan"}:
             checked = self.manager.check(
                 self.plugin_name,
                 request.target,
                 timeout=request.execution_context.max_runtime_seconds,
+                **parameters,
             )
             payload = {
                 "action": "check",

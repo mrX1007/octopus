@@ -66,6 +66,9 @@ def test_killchain_stage_configuration_can_disable_a_mapped_task():
 @pytest.mark.parametrize(
     ("task", "state", "automation", "expected"),
     [
+        ("payload_generation", "initial_recon", True, False),
+        ("payload_generation", "root_access_confirmed", False, False),
+        ("payload_generation", "root_access_confirmed", True, True),
         ("establish_persistence", "initial_recon", True, False),
         ("establish_persistence", "root_access_confirmed", False, False),
         ("establish_persistence", "root_access_confirmed", True, True),
@@ -87,6 +90,7 @@ def test_post_access_state_and_automation_flags_are_both_required(
     expected,
 ):
     key = {
+        "payload_generation": "auto_payload_generation",
         "establish_persistence": "auto_persistence",
         "internal_network_recon": "auto_internal_recon",
         "exfiltrate_data": "auto_data_exfil",

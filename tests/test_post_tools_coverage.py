@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import builtins
+import json
 import sys
 from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
-from typing import Any, ClassVar
+from typing import Any
 
 import pytest
 
@@ -1130,70 +1131,47 @@ def test_builders_waf_search_and_plugin_wrappers(monkeypatch, tmp_path):
     monkeypatch.setattr(post_tools, "run_tool", lambda cmd, timeout: f"tool:{cmd}:{timeout}")
     assert "searchsploit" in post_tools.ai_searchsploit("apache 2")
 
-    with _blocked_import("core.plugins.base"):
-        assert "Plugin system unavailable" in post_tools.ai_run_plugin("list")
-    with _blocked_import("core.plugins.loader"):
-        assert "Plugin system unavailable" in post_tools.ai_plugin_inventory()
-
-    class Context:
-        def __init__(self, target):
-            self.target = target
-
-    class Manager:
-        plugins: ClassVar[dict] = {"demo": object()}
-        output = "details"
-        calls: ClassVar[list[str]] = []
-
-        def __init__(self, path):
-            pass
-
-        def list_plugins(self):
-            return ["demo"]
-
-        def list_skipped_plugins(self):
-            return []
-
-        def get_plugin(self, name):
-            return self.plugins.get(name)
-
-        def check(self, name, target, timeout=60):
-            self.calls.append(f"check:{name}:{target}:{timeout}")
-            return SimpleNamespace(
-                vulnerable=False,
-                confidence=0.75,
-                details="checked",
-                evidence="fixture",
-                version="1.0",
-            )
-
-        def execute(self, *args, **kwargs):
-            self.calls.append(f"run:{args[0]}")
-            return SimpleNamespace(
-                success=True,
-                data={"ok": True},
-                artifacts=[],
-                credentials=[],
-                sessions=[],
-                error="",
-                output=self.output,
-            )
-
-    import core.plugins.base as plugin_base
     import core.plugins.loader as plugin_loader
+    from core.ai import runtime as runtime_module
+    from core.execution import ExecutionStatus
 
-    monkeypatch.setattr(plugin_base, "PluginContext", Context)
-    monkeypatch.setattr(plugin_loader, "PluginManager", Manager)
+    commands: list[str] = []
+
+    def canonical_dispatch(command: str, _context: ExecutionContext) -> SimpleNamespace:
+        commands.append(command)
+        output = (
+            '{"plugins":[{"name":"demo"}],"skipped":[]}'
+            if command in {"plugin_inventory", "plugin list", "plugin summary"}
+            else '{"action":"check","details":"checked","plugin":"demo"}'
+        )
+        return SimpleNamespace(
+            status=ExecutionStatus.SUCCEEDED,
+            output=output,
+            error_message="",
+            stderr="",
+        )
+
+    monkeypatch.setattr(runtime_module, "dispatch_plugin_command", canonical_dispatch)
     inventory = post_tools.ai_plugin_inventory()
-    assert '"plugins": [' in inventory and "demo" in inventory
+    assert json.loads(inventory) == {"plugins": [{"name": "demo"}], "skipped": []}
     assert "demo" in post_tools.ai_run_plugin("list")
     assert "demo" in post_tools.ai_run_plugin("summary")
-    assert "not found" in post_tools.ai_run_plugin("missing")
-    output = post_tools.ai_run_plugin("demo", "host", "scan")
-    assert '"action": "check"' in output
-    assert Manager.calls == ["check:demo:host:60"]
-    assert "not declared" in post_tools.ai_run_plugin("demo", "host", "summary")
-    output = post_tools.ai_run_plugin("demo", "host", "run")
-    assert "plugin output" in output
-    assert Manager.calls[-1] == "run:demo"
-    Manager.output = ""
-    assert "plugin output" not in post_tools.ai_run_plugin("demo", action="run")
+    output = post_tools.ai_run_plugin("demo", "host", "scan", label="neutral fixture")
+    assert json.loads(output)["details"] == "checked"
+    assert commands == [
+        "plugin_inventory",
+        "plugin list",
+        "plugin summary",
+        "plugin demo host scan 'label=neutral fixture'",
+    ]
+
+    def fail_legacy(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("legacy PluginManager fallback invoked")
+
+    def fail_canonical(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("canonical dispatch failed")
+
+    monkeypatch.setattr(plugin_loader, "PluginManager", fail_legacy)
+    monkeypatch.setattr(runtime_module, "dispatch_plugin_command", fail_canonical)
+    with pytest.raises(RuntimeError, match="canonical dispatch failed"):
+        post_tools.ai_run_plugin("demo", "host", "check")

@@ -48,13 +48,24 @@ def test_builder_loads_only_x25519_public_keys(tmp_path) -> None:
     assert base64.b64decode(builder.load_server_pub_key(str(valid))) == expected
 
 
-def test_builder_encrypts_an_authenticated_round_trip_configuration() -> None:
+def test_builder_encrypts_an_authenticated_round_trip_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = []
+    import core.c2.evasion as evasion_mod
+    orig_aes = evasion_mod.aes_encrypt_payload
+
+    def spy_aes(payload: bytes):
+        called.append(payload)
+        return orig_aes(payload)
+
+    monkeypatch.setattr(evasion_mod, "aes_encrypt_payload", spy_aes)
+
     blob, hex_key = builder.encrypt_config(
         "https://one.test,https://two.test",
         "pin-one,pin-two",
         "server-public-key",
         "enrollment-token",
     )
+    assert len(called) == 1
 
     packed = base64.b64decode(blob)
     plaintext = AESGCM(bytes.fromhex(hex_key)).decrypt(packed[:12], packed[12:], None)

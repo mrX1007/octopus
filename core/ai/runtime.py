@@ -8,6 +8,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -53,6 +54,26 @@ Runner = Callable[..., Any]
 EXECUTION_RESULT_SCHEMA_VERSION = "1.0"
 logger = logging.getLogger("octopus.runtime")
 
+_PLUGIN_METADATA_KEY = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
+_PLUGIN_SECRET_KEY_PARTS = frozenset(
+    {
+        "api_key",
+        "apikey",
+        "auth",
+        "authorization",
+        "cookie",
+        "credential",
+        "credentials",
+        "passwd",
+        "password",
+        "private_key",
+        "privatekey",
+        "pwd",
+        "secret",
+        "token",
+    }
+)
+
 
 def _policy_decision_ref(decision: CommandDecision) -> str:
     """Build a non-secret stable reference to one scheduler/policy decision."""
@@ -70,6 +91,81 @@ def _policy_decision_ref(decision: CommandDecision) -> str:
 def _tool_name(command: str) -> str:
     parts = (command or "").strip().split(maxsplit=1)
     return parts[0] if parts else "unknown"
+
+
+def _plugin_metadata_key_contains_secret(name: str) -> bool:
+    normalized = re.sub(r"[^a-z0-9]+", "_", name.casefold()).strip("_")
+    padded = f"_{normalized}_"
+    return any(f"_{part}_" in padded for part in _PLUGIN_SECRET_KEY_PARTS)
+
+
+def _decode_plugin_metadata_value(raw: str, declared_type: str) -> Any:
+    """Decode JSON scalars and complex objects/arrays when declared."""
+
+    if declared_type == "string" or not declared_type:
+        return raw
+    try:
+        decoded = json.loads(raw)
+        if declared_type == "object" and isinstance(decoded, dict):
+            return decoded
+        if declared_type == "array" and isinstance(decoded, list):
+            return decoded
+        if declared_type not in {"object", "array"}:
+            return decoded
+    except Exception:
+        pass
+    return raw
+
+
+def _parse_plugin_metadata_arguments(
+    arguments: Sequence[str],
+    input_schema: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Parse repeated closed ``key=value`` plugin metadata arguments.
+
+    The parser never resolves reference formats and never accepts plaintext
+    secret-bearing field names. The adapter remains the owner of declared,
+    required, and exact-type validation.
+    """
+
+    raw_properties = input_schema.get("properties", {})
+    properties = raw_properties if isinstance(raw_properties, Mapping) else {}
+    parsed: dict[str, Any] = {}
+    for argument in arguments:
+        key, separator, raw_value = str(argument).partition("=")
+        if not separator:
+            raise ValueError("plugin_metadata_invalid_syntax")
+        if _PLUGIN_METADATA_KEY.fullmatch(key) is None or key in {"action", "target", "timeout"}:
+            raise ValueError("plugin_metadata_unsafe_key")
+        if key in parsed:
+            raise ValueError(f"plugin_metadata_duplicate:{key}")
+        if len(raw_value) > 4096 or any(ord(character) < 32 or ord(character) == 127 for character in raw_value):
+            raise ValueError(f"plugin_metadata_unsafe_value:{key}")
+        property_schema = properties.get(key, {})
+        if not isinstance(property_schema, Mapping):
+            property_schema = {}
+        declared_format = str(property_schema.get("format") or "")
+        if _plugin_metadata_key_contains_secret(key) and declared_format != "credential-ref":
+            raise ValueError(f"plugin_metadata_secret_material_forbidden:{key}")
+        declared_type = str(property_schema.get("type") or "")
+        try:
+            parsed[key] = _decode_plugin_metadata_value(raw_value, declared_type)
+        except ValueError as exc:
+            raise ValueError(f"{exc}:{key}") from exc
+    return parsed
+
+
+def dispatch_plugin_command(
+    command: str,
+    context: ExecutionContext,
+) -> DispatchResult:
+    """Dispatch one plugin command through a single runtime-owned catalog."""
+
+    def _forbidden_legacy_runner(*_args: Any, **_kwargs: Any) -> str:
+        raise RuntimeError("plugin_legacy_runner_forbidden")
+
+    runtime = PipelineRuntime(runner=_forbidden_legacy_runner)
+    return runtime.dispatch(command, (), set(), context)
 
 
 class PipelineRuntime:
@@ -647,16 +743,30 @@ class PipelineRuntime:
                 else:
                     plugin_action_id = "plugin_inventory"
                     plugin_action_command = "plugin_inventory"
-            elif len(invocation_argv) not in {3, 4}:
+            elif len(invocation_argv) < 3:
                 invalid_plugin_request = "plugin_command_invalid_arity"
             else:
-                plugin_requested_action = invocation_argv[3].strip().casefold() if len(invocation_argv) == 4 else "scan"
+                metadata_arguments = list(invocation_argv[3:])
+                if metadata_arguments and "=" not in metadata_arguments[0]:
+                    plugin_requested_action = metadata_arguments.pop(0).strip().casefold()
+                else:
+                    plugin_requested_action = "scan"
                 if plugin_requested_action not in {"check", "run", "scan"}:
                     invalid_plugin_request = "plugin_action_undeclared"
                 else:
                     plugin_action_id = f"plugin:{invocation_argv[1]}"
                     request_parameters["action"] = plugin_requested_action
                     target = invocation_argv[2]
+                    plugin_resolved = catalog.resolve(plugin_action_id) if catalog is not None else None
+                    input_schema = (
+                        getattr(plugin_resolved.adapter, "input_schema", {}) if plugin_resolved is not None else {}
+                    )
+                    try:
+                        request_parameters.update(_parse_plugin_metadata_arguments(metadata_arguments, input_schema))
+                    except ValueError as exc:
+                        invalid_plugin_request = (
+                            "plugin_command_invalid_arity" if str(exc) == "plugin_metadata_invalid_syntax" else str(exc)
+                        )
 
         if invalid_plugin_request:
             request_denial = PolicyDenial.create(

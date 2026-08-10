@@ -9,11 +9,15 @@ from typing import Any
 
 from core.ai.capability_assessment import CapabilityResolver
 from core.ai.llm_context import compact_context_for_llm, mission_contract_preamble
+from core.ai.tool_registry import PLANNER_TASKS
 from core.execution import ExecutionContext
 
 CONTEXT_WINDOW = 5
 with contextlib.suppress(ImportError):
-    from core.ai.ollama_client import CONTEXT_WINDOW, ask_ollama
+    from core.ai.ollama_client import CONTEXT_WINDOW as _CONFIGURED_CONTEXT_WINDOW
+    from core.ai.ollama_client import ask_ollama
+
+    CONTEXT_WINDOW = _CONFIGURED_CONTEXT_WINDOW
 
 logger = logging.getLogger("octopus.planner")
 
@@ -80,7 +84,8 @@ class MissionPlanCompiler:
 
 class MissionPlanner:
     def __init__(self):
-        self.system_prompt = """You are the MISSION PLANNER of OCTOPUS, an autonomous penetration testing system.
+        self.system_prompt = (
+            """You are the MISSION PLANNER of OCTOPUS, an autonomous penetration testing system.
 YOUR ONLY JOB is to take a high-level GOAL from the Director and decompose it into a sequence of agent assignments.
 
 Available Agents:
@@ -101,8 +106,13 @@ RULES:
 1. Do NOT specify exact tools like 'nmap' or 'whatweb'. Use high-level conceptual tasks.
 2. Keep the plan focused. A maximum of 3 steps per plan.
 3. Include an AnalysisAgent step for discovery/vulnerability goals. Do NOT add AnalysisAgent for persistence, data_exfiltration, or cleanup goals.
-4. VALID TASKS ONLY: service_discovery, vulnerability_assessment, analyze_vulnerabilities, exploit_selection, metasploit_verification, web_application_mapping, browser_surface_analysis, web_vulnerability_testing, web_content_discovery, web_credential_testing, transport_security_assessment, firewall_detection, external_intelligence, windows_enumeration, active_directory_enumeration, kerberos_assessment, ssh_user_enumeration, credential_harvesting, hash_cracking, test_credentials, find_privesc_vectors, exploit_privesc, post_access_inventory, payload_generation, establish_persistence, internal_network_recon, internal_service_discovery, pivot_setup, lateral_movement, domain_credential_extraction, ad_remote_execution, plugin_assessment, exfiltrate_data, stealth_cleanup.
+4. VALID TASKS ONLY: """
+            + ", ".join(PLANNER_TASKS)
+            + """.
+5. Respect task_input_readiness. Do not schedule a task marked blocked_by_input; a partial task runs only its ready providers.
+6. Concrete plugin actions are candidates only when plugin_action_readiness marks planner_visible=true. Never invent plugin parameter names or values.
 """
+        )
 
     def create_plan(self, goal: str, context: dict[str, Any], task_history: list[str]) -> dict[str, Any]:
         """Query the LLM to create a mission plan. Falls back to deterministic plans."""

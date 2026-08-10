@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import builtins
+import shlex
 from types import SimpleNamespace
 
 import pytest
@@ -10,7 +11,7 @@ import pytest
 import core.ai.tool_registry as ai_registry_module
 import core.plugins.loader as plugin_loader_module
 import core.tools.registry as tool_registry_module
-from core.ai.tool_registry import ToolRegistry
+from core.ai.tool_registry import PLANNER_TASKS, ToolRegistry
 
 pytestmark = pytest.mark.contract
 
@@ -208,3 +209,216 @@ def test_plugin_summary_uses_injected_runtime_manager_snapshot() -> None:
     assert first == [{"name": "runtime-plugin", "type": "recon"}]
     assert registry.get_discovered_plugins_summary() is first
     assert calls == ["provider", "list"]
+
+
+def test_typed_task_inputs_do_not_reuse_network_target_for_incompatible_providers(
+    tmp_path,
+) -> None:
+    registry = ToolRegistry()
+    registry._is_tool_available = lambda _name: True
+
+    web_commands = registry.get_commands_for_task("web_app_deep_testing", "app.example.test")
+    api_commands = registry.get_commands_for_task("api_security_testing", "app.example.test")
+
+    assert {shlex.split(command)[0] for command in web_commands} == {
+        "authenticated_crawl",
+        "cors_check",
+        "js_route_extract",
+        "security_headers_check",
+    }
+    assert {shlex.split(command)[0] for command in api_commands} == {
+        "api_auth_check",
+        "graphql_check",
+        "katana_crawl",
+    }
+    assert registry.get_commands_for_task("cloud_security_assessment", "app.example.test") == []
+    assert registry.get_commands_for_task("code_security_assessment", "app.example.test") == []
+    assert registry.get_commands_for_task("secrets_scanning", "app.example.test") == []
+
+    workspace = tmp_path / "authorized workspace"
+    workspace.mkdir()
+    files = {}
+    for name in ("session.json", "jwt.txt", "burp.xml", "zap.json", "openapi.yaml"):
+        path = workspace / name
+        path.write_text("fixture", encoding="utf-8")
+        files[name] = str(path)
+
+    inputs = registry.resolve_task_inputs(
+        "app.example.test",
+        [
+            {"type": "session_profile_path", "value": files["session.json"]},
+            {"type": "jwt_artifact", "value": files["jwt.txt"]},
+            {"type": "burp_export", "value": files["burp.xml"]},
+            {"type": "zap_export", "value": files["zap.json"]},
+            {"type": "openapi_spec_path", "value": files["openapi.yaml"]},
+            {"type": "cloud_provider", "value": "azure"},
+        ],
+        {"filesystem_scopes": [str(workspace)]},
+    )
+
+    assert inputs["filesystem_scope"] == (str(workspace.resolve()),)
+    assert inputs["cloud_provider"] == ("azure",)
+    bound_web = registry.get_commands_for_task(
+        "web_app_deep_testing",
+        "app.example.test",
+        task_inputs=inputs,
+    )
+    bound_api = registry.get_commands_for_task(
+        "api_security_testing",
+        "app.example.test",
+        task_inputs=inputs,
+    )
+    assert {
+        tuple(shlex.split(command)[:2])
+        for command in bound_web
+        if shlex.split(command)[0] in {"session_profile_import", "jwt_analyze", "burp_import", "zap_import"}
+    } == {
+        ("session_profile_import", files["session.json"]),
+        ("jwt_analyze", files["jwt.txt"]),
+        ("burp_import", files["burp.xml"]),
+        ("zap_import", files["zap.json"]),
+    }
+    assert ("openapi_import", files["openapi.yaml"]) in {tuple(shlex.split(command)[:2]) for command in bound_api}
+    assert registry.get_commands_for_task(
+        "cloud_security_assessment",
+        "app.example.test",
+        task_inputs=inputs,
+    ) == ["prowler_scan azure", "scoutsuite_scan azure"]
+    assert all(
+        shlex.split(command)[1] == str(workspace.resolve())
+        for task in ("code_security_assessment", "secrets_scanning")
+        for command in registry.get_commands_for_task(task, "app.example.test", task_inputs=inputs)
+    )
+
+
+def test_local_artifact_facts_cannot_escape_configured_filesystem_scope(tmp_path) -> None:
+    registry = ToolRegistry()
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}", encoding="utf-8")
+
+    inputs = registry.resolve_task_inputs(
+        "app.example.test",
+        [{"type": "session_profile", "value": str(outside)}],
+        {"filesystem_scopes": [str(allowed)]},
+    )
+
+    assert inputs == {"filesystem_scope": (str(allowed.resolve()),)}
+
+
+def test_remote_artifact_facts_are_bound_to_the_scan_target_scope() -> None:
+    registry = ToolRegistry()
+
+    inputs = registry.resolve_task_inputs(
+        "app.example.test",
+        [
+            {
+                "type": "openapi_spec_url",
+                "value": "https://app.example.test/schema/v3.json",
+            },
+            {
+                "type": "web_link",
+                "value": "https://app.example.test/api-docs",
+            },
+            {
+                "type": "web_link",
+                "value": "https://app.example.test/schema/ordinary.json",
+            },
+        ],
+        {
+            "openapi_specs": [
+                "https://app.example.test/configured/schema.json",
+                "https://outside.example/openapi.json",
+            ]
+        },
+    )
+
+    assert inputs == {
+        "openapi_spec": (
+            "https://app.example.test/configured/schema.json",
+            "https://app.example.test/schema/v3.json",
+            "https://app.example.test/api-docs",
+        )
+    }
+
+
+def test_reachability_report_separates_planner_routes_from_input_readiness() -> None:
+    registry = ToolRegistry()
+    report = registry.get_reachability_report("app.example.test")
+    rows = {row["task"]: row for row in report["tasks"]}
+
+    assert set(PLANNER_TASKS) == set(registry.task_map)
+    assert report["task_map_total"] == report["planner_allowed_total"] == report["routed_total"] == 56
+    assert report["unreachable"] == []
+    assert rows["payload_generation"]["input_state"] == "ready"
+    assert rows["web_app_deep_testing"]["input_state"] == "partial"
+    assert rows["api_security_testing"]["input_state"] == "partial"
+    assert rows["cloud_security_assessment"]["input_state"] == "blocked_by_input"
+    assert rows["code_security_assessment"]["missing_input_kinds"] == ["filesystem_scope"]
+    assert rows["secrets_scanning"]["missing_input_kinds"] == ["filesystem_scope"]
+
+
+def test_non_scan_provider_templates_use_only_their_declared_input_kind() -> None:
+    registry = ToolRegistry()
+
+    for entries in registry.task_map.values():
+        for template, provider in entries:
+            if provider in registry.task_map:
+                continue
+            kind = registry.provider_input_contract(provider).kind
+            if kind == "scan_target":
+                continue
+            assert "{target}" not in template, provider
+            if kind == "none":
+                assert "{" not in template, provider
+            else:
+                assert f"{{{kind}}}" in template, provider
+
+
+def test_plugin_action_reachability_requires_schema_complete_inputs_without_exposing_values() -> None:
+    canary = "credential://secret-reference-canary"
+    manager = SimpleNamespace(
+        list_plugins=lambda: [
+            {
+                "name": "typed_plugin",
+                "type": "post",
+                "supports_check": True,
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "artifact": {"type": "string", "format": "artifact-ref"},
+                        "credential": {"type": "string", "format": "credential-ref"},
+                        "attempts": {"type": "integer"},
+                    },
+                    "required": ["artifact", "credential"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+    )
+    registry = ToolRegistry(plugin_manager_provider=lambda: manager)
+
+    blocked = registry.get_discovered_plugin_action_reachability(
+        "host.example.test",
+        {"typed_plugin": {"artifact": "artifact://payload"}},
+    )[0]
+    ready = registry.get_discovered_plugin_action_reachability(
+        "host.example.test",
+        {
+            "typed_plugin": {
+                "artifact": "artifact://payload",
+                "credential": canary,
+                "attempts": 2,
+            }
+        },
+    )[0]
+
+    assert blocked["input_state"] == "blocked_by_input"
+    assert blocked["missing_parameter_names"] == ["credential"]
+    assert blocked["planner_visible"] is False
+    assert ready["input_state"] == "ready"
+    assert ready["planner_visible"] is True
+    assert ready["actions"] == ["check", "run"]
+    assert ready["resolved_parameter_names"] == ["artifact", "attempts", "credential"]
+    assert canary not in str(ready)

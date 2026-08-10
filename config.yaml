@@ -96,6 +96,17 @@ strategy:
   auto_ssh_inventory: true   # backwards-compatible name for controlled inventory
   auto_internal_recon: true  # allow read-only internal network inventory
   auto_payload_generation: false # do not build payloads unless explicitly enabled
+  task_inputs:
+    # Explicit operator-owned inputs. Local artifact facts are usable only when
+    # their resolved path stays beneath one of these filesystem roots.
+    filesystem_scopes: []
+    session_profiles: []
+    jwt_artifacts: []
+    burp_exports: []
+    zap_exports: []
+    openapi_specs: []
+    cloud_providers: []       # aws, azure, gcp, kubernetes, or m365
+    plugin_actions: {}        # plugin -> schema-declared parameter names/typed values
   auto_persistence: false    # active persistence is opt-in
   auto_data_exfil: false     # data collection/exfil stage is opt-in
   auto_cleanup: false        # stealth cleanup is opt-in

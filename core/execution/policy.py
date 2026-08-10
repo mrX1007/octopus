@@ -78,6 +78,7 @@ _NON_NETWORK_TARGET_TOOLS = {
     "checkov_scan",
     "gitleaks_scan",
     "jwt_analyze",
+    "openapi_import",
     "prowler_scan",
     "scoutsuite_scan",
     "semgrep_scan",
@@ -99,6 +100,16 @@ _TOOL_NETWORK_PARAMETER_NAMES = {
     "build_python_implant": frozenset({"c2_url"}),
     "shodan": frozenset({"query"}),
 }
+_OPTIONAL_NETWORK_TARGET_TOOLS = frozenset(
+    {
+        "build_go_implant",
+        "build_ps_stager",
+        "build_python_implant",
+        # This provider accepts either a local artifact (no network scope) or
+        # an HTTP(S) artifact URL (normal target-scope enforcement).
+        "openapi_import",
+    }
+)
 
 _NMAP_INDIRECT_TARGET_FLAGS = frozenset(
     {
@@ -274,7 +285,10 @@ def registered_tool_network_parameter_names(name: str) -> frozenset[str]:
     except ImportError:
         return frozenset()
     tool_def = get_tool(name)
-    if tool_def is None or not _registered_tool_uses_network_scope(tool_def):
+    if tool_def is None:
+        return frozenset()
+    canonical = str(getattr(tool_def, "name", "") or "").strip().casefold()
+    if not _registered_tool_uses_network_scope(tool_def) and canonical not in _OPTIONAL_NETWORK_TARGET_TOOLS:
         return frozenset()
     return _network_parameter_names(tool_def)
 
@@ -286,11 +300,12 @@ def _declared_network_targets(
 ) -> tuple[str, ...]:
     """Bind single-label targets through the callable's positional contract."""
 
-    if not _registered_tool_uses_network_scope(tool_def):
+    name = str(getattr(tool_def, "name", "") or "").strip().casefold()
+    if not _registered_tool_uses_network_scope(tool_def) and name not in _OPTIONAL_NETWORK_TARGET_TOOLS:
         return ()
     arguments = tuple(str(item) for item in argv[alias_tokens:])
     special = _special_registered_targets(
-        str(getattr(tool_def, "name", "") or "").strip().casefold(),
+        name,
         arguments,
     )
     if special is not None:
@@ -696,7 +711,8 @@ def registered_tool_requires_approval(
     arguments = tuple(str(item) for item in argv)
     requires_approval = normalized in _MANUAL_APPROVAL_TOOLS
     if normalized == "plugin":
-        action = arguments[3].casefold() if len(arguments) > 3 else "scan"
+        fourth = arguments[3].casefold() if len(arguments) > 3 else "scan"
+        action = "scan" if "=" in fourth else fourth
         requires_approval = action not in {"list", "ls", "scan", "check", "summary"}
     return requires_approval
 
@@ -1194,7 +1210,6 @@ class ExecutionPolicy:
             and registered_arguments
             and registered_arguments[0].strip().casefold() in {"list", "ls", "summary"}
         )
-        uses_network_scope = _registered_tool_uses_network_scope(registered_tool) and not plugin_inventory_gateway
         declared_targets: tuple[str, ...]
         if plugin_inventory_gateway:
             declared_targets = ()
@@ -1207,6 +1222,10 @@ class ExecutionPolicy:
                 )
             except InvalidInvocation as exc:
                 return self._decision(False, str(exc), context, invocation)
+        uses_network_scope = (
+            _registered_tool_uses_network_scope(registered_tool)
+            or (name in _OPTIONAL_NETWORK_TARGET_TOOLS and bool(declared_targets))
+        ) and not plugin_inventory_gateway
         effective_targets = tuple(dict.fromkeys((*declared_targets, *invocation.targets)))
         if effective_targets != invocation.targets:
             invocation = ToolInvocation(

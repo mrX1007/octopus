@@ -314,6 +314,9 @@ class PipelinePlanningMixin(PipelineMixinBase):
             if agent != "AnalysisAgent" and not self.tool_registry.has_task(task):
                 print(f"     [!] Dropping unknown planner task: {task}")
                 continue
+            if agent != "AnalysisAgent" and self._task_blocked_by_input(task, context):
+                print(f"     [i] Dropping planner task awaiting typed input: {task}")
+                continue
             seen_tasks.add(task_identity)
             optimized.append({**step, "task": task})
 
@@ -421,8 +424,14 @@ class PipelinePlanningMixin(PipelineMixinBase):
                 candidates.append("ad_security_review")
             if assets.get("urls") and surface_states.get("web") == "confirmed_present":
                 candidates.append("template_verification")
-            if surface_states.get("cloud") == "unknown" and assets.get("domains"):
+            cloud_input_state = self._task_input_state("cloud_security_assessment", context)
+            if cloud_input_state == "ready" or (
+                not cloud_input_state and surface_states.get("cloud") == "unknown" and assets.get("domains")
+            ):
                 candidates.append("cloud_security_assessment")
+            for local_task in ("secrets_scanning", "code_security_assessment"):
+                if self._task_input_state(local_task, context) == "ready":
+                    candidates.append(local_task)
         elif goal == "credential_harvesting":
             if services.intersection({"ldap", "kerberos", "winrm", "rdp", "smb"}):
                 candidates.append("active_directory_enumeration")
@@ -438,6 +447,26 @@ class PipelinePlanningMixin(PipelineMixinBase):
                 candidates.append("internal_network_recon")
             if "internal_service_assessment_pending" in coverage_gaps:
                 candidates.append("internal_service_discovery")
+
+        plugin_inputs = (context.get("task_inputs") or {}).get("plugin_actions") or []
+        for plugin_item in plugin_inputs:
+            p_name = str(plugin_item.get("plugin") or "").strip()
+            if p_name:
+                candidates.append(f"plugin:{p_name}")
+
+        for reach in self.tool_registry.get_discovered_plugin_action_reachability(context.get("host", ""), context.get("task_inputs")):
+            if reach.get("planner_visible"):
+                p_task = reach.get("action_id", "")
+                if p_task and p_task not in candidates:
+                    candidates.append(p_task)
+
+        readiness_list = context.get("plugin_action_readiness") or []
+        if isinstance(readiness_list, list):
+            for item in readiness_list:
+                if isinstance(item, dict) and item.get("planner_visible"):
+                    p_task = str(item.get("action_id") or item.get("action") or item.get("task") or "")
+                    if p_task and p_task not in candidates:
+                        candidates.append(p_task)
 
         if not candidates:
             return plan
@@ -457,6 +486,8 @@ class PipelinePlanningMixin(PipelineMixinBase):
                 continue
             if task in present or self._task_exhausted(task):
                 continue
+            if self._task_blocked_by_input(task, context):
+                continue
             if not self.tool_registry.task_has_available_tools(task):
                 continue
             insert_at = next(
@@ -472,6 +503,25 @@ class PipelinePlanningMixin(PipelineMixinBase):
             enriched.sort(key=lambda step: 0 if step.get("task") == "vulnerability_assessment" else 1)
 
         return self.policy.validate_plan(enriched, context)
+
+    def _task_blocked_by_input(self, task: str, context: dict[str, Any]) -> bool:
+        canon = self.tool_registry.canonical_task(task)
+        if canon.startswith("plugin:"):
+            readiness_list = context.get("plugin_action_readiness") or []
+            if isinstance(readiness_list, list):
+                for item in readiness_list:
+                    if isinstance(item, dict) and (item.get("action_id") == canon or item.get("action") == canon):
+                        if item.get("state") == "blocked_by_input":
+                            return True
+            return False
+        return self._task_input_state(task, context) == "blocked_by_input"
+
+    def _task_input_state(self, task: str, context: dict[str, Any]) -> str:
+        readiness = context.get("task_input_readiness") or {}
+        if not isinstance(readiness, dict):
+            return ""
+        task_state = readiness.get(self.tool_registry.canonical_task(task)) or {}
+        return str(task_state.get("state") or "") if isinstance(task_state, dict) else ""
 
     def _rank_candidate_tasks(
         self,

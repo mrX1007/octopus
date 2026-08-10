@@ -345,6 +345,103 @@ def test_vulnerability_plan_enriches_safe_categories_from_surface_state():
     assert "ad_security_review" in tasks
 
 
+def test_planner_prompt_inventory_matches_registry_and_exposes_input_readiness() -> None:
+    from core.ai.planner import MissionPlanner
+    from core.ai.tool_registry import PLANNER_TASKS, ToolRegistry
+
+    planner = MissionPlanner()
+    registry = ToolRegistry()
+
+    assert set(PLANNER_TASKS) == set(registry.task_map)
+    for task in ("code_security_assessment", "secrets_scanning", "cloud_security_assessment"):
+        assert task in planner.system_prompt
+    assert "blocked_by_input" in planner.system_prompt
+
+
+def test_pipeline_agents_bind_cloud_provider_fact_instead_of_network_target(
+    tmp_path,
+) -> None:
+    from core.ai.pipeline import AIPipeline
+
+    pipeline = AIPipeline(str(tmp_path / "typed-inputs.db"))
+    scan_id = "typed-input-scan"
+    target = "app.example.test"
+    pipeline._current_scan_id = scan_id
+    pipeline.fact_store.add_fact(scan_id, target, "cloud_provider", "gcp", "operator")
+    pipeline.tool_registry._is_tool_available = lambda name: (
+        name
+        in {
+            "prowler_scan",
+            "scoutsuite_scan",
+        }
+    )
+
+    commands = pipeline.discovery_agent.execute_task("cloud_security_assessment", target)
+
+    assert commands == ["prowler_scan gcp", "scoutsuite_scan gcp"]
+    assert target not in " ".join(commands)
+
+
+def test_vulnerability_plan_reaches_tasks_with_ready_typed_inputs(tmp_path) -> None:
+    from core.ai.pipeline import AIPipeline
+
+    pipeline = AIPipeline(str(tmp_path / "ready-typed-inputs.db"))
+    typed_tasks = {
+        "cloud_security_assessment",
+        "code_security_assessment",
+        "secrets_scanning",
+    }
+    pipeline.tool_registry.task_has_available_tools = lambda task: task in typed_tasks
+    pipeline._rank_candidate_tasks = lambda candidates, _context, _critical: list(dict.fromkeys(candidates))
+    context = {
+        "host": "app.example.test",
+        "state": "recon_completed",
+        "services": [],
+        "coverage_gaps": [],
+        "task_input_readiness": {task: {"state": "ready"} for task in typed_tasks},
+        "target_model": {"surface_states": {}, "assets": {}},
+    }
+
+    optimized = pipeline._optimize_plan(
+        [{"agent": "DiscoveryAgent", "task": "vulnerability_assessment"}],
+        "vulnerability_assessment",
+        context,
+    )
+
+    assert typed_tasks.issubset({step["task"] for step in optimized})
+
+
+def test_vulnerability_plan_does_not_reach_tasks_with_missing_typed_inputs(tmp_path) -> None:
+    from core.ai.pipeline import AIPipeline
+
+    pipeline = AIPipeline(str(tmp_path / "blocked-typed-inputs.db"))
+    typed_tasks = {
+        "cloud_security_assessment",
+        "code_security_assessment",
+        "secrets_scanning",
+    }
+    pipeline.tool_registry.task_has_available_tools = lambda task: task in typed_tasks
+    context = {
+        "host": "app.example.test",
+        "state": "recon_completed",
+        "services": [],
+        "coverage_gaps": [],
+        "task_input_readiness": {task: {"state": "blocked_by_input"} for task in typed_tasks},
+        "target_model": {
+            "surface_states": {"cloud": "unknown"},
+            "assets": {"domains": ["app.example.test"]},
+        },
+    }
+
+    optimized = pipeline._optimize_plan(
+        [{"agent": "DiscoveryAgent", "task": "vulnerability_assessment"}],
+        "vulnerability_assessment",
+        context,
+    )
+
+    assert typed_tasks.isdisjoint({step["task"] for step in optimized})
+
+
 def test_plan_enrichment_limit_counts_only_new_noncritical_tasks(
     monkeypatch,
     tmp_path,
@@ -737,3 +834,55 @@ def test_bound_ollama_stalled_stream_is_closed_on_early_cancellation(monkeypatch
     assert chunks == ["[!] Ollama request cancelled: operator_request."]
     assert response_closed.wait(1.0)
     assert not canceller.is_alive()
+
+
+def test_end_to_end_plugin_candidate_planner_compiler_runtime_flow(tmp_path):
+    """Verify candidate -> planner -> compiler -> key=value command -> canonical runtime execution."""
+    from core.ai.pipeline import AIPipeline
+    from core.ai.runtime import PipelineRuntime
+    from core.execution import ExecutionContext, ExecutionStatus
+
+    pipeline = AIPipeline(str(tmp_path / "facts.db"))
+
+    context = {
+        "host": "192.0.2.20",
+        "state": "initial_recon",
+        "services": ["ssh"],
+        "task_inputs": {
+            "plugin_actions": [
+                {"plugin": "payload_keying", "payload": "secret_bytes"}
+            ]
+        },
+        "plugin_action_readiness": [
+            {
+                "action_id": "plugin:payload_keying",
+                "plugin": "payload_keying",
+                "state": "ready",
+                "planner_visible": True,
+            }
+        ],
+    }
+
+    # 1. Candidate enrichment in PipelinePlanningMixin
+    plan = pipeline._enrich_plan([], "vulnerability_assessment", context)
+    tasks = [step["task"] for step in plan]
+    assert "plugin:payload_keying" in tasks
+
+    # 2. Command formatting in ToolRegistry
+    commands = pipeline.tool_registry.get_commands_for_task("plugin:payload_keying", target="192.0.2.20", task_inputs=context["task_inputs"])
+    assert len(commands) == 1
+    assert "plugin payload_keying 192.0.2.20 scan payload=secret_bytes" in commands[0]
+
+    # 3. Canonical PipelineRuntime execution
+    def _dummy_runner(*_args, **_kwargs):
+        return "noop"
+
+    exec_ctx = ExecutionContext.operator(
+        actor="e2e-planner-test",
+        approval_id="approved-e2e",
+        target_scope=("192.0.2.20",),
+        allow_active_tools=True,
+    )
+    runtime = PipelineRuntime(str(tmp_path / "facts.db"), runner=_dummy_runner)
+    res = runtime.dispatch(commands[0], (), set(), exec_ctx)
+    assert res.status is ExecutionStatus.SUCCEEDED

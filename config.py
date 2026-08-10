@@ -5,9 +5,9 @@ import copy
 import math
 import os
 from collections.abc import Mapping
-from typing import Optional
+from typing import Any, Optional
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 # Load .env before constructing defaults.
 try:
@@ -70,7 +70,7 @@ KILLCHAIN_STAGE_KEYS: tuple[str, ...] = (
 )
 
 
-DEFAULTS = {
+DEFAULTS: dict[str, Any] = {
     "db": {
         "host": "localhost",
         "user": "octopus",
@@ -139,6 +139,20 @@ DEFAULTS = {
         "auto_ssh_inventory": True,
         "auto_internal_recon": True,
         "auto_payload_generation": False,
+        "task_inputs": {
+            # Explicit operator-owned local/cloud scopes for autonomous tasks.
+            # Artifact facts are accepted only beneath these filesystem roots.
+            "filesystem_scopes": [],
+            "session_profiles": [],
+            "jwt_artifacts": [],
+            "burp_exports": [],
+            "zap_exports": [],
+            "openapi_specs": [],
+            "cloud_providers": [],
+            # Per-plugin values validated against discovered input_schema.
+            # Credential/path/artifact references remain opaque at this layer.
+            "plugin_actions": {},
+        },
         "auto_persistence": False,
         "auto_data_exfil": False,
         "auto_cleanup": False,
@@ -282,6 +296,13 @@ DEFAULTS = {
 
 _EMPTY_LIST_ITEM_TYPES: dict[tuple[str, ...], type] = {
     ("strategy", "authorized_targets"): str,
+    ("strategy", "task_inputs", "filesystem_scopes"): str,
+    ("strategy", "task_inputs", "session_profiles"): str,
+    ("strategy", "task_inputs", "jwt_artifacts"): str,
+    ("strategy", "task_inputs", "burp_exports"): str,
+    ("strategy", "task_inputs", "zap_exports"): str,
+    ("strategy", "task_inputs", "openapi_specs"): str,
+    ("strategy", "task_inputs", "cloud_providers"): str,
     ("wordlists", "dns"): str,
     ("wordlists", "snmp"): str,
     ("wordlists", "ftp_passwords"): str,
@@ -437,17 +458,66 @@ def _validate_value(path: tuple[str, ...], value) -> None:
             if maximum is not None and item > maximum:
                 raise ConfigValidationError(f"{_path_label(path)}[{index}] must be <= {maximum:g}; got {item!r}")
 
+    if path == ("strategy", "task_inputs", "cloud_providers"):
+        supported = {"aws", "azure", "gcp", "kubernetes", "m365"}
+        for index, item in enumerate(value):
+            if item.strip().casefold() not in supported:
+                raise ConfigValidationError(
+                    f"{_path_label(path)}[{index}] must be a supported cloud provider; got {item!r}"
+                )
+
+
+def _strict_json_config_value(value: Any, path: tuple[str, ...]) -> Any:
+    """Validate and detach a plugin input value without interpreting it."""
+
+    if value is None or isinstance(value, (str, bool, int)):
+        if value is None:
+            raise ConfigValidationError(f"{_path_label(path)} must not be null")
+        return copy.deepcopy(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ConfigValidationError(f"{_path_label(path)} must be finite; got {value!r}")
+        return value
+    if isinstance(value, list):
+        return [_strict_json_config_value(item, (*path, str(index))) for index, item in enumerate(value)]
+    if isinstance(value, Mapping):
+        result = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or not key.strip():
+                raise ConfigValidationError(f"{_path_label(path)} keys must be non-empty strings")
+            result[key] = _strict_json_config_value(item, (*path, key))
+        return result
+    raise ConfigValidationError(
+        f"{_path_label(path)} must contain only JSON-compatible values; got {type(value).__name__}"
+    )
+
+
+def _validate_plugin_action_inputs(value: Any, path: tuple[str, ...]) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ConfigValidationError(f"{_path_label(path)} must be a mapping; got {type(value).__name__}")
+    result = {}
+    for plugin_name, parameters in value.items():
+        if not isinstance(plugin_name, str) or not plugin_name.strip():
+            raise ConfigValidationError(f"{_path_label(path)} plugin names must be non-empty strings")
+        plugin_path = (*path, plugin_name)
+        if not isinstance(parameters, Mapping):
+            raise ConfigValidationError(
+                f"{_path_label(plugin_path)} must be a mapping; got {type(parameters).__name__}"
+            )
+        result[plugin_name] = _strict_json_config_value(parameters, plugin_path)
+    return result
+
 
 def _deep_merge(
-    base: Mapping,
-    override: Mapping,
+    base: Mapping[Any, Any],
+    override: Mapping[Any, Any],
     *,
     _path: tuple[str, ...] = (),
-) -> dict:
+) -> dict[Any, Any]:
     """Strictly merge a validated mapping into a detached defaults copy."""
     if not isinstance(base, Mapping) or not isinstance(override, Mapping):
         raise ConfigValidationError(f"{_path_label(_path)} must be a mapping")
-    result = copy.deepcopy(base)
+    result = copy.deepcopy(dict(base))
     for key, value in override.items():
         path = (*_path, str(key))
         if key not in base:
@@ -457,6 +527,9 @@ def _deep_merge(
             raise ConfigValidationError(f"unknown configuration key {_path_label(path)!r}")
 
         default = base[key]
+        if path == ("strategy", "task_inputs", "plugin_actions"):
+            result[key] = _validate_plugin_action_inputs(value, path)
+            continue
         if isinstance(default, dict):
             if not isinstance(value, Mapping):
                 raise ConfigValidationError(f"{_path_label(path)} must be a mapping; got {type(value).__name__}")

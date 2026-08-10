@@ -2165,6 +2165,7 @@ def ai_stealth_brute(service: str, target: str) -> str:
     category="post",
     description="Build the Go C2 implant",
     requires=["go", "garble"],
+    needs_target=False,
 )
 def ai_build_go_implant(
     c2_url: str = "http://127.0.0.1:8443", os_target: str = "linux", arch_target: str = "amd64"
@@ -2187,6 +2188,7 @@ def ai_build_go_implant(
     aliases=["build_py_implant"],
     category="post",
     description="Generate the Python C2 implant",
+    needs_target=False,
 )
 def ai_build_python_implant(c2_url: str = "http://127.0.0.1:8443", beacon_interval: int = 60) -> str:
     try:
@@ -2205,6 +2207,7 @@ def ai_build_python_implant(c2_url: str = "http://127.0.0.1:8443", beacon_interv
     aliases=["build_powershell_stager"],
     category="post",
     description="Generate a PowerShell C2 stager",
+    needs_target=False,
 )
 def ai_build_ps_stager(c2_url: str = "http://127.0.0.1:8443", method: str = "iex") -> str:
     try:
@@ -2237,25 +2240,16 @@ def ai_searchsploit(query: str) -> str:
     needs_target=False,
 )
 def ai_plugin_inventory() -> str:
-    """Return real discovery metadata for the plugin-assessment task."""
+    """Return discovery metadata through the canonical plugin runtime."""
 
-    try:
-        import json as _json
+    from core.ai.runtime import dispatch_plugin_command
+    from core.execution import ExecutionStatus
 
-        from core.plugins.loader import PluginManager, default_modules_dir
-    except ImportError as exc:
-        return f"[!] Plugin system unavailable: {exc}"
-
-    manager = PluginManager(default_modules_dir())
-    return _json.dumps(
-        {
-            "plugins": manager.list_plugins(),
-            "skipped": manager.list_skipped_plugins(),
-        },
-        indent=2,
-        default=str,
-        sort_keys=True,
-    )
+    result = dispatch_plugin_command("plugin_inventory", current_execution_context())
+    if result.status is ExecutionStatus.SUCCEEDED:
+        return result.output
+    detail = result.error_message or result.stderr or result.status.value
+    return f"[!] Plugin runtime execution error [{result.status.value}]: {detail}"
 
 
 @tool(
@@ -2265,67 +2259,26 @@ def ai_plugin_inventory() -> str:
     description="Run a class-based OCTOPUS plugin by name.",
     dependencies=resource("", "modules", resource_type=ResourceType.DIRECTORY),
 )
-def ai_run_plugin(plugin_name: str, target: str = "", action: str = "scan") -> str:
-    """Execute PluginManager plugins through the tool registry.
+def ai_run_plugin(plugin_name: str, target: str = "", action: str = "scan", **kwargs) -> str:
+    """Execute class plugins through the canonical runtime-owned catalog.
 
     Default action is intentionally check/scan-oriented. Exploit-style actions
     must be exposed by the plugin itself with an explicit allow flag.
     """
-    try:
-        import json as _json
+    import shlex
 
-        from core.plugins.base import PluginContext
-        from core.plugins.loader import PluginManager, default_modules_dir
-    except ImportError as e:
-        return f"[!] Plugin system unavailable: {e}"
+    from core.ai.runtime import dispatch_plugin_command
+    from core.execution import ExecutionStatus
 
-    manager = PluginManager(default_modules_dir())
-    if plugin_name in ("list", "ls", "summary"):
-        return _json.dumps(manager.list_plugins(), indent=2, default=str)
-
-    descriptor = manager.get_plugin(plugin_name)
-    if descriptor is None:
-        available = ", ".join(sorted(manager.plugins)) or "none"
-        return f"[!] Plugin '{plugin_name}' not found. Available: {available}"
-
-    normalized_action = str(action or "scan").strip().casefold()
-    if normalized_action not in {"check", "run", "scan"}:
-        return f"[!] Plugin action '{normalized_action or 'unknown'}' is not declared."
-    if normalized_action in {"check", "scan"}:
-        checked = manager.check(plugin_name, target, timeout=60)
-        return _json.dumps(
-            {
-                "action": "check",
-                "confidence": checked.confidence,
-                "details": checked.details,
-                "evidence": checked.evidence,
-                "plugin": plugin_name,
-                "supports_check": bool(getattr(descriptor, "supports_check", False)),
-                "version": checked.version,
-                "vulnerable": checked.vulnerable,
-            },
-            indent=2,
-            default=str,
-        )
-
-    ctx = PluginContext(target=target or "")
-    result = manager.execute(
-        plugin_name,
-        context=ctx,
-        target=target,
-        action="run",
-        timeout=60,
-    )
-    payload = {
-        "plugin": plugin_name,
-        "success": result.success,
-        "data": result.data,
-        "artifacts": result.artifacts,
-        "credentials": result.credentials,
-        "sessions": result.sessions,
-        "error": result.error,
-    }
-    output = _json.dumps(payload, indent=2, default=str)
-    if result.output:
-        output += f"\n\n--- plugin output ---\n{result.output[:4000]}"
-    return output
+    command = ["plugin", plugin_name]
+    if plugin_name not in {"list", "ls", "summary"}:
+        if target:
+            command.append(target)
+        if action:
+            command.append(action)
+        command.extend(f"{key}={value}" for key, value in kwargs.items())
+    result = dispatch_plugin_command(shlex.join(command), current_execution_context())
+    if result.status is ExecutionStatus.SUCCEEDED:
+        return result.output
+    detail = result.error_message or result.stderr or result.status.value
+    return f"[!] Plugin runtime execution error [{result.status.value}]: {detail}"

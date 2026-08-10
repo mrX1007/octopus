@@ -156,6 +156,8 @@ class ContextBuilder:
         stage_gates = self._stage_gates(state)
 
         next_required_capability = self._next_required_capability(primary_state, open_questions)
+        task_input_readiness = self._task_input_readiness(host, facts)
+        plugin_action_readiness = self._plugin_action_readiness(host)
         context = {
             "host": host,
             "state": primary_state,
@@ -169,6 +171,8 @@ class ContextBuilder:
             "automation_policy": self._automation_policy(),
             "killchain_policy": self._killchain_policy(),
             "next_required_capability": next_required_capability,
+            "task_input_readiness": task_input_readiness,
+            "plugin_action_readiness": plugin_action_readiness,
             "network_graph": self._network_graph(facts),
             "asset_graph": asset_graph,
             "surface_states": surface_states,
@@ -188,6 +192,51 @@ class ContextBuilder:
             requested=True,
         ).to_dict()
         return context
+
+    def _task_input_readiness(
+        self,
+        target: str,
+        facts: list[dict[str, Any]],
+    ) -> dict[str, dict[str, Any]]:
+        """Expose input states to planning without exposing resolved values."""
+
+        registry = getattr(self.capability_resolver, "tool_registry", None)
+        resolve = getattr(registry, "resolve_task_inputs", None)
+        report = getattr(registry, "get_reachability_report", None)
+        if not callable(resolve) or not callable(report):
+            return {}
+        configured = (CFG.get("strategy") or {}).get("task_inputs") or {}
+        inputs = resolve(target, facts, configured)
+        rows = report(target, inputs).get("tasks") or []
+        relevant = {
+            "api_security_testing",
+            "cloud_security_assessment",
+            "code_security_assessment",
+            "payload_generation",
+            "secrets_scanning",
+            "web_app_deep_testing",
+        }
+        return {
+            str(row["task"]): {
+                "state": str(row["input_state"]),
+                "missing_input_kinds": list(row.get("missing_input_kinds") or []),
+                "ready_providers": int(row.get("ready_providers") or 0),
+                "provider_count": int(row.get("provider_count") or 0),
+            }
+            for row in rows
+            if str(row.get("task") or "") in relevant
+        }
+
+    def _plugin_action_readiness(self, target: str) -> list[dict[str, Any]]:
+        """Return schema-only plugin candidates; never expose configured values."""
+
+        registry = getattr(self.capability_resolver, "tool_registry", None)
+        resolver = getattr(registry, "get_discovered_plugin_action_reachability", None)
+        if not callable(resolver):
+            return []
+        configured = (CFG.get("strategy") or {}).get("task_inputs") or {}
+        plugin_inputs = configured.get("plugin_actions") or {}
+        return resolver(target, plugin_inputs)
 
     def build_evaluated_fact_snapshot(
         self,

@@ -1,5 +1,4 @@
-"""
-Payload evasion engine.
+"""Payload-transformation and evasion helpers owned by core.c2.
 
 Provides payload encoding, encryption, obfuscation, and stager generation
 to evade AV/EDR detection. All techniques are designed to be composable —

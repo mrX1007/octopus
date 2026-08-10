@@ -30,6 +30,13 @@ def create_parser() -> argparse.ArgumentParser:
     trace.add_argument("scan_id")
     trace.add_argument("target")
     trace.add_argument("format", nargs="?", default="text")
+
+    plugin = commands.add_parser("plugin", help="execute a class-based plugin action")
+    plugin.add_argument("plugin_name", help="plugin identifier or list/ls/summary")
+    plugin.add_argument("target", nargs="?", default="")
+    plugin.add_argument("action", nargs="?", default=None)
+    plugin.add_argument("metadata", nargs=argparse.REMAINDER, help="key=value parameters")
+
     for command in _SUPERVISOR_COMMANDS:
         commands.add_parser(command, help=f"supervisor {command}")
     return parser
@@ -156,7 +163,7 @@ def main(
     """Dispatch one CLI invocation and return its process exit code."""
 
     arguments = list(argv) if argv is not None else list(sys.argv[1:])
-    known_commands = {"trace", *_SUPERVISOR_COMMANDS}
+    known_commands = {"trace", "plugin", *_SUPERVISOR_COMMANDS}
     if arguments and arguments[0] not in known_commands and arguments[0] not in {"-h", "--help", "--version"}:
         # The historical script ignored unrecognized argv and entered the
         # interactive menu. Preserve that compatibility quirk while the
@@ -171,6 +178,46 @@ def main(
             args.format,
         )
         return 0
+    if args.command == "plugin":
+        import shlex
+
+        from core.ai.runtime import PipelineRuntime
+        from core.execution import ExecutionContext, ExecutionStatus
+
+        cmd_tokens = ["plugin", args.plugin_name]
+        if args.target:
+            cmd_tokens.append(args.target)
+        if args.action:
+            cmd_tokens.append(args.action)
+        if args.metadata:
+            cmd_tokens.extend(args.metadata)
+        command_str = shlex.join(cmd_tokens)
+
+        context = ExecutionContext.operator(
+            actor="octopus-cli",
+            approval_id="cli-plugin-read-only",
+            target_scope=(args.target,) if args.target else (),
+        )
+        try:
+
+            def _forbidden_legacy_runner(*_args: object, **_kwargs: object) -> str:
+                raise RuntimeError("plugin_cli_legacy_runner_forbidden")
+
+            runtime = PipelineRuntime(runner=_forbidden_legacy_runner)
+            result = runtime.dispatch(command_str, (), set(), context)
+            if result.status is ExecutionStatus.SUCCEEDED:
+                if result.output:
+                    print(result.output)
+                return 0
+            else:
+                print(
+                    f"[!] Plugin CLI execution error [{result.status}]: {result.error_message}",
+                    file=sys.stderr,
+                )
+                return 1
+        except Exception as exc:
+            print(f"[!] Plugin CLI execution error: {exc}", file=sys.stderr)
+            return 1
     if args.command in _SUPERVISOR_COMMANDS:
         return _run_supervisor_command(args.command)
     return (app or create_app()).run()

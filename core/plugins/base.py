@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, ClassVar, Optional
 
+from core.plugins.schema import empty_input_schema
+
 
 class PluginType(Enum):
     RECON = "recon"
@@ -92,6 +94,9 @@ class OctopusPlugin:
       - cleanup()
       - on_credential_found(cred)
       - on_session_opened(session)
+
+    Subclasses MAY declare:
+      - input_schema: closed JSON-serializable metadata for run/check kwargs
     """
 
     name: str = "base_plugin"
@@ -107,6 +112,11 @@ class OctopusPlugin:
     python_deps: ClassVar[list[str]] = []      # pip packages
 
     capabilities: ClassVar[set[str]] = set()   # "network", "file_write", "shell_exec", "root"
+
+    # Closed JSON-Schema-like metadata for top-level ``run``/``check`` kwargs.
+    # Reference formats are opaque identifiers; the framework never resolves
+    # them while discovering or validating a plugin.
+    input_schema: ClassVar[dict[str, Any]] = empty_input_schema()
 
     _context: Optional[PluginContext] = None
 

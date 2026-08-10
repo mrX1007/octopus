@@ -83,7 +83,11 @@ class DeterministicPolicy:
             automated_stages = killchain_policy.get("automated_stages") or {}
             if not bool(automated_stages.get(killchain_stage, True)):
                 return False
-        if task in {"establish_persistence", "payload_generation"}:
+        if task == "payload_generation":
+            return state in {"root_access_confirmed", "persistence_established"} and bool(
+                policy.get("auto_payload_generation", False)
+            )
+        if task == "establish_persistence":
             return state in {"root_access_confirmed", "persistence_established"} and bool(
                 policy.get("auto_persistence", False)
             )

@@ -8,6 +8,7 @@ Only inert metadata descriptors live in this process.
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import logging
 import os
@@ -24,6 +25,7 @@ from typing import Any
 from core.plugins.base import CheckResult, KillChainStage, PluginContext, PluginResult, PluginType
 from core.plugins.events import PluginEventBus
 from core.plugins.protocol import WireError, dumps_message, loads_message
+from core.plugins.schema import empty_input_schema, normalize_input_schema
 from core.secrets import Redactor, get_redactor, is_secret_ref
 
 _DISCOVERY_TIMEOUT = 15.0
@@ -73,6 +75,7 @@ class PluginDescriptor:
     capabilities: list[str] = field(default_factory=list)
     hooks: list[str] = field(default_factory=list)
     supports_check: bool = False
+    input_schema: dict[str, Any] = field(default_factory=empty_input_schema)
 
 
 @dataclass
@@ -217,6 +220,7 @@ class PluginManager:
         supports_check = raw.get("supports_check", False)
         if not isinstance(supports_check, bool):
             raise ValueError("plugin metadata field 'supports_check' must be a boolean")
+        input_schema = normalize_input_schema(raw.get("input_schema", empty_input_schema()))
         return PluginDescriptor(
             name=name,
             path=path,
@@ -233,6 +237,7 @@ class PluginManager:
             capabilities=self._string_list(raw.get("capabilities", []), "capabilities"),
             hooks=self._string_list(raw.get("hooks", []), "hooks"),
             supports_check=supports_check,
+            input_schema=input_schema,
         )
 
     def _register_descriptor(self, descriptor: PluginDescriptor) -> None:
@@ -795,6 +800,7 @@ class PluginManager:
                 "requires": list(descriptor.requires),
                 "depends_on": list(descriptor.depends_on),
                 "supports_check": descriptor.supports_check,
+                "input_schema": copy.deepcopy(descriptor.input_schema),
             }
             for descriptor in (self.plugins[name] for name in sorted(self.plugins))
         ]

@@ -335,6 +335,50 @@ def test_nonstandard_network_parameters_require_explicit_scope(command):
     assert decision.reason == "missing_target_scope"
 
 
+@pytest.mark.parametrize(
+    "command",
+    ["build_go_implant", "build_python_implant", "build_ps_stager"],
+)
+def test_payload_build_defaults_are_targetless_but_remain_approval_gated(command):
+    policy = ExecutionPolicy()
+
+    automatic = policy.authorize_command(command, _context(CAP_REGISTERED_TOOL))
+    approved = policy.authorize_command(
+        command,
+        _context(CAP_REGISTERED_TOOL, CAP_ACTIVE_TOOL, approved=True),
+    )
+
+    assert automatic.reason == "active_tool_requires_approval"
+    assert approved.allowed is True
+    assert approved.invocation is not None
+    assert approved.invocation.targets == ()
+
+
+def test_hybrid_artifact_input_accepts_local_path_and_scopes_remote_url(tmp_path):
+    artifact = tmp_path / "api schema.yaml"
+    artifact.write_text("openapi: 3.0.0\n", encoding="utf-8")
+    policy = ExecutionPolicy()
+    context = _context(CAP_REGISTERED_TOOL, scope=("app.example.test",))
+
+    local = policy.authorize_command(f"openapi_import '{artifact}'", context)
+    remote = policy.authorize_command(
+        "openapi_import https://app.example.test/openapi.json",
+        context,
+    )
+    outside = policy.authorize_command(
+        "openapi_import https://outside.example/openapi.json",
+        context,
+    )
+
+    assert local.allowed is True
+    assert local.reason == "registered_tool_authorized"
+    assert remote.allowed is True
+    assert remote.invocation is not None
+    assert remote.invocation.targets == ("https://app.example.test/openapi.json",)
+    assert outside.allowed is False
+    assert outside.reason == "target_out_of_scope:https://outside.example/openapi.json"
+
+
 def test_parse_invocation_rejects_empty_tokenization(monkeypatch):
     import core.execution.policy as policy_module
 

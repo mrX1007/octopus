@@ -271,18 +271,19 @@ At this revision, the profile-accounted registry coverage command in Testing
 reports:
 
 ```text
-covered/registered: 96/96
+covered/registered: 110/110
 unknown: []
 ```
 
-The decorator inventory contains 96 canonical names and 121 unique aliases.
-Of those canonical tools, 84 occur as AI task-map leaf providers and the
-remaining 12 are explicitly classified as follow-up, manual-gated, legacy or
-alias wrappers. The hermetic unified-runtime contract verifies that all 217
-declared names resolve through the action catalog, runtime dispatcher and
-stubbed provider facade. Undeclared `run_`/`_run_` spellings are rejected by
-both registries instead of becoming implicit aliases. No external provider is
-invoked by this contract.
+The decorator inventory contains 110 canonical names and 119 unique aliases
+(229 declared names in total). Of those canonical tools, 96 are enabled and 14
+are explicitly quarantined. The AI task map contains 82 enabled leaf providers;
+the remaining 14 enabled tools have explicit profile-only roles such as
+follow-up, manual-gated, legacy or alias wrappers. The hermetic decorator-only
+catalog contract verifies that all 229 declared names resolve to their canonical
+action IDs through a stubbed provider facade. Undeclared `run_`/`_run_`
+spellings are rejected by both registries instead of becoming implicit aliases.
+No external provider is invoked by this contract.
 
 For application integrations, the documented public execution entry point is
 `core.tools.dispatch_registered_tool(command, execution_context)`. It requires
@@ -296,7 +297,7 @@ imports the top-level compatibility module.
 
 This is not yet literal end-to-end unification of every project path:
 
-- all 84 AI task-map leaf providers, including `rustscan`, now resolve through
+- all 82 enabled AI task-map leaf providers, including `rustscan`, now resolve through
   the decorator registry and `ActionCatalog`; unregistered direct-binary
   execution fails closed;
 - the duplicated legacy numeric menu has 48 entries; each selection, plus the
@@ -310,16 +311,26 @@ This is not yet literal end-to-end unification of every project path:
   identity; cached-credential/post-access adapters and C2 builders that need
   additional parameters fail closed instead of reusing a mutable label or
   treating the scan target as build configuration;
-- class plugins are discovered behind the shared `plugin` gateway rather than
-  being registered as individual `PluginActionAdapter` entries;
-- all 58 conceptual task-map keys have explicit scheduling risk and
+- the runtime-owned `PluginManager` replaces the executable shared `plugin`
+  registry adapter with one individual `PluginActionAdapter` per discovered
+  class plugin. `plugin_inventory` owns discovery evidence, while
+  `plugin NAME TARGET ACTION` command grammar resolves to the corresponding
+  `plugin:<name>` action without constructing a second manager;
+- all 56 conceptual task-map keys have explicit scheduling risk and
   precondition metadata; only an unknown external task receives the
   fail-closed default `risk: unknown` profile.
 
-Accordingly, `96/96` means every decorator-registered tool is accounted for by
+Accordingly, `110/110` means every decorator-registered tool is accounted for by
 an execution profile; it must not be read as “every tool path is unified.” It
 also does not imply that optional external binaries or services are installed
 in a particular environment.
+
+Registry coverage is a classification invariant, not a planner-reachability
+metric. It does not prove that the Director/Planner vocabulary can select every
+conceptual task, that a fact-driven follow-up exists for every profile-only
+provider, or that task expansion can bind the provider's required typed input.
+Those scheduling and input-binding properties require separate reachability
+contracts.
 
 ## Automation And Gating
 
@@ -1246,7 +1257,7 @@ denominator rules are documented in
 │   ├── actions/            # unified provider/action lifecycle adapters
 │   ├── ai/                 # pipeline, missions, facts, assessment, LLM, parsers
 │   ├── benchmarks/         # schema, built-in replay runner, CLI and aggregation
-│   ├── c2/                 # optional C2 daemon, implants, operators
+│   ├── c2/                 # C2 daemon, Garble builder, and evasion payload transformations
 │   ├── cli/                # parser, lifecycle, workflows, history and presentation
 │   ├── exploits/           # exploit selector and intelligence mapper
 │   ├── killchain/          # post-access stages and AD modules

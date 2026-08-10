@@ -114,9 +114,20 @@ class AIPipeline(
         )
         self.trace_reporter = self.runtime.reporter
 
-        self.discovery_agent = DiscoveryAgent(self.tool_registry)
+        def task_input_provider(task: str, target: str) -> Mapping[str, Sequence[str]]:
+            return self._task_inputs_for_task(
+                self._current_scan_id,
+                target,
+                task,
+            )
+
+        self.discovery_agent = DiscoveryAgent(self.tool_registry, task_input_provider)
         self.analysis_agent = AnalysisAgent(self.fact_store, self.context_builder)
-        self.verification_agent = VerificationAgent(self.tool_registry, self.evidence_verifier)
+        self.verification_agent = VerificationAgent(
+            self.tool_registry,
+            self.evidence_verifier,
+            task_input_provider,
+        )
         self.credential_synchronizer = RuntimeCredentialSynchronizer(logger=logger)
 
         self.MAX_CONSECUTIVE_LLM_FAILURES = 3
@@ -742,6 +753,25 @@ class AIPipeline(
                         raise RuntimeError("active task snapshot belongs to a different scan")
                     return list(snapshot.decision_facts())
         return [fact for fact in self.fact_store.get_facts(scan_id, target) if fact_is_decision_usable(fact)]
+
+    def _task_inputs_for_task(
+        self,
+        scan_id: str,
+        target: str,
+        task: str,
+    ) -> dict[str, tuple[str, ...]]:
+        """Resolve operator-authorized/fact-backed inputs for command expansion."""
+
+        del task  # Resolution is shared; each provider consumes only its declared kind.
+        if not scan_id:
+            return {}
+        try:
+            from config import CFG
+        except ImportError:
+            CFG = {}
+        configured = (CFG.get("strategy") or {}).get("task_inputs") or {}
+        facts = self._accepted_task_decision_facts(scan_id, target)
+        return self.tool_registry.resolve_task_inputs(target, facts, configured)
 
     def _execute_runtime_compatibly(
         self,

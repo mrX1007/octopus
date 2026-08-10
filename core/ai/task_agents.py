@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Optional
 
 from core.ai.evidence import EvidenceVerifier
@@ -52,12 +53,18 @@ def _analysis_failure(error: str) -> dict[str, Any]:
 
 
 class DiscoveryAgent:
-    def __init__(self, tool_registry: ToolRegistry):
+    def __init__(
+        self,
+        tool_registry: ToolRegistry,
+        task_input_provider: Optional[Callable[[str, str], Mapping[str, Sequence[str]]]] = None,
+    ):
         self.tool_registry = tool_registry
+        self.task_input_provider = task_input_provider
 
     def execute_task(self, task: str, target: str) -> list[str]:
         """Returns a list of commands to run for discovery."""
-        return self.tool_registry.get_commands_for_task(task, target)
+        inputs = self.task_input_provider(task, target) if self.task_input_provider is not None else {}
+        return self.tool_registry.get_commands_for_task(task, target, task_inputs=inputs)
 
 
 class AnalysisAgent:
@@ -124,13 +131,20 @@ Ensure the format matches EXACTLY:
 
 
 class VerificationAgent:
-    def __init__(self, tool_registry: ToolRegistry, verifier: EvidenceVerifier):
+    def __init__(
+        self,
+        tool_registry: ToolRegistry,
+        verifier: EvidenceVerifier,
+        task_input_provider: Optional[Callable[[str, str], Mapping[str, Sequence[str]]]] = None,
+    ):
         self.tool_registry = tool_registry
         self.verifier = verifier
+        self.task_input_provider = task_input_provider
 
     def execute_task(self, task: str, target: str) -> list[str]:
         """Returns commands to run to verify a task."""
-        return self.tool_registry.get_commands_for_task(task, target)
+        inputs = self.task_input_provider(task, target) if self.task_input_provider is not None else {}
+        return self.tool_registry.get_commands_for_task(task, target, task_inputs=inputs)
 
     def verify_hypothesis(
         self,

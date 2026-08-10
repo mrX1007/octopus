@@ -941,6 +941,30 @@ def run_tool_by_command(
         if not raw_decision.allowed:
             return _execution_denied(raw_decision.reason, context.request_id)
 
+        if tool_def.name in {"plugin", "plugin_inventory"}:
+            from core.ai.runtime import dispatch_plugin_command
+
+            try:
+                result = dispatch_plugin_command(command_str, context)
+            except Exception as exc:
+                logging.exception(
+                    "Canonical plugin runtime failed tool=%s request_id=%s",
+                    tool_def.name,
+                    context.request_id,
+                )
+                safe_error = _redact_command(str(exc))
+                return _bounded_tool_result(
+                    f"[!] Plugin runtime execution error: {safe_error}",
+                    context,
+                )
+            if result.status.value == "succeeded":
+                return _bounded_tool_result(result.output, context)
+            detail = result.error_message or result.stderr or result.status.value
+            return _bounded_tool_result(
+                f"[!] Plugin runtime execution error [{result.status.value}]: {detail}",
+                context,
+            )
+
     # Historical hints must never shadow a canonical registry name or alias.
     if not tool_def and cmd_lower in _FAKE_TOOLS:
         hint = _FAKE_TOOLS[cmd_lower]
@@ -963,7 +987,6 @@ def run_tool_by_command(
         params = list(sig.parameters.values())
         kwargs = {}
         positional_args: list[Any] = []
-
         # NMAP specific garbage stripping logic ported over
         if t_def.name == "nmap" and args:
             clean_parts = []

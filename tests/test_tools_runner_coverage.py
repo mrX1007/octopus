@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import contextlib
+import json
 import runpy
 import signal
 import subprocess
@@ -2141,3 +2142,124 @@ def test_module_main_guard_uses_stubbed_registered_recon(
     output = capsys.readouterr().out
     assert "NMAP OUTPUT" in output
     assert "nmap:example.test" in output
+
+
+def test_run_plugin_cli_key_value_argument_routing(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+    manager_constructions: list[str] = []
+
+    def fake_check(self, plugin_name: str, target: str, timeout: int = 60, **kwargs: Any) -> SimpleNamespace:
+        captured["plugin_name"] = plugin_name
+        captured["target"] = target
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            confidence=0.0,
+            details="fake check",
+            evidence="",
+            version="1.0.0",
+            vulnerable=False,
+        )
+
+    from core.plugins.loader import PluginManager
+    from core.tools.registry import get_tool
+
+    original_init = PluginManager.__init__
+
+    def counted_init(self, modules_dir: str) -> None:
+        manager_constructions.append(modules_dir)
+        original_init(self, modules_dir)
+
+    plugin_tool = get_tool("plugin")
+    assert plugin_tool is not None
+    monkeypatch.setattr(
+        plugin_tool,
+        "func",
+        lambda *_args, **_kwargs: pytest.fail("legacy plugin provider invoked"),
+    )
+    monkeypatch.setattr(PluginManager, "__init__", counted_init)
+    monkeypatch.setattr(PluginManager, "check", fake_check)
+
+    context = ExecutionContext.operator(
+        actor="test-plugin-cli",
+        approval_id="test-appr",
+        target_scope=("192.0.2.1",),
+        allow_active_tools=True,
+    )
+    with bind_execution_context(context):
+        res = runner.run_tool_by_command(
+            "plugin systemd 192.0.2.1 check payload_path=/var/tmp/agent service_name=my.service",
+            context,
+        )
+    assert json.loads(res)["details"] == "fake check"
+    assert captured["plugin_name"] == "systemd"
+    assert captured["target"] == "192.0.2.1"
+    assert captured["kwargs"] == {"payload_path": "/var/tmp/agent", "service_name": "my.service"}
+    assert len(manager_constructions) == 1
+
+
+@pytest.mark.parametrize("command", ["plugin list", "plugin_inventory"])
+def test_plugin_inventory_cli_uses_one_canonical_manager(
+    monkeypatch: pytest.MonkeyPatch,
+    command: str,
+) -> None:
+    from core.plugins.loader import PluginManager
+    from core.tools.registry import get_tool
+
+    manager_constructions: list[str] = []
+    original_init = PluginManager.__init__
+
+    def counted_init(self, modules_dir: str) -> None:
+        manager_constructions.append(modules_dir)
+        original_init(self, modules_dir)
+
+    for tool_name in ("plugin", "plugin_inventory"):
+        tool_def = get_tool(tool_name)
+        assert tool_def is not None
+        monkeypatch.setattr(
+            tool_def,
+            "func",
+            lambda *_args, **_kwargs: pytest.fail("legacy plugin provider invoked"),
+        )
+    monkeypatch.setattr(PluginManager, "__init__", counted_init)
+
+    result = runner.run_tool_by_command(command, ExecutionContext.automatic(actor="plugin-inventory-cli"))
+    payload = json.loads(result)
+
+    assert {item["name"] for item in payload["plugins"]} >= {"payload_keying", "systemd"}
+    assert payload["skipped"] == []
+    assert len(manager_constructions) == 1
+
+
+def test_plugin_cli_canonical_failure_has_no_legacy_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    from core.ai import runtime as runtime_module
+    from core.plugins import loader as plugin_loader
+    from core.tools.registry import get_tool
+
+    def fail_canonical(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("canonical plugin failure")
+
+    def fail_legacy(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("legacy plugin fallback invoked")
+
+    plugin_tool = get_tool("plugin")
+    assert plugin_tool is not None
+    monkeypatch.setattr(plugin_tool, "func", fail_legacy)
+    monkeypatch.setattr(plugin_loader, "PluginManager", fail_legacy)
+    monkeypatch.setattr(runtime_module, "dispatch_plugin_command", fail_canonical)
+
+    result = runner.run_tool_by_command(
+        "plugin systemd 192.0.2.1 check",
+        ExecutionContext.automatic(actor="plugin-fallback-test", target_scope=("192.0.2.1",)),
+    )
+
+    assert "canonical plugin failure" in result
+
+
+def test_policy_omitted_action_with_key_value_parameter_does_not_require_manual_approval():
+    from core.execution.policy import registered_tool_requires_approval
+
+    requires_approval = registered_tool_requires_approval(
+        "plugin",
+        ("plugin", "systemd", "192.0.2.1", "payload_path=/tmp/test"),
+    )
+    assert requires_approval is False

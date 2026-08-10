@@ -229,6 +229,94 @@ class TestConfigValidation:
 
         assert loaded["strategy"]["plan_enrichment_limit"] == 0
 
+    def test_typed_task_inputs_accept_explicit_scopes_and_plugin_parameters(self, tmp_path):
+        import config
+
+        path = tmp_path / "typed-inputs.yaml"
+        path.write_text(
+            """strategy:
+  task_inputs:
+    filesystem_scopes: [/srv/authorized-source]
+    session_profiles: [/srv/authorized-source/session.json]
+    jwt_artifacts: [/srv/authorized-source/token.txt]
+    burp_exports: [/srv/authorized-source/burp.xml]
+    zap_exports: [/srv/authorized-source/zap.json]
+    openapi_specs: [https://api.example.test/openapi.json]
+    cloud_providers: [AWS, gcp]
+    plugin_actions:
+      payload_keying:
+        payload: artifact://sha256/example
+        attempts: 2
+        enabled: true
+""",
+            encoding="utf-8",
+        )
+
+        with patch("config._find_config", return_value=str(path)):
+            loaded = config.load_config()
+
+        inputs = loaded["strategy"]["task_inputs"]
+        assert inputs["cloud_providers"] == ["AWS", "gcp"]
+        assert inputs["plugin_actions"]["payload_keying"] == {
+            "payload": "artifact://sha256/example",
+            "attempts": 2,
+            "enabled": True,
+        }
+
+    def test_typed_task_inputs_reject_non_string_scopes(self, tmp_path):
+        import config
+
+        path = tmp_path / "invalid-typed-inputs.yaml"
+        path.write_text(
+            "strategy:\n  task_inputs:\n    filesystem_scopes: [123]\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("config._find_config", return_value=str(path)),
+            pytest.raises(
+                config.ConfigValidationError,
+                match=r"strategy\.task_inputs\.filesystem_scopes must be list",
+            ),
+        ):
+            config.load_config()
+
+    def test_typed_task_inputs_reject_unknown_cloud_provider(self, tmp_path):
+        import config
+
+        path = tmp_path / "invalid-cloud-provider.yaml"
+        path.write_text(
+            "strategy:\n  task_inputs:\n    cloud_providers: [example.test]\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("config._find_config", return_value=str(path)),
+            pytest.raises(
+                config.ConfigValidationError,
+                match=r"strategy\.task_inputs\.cloud_providers\[0\] must be a supported cloud provider",
+            ),
+        ):
+            config.load_config()
+
+    def test_plugin_task_inputs_require_parameter_mappings(self, tmp_path):
+        import config
+
+        path = tmp_path / "invalid-plugin-inputs.yaml"
+        path.write_text(
+            "strategy:\n  task_inputs:\n    plugin_actions:\n      payload_keying: invalid\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("config._find_config", return_value=str(path)),
+            pytest.raises(
+                config.ConfigValidationError,
+                match=r"strategy\.task_inputs\.plugin_actions\.payload_keying must be a mapping",
+            ),
+        ):
+            config.load_config()
+
     def test_negative_plan_enrichment_limit_fails_closed(self, tmp_path):
         import config
 

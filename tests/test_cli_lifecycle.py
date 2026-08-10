@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import ClassVar
 
 import pytest
 
@@ -93,6 +95,14 @@ def test_create_parser_preserves_trace_and_supervisor_commands() -> None:
         "example.com",
         "json",
     )
+    plugin = parser.parse_args(["plugin", "checked_plugin", "example.com", "check", "label=neutral fixture"])
+    assert (plugin.command, plugin.plugin_name, plugin.target, plugin.action, plugin.metadata) == (
+        "plugin",
+        "checked_plugin",
+        "example.com",
+        "check",
+        ["label=neutral fixture"],
+    )
     assert parser.parse_args(["status"]).command == "status"
     assert parser.parse_args([]).command is None
 
@@ -109,6 +119,125 @@ def test_main_routes_trace_without_starting_interactive_lifecycle() -> None:
 
     assert main(["trace", "scan-2", "https://example.com", "json"], app=app) == 0
     assert calls == [("scan-2", "https://example.com", "json")]
+
+
+def test_main_routes_plugin_and_inventory_through_canonical_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys,
+) -> None:
+    from core.ai import runtime as runtime_module
+    from core.ai.runtime import PipelineRuntime
+    from core.plugins.schema import empty_input_schema
+    from core.tools.registry import get_tool
+
+    descriptor = SimpleNamespace(
+        name="checked_plugin",
+        plugin_type="recon",
+        description="Inert CLI fixture",
+        version="1.0",
+        requires=[],
+        python_deps=[],
+        capabilities=[],
+        supports_check=True,
+        input_schema={
+            **empty_input_schema(),
+            "properties": {"label": {"type": "string"}},
+        },
+    )
+
+    class Manager:
+        plugins: ClassVar[dict[str, object]] = {descriptor.name: descriptor}
+        skipped_plugins: ClassVar[dict[str, str]] = {}
+
+        def __init__(self) -> None:
+            self.check_calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def get_plugin(self, name: str):
+            return self.plugins.get(name)
+
+        def validate(self, _name: str) -> list[str]:
+            return []
+
+        def list_plugins(self) -> list[dict[str, object]]:
+            return [{"name": descriptor.name, "type": "recon", "version": "1.0"}]
+
+        def list_skipped_plugins(self) -> list[dict[str, str]]:
+            return []
+
+        def check(self, name: str, target: str, **kwargs: object) -> SimpleNamespace:
+            self.check_calls.append((name, target, dict(kwargs)))
+            return SimpleNamespace(
+                vulnerable=False,
+                confidence=0.5,
+                details="canonical CLI check",
+                evidence="fixture",
+                version="1.0",
+            )
+
+        def execute(self, *_args: object, **_kwargs: object) -> None:
+            pytest.fail("read-only CLI check must not execute plugin run")
+
+    def forbidden_legacy(*_args: object, **_kwargs: object) -> str:
+        pytest.fail("legacy plugin provider invoked")
+
+    manager = Manager()
+    runtime = PipelineRuntime(
+        str(tmp_path / "facts.db"),
+        runner=forbidden_legacy,
+        plugin_manager=manager,
+    )
+    commands: list[str] = []
+
+    class RuntimeFacade:
+        def __init__(self, *, runner) -> None:
+            self.runner = runner
+
+        def dispatch(self, command: str, facts, executed_keys, context):
+            assert tuple(facts) == ()
+            assert executed_keys == set()
+            commands.append(command)
+            return runtime.dispatch(command, (), set(), context)
+
+    monkeypatch.setattr(runtime_module, "PipelineRuntime", RuntimeFacade)
+    for tool_name in ("plugin", "plugin_inventory"):
+        tool_def = get_tool(tool_name)
+        assert tool_def is not None
+        monkeypatch.setattr(tool_def, "func", forbidden_legacy)
+
+    app = SimpleNamespace(
+        workflows=SimpleNamespace(),
+        run=lambda: pytest.fail("plugin CLI must not start interactive lifecycle"),
+    )
+    target = "192.0.2.40"
+
+    assert (
+        main(
+            ["plugin", descriptor.name, target, "check", "label=neutral fixture"],
+            app=app,
+        )
+        == 0
+    )
+    check_payload = json.loads(capsys.readouterr().out)
+    assert check_payload["details"] == "canonical CLI check"
+    assert manager.check_calls == [
+        (
+            descriptor.name,
+            target,
+            {"timeout": 300, "label": "neutral fixture"},
+        )
+    ]
+
+    assert main(["plugin", "list"], app=app) == 0
+    inventory = json.loads(capsys.readouterr().out)
+    assert inventory == {
+        "plugins": manager.list_plugins(),
+        "skipped": manager.list_skipped_plugins(),
+    }
+    assert commands == [
+        "plugin checked_plugin 192.0.2.40 check 'label=neutral fixture'",
+        "plugin list",
+    ]
 
 
 def test_main_routes_interactive_and_supervisor_commands(monkeypatch) -> None:

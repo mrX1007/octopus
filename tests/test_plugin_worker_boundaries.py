@@ -286,6 +286,12 @@ def test_enum_metadata_and_plugin_selection_boundaries() -> None:
         "capabilities": ["a", "z"],
         "hooks": ["on_credential_found"],
         "supports_check": False,
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
     }
     assert worker._metadata(empty)["requires"] == []
     assert worker._metadata(empty)["capabilities"] == []

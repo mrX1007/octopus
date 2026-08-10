@@ -234,6 +234,16 @@ class PayloadKeyingPlugin(OctopusPlugin):
     kill_chain_stage = KillChainStage.EXPLOITATION
     python_deps: ClassVar[list[str]] = ["cryptography"]
     capabilities: ClassVar[set[str]] = {"crypto"}
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "payload": {"type": "string"},
+            "target_info": {"type": "object"},
+            "output_path": {"type": "string", "format": "path-ref"},
+        },
+        "required": [],
+        "additionalProperties": False,
+    }
 
     def run(self, **kwargs) -> PluginResult:
         payload = kwargs.get("payload")
@@ -243,6 +253,11 @@ class PayloadKeyingPlugin(OctopusPlugin):
             payload = payload.encode("utf-8")
 
         target_info = kwargs.get("target_info", {})
+        if isinstance(target_info, str):
+            try:
+                target_info = json.loads(target_info)
+            except Exception:
+                target_info = {}
         if not isinstance(target_info, dict):
             return PluginResult(success=False, error="target_info must be a dict")
 

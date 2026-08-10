@@ -118,6 +118,8 @@ def compact_context_for_llm(context: dict[str, Any], role: str = "generic") -> d
         "killchain_policy",
         "next_required_capability",
         "capability_assessment",
+        "task_input_readiness",
+        "plugin_action_readiness",
     ):
         if key in context:
             compact[key] = _trim_value(context[key], role)
@@ -166,6 +168,8 @@ def _fit_summary_budget(compact: dict[str, Any]) -> dict[str, Any]:
         "automation_policy",
         "killchain_policy",
         "capability_assessment",
+        "task_input_readiness",
+        "plugin_action_readiness",
         "coverage_gaps",
         "typed_coverage_gaps",
         "surface_states",

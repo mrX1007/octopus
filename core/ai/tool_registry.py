@@ -1,11 +1,155 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
+import os
+import re
+import shlex
 import shutil
-from typing import Any, Callable, Optional
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+from core.ai.evaluated_facts import fact_is_decision_usable
+
+# The planner prompt and registry task map intentionally share this public
+# inventory.  A contract test makes drift fail closed: adding a task without
+# deciding whether the Planner may name it is no longer reported as autonomous
+# reachability merely because its providers happen to be registered.
+PLANNER_TASKS = (
+    "service_discovery",
+    "vulnerability_assessment",
+    "exploit_selection",
+    "metasploit_verification",
+    "web_vulnerability_testing",
+    "web_app_deep_testing",
+    "web_application_mapping",
+    "browser_surface_analysis",
+    "web_content_discovery",
+    "transport_security_assessment",
+    "ftp_assessment",
+    "mail_service_assessment",
+    "database_inventory",
+    "firewall_detection",
+    "external_intelligence",
+    "asm_discovery",
+    "asm_http_probe",
+    "asm_dns_resolution",
+    "asm_port_discovery",
+    "asm_url_discovery",
+    "template_verification",
+    "api_security_testing",
+    "secrets_scanning",
+    "code_security_assessment",
+    "cloud_security_assessment",
+    "ssh_user_enumeration",
+    "windows_enumeration",
+    "credential_harvesting",
+    "web_credential_testing",
+    "active_directory_enumeration",
+    "ad_security_review",
+    "bloodhound_ingest",
+    "password_policy_review",
+    "delegation_analysis",
+    "gpo_review",
+    "adcs_review",
+    "local_admin_paths",
+    "acl_review",
+    "kerberos_assessment",
+    "domain_credential_extraction",
+    "ad_remote_execution",
+    "hash_cracking",
+    "test_credentials",
+    "find_privesc_vectors",
+    "post_access_inventory",
+    "exploit_privesc",
+    "establish_persistence",
+    "payload_generation",
+    "internal_network_recon",
+    "internal_service_discovery",
+    "pivot_setup",
+    "lateral_movement",
+    "exfiltrate_data",
+    "stealth_cleanup",
+    "plugin_assessment",
+    "analyze_vulnerabilities",
+)
+
+SCAN_TARGET_INPUT = "scan_target"
+NO_INPUT = "none"
+
+
+@dataclass(frozen=True)
+class ProviderInputContract:
+    """The semantic input consumed by one concrete provider command.
+
+    Values are resolved from trusted facts or explicit operator configuration
+    before command formatting.  The contract deliberately describes semantic
+    kinds, not Python keyword arguments, so it cannot become a raw-kwargs bypass
+    around the action catalog or execution policy.
+    """
+
+    kind: str = SCAN_TARGET_INPUT
+    sources: tuple[str, ...] = ("scan_target",)
+
+
+_PROVIDER_INPUT_CONTRACTS = {
+    "session_profile_import": ProviderInputContract("session_profile", ("fact", "configuration")),
+    "jwt_analyze": ProviderInputContract("jwt_artifact", ("fact", "configuration")),
+    "burp_import": ProviderInputContract("burp_export", ("fact", "configuration")),
+    "zap_import": ProviderInputContract("zap_export", ("fact", "configuration")),
+    "openapi_import": ProviderInputContract("openapi_spec", ("fact", "configuration")),
+    "gitleaks_scan": ProviderInputContract("filesystem_scope", ("configuration",)),
+    "trufflehog_scan": ProviderInputContract("filesystem_scope", ("configuration",)),
+    "semgrep_scan": ProviderInputContract("filesystem_scope", ("configuration",)),
+    "trivy_scan": ProviderInputContract("filesystem_scope", ("configuration",)),
+    "checkov_scan": ProviderInputContract("filesystem_scope", ("configuration",)),
+    "prowler_scan": ProviderInputContract("cloud_provider", ("fact", "configuration")),
+    "scoutsuite_scan": ProviderInputContract("cloud_provider", ("fact", "configuration")),
+    "build_go_implant": ProviderInputContract(NO_INPUT, ("tool_default",)),
+    "build_python_implant": ProviderInputContract(NO_INPUT, ("tool_default",)),
+    "build_ps_stager": ProviderInputContract(NO_INPUT, ("tool_default",)),
+    "plugin_inventory": ProviderInputContract(NO_INPUT, ("plugin_discovery",)),
+}
+
+_CONFIGURED_INPUT_KEYS = {
+    "session_profiles": "session_profile",
+    "jwt_artifacts": "jwt_artifact",
+    "burp_exports": "burp_export",
+    "zap_exports": "zap_export",
+    "openapi_specs": "openapi_spec",
+    "cloud_providers": "cloud_provider",
+    "filesystem_scopes": "filesystem_scope",
+}
+
+_FACT_INPUT_KINDS = {
+    "session_profile": "session_profile",
+    "session_profile_path": "session_profile",
+    "jwt_artifact": "jwt_artifact",
+    "burp_export": "burp_export",
+    "zap_export": "zap_export",
+    "openapi_spec": "openapi_spec",
+    "openapi_spec_path": "openapi_spec",
+    "openapi_spec_url": "openapi_spec",
+    "cloud_provider": "cloud_provider",
+}
+
+_PATH_INPUT_KINDS = frozenset(
+    {
+        "session_profile",
+        "jwt_artifact",
+        "burp_export",
+        "zap_export",
+        "filesystem_scope",
+    }
+)
+_CLOUD_PROVIDERS = frozenset({"aws", "azure", "gcp", "kubernetes", "m365"})
+_OPENAPI_URL_RE = re.compile(r"(?i)(?:openapi|swagger|api-docs)(?:\.(?:json|ya?ml))?(?:[/?#]|$)")
 
 
 class ToolRegistry:
-    def __init__(self, plugin_manager_provider: Optional[Callable[[], Any]] = None):
+    def __init__(self, plugin_manager_provider: Callable[[], Any] | None = None):
         self._plugin_manager_provider = plugin_manager_provider
         # LLMs and plugins often describe the same work with slightly different
         # names. Keep that vocabulary normalized at the registry boundary so the
@@ -447,14 +591,14 @@ class ToolRegistry:
                 ("jmx2rce_scan {target}", "jmx2rce_scan"),
             ],
             "web_app_deep_testing": [
-                ("session_profile_import {target}", "session_profile_import"),
+                ("session_profile_import {session_profile}", "session_profile_import"),
                 ("security_headers_check {target}", "security_headers_check"),
                 ("cors_check {target}", "cors_check"),
-                ("jwt_analyze {target}", "jwt_analyze"),
+                ("jwt_analyze {jwt_artifact}", "jwt_analyze"),
                 ("js_route_extract {target}", "js_route_extract"),
                 ("authenticated_crawl {target}", "authenticated_crawl"),
-                ("burp_import {target}", "burp_import"),
-                ("zap_import {target}", "zap_import"),
+                ("burp_import {burp_export}", "burp_import"),
+                ("zap_import {zap_export}", "zap_import"),
             ],
             "web_application_mapping": [
                 ("whatweb {target}", "whatweb"),
@@ -519,23 +663,23 @@ class ToolRegistry:
                 ("nuclei_safe {target}", "nuclei_safe"),
             ],
             "api_security_testing": [
-                ("openapi_import {target}", "openapi_import"),
+                ("openapi_import {openapi_spec}", "openapi_import"),
                 ("graphql_check {target}", "graphql_check"),
                 ("api_auth_check {target}", "api_auth_check"),
                 ("katana_crawl {target}", "katana_crawl"),
             ],
             "secrets_scanning": [
-                ("gitleaks_scan {target}", "gitleaks_scan"),
-                ("trufflehog_scan {target}", "trufflehog_scan"),
+                ("gitleaks_scan {filesystem_scope}", "gitleaks_scan"),
+                ("trufflehog_scan {filesystem_scope}", "trufflehog_scan"),
             ],
             "code_security_assessment": [
-                ("semgrep_scan {target}", "semgrep_scan"),
-                ("trivy_scan {target}", "trivy_scan"),
-                ("checkov_scan {target}", "checkov_scan"),
+                ("semgrep_scan {filesystem_scope}", "semgrep_scan"),
+                ("trivy_scan {filesystem_scope}", "trivy_scan"),
+                ("checkov_scan {filesystem_scope}", "checkov_scan"),
             ],
             "cloud_security_assessment": [
-                ("prowler_scan {target}", "prowler_scan"),
-                ("scoutsuite_scan {target}", "scoutsuite_scan"),
+                ("prowler_scan {cloud_provider}", "prowler_scan"),
+                ("scoutsuite_scan {cloud_provider}", "scoutsuite_scan"),
             ],
             "ssh_user_enumeration": [
                 ("ssh_user_enum {target}", "ssh_user_enum"),
@@ -645,7 +789,333 @@ class ToolRegistry:
 
         # Cache of available tools (checked once)
         self._available_cache: dict[str, bool] = {}
-        self._plugin_summary_cache: Optional[list[dict[str, Any]]] = None
+        self._plugin_summary_cache: list[dict[str, Any]] | None = None
+
+    def provider_input_contract(self, provider: str) -> ProviderInputContract:
+        """Return the declared semantic input for one canonical provider."""
+
+        return _PROVIDER_INPUT_CONTRACTS.get(str(provider or "").strip(), ProviderInputContract())
+
+    @staticmethod
+    def _configured_input_values(value: Any) -> tuple[str, ...]:
+        if value is None:
+            return ()
+        if isinstance(value, str):
+            candidates: Iterable[Any] = (value,)
+        elif isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray)):
+            candidates = value
+        else:
+            return ()
+        result: list[str] = []
+        for candidate in candidates:
+            if not isinstance(candidate, str):
+                continue
+            normalized = candidate.strip()
+            if normalized and normalized not in result:
+                result.append(normalized)
+        return tuple(result)
+
+    @staticmethod
+    def _resolved_directory(path: str) -> str:
+        try:
+            resolved = Path(path).expanduser().resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            return ""
+        return str(resolved) if resolved.is_dir() else ""
+
+    @staticmethod
+    def _resolved_file(path: str) -> str:
+        try:
+            resolved = Path(path).expanduser().resolve(strict=True)
+        except (OSError, RuntimeError, ValueError):
+            return ""
+        return str(resolved) if resolved.is_file() else ""
+
+    @staticmethod
+    def _path_is_within(path: str, roots: Sequence[str]) -> bool:
+        for root in roots:
+            try:
+                if os.path.commonpath((path, root)) == root:
+                    return True
+            except (OSError, ValueError):
+                continue
+        return False
+
+    @staticmethod
+    def _url_in_scope(value: str, target: str) -> bool:
+        if not value.startswith(("http://", "https://")):
+            return False
+        try:
+            from core.tools.targeting import endpoint_in_target_scope
+
+            return endpoint_in_target_scope(value, target)
+        except (ImportError, TypeError, ValueError):
+            return False
+
+    @classmethod
+    def _openapi_url_in_scope(cls, value: str, target: str) -> bool:
+        return bool(_OPENAPI_URL_RE.search(value)) and cls._url_in_scope(value, target)
+
+    def resolve_task_inputs(
+        self,
+        target: str,
+        facts: Iterable[Mapping[str, Any]] = (),
+        configured_inputs: Mapping[str, Any] | None = None,
+    ) -> dict[str, tuple[str, ...]]:
+        """Resolve typed autonomous inputs without treating the scan target as data.
+
+        Filesystem access is configuration-authorized: a path fact can select an
+        artifact only when it resolves beneath one of ``filesystem_scopes``.
+        Cloud provider facts/configuration are closed over the providers supported
+        by the mounted scanners.  OpenAPI URLs must remain in the network scan
+        scope.  Raw JWT values are intentionally not put into command strings;
+        ``jwt_artifact`` is the supported autonomous boundary.
+        """
+
+        configured = configured_inputs if isinstance(configured_inputs, Mapping) else {}
+        resolved: dict[str, list[str]] = {}
+
+        def add(kind: str, value: str) -> None:
+            bucket = resolved.setdefault(kind, [])
+            if value and value not in bucket:
+                bucket.append(value)
+
+        configured_roots = tuple(
+            value
+            for raw in self._configured_input_values(configured.get("filesystem_scopes"))
+            if (value := self._resolved_directory(raw))
+        )
+        for root in configured_roots:
+            add("filesystem_scope", root)
+
+        candidates: list[tuple[str, str]] = []
+        for config_key, kind in _CONFIGURED_INPUT_KEYS.items():
+            if kind == "filesystem_scope":
+                continue
+            candidates.extend((kind, value) for value in self._configured_input_values(configured.get(config_key)))
+
+        for fact in facts or ():
+            if not isinstance(fact, Mapping) or not fact_is_decision_usable(fact):
+                continue
+            fact_type = str(fact.get("type") or "").strip().casefold()
+            value = str(fact.get("value") or "").strip()
+            if not value:
+                continue
+            fact_kind = _FACT_INPUT_KINDS.get(fact_type)
+            if fact_kind:
+                candidates.append((fact_kind, value))
+            elif fact_type == "web_link" and self._openapi_url_in_scope(value, target):
+                candidates.append(("openapi_spec", value))
+
+        for kind, raw_value in candidates:
+            value = raw_value.strip()
+            if kind == "cloud_provider":
+                provider = value.casefold()
+                if provider in _CLOUD_PROVIDERS:
+                    add(kind, provider)
+                continue
+            # Values already declared as ``openapi_spec`` are semantic typed
+            # inputs and may use an arbitrary filename. Only generic web_link
+            # discovery relies on the OpenAPI/Swagger pathname heuristic above.
+            if kind == "openapi_spec" and self._url_in_scope(value, target):
+                add(kind, value)
+                continue
+            path = self._resolved_file(value) if kind == "openapi_spec" or kind in _PATH_INPUT_KINDS else ""
+            if path and configured_roots and self._path_is_within(path, configured_roots):
+                add(kind, path)
+
+        return {kind: tuple(values) for kind, values in sorted(resolved.items())}
+
+    def _input_values_for_provider(
+        self,
+        provider: str,
+        target: str,
+        task_inputs: Mapping[str, Sequence[str]],
+    ) -> tuple[str, ...]:
+        contract = self.provider_input_contract(provider)
+        if contract.kind == NO_INPUT:
+            return ("",)
+        if contract.kind == SCAN_TARGET_INPUT:
+            normalized_target = str(target or "").strip()
+            return (normalized_target,) if normalized_target else ()
+        values = self._configured_input_values(task_inputs.get(contract.kind))
+        if provider == "scoutsuite_scan":
+            values = tuple(value for value in values if value in {"aws", "azure", "gcp"})
+        return values
+
+    def _leaf_provider_entries(
+        self,
+        task: str,
+        seen: set[str] | None = None,
+    ) -> list[tuple[str, str]]:
+        task = self.canonical_task(task)
+        seen = set(seen or ())
+        if task in seen:
+            return []
+        seen.add(task)
+        entries: list[tuple[str, str]] = []
+        for command_template, provider in self.task_map.get(task, []):
+            if provider in self.task_map and provider != task:
+                entries.extend(self._leaf_provider_entries(provider, seen))
+            else:
+                entries.append((command_template, provider))
+        return entries
+
+    def get_task_input_readiness(
+        self,
+        task: str,
+        target: str,
+        task_inputs: Mapping[str, Sequence[str]] | None = None,
+    ) -> dict[str, Any]:
+        """Describe input reachability independently from provider availability."""
+
+        task = self.canonical_task(task)
+        inputs = task_inputs if isinstance(task_inputs, Mapping) else {}
+        providers = []
+        ready_count = 0
+        missing: list[str] = []
+        for _template, provider in self._leaf_provider_entries(task):
+            contract = self.provider_input_contract(provider)
+            values = self._input_values_for_provider(provider, target, inputs)
+            ready = bool(values)
+            ready_count += int(ready)
+            if not ready and contract.kind not in missing:
+                missing.append(contract.kind)
+            providers.append(
+                {
+                    "provider": provider,
+                    "input_kind": contract.kind,
+                    "input_sources": list(contract.sources),
+                    "ready": ready,
+                    "resolved_count": len(values) if contract.kind != NO_INPUT else 0,
+                }
+            )
+        if not providers and task == "analyze_vulnerabilities":
+            state = "agent_owned"
+        elif not providers or ready_count == 0:
+            state = "blocked_by_input"
+        elif ready_count == len(providers):
+            state = "ready"
+        else:
+            state = "partial"
+        return {
+            "task": task,
+            "state": state,
+            "ready_providers": ready_count,
+            "provider_count": len(providers),
+            "missing_input_kinds": missing,
+            "providers": providers,
+        }
+
+    def get_discovered_plugin_action_reachability(
+        self,
+        target: str = "",
+        plugin_inputs: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Expose safe plugin action candidates only after typed inputs resolve.
+
+        Discovery metadata supplies the closed ``input_schema``. Operator-owned
+        values remain outside this report; only parameter names and validation
+        state are returned. Runtime and ``PluginActionAdapter`` still perform the
+        authoritative parse/validation immediately before provider invocation.
+        """
+
+        from core.plugins.schema import empty_input_schema, normalize_input_schema, validate_input_parameters
+
+        supplied_by_plugin = plugin_inputs if isinstance(plugin_inputs, Mapping) else {}
+        active_types = {"evasion", "exploit", "lateral", "persistence", "post"}
+        rows: list[dict[str, Any]] = []
+        for record in self.get_discovered_plugins_summary():
+            if not isinstance(record, Mapping):
+                continue
+            name = str(record.get("name") or "").strip()
+            if not name:
+                continue
+            try:
+                schema = normalize_input_schema(record.get("input_schema", empty_input_schema()))
+            except ValueError:
+                continue
+            raw_parameters = supplied_by_plugin.get(name, {})
+            parameters = dict(raw_parameters) if isinstance(raw_parameters, Mapping) else {}
+            properties = schema["properties"]
+            required = list(schema["required"])
+            missing = [parameter for parameter in required if parameter not in parameters]
+            undeclared = sorted(set(parameters) - set(properties))
+            validation_error = ""
+            if not missing and not undeclared:
+                try:
+                    validate_input_parameters(schema, parameters)
+                except ValueError as exc:
+                    validation_error = str(exc)
+            input_state = "ready"
+            if not str(target or "").strip():
+                input_state = "blocked_by_target"
+            elif missing or undeclared or validation_error:
+                input_state = "blocked_by_input"
+            plugin_type = str(record.get("type") or "").strip().casefold()
+            supports_check = record.get("supports_check") is True
+            actions = (["check"] if supports_check else []) + (["run"] if plugin_type in active_types else ["scan"])
+            rows.append(
+                {
+                    "action_id": f"plugin:{name}",
+                    "plugin": name,
+                    "plugin_type": plugin_type,
+                    "actions": actions,
+                    "supports_check": supports_check,
+                    "input_state": input_state,
+                    "planner_visible": input_state == "ready",
+                    "required_parameter_names": required,
+                    "resolved_parameter_names": sorted(set(parameters).intersection(properties)),
+                    "missing_parameter_names": missing,
+                    "undeclared_parameter_names": undeclared,
+                    "validation_error": validation_error,
+                    "input_schema": {
+                        parameter: {key: value for key, value in property_schema.items() if key in {"format", "type"}}
+                        for parameter, property_schema in properties.items()
+                    },
+                }
+            )
+        return rows
+
+    def get_reachability_report(
+        self,
+        target: str = "",
+        task_inputs: Mapping[str, Sequence[str]] | None = None,
+        plugin_inputs: Mapping[str, Mapping[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """Report planner routing and typed-input readiness without conflating coverage."""
+
+        allowed = frozenset(PLANNER_TASKS)
+        task_rows = []
+        for task in self.task_map:
+            readiness = self.get_task_input_readiness(task, target, task_inputs)
+            routes = ["planner_prompt"] if task in allowed else []
+            task_rows.append(
+                {
+                    "task": task,
+                    "routes": routes,
+                    "planner_allowed": bool(routes),
+                    "input_state": readiness["state"],
+                    "missing_input_kinds": readiness["missing_input_kinds"],
+                    "provider_count": readiness["provider_count"],
+                    "ready_providers": readiness["ready_providers"],
+                }
+            )
+        unreachable = [row["task"] for row in task_rows if not row["routes"]]
+        blocked = [row["task"] for row in task_rows if row["input_state"] == "blocked_by_input"]
+        plugin_actions = (
+            self.get_discovered_plugin_action_reachability(target, plugin_inputs) if plugin_inputs is not None else []
+        )
+        return {
+            "task_map_total": len(self.task_map),
+            "planner_allowed_total": len(allowed.intersection(self.task_map)),
+            "routed_total": len(task_rows) - len(unreachable),
+            "unreachable": unreachable,
+            "blocked_by_input": blocked,
+            "tasks": task_rows,
+            "plugin_actions": plugin_actions,
+            "planner_visible_plugin_actions": [row["action_id"] for row in plugin_actions if row["planner_visible"]],
+        }
 
     def canonical_task(self, task: str) -> str:
         """Return the canonical registry task for a planner/agent task name."""
@@ -695,7 +1165,7 @@ class ToolRegistry:
         self._available_cache[binary_name] = available
         return available
 
-    def _tool_names_for_task(self, task: str, seen: Optional[set[str]] = None) -> list[str]:
+    def _tool_names_for_task(self, task: str, seen: set[str] | None = None) -> list[str]:
         """Expand a task into enabled concrete tool names, including nested tasks."""
         from core.tools.registry import get_tool
 
@@ -717,19 +1187,42 @@ class ToolRegistry:
         return list(dict.fromkeys(names))
 
     def get_commands_for_task(
-        self, task: str, target: str, user: str = "root", password: str = "", _seen: Optional[set[str]] = None
+        self,
+        task: str,
+        target: str = "",
+        user: str = "",
+        password: str = "",
+        task_inputs: Mapping[str, Any] | None = None,
+        _seen: set[str] | None = None,
     ) -> list[str]:
-        """
-        Translate a conceptual task into concrete CLI commands.
-        Only returns commands whose binary is actually installed.
+        """Expand available providers for a task into command strings.
+
+        A network scan target is only formatted into providers declaring
+        ``scan_target``.  Artifact, token-file, cloud, and filesystem providers
+        are omitted until their own input kind has been resolved.
         """
         if password:
-            # Command strings are control-plane data and must never transport
-            # credential material. Authenticated providers consume an opaque
-            # CredentialRef through their dedicated execution adapter instead.
             print("     [!] Credential-bearing command expansion is disabled.")
             return []
         task = self.canonical_task(task)
+        if task.startswith("plugin:"):
+            plugin_name = task.split(":", 1)[1]
+            if self._is_tool_available("plugin"):
+                target_str = shlex.quote(str(target or ""))
+                cmd_tokens = ["plugin", plugin_name]
+                if target_str:
+                    cmd_tokens.append(target_str)
+                cmd_tokens.append("scan")
+                if task_inputs and isinstance(task_inputs, Mapping):
+                    p_actions = task_inputs.get("plugin_actions") or []
+                    if isinstance(p_actions, Sequence):
+                        for item in p_actions:
+                            if isinstance(item, Mapping) and item.get("plugin") == plugin_name:
+                                for k, v in item.items():
+                                    if k not in {"plugin", "target", "action"}:
+                                        cmd_tokens.append(f"{k}={shlex.quote(str(v))}")
+                return [shlex.join(cmd_tokens)]
+            return []
         _seen = _seen or set()
         if task in _seen:
             return []
@@ -737,6 +1230,8 @@ class ToolRegistry:
         entries = self.task_map.get(task, [])
         formatted_cmds = []
         skipped = []
+        skipped_inputs = []
+        inputs = task_inputs if isinstance(task_inputs, Mapping) else {}
 
         for cmd_template, binary_name in entries:
             if binary_name in self.task_map and binary_name != task:
@@ -744,6 +1239,7 @@ class ToolRegistry:
                     binary_name,
                     target,
                     user=user,
+                    task_inputs=inputs,
                     _seen=_seen,
                 )
                 formatted_cmds.extend(nested_cmds)
@@ -751,12 +1247,30 @@ class ToolRegistry:
                     skipped.append(binary_name)
             else:
                 if self._is_tool_available(binary_name):
-                    formatted_cmds.append(cmd_template.format(target=target, user=user))
+                    values = self._input_values_for_provider(binary_name, target, inputs)
+                    if not values:
+                        skipped_inputs.append(f"{binary_name}:{self.provider_input_contract(binary_name).kind}")
+                        continue
+                    for value in values:
+                        format_values = {
+                            "target": shlex.quote(str(target or "")),
+                            "user": shlex.quote(str(user or "")),
+                            self.provider_input_contract(binary_name).kind: shlex.quote(value),
+                        }
+                        try:
+                            command = cmd_template.format_map(format_values).strip()
+                        except KeyError:
+                            skipped_inputs.append(f"{binary_name}:invalid_input_contract")
+                            continue
+                        if command and command not in formatted_cmds:
+                            formatted_cmds.append(command)
                 else:
                     skipped.append(binary_name)
 
         if skipped:
             print(f"     [!] Skipped unavailable tools: {', '.join(skipped)}")
+        if skipped_inputs:
+            print(f"     [i] Skipped providers awaiting typed input: {', '.join(skipped_inputs)}")
 
         if not formatted_cmds and entries:
             print(f"     [!] WARNING: No tools available for task '{task}'")
@@ -765,7 +1279,16 @@ class ToolRegistry:
 
     def has_task(self, task: str) -> bool:
         """Check if a task is registered."""
-        return self.canonical_task(task) in self.task_map
+        canon = self.canonical_task(task)
+        if canon in self.task_map:
+            return True
+        if canon.startswith("plugin:"):
+            plugin_name = canon.split(":", 1)[1]
+            return any(
+                isinstance(r, Mapping) and str(r.get("name")) == plugin_name
+                for r in self.get_discovered_plugins_summary()
+            )
+        return False
 
     def get_available_tools_summary(self) -> dict[str, list[str]]:
         """Return a summary of which tools are available for which tasks."""
@@ -777,6 +1300,8 @@ class ToolRegistry:
     def get_available_tools_for_task(self, task: str) -> list[str]:
         """Return available tool names for one canonical task."""
         task = self.canonical_task(task)
+        if task.startswith("plugin:"):
+            return ["plugin"] if self._is_tool_available("plugin") else []
         available = []
         for binary_name in self._tool_names_for_task(task):
             if self._is_tool_available(binary_name):
@@ -792,6 +1317,16 @@ class ToolRegistry:
         format credentials or dispatch a command.
         """
         task = self.canonical_task(task)
+        if task.startswith("plugin:"):
+            plugin_name = task.split(":", 1)[1]
+            return [
+                {
+                    "task": task,
+                    "provider": "plugin",
+                    "command_template": f"plugin {plugin_name} {{target}} scan",
+                    "available": self._is_tool_available("plugin"),
+                }
+            ]
         return self._provider_statuses_for_task(task, set(), task)
 
     def _provider_statuses_for_task(
@@ -860,7 +1395,7 @@ class ToolRegistry:
             return "disabled"
         return self.tool_execution_profiles.get(tool_def.name, "auto")
 
-    def get_coverage_report(self, registered_tools: Optional[list[str]] = None) -> dict[str, Any]:
+    def get_coverage_report(self, registered_tools: list[str] | None = None) -> dict[str, Any]:
         """Classify registry coverage without treating gated/manual tools as bugs."""
         if registered_tools is None:
             try:

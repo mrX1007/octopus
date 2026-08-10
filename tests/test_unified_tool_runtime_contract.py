@@ -14,7 +14,7 @@ import core.tools.runner as tool_runner
 from core.actions import ActionRequest, OutcomeStatus, build_action_catalog
 from core.ai.runtime import PipelineRuntime
 from core.ai.tool_registry import ToolRegistry
-from core.execution import ExecutionContext, ExecutionStatus, current_execution_context
+from core.execution import ExecutionContext, ExecutionResult, ExecutionStatus, current_execution_context
 from core.execution.policy import registered_tool_requires_approval
 from core.tools.registry import get_tool, list_tools
 from core.tools.runner import run_tool_by_command
@@ -508,9 +508,24 @@ def test_automatic_context_never_dispatches_policy_active_builtin_or_alias(tmp_p
 def test_real_command_facade_reaches_all_builtin_providers_without_external_io(
     monkeypatch,
 ):
+    from core.ai import runtime as runtime_module
+
     context = _approved_context()
     called: list[tuple[str, ExecutionContext]] = []
+    canonical_calls: list[tuple[str, str, ExecutionContext]] = []
     definitions = _builtin_tool_defs()
+
+    def canonical_dispatch(command: str, execution_context: ExecutionContext) -> ExecutionResult:
+        lookup_name = shlex.split(command)[0]
+        tool_def = get_tool(lookup_name)
+        assert tool_def is not None
+        canonical_calls.append((tool_def.name, command, execution_context))
+        return ExecutionResult(
+            status=ExecutionStatus.SUCCEEDED,
+            stdout=f"canonical-stub:{tool_def.name}",
+        )
+
+    monkeypatch.setattr(runtime_module, "dispatch_plugin_command", canonical_dispatch)
 
     for tool_def in definitions:
         assert tool_def.func is not None
@@ -531,6 +546,9 @@ def test_real_command_facade_reaches_all_builtin_providers_without_external_io(
         for lookup_name in (tool_def.name, *tool_def.aliases):
             result = run_tool_by_command(_provider_command(tool_def, lookup_name), context)
             if tool_def.enabled:
+                if tool_def.name in {"plugin", "plugin_inventory"}:
+                    assert result == f"canonical-stub:{tool_def.name}"
+                    continue
                 expected_names.append(tool_def.name)
                 assert result == f"provider-stub:{tool_def.name}"
             else:
@@ -538,6 +556,11 @@ def test_real_command_facade_reaches_all_builtin_providers_without_external_io(
 
     assert [name for name, _context in called] == expected_names
     assert all(bound_context is context for _name, bound_context in called)
+    assert {name for name, _command, _context in canonical_calls} == {
+        "plugin",
+        "plugin_inventory",
+    }
+    assert all(bound_context is context for _name, _command, bound_context in canonical_calls)
 
 
 def test_legacy_one_argument_runtime_runner_keeps_bound_context(tmp_path):
