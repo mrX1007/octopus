@@ -140,15 +140,17 @@ def _request_timeout() -> float:
 def _post_ollama(payload: dict):
     """POST to Ollama, adding the optional shared-endpoint bearer token."""
 
-    kwargs = {
-        "json": payload,
-        "stream": True,
-        "timeout": _request_timeout(),
-    }
+    timeout = _request_timeout()
     api_key = str(os.environ.get("LLM_API_KEY") or "").strip()
     if api_key:
-        kwargs["headers"] = {"Authorization": f"Bearer {api_key}"}
-    return requests.post(OLLAMA_URL, **kwargs)
+        return requests.post(
+            OLLAMA_URL,
+            json=payload,
+            stream=True,
+            timeout=timeout,
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+    return requests.post(OLLAMA_URL, json=payload, stream=True, timeout=timeout)
 
 
 def _wait_before_retry(seconds: float) -> bool:

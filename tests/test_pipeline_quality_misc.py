@@ -290,9 +290,7 @@ def test_pipeline_llm_dead_uses_fallback_without_new_llm_calls():
         "llm_error": "llm_dead_fallback_only",
         "fallback": True,
     }
-    pipeline.tool_registry.get_commands_for_task = (
-        lambda _task, _target, *, task_inputs=None: []
-    )
+    pipeline.tool_registry.get_commands_for_task = lambda _task, _target, *, task_inputs=None: []
 
     pipeline.run_scan("scan-llm-dead", "10.0.0.5", max_iterations=1)
 
