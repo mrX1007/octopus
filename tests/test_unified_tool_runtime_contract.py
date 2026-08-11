@@ -21,9 +21,9 @@ from core.tools.runner import run_tool_by_command
 
 pytestmark = [pytest.mark.contract, pytest.mark.security]
 
-EXPECTED_BUILTIN_TOOL_COUNT = 110
+EXPECTED_BUILTIN_TOOL_COUNT = 116
 EXPECTED_ENABLED_TOOL_COUNT = 96
-EXPECTED_DISABLED_TOOL_COUNT = 14
+EXPECTED_DISABLED_TOOL_COUNT = 20
 TARGET = "192.0.2.10"
 CALLBACK_TARGET = "192.0.2.11"
 PROFILE_ONLY_BUILTINS = {
@@ -92,21 +92,20 @@ def test_builtin_registry_ai_classification_and_action_catalog_are_complete():
     assert len(set(core.tools.BUILTIN_TOOL_NAMES)) == EXPECTED_BUILTIN_TOOL_COUNT
     assert len(enabled_definitions) == EXPECTED_ENABLED_TOOL_COUNT
     assert len(disabled_definitions) == EXPECTED_DISABLED_TOOL_COUNT
-    assert {tool_def.name for tool_def in disabled_definitions} == set(core.tools.QUARANTINED_CAPABILITY_NAMES)
+    assert {tool_def.name for tool_def in disabled_definitions} == set(core.tools.MANUAL_GATED_CAPABILITY_NAMES)
+    assert core.tools.QUARANTINED_CAPABILITY_NAMES == ()
     assert set(names).issubset({tool_def.name for tool_def in list_tools()})
 
     coverage = ToolRegistry().get_coverage_report(list(names))
     assert coverage["registered"] == EXPECTED_BUILTIN_TOOL_COUNT
     assert coverage["covered"] == EXPECTED_BUILTIN_TOOL_COUNT
-    assert set(coverage["disabled"]) == set(core.tools.QUARANTINED_CAPABILITY_NAMES)
+    assert set(coverage["disabled"]) == set(core.tools.MANUAL_GATED_CAPABILITY_NAMES)
     assert coverage["unknown"] == []
 
     catalog = build_action_catalog(lambda _command, _context: "unused", tool_defs=definitions)
     assert len(catalog) == EXPECTED_BUILTIN_TOOL_COUNT
-    descriptor_kinds = [descriptor.kind.value for descriptor in catalog.descriptors()]
-    assert descriptor_kinds.count("registered_tool") == 102
-    assert descriptor_kinds.count("killchain") == 8
-    assert set(descriptor_kinds) == {"registered_tool", "killchain"}
+    descriptor_kinds = {descriptor.kind.value for descriptor in catalog.descriptors()}
+    assert descriptor_kinds == {"registered_tool", "killchain", "plugin"}
     for tool_def in definitions:
         canonical = catalog.require(tool_def.name)
         assert canonical.adapter.descriptor.name == tool_def.name
@@ -118,10 +117,9 @@ def test_builtin_registry_ai_classification_and_action_catalog_are_complete():
             assert resolved.alias_used is True
 
     for tool_def in disabled_definitions:
-        applicability = catalog.require(tool_def.name).adapter.applicability(
-            ActionRequest(target=TARGET, execution_context=_approved_context())
-        )
-        assert "provider_disabled" in applicability.missing_requirements
+        descriptor = catalog.require(tool_def.name).adapter.descriptor
+        assert descriptor.manual_gate is True
+        assert descriptor.provider_mounted is False
 
 
 def test_ai_leaf_provider_namespace_is_registry_complete():
@@ -141,7 +139,7 @@ def test_ai_leaf_provider_namespace_is_registry_complete():
             assert shlex.split(command_template)[0] == provider
 
 
-def test_pass_the_hash_name_and_alias_are_quarantined_without_exposing_raw_hash():
+def test_pass_the_hash_name_and_alias_are_manual_gated_without_exposing_raw_hash():
     canary = "0123456789abcdef0123456789abcdef"
     canonical = get_tool("pass_the_hash")
     registry = ToolRegistry()

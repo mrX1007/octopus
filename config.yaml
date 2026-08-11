@@ -106,7 +106,7 @@ strategy:
     zap_exports: []
     openapi_specs: []
     cloud_providers: []       # aws, azure, gcp, kubernetes, or m365
-    plugin_actions: {}        # plugin -> schema-declared parameter names/typed values
+    plugin_actions: {}        # plugin -> {action: check|run, ...schema-declared typed values}
   auto_persistence: false    # active persistence is opt-in
   auto_data_exfil: false     # data collection/exfil stage is opt-in
   auto_cleanup: false        # stealth cleanup is opt-in

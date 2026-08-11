@@ -103,6 +103,8 @@ class _PluginManager:
         requires=(),
         python_deps=(),
         capabilities=(),
+        supports_check=False,
+        supports_run=False,
     )
 
     def get_plugin(self, name):

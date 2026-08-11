@@ -73,7 +73,6 @@ def test_c2_evasion_is_an_exported_production_c2_module() -> None:
     assert "xor_encode" in exported_names
 
 
-
 def test_readme_tooling_inventory_matches_code_owned_registries() -> None:
     import core.tools
     from core.ai.tool_registry import ToolRegistry
@@ -93,8 +92,10 @@ def test_readme_tooling_inventory_matches_code_owned_registries() -> None:
     assert (
         f"decorator inventory contains {registered_count} canonical names and {alias_count} unique aliases"
     ) in normalized_readme
-    assert f"{enabled_count} are enabled and {disabled_count} are explicitly quarantined" in normalized_readme
+    assert f"{enabled_count} have mounted, enabled providers" in normalized_readme
+    assert f"The other {disabled_count} are registered as manual-gated identities" in normalized_readme
+    assert "`QUARANTINED_CAPABILITY_NAMES` is empty" in normalized_readme
     assert f"task map contains {len(leaf_providers)} enabled leaf providers" in normalized_readme
     assert f"all {len(registry.task_map)} conceptual task-map keys" in normalized_readme
-    assert "one individual `PluginActionAdapter` per discovered class plugin" in normalized_readme
+    assert "one individual `PluginActionAdapter` per mounted class plugin" in normalized_readme
     assert "Registry coverage is a classification invariant, not a planner-reachability metric" in normalized_readme

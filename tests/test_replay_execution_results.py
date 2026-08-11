@@ -229,7 +229,9 @@ def test_versioned_replay_keeps_statuses_ids_and_never_returns_or_persists_bodie
         "execution-blocked",
     ]
     assert [item["failed"] for item in replay["execution_results"]] == [True, False, False]
-    assert all("stdout" not in item and "stderr" not in item and "metadata" not in item for item in replay["execution_results"])
+    assert all(
+        "stdout" not in item and "stderr" not in item and "metadata" not in item for item in replay["execution_results"]
+    )
     assert [item["status"] for item in persisted] == ["timeout", "partial", "blocked"]
     assert persisted[0]["output_bytes"] == 0
     assert persisted[0]["stderr_bytes"] > 0
@@ -237,7 +239,11 @@ def test_versioned_replay_keeps_statuses_ids_and_never_returns_or_persists_bodie
     assert persisted[0]["error_class"] == "TimeoutExpired"
     assert len(parser_inputs[1].stdout.encode()) <= 96
     assert replay["parsed_facts"] > 0
-    assert not any(fact["type"] in {"port_open", "service_version"} for fact in pipeline.fact_store.get_facts("scan", "10.0.0.5") if fact["source"].startswith("replay:nmap") and "22" in fact["value"])
+    assert not any(
+        fact["type"] in {"port_open", "service_version"}
+        for fact in pipeline.fact_store.get_facts("scan", "10.0.0.5")
+        if fact["source"].startswith("replay:nmap") and "22" in fact["value"]
+    )
     assert CANARY not in repr(replay)
     assert CANARY not in json.dumps(persisted)
     assert CANARY.encode() not in db_path.read_bytes()
@@ -267,14 +273,8 @@ def test_legacy_replay_is_equivalent_deterministic_and_keeps_append_history(tmp_
         ],
     )
 
-    legacy_pairs = {
-        (fact["type"], fact["value"])
-        for fact in legacy.fact_store.get_facts("scan", "10.0.0.5")
-    }
-    canonical_pairs = {
-        (fact["type"], fact["value"])
-        for fact in canonical.fact_store.get_facts("scan", "10.0.0.5")
-    }
+    legacy_pairs = {(fact["type"], fact["value"]) for fact in legacy.fact_store.get_facts("scan", "10.0.0.5")}
+    canonical_pairs = {(fact["type"], fact["value"]) for fact in canonical.fact_store.get_facts("scan", "10.0.0.5")}
     assert legacy_pairs == canonical_pairs
     assert first["new_facts"] > 0
     assert second["new_facts"] == 0
@@ -343,14 +343,37 @@ def test_replay_schema_preflight_prevents_partial_batch_persistence(tmp_path: Pa
     assert pipeline.fact_store.get_command_results("scan", "target") == []
 
 
+@pytest.mark.security
+def test_replay_action_label_cannot_promote_auth_stdout(tmp_path: Path) -> None:
+    pipeline = _quiet_pipeline(tmp_path / "replay-auth.db")
+
+    outcome = pipeline.replay_outputs(
+        "scan",
+        "victim",
+        [
+            {
+                "tool": "bruteforce",
+                "output": "login success\n[+] SSH connected as operator@victim\npassword found",
+            }
+        ],
+    )
+
+    assert outcome["execution_results"][0]["tool_name"] == "bruteforce"
+    facts = pipeline.fact_store.get_facts("scan", "victim")
+    assert not any(
+        fact["type"] in {"credential", "application_access"}
+        or (fact["type"] == "service_status" and fact["value"] == "ssh_authenticated")
+        for fact in facts
+    )
+    assert pipeline.fact_store.get_command_results("scan", "victim")
+
+
 def test_replay_snapshot_schema_migration_is_explicit_and_future_major_fails(tmp_path: Path) -> None:
     snapshot = ReplaySnapshot(str(tmp_path / "snapshot.db"))
     snapshot.pipeline.snapshot_actions = lambda _scan, _target: []
 
     legacy = snapshot.run({"scan_id": "legacy", "target": "host", "outputs": []})
-    current = snapshot.run(
-        {"schema_version": "1.0", "scan_id": "current", "target": "host", "outputs": []}
-    )
+    current = snapshot.run({"schema_version": "1.0", "scan_id": "current", "target": "host", "outputs": []})
 
     assert legacy["schema_version"] == "1.0"
     assert legacy["input_schema_version"] == "0"

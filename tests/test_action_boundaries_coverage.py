@@ -196,9 +196,11 @@ def test_action_models_serialize_commands_lifecycle_and_audit(monkeypatch):
         "fact_count": 1,
         "evidence_fact_ids": [3],
         "assessment_refs": ["assessment-1"],
-        "source_execution_ids": ["source-1"],
-        "has_handle": True,
-    }
+            "source_execution_ids": ["source-1"],
+            "has_handle": True,
+            "typed_input_type": None,
+            "precondition_ref_count": 0,
+        }
 
     applicability = ApplicabilityResult(False, ("reason",), ("dependency",))
     verification = ActionVerificationResult(
@@ -488,6 +490,8 @@ class PluginManagerFixture:
             requires=("binary",),
             python_deps=("package",),
             capabilities=("network",),
+            supports_check=True,
+            supports_run=True,
         )
 
     def validate(self, _name: str):

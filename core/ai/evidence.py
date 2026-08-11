@@ -3764,6 +3764,24 @@ class OutputParser:
             pass
         return raw
 
+    @staticmethod
+    def _registered_tool_identity(tool_name: str) -> str:
+        """Resolve only code-owned parser identities; never trust raw fallback."""
+
+        parts = str(tool_name or "").strip().split()
+        if not parts:
+            return ""
+        try:
+            import core.tools  # noqa: F401
+            from core.tools.registry import get_tool
+
+            tool_def = get_tool(parts[0])
+            if tool_def is None and len(parts) >= 2:
+                tool_def = get_tool(f"{parts[0]} {parts[1]}")
+            return str(tool_def.name).strip().casefold() if tool_def is not None else ""
+        except ImportError:
+            return ""
+
     def _tool_can_emit_decision_fact(
         self,
         tool_name: str,
@@ -3772,6 +3790,7 @@ class OutputParser:
         """Apply the canonical-fact schema bound to the invoked tool identity."""
 
         tool = self._tool_identity(tool_name)
+        registered_tool = self._registered_tool_identity(tool_name)
         fact_type = str(fact.get("type") or "").strip().casefold()
         value = str(fact.get("value") or "").strip().casefold()
         if fact_type == "port_open":
@@ -3878,9 +3897,9 @@ class OutputParser:
                 return tool in {"killchain_exfil", "killchain_full", "ssh_inventory"}
             return False
         if fact_type == "credential" and value.startswith("ssh_login_success:root@"):
-            return tool in {"ssh_inventory", "ssh_session"}
+            return registered_tool in {"ssh_inventory", "ssh_session"}
         if fact_type in {"credential", "application_access"}:
-            return tool in self._AUTH_FACT_TOOLS
+            return registered_tool in self._AUTH_FACT_TOOLS
         if fact_type == "hash_material":
             return tool == "crack_hashes"
         if fact_type == "kerberos_hashes":
@@ -3921,7 +3940,7 @@ class OutputParser:
             if value == f"tool_timeout:{tool}":
                 return True
             if value == "ssh_authenticated":
-                return tool in self._AUTH_FACT_TOOLS
+                return registered_tool in self._AUTH_FACT_TOOLS
             if value in {"network_recon_completed", "internal_network_recon_completed"}:
                 return tool in self._NETWORK_FACT_TOOLS
             status_sources = (
@@ -4118,7 +4137,13 @@ class OutputParser:
         aggregate_family_output = identity in {"manual_recon", "tool"}
         return not (aggregate_family_output and any(marker in raw_lower for marker in self.family_owned_raw_markers))
 
-    def parse_tool_output(self, tool_name: str, raw_output: str) -> list[dict[str, Any]]:
+    def parse_tool_output(
+        self,
+        tool_name: str,
+        raw_output: str,
+        *,
+        source_authenticated: bool = True,
+    ) -> list[dict[str, Any]]:
         """
         Extract raw facts from tool output.
         Returns a list of dicts: [{"type": "...", "value": "...", "confidence": int, "session_id": "str"}]
@@ -4194,6 +4219,16 @@ class OutputParser:
         # There is intentionally no LLM fact-extraction fallback.  Models may
         # propose hypotheses through AnalysisAgent; observations are produced
         # only by code-owned, tool-bound parsers above.
+
+        if not source_authenticated:
+            for fact in facts:
+                fact_type = str(fact.get("type") or "").strip().casefold()
+                value = str(fact.get("value") or "").strip().casefold()
+                if fact_type in {"credential", "application_access"} or (
+                    fact_type == "service_status" and value == "ssh_authenticated"
+                ):
+                    fact["trust_level"] = TARGET_CONTROLLED
+                    fact["observation_method"] = "unauthenticated_replay_stdout"
 
         return self._sanitize_facts(facts)
 

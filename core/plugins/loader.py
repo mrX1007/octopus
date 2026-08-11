@@ -75,6 +75,7 @@ class PluginDescriptor:
     capabilities: list[str] = field(default_factory=list)
     hooks: list[str] = field(default_factory=list)
     supports_check: bool = False
+    supports_run: bool = False
     input_schema: dict[str, Any] = field(default_factory=empty_input_schema)
 
 
@@ -220,6 +221,9 @@ class PluginManager:
         supports_check = raw.get("supports_check", False)
         if not isinstance(supports_check, bool):
             raise ValueError("plugin metadata field 'supports_check' must be a boolean")
+        supports_run = raw.get("supports_run", False)
+        if not isinstance(supports_run, bool):
+            raise ValueError("plugin metadata field 'supports_run' must be a boolean")
         input_schema = normalize_input_schema(raw.get("input_schema", empty_input_schema()))
         return PluginDescriptor(
             name=name,
@@ -237,6 +241,7 @@ class PluginManager:
             capabilities=self._string_list(raw.get("capabilities", []), "capabilities"),
             hooks=self._string_list(raw.get("hooks", []), "hooks"),
             supports_check=supports_check,
+            supports_run=supports_run,
             input_schema=input_schema,
         )
 
@@ -800,6 +805,7 @@ class PluginManager:
                 "requires": list(descriptor.requires),
                 "depends_on": list(descriptor.depends_on),
                 "supports_check": descriptor.supports_check,
+                "supports_run": descriptor.supports_run,
                 "input_schema": copy.deepcopy(descriptor.input_schema),
             }
             for descriptor in (self.plugins[name] for name in sorted(self.plugins))

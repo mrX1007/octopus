@@ -555,9 +555,8 @@ class PluginActionAdapter(ActionAdapter):
             raise KeyError(f"Unknown plugin: {plugin_name}")
         self.manager = manager
         self.plugin_name = plugin_name
-        self.input_schema = normalize_input_schema(
-            getattr(descriptor, "input_schema", empty_input_schema())
-        )
+        self.input_schema = normalize_input_schema(getattr(descriptor, "input_schema", empty_input_schema()))
+        self.supports_run = bool(getattr(descriptor, "supports_run", False))
         active = str(descriptor.plugin_type) in self._ACTIVE_TYPES
         self.descriptor = ActionDescriptor(
             action_id=f"plugin:{plugin_name}",
@@ -624,6 +623,7 @@ class PluginActionAdapter(ActionAdapter):
     ) -> ExecutionDecision:
         try:
             self._provider_parameters(request)
+            action = self._action(request, phase)
         except ValueError as exc:
             return ExecutionDecision(
                 False,
@@ -631,9 +631,25 @@ class PluginActionAdapter(ActionAdapter):
                 request.execution_context,
                 self.invocation(request, phase),
             )
+        if action in {"check", "scan"} and not self.descriptor.requirements.supports_check:
+            return ExecutionDecision(
+                False,
+                "plugin_check_unsupported",
+                request.execution_context,
+                self.invocation(request, phase),
+            )
+        if action == "run" and not self.supports_run:
+            return ExecutionDecision(
+                False,
+                "plugin_run_unsupported",
+                request.execution_context,
+                self.invocation(request, phase),
+            )
         return super().authorize(policy, request, phase)
 
     def check(self, request: ActionRequest) -> ActionCheckResult:
+        if not self.descriptor.requirements.supports_check:
+            raise ValueError("plugin_check_unsupported")
         parameters = self._provider_parameters(request)
         raw = self.manager.check(
             self.plugin_name,
@@ -653,6 +669,8 @@ class PluginActionAdapter(ActionAdapter):
         parameters = self._provider_parameters(request)
         action = self._action(request, "execute")
         if action in {"check", "scan"}:
+            if not self.descriptor.requirements.supports_check:
+                raise ValueError("plugin_check_unsupported")
             checked = self.manager.check(
                 self.plugin_name,
                 request.target,
@@ -709,6 +727,18 @@ def register_tool_adapters(
     dispatch: ActionDispatch,
 ) -> None:
     for tool_def in tool_defs:
+        existing = catalog.resolve(str(tool_def.name))
+        if existing is not None:
+            descriptor = existing.adapter.descriptor
+            same_name = descriptor.name.strip().casefold() == str(tool_def.name).strip().casefold()
+            same_provider = descriptor.provider.strip() == str(getattr(tool_def, "provider_path", "") or "").strip()
+            aliases_match = all(
+                (resolved := catalog.resolve(str(alias))) is not None and resolved.adapter is existing.adapter
+                for alias in (getattr(tool_def, "aliases", ()) or ())
+            )
+            if not (same_name and same_provider and aliases_match):
+                raise ValueError(f"Registry/custom action identity mismatch: {tool_def.name}")
+            continue
         adapter: ActionAdapter
         if str(tool_def.name).startswith("killchain_"):
             adapter = KillchainActionAdapter(tool_def, dispatch)

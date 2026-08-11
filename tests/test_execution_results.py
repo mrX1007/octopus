@@ -501,3 +501,22 @@ def test_shared_canonical_result_fixtures(
     assert canonical_success_result.schema_version == "1.0"
     assert canonical_partial_result.status is ExecutionStatus.PARTIAL
     assert canonical_partial_result.partial is True
+
+
+def test_execution_provenance_round_trips_through_normalization() -> None:
+    result = adapt_execution_result(
+        {
+            "status": "succeeded",
+            "mission_id": "mission-1",
+            "task_id": "task-1",
+            "attempt_id": "attempt-1",
+            "provenance_chain": {"parent": "execution-0"},
+        }
+    )
+    round_trip = adapt_execution_result(result)
+
+    assert round_trip.mission_id == "mission-1"
+    assert round_trip.task_id == "task-1"
+    assert round_trip.attempt_id == "attempt-1"
+    assert round_trip.provenance_chain == {"parent": "execution-0"}
+    assert round_trip.to_dict()["provenance_chain"] == {"parent": "execution-0"}

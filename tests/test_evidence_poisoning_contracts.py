@@ -517,3 +517,47 @@ def test_untrusted_check_result_cannot_restore_executed_command_key(tmp_path) ->
     pipeline._start_mission("scan", "victim")
 
     assert "attacker-selected-key" not in pipeline.executed_command_keys
+
+
+@pytest.mark.security
+def test_auth_fact_allowlist_contains_only_registered_sources() -> None:
+    import core.tools  # noqa: F401
+    from core.tools.registry import get_tool
+
+    assert {name for name in OutputParser._AUTH_FACT_TOOLS if get_tool(name) is None} == set()
+
+
+@pytest.mark.security
+def test_manual_gated_action_labels_cannot_authenticate_legacy_stdout() -> None:
+    from core.tools.quarantined import MANUAL_GATED_CAPABILITY_NAMES
+
+    payload = "login success\n[+] SSH connected as operator@victim\npassword found"
+    for name in MANUAL_GATED_CAPABILITY_NAMES:
+        facts = OutputParser().parse_tool_output(name, payload)
+        assert not any(
+            fact["type"] in {"credential", "application_access"}
+            or (fact["type"] == "service_status" and fact["value"] == "ssh_authenticated")
+            for fact in facts
+        )
+
+
+@pytest.mark.security
+def test_unauthenticated_replay_source_cannot_spoof_registered_auth_family() -> None:
+    facts = OutputParser().parse_tool_output(
+        "bruteforce victim",
+        "login success\npassword found",
+        source_authenticated=False,
+    )
+    assert not any(fact["type"] in {"credential", "application_access"} for fact in facts)
+
+
+@pytest.mark.security
+def test_registered_auth_family_positive_control_remains_trusted() -> None:
+    facts = OutputParser().parse_tool_output(
+        "ssh_inventory victim",
+        "[+] SSH connected as operator@victim",
+    )
+    credential = next(
+        fact for fact in facts if fact["type"] == "credential" and fact["value"] == "ssh_login_success:operator@victim"
+    )
+    assert credential["trust_level"] == "trusted"

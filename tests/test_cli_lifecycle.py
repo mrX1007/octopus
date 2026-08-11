@@ -140,6 +140,7 @@ def test_main_routes_plugin_and_inventory_through_canonical_runtime(
         python_deps=[],
         capabilities=[],
         supports_check=True,
+        supports_run=False,
         input_schema={
             **empty_input_schema(),
             "properties": {"label": {"type": "string"}},

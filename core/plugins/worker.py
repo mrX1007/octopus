@@ -157,6 +157,7 @@ def _metadata(plugin_class: type[OctopusPlugin]) -> dict[str, Any]:
         "capabilities": sorted(str(item) for item in (getattr(plugin_class, "capabilities", set()) or set())),
         "hooks": [name for name in _HOOKS if name in plugin_class.__dict__],
         "supports_check": plugin_class.check is not OctopusPlugin.check,
+        "supports_run": plugin_class.run is not OctopusPlugin.run,
         "input_schema": getattr(plugin_class, "input_schema", None),
     }
 

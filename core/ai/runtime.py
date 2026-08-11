@@ -729,7 +729,10 @@ class PipelineRuntime:
             descriptors = getattr(catalog, "descriptors", None)
             if callable(descriptors):
                 plugin_namespace_owned = any(
-                    str(descriptor.action_id).strip().casefold().startswith("plugin:") for descriptor in descriptors()
+                    str(descriptor.action_id).strip().casefold().startswith("plugin:")
+                    and descriptor.provider == "core.plugins.loader.PluginManager"
+                    and descriptor.provider_mounted
+                    for descriptor in descriptors()
                 )
         if invocation.registered_name == "plugin" and plugin_namespace_owned:
             inventory_request = len(invocation_argv) >= 2 and invocation_argv[1].strip().casefold() in {
@@ -1148,8 +1151,19 @@ class PipelineRuntime:
     ) -> list[dict[str, Any]]:
         # Diagnostics are audit-only. Parsing stderr as evidence can turn a
         # failed tool's echoed examples into verified facts and follow-ups.
-        output_text = output.stdout if isinstance(output, ExecutionResult) else str(output)
-        return self.parser.parse_tool_output(command, output_text)
+        if isinstance(output, ExecutionResult):
+            output_text = output.stdout
+            source_authenticated = output.metadata.get("source_authenticated") is not False
+        else:
+            output_text = str(output)
+            source_authenticated = True
+        if source_authenticated:
+            return self.parser.parse_tool_output(command, output_text)
+        return self.parser.parse_tool_output(
+            command,
+            output_text,
+            source_authenticated=False,
+        )
 
     @staticmethod
     def output_fingerprint(output: str) -> str:

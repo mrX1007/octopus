@@ -13,7 +13,11 @@ import pytest
 from core.actions import ActionRequest
 from core.actions.adapters import RegisteredToolAdapter
 from core.execution import ExecutionContext
-from core.tools import QUARANTINED_CAPABILITY_NAMES, dispatch_registered_tool
+from core.tools import (
+    MANUAL_GATED_CAPABILITY_NAMES,
+    QUARANTINED_CAPABILITY_NAMES,
+    dispatch_registered_tool,
+)
 from core.tools import dependencies as dependency_model
 from core.tools.dependencies import (
     DependencyContext,
@@ -290,13 +294,14 @@ def test_source_only_high_risk_capabilities_are_registered_and_fail_closed() -> 
     inventory = dependency_inventory()
     records = {item["name"]: item for item in inventory["tools"]}
 
-    assert len(QUARANTINED_CAPABILITY_NAMES) == 14
-    for name in QUARANTINED_CAPABILITY_NAMES:
+    assert QUARANTINED_CAPABILITY_NAMES == ()
+    assert len(MANUAL_GATED_CAPABILITY_NAMES) == 20
+    for name in MANUAL_GATED_CAPABILITY_NAMES:
         definition = get_tool(name)
         assert definition is not None
         assert definition.enabled is False
         assert definition.provider_path
-        assert definition.disabled_reason == "unsafe_provider_contract_not_mounted"
+        assert definition.disabled_reason == "provider_not_configured"
         assert records[name]["provider_path"] == definition.provider_path
         assert records[name]["disabled_reason"] == definition.disabled_reason
         result = dispatch_registered_tool(

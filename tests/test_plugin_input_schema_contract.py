@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 from types import SimpleNamespace
 from typing import Any
 
@@ -37,6 +38,7 @@ def _descriptor(
     input_schema: dict[str, Any],
     *,
     supports_check: bool = False,
+    supports_run: bool = True,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         name="synthetic_noop",
@@ -47,6 +49,7 @@ def _descriptor(
         python_deps=(),
         capabilities=(),
         supports_check=supports_check,
+        supports_run=supports_run,
         input_schema=input_schema,
     )
 
@@ -57,8 +60,13 @@ class _NoOpManager:
         input_schema: dict[str, Any],
         *,
         supports_check: bool = False,
+        supports_run: bool = True,
     ) -> None:
-        self.descriptor = _descriptor(input_schema, supports_check=supports_check)
+        self.descriptor = _descriptor(
+            input_schema,
+            supports_check=supports_check,
+            supports_run=supports_run,
+        )
         self.plugins = {self.descriptor.name: self.descriptor}
         self.skipped_plugins: dict[str, str] = {}
         self.calls: list[dict[str, Any]] = []
@@ -215,6 +223,73 @@ def test_plugin_action_adapter_passes_valid_opaque_references_without_resolving_
     assert manager.calls[0]["path_ref"] == "path://opaque/not-opened"
     assert manager.execute_calls == manager.calls
     assert manager.check_calls == []
+
+
+def test_plugin_action_adapter_rejects_check_when_provider_does_not_support_it() -> None:
+    manager = _NoOpManager(_schema({"label": {"type": "string"}}, required=["label"]))
+    adapter = PluginActionAdapter(manager, "synthetic_noop")
+
+    with pytest.raises(ValueError, match=r"^plugin_check_unsupported$"):
+        adapter.execute(_request({"action": "check", "label": "fixture"}))
+
+    assert manager.calls == []
+
+
+def test_runtime_blocks_unsupported_check_before_provider_attempt(tmp_path) -> None:
+    manager = _NoOpManager(_schema({"label": {"type": "string"}}, required=["label"]))
+    runtime = PipelineRuntime(
+        str(tmp_path / "unsupported-check.db"),
+        runner=lambda *_args, **_kwargs: "unexpected",
+        plugin_manager=manager,
+    )
+
+    result = runtime.dispatch(
+        "plugin synthetic_noop example.test check label=fixture",
+        (),
+        set(),
+        ExecutionContext.automatic(target_scope=("example.test",)),
+    )
+
+    assert result.status is ExecutionStatus.BLOCKED
+    assert result.error_message == "plugin_check_unsupported"
+    assert result.executed is False
+    assert result.metadata["provider_attempts"] == 0
+    assert manager.calls == []
+
+
+@pytest.mark.parametrize("metadata_present", [False, True])
+def test_runtime_blocks_unsupported_run_before_provider_attempt(tmp_path, metadata_present: bool) -> None:
+    manager = _NoOpManager(
+        _schema({"label": {"type": "string"}}, required=["label"]),
+        supports_check=True,
+        supports_run=False,
+    )
+    if not metadata_present:
+        del manager.descriptor.supports_run
+    runtime = PipelineRuntime(
+        str(tmp_path / "unsupported-run.db"),
+        runner=lambda *_args, **_kwargs: "unexpected",
+        plugin_manager=manager,
+    )
+    context = ExecutionContext.operator(
+        actor="synthetic-fixture",
+        approval_id="synthetic-run-fixture",
+        target_scope=("example.test",),
+        allow_active_tools=True,
+    )
+
+    result = runtime.dispatch(
+        "plugin synthetic_noop example.test run label=fixture",
+        (),
+        set(),
+        context,
+    )
+
+    assert result.status is ExecutionStatus.BLOCKED
+    assert result.error_message == "plugin_run_unsupported"
+    assert result.executed is False
+    assert result.metadata["provider_attempts"] == 0
+    assert manager.calls == []
 
 
 def test_runtime_parser_accepts_repeated_safe_metadata_and_keeps_refs_opaque() -> None:
@@ -382,6 +457,7 @@ def test_inventory_metadata_creates_inert_ready_planner_candidate_without_action
                     "name": "synthetic_noop",
                     "type": "recon",
                     "supports_check": True,
+                    "supports_run": True,
                     "input_schema": _schema(
                         {
                             "credential_ref": {
@@ -417,12 +493,178 @@ def test_inventory_metadata_creates_inert_ready_planner_candidate_without_action
     )[0]
 
     assert candidate["action_id"] == "plugin:synthetic_noop"
-    assert candidate["actions"] == ["check", "scan"]
+    assert candidate["actions"] == ["check", "run"]
+    assert candidate["selected_action"] == "check"
     assert candidate["input_state"] == "ready"
     assert candidate["planner_visible"] is True
     assert candidate["resolved_parameter_names"] == ["credential_ref", "label"]
     assert credential_ref not in str(candidate)
     assert manager.inventory_reads == 1
+
+
+@pytest.mark.parametrize("action", ["check", "run"])
+def test_plugin_command_round_trips_spaces_objects_and_arrays(action: str) -> None:
+    schema = _schema(
+        {
+            "label": {"type": "string"},
+            "tags": {"type": "array"},
+            "target_info": {"type": "object"},
+        },
+        required=["label", "tags", "target_info"],
+    )
+    manager = SimpleNamespace(
+        list_plugins=lambda: [
+            {
+                "name": "synthetic_active",
+                "type": "post",
+                "supports_check": True,
+                "supports_run": True,
+                "input_schema": schema,
+            }
+        ]
+    )
+    registry = ToolRegistry(plugin_manager_provider=lambda: manager)
+    inputs = {
+        "plugin_actions": {
+            "synthetic_active": {
+                "action": action,
+                "label": "neutral fixture",
+                "tags": ["alpha", "two words"],
+                "target_info": {
+                    "hostname": "host one",
+                    "roles": ["web", "api worker"],
+                },
+            }
+        }
+    }
+
+    commands = registry.get_commands_for_task(
+        "plugin:synthetic_active",
+        "example.test",
+        task_inputs=inputs,
+    )
+
+    assert len(commands) == 1
+    tokens = shlex.split(commands[0])
+    assert tokens[:4] == ["plugin", "synthetic_active", "example.test", action]
+    assert tokens[4:] == [
+        "label=neutral fixture",
+        'tags=["alpha","two words"]',
+        'target_info={"hostname":"host one","roles":["web","api worker"]}',
+    ]
+    assert _parse_plugin_metadata_arguments(tokens[4:], schema) == {
+        "label": "neutral fixture",
+        "tags": ["alpha", "two words"],
+        "target_info": {
+            "hostname": "host one",
+            "roles": ["web", "api worker"],
+        },
+    }
+
+
+def test_check_only_plugin_does_not_advertise_or_compile_run() -> None:
+    schema = _schema({"label": {"type": "string"}}, required=["label"])
+    manager = SimpleNamespace(
+        list_plugins=lambda: [
+            {
+                "name": "check_only",
+                "type": "recon",
+                "supports_check": True,
+                "supports_run": False,
+                "input_schema": schema,
+            }
+        ]
+    )
+    registry = ToolRegistry(plugin_manager_provider=lambda: manager)
+    plugin_inputs = {"check_only": {"action": "run", "label": "fixture"}}
+
+    readiness = registry.get_discovered_plugin_action_reachability("example.test", plugin_inputs)[0]
+    commands = registry.get_commands_for_task(
+        "plugin:check_only",
+        "example.test",
+        task_inputs={"plugin_actions": plugin_inputs},
+    )
+
+    assert readiness["actions"] == ["check"]
+    assert readiness["input_state"] == "blocked_by_action"
+    assert readiness["planner_visible"] is False
+    assert readiness["action_state"] == "plugin_action_unsupported:run"
+    assert commands == []
+
+
+@pytest.mark.parametrize("include_field", [False, True])
+def test_plugin_without_proven_run_support_fails_closed(include_field: bool) -> None:
+    record: dict[str, Any] = {
+        "name": "actionless",
+        "type": "recon",
+        "supports_check": False,
+        "input_schema": _schema(),
+    }
+    if include_field:
+        record["supports_run"] = False
+    manager = SimpleNamespace(list_plugins=lambda: [record])
+    registry = ToolRegistry(plugin_manager_provider=lambda: manager)
+    plugin_inputs = {"actionless": {"action": "run"}}
+
+    readiness = registry.get_discovered_plugin_action_reachability("example.test", plugin_inputs)[0]
+
+    assert readiness["actions"] == []
+    assert readiness["input_state"] == "blocked_by_action"
+    assert readiness["planner_visible"] is False
+    assert registry.get_provider_statuses_for_task("plugin:actionless") == []
+    assert (
+        registry.get_commands_for_task(
+            "plugin:actionless",
+            "example.test",
+            task_inputs={"plugin_actions": plugin_inputs},
+        )
+        == []
+    )
+
+
+@pytest.mark.parametrize(
+    ("properties", "parameters", "message"),
+    [
+        ({"label": {"type": "string"}}, {"label": "line one\nline two"}, "plugin_metadata_unsafe_value:label"),
+        ({"label": {"type": "string"}}, {"label": "x" * 4097}, "plugin_metadata_unsafe_value:label"),
+        (
+            {"password": {"type": "string"}},
+            {"password": "plaintext-fixture"},
+            "plugin_metadata_secret_material_forbidden:password",
+        ),
+    ],
+)
+def test_readiness_and_command_generation_share_runtime_metadata_grammar(
+    properties: dict[str, dict[str, Any]],
+    parameters: dict[str, Any],
+    message: str,
+) -> None:
+    schema = _schema(properties, required=list(properties))
+    manager = SimpleNamespace(
+        list_plugins=lambda: [
+            {
+                "name": "grammar_fixture",
+                "type": "recon",
+                "supports_check": True,
+                "supports_run": True,
+                "input_schema": schema,
+            }
+        ]
+    )
+    registry = ToolRegistry(plugin_manager_provider=lambda: manager)
+    plugin_inputs = {"grammar_fixture": {"action": "check", **parameters}}
+
+    readiness = registry.get_discovered_plugin_action_reachability("example.test", plugin_inputs)[0]
+    commands = registry.get_commands_for_task(
+        "plugin:grammar_fixture",
+        "example.test",
+        task_inputs={"plugin_actions": plugin_inputs},
+    )
+
+    assert readiness["input_state"] == "blocked_by_input"
+    assert readiness["planner_visible"] is False
+    assert readiness["validation_error"] == message
+    assert commands == []
 
 
 @pytest.mark.parametrize(

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from core.actions import ActionKind, ActionRequest, build_action_catalog
+from core.actions import ActionRequest, build_action_catalog
 from core.ai.runtime import PipelineRuntime
 from core.execution import ExecutionContext, ExecutionStatus
 from core.plugins import loader as plugin_loader
@@ -43,6 +43,7 @@ def _plugin_descriptor(name: str, *, supports_check: bool = False) -> SimpleName
         python_deps=[],
         capabilities=[],
         supports_check=supports_check,
+        supports_run=True,
     )
 
 
@@ -88,6 +89,7 @@ class _CheckingManager:
                 "requires": [],
                 "stage": 1,
                 "supports_check": True,
+                "supports_run": True,
                 "type": "recon",
                 "version": "1.0",
             }
@@ -109,7 +111,7 @@ class _CheckingManager:
         raise AssertionError("explicit plugin check must not execute run()")
 
 
-def test_inert_plugin_descriptors_join_catalog_without_stealing_disabled_bare_name() -> None:
+def test_payload_registry_identity_mismatch_fails_closed() -> None:
     disabled = ToolDef(
         name="payload_keying",
         func=lambda: None,
@@ -119,24 +121,12 @@ def test_inert_plugin_descriptors_join_catalog_without_stealing_disabled_bare_na
     )
     manager = _InertManager("payload_keying", "synthetic_plugin")
 
-    catalog = build_action_catalog(
-        lambda _command, _context: "unused",
-        tool_defs=(disabled,),
-        plugin_manager=manager,
-    )
-
-    plugin_descriptors = tuple(
-        descriptor for descriptor in catalog.descriptors() if descriptor.kind is ActionKind.PLUGIN
-    )
-    assert len(plugin_descriptors) == 2
-    assert {descriptor.action_id for descriptor in plugin_descriptors} == {
-        "plugin:payload_keying",
-        "plugin:synthetic_plugin",
-    }
-    assert catalog.require("payload_keying").canonical_id == "tool:payload_keying"
-    assert catalog.require("plugin:payload_keying").canonical_id == "plugin:payload_keying"
-    assert catalog.require("synthetic_plugin").canonical_id == "plugin:synthetic_plugin"
-    assert manager.metadata_reads == ["payload_keying", "synthetic_plugin"]
+    with pytest.raises(ValueError, match="Registry/custom action identity mismatch: payload_keying"):
+        build_action_catalog(
+            lambda _command, _context: "unused",
+            tool_defs=(disabled,),
+            plugin_manager=manager,
+        )
 
 
 def test_plugin_display_name_cannot_shadow_an_enabled_registry_owner() -> None:
@@ -336,6 +326,44 @@ def test_real_discovery_catalog_and_parser_complete_without_plugin_actions(
     assert {"payload_keying", "systemd"}.issubset(manager.plugins)
     assert Path(manager.plugins["payload_keying"].path).resolve() == modules_root / "evasion" / "payload_keying.py"
     assert Path(manager.plugins["systemd"].path).resolve() == modules_root / "persistence" / "systemd.py"
+    payload_schema = manager.plugins["payload_keying"].input_schema
+    systemd_schema = manager.plugins["systemd"].input_schema
+    assert payload_schema["required"] == ["payload"]
+    assert systemd_schema["required"] == ["credential_ref"]
+    assert systemd_schema["properties"]["credential_ref"] == {
+        "type": "string",
+        "format": "credential-ref",
+    }
+    assert "password" not in systemd_schema["properties"]
+
+    from core.ai.tool_registry import ToolRegistry
+
+    credential_canary = "credential://opaque/systemd-contract"
+    plugin_registry = ToolRegistry(plugin_manager_provider=lambda: manager)
+    readiness = {
+        row["plugin"]: row
+        for row in plugin_registry.get_discovered_plugin_action_reachability(
+            "192.0.2.10",
+            {
+                "payload_keying": {
+                    "action": "run",
+                    "payload": "neutral fixture",
+                },
+                "systemd": {
+                    "action": "run",
+                    "credential_ref": credential_canary,
+                },
+            },
+        )
+    }
+    assert readiness["payload_keying"]["input_state"] == "provider_not_configured"
+    assert readiness["payload_keying"]["selected_action"] == "run"
+    assert readiness["payload_keying"]["planner_visible"] is False
+    assert readiness["payload_keying"]["manual_gate"] is True
+    assert readiness["payload_keying"]["provider_mounted"] is False
+    assert readiness["systemd"]["input_state"] == "ready"
+    assert readiness["systemd"]["selected_action"] == "run"
+    assert credential_canary not in str(readiness)
 
     def forbidden_action(*_args, **_kwargs):
         raise AssertionError("plugin check/run must not execute during inventory assessment")
@@ -349,7 +377,10 @@ def test_real_discovery_catalog_and_parser_complete_without_plugin_actions(
     monkeypatch.setattr(plugin_loader, "PluginManager", forbidden_second_discovery)
     catalog = runtime.action_catalog
 
-    assert catalog.require("plugin:payload_keying").adapter.manager is manager
+    payload_adapter = catalog.require("plugin:payload_keying").adapter
+    assert payload_adapter.descriptor.manual_gate is True
+    assert payload_adapter.descriptor.provider_mounted is False
+    assert not hasattr(payload_adapter, "manager")
     assert catalog.require("plugin:systemd").adapter.manager is manager
     assert catalog.require("plugin:payload_keying").adapter.descriptor.requirements.supports_check is False
     assert catalog.require("plugin:systemd").adapter.descriptor.requirements.supports_check is False
@@ -422,10 +453,6 @@ def test_real_plugin_commands_use_runtime_manager_and_fail_closed_before_side_ef
         "systemd": "192.0.2.10",
         "payload_keying": "192.0.2.11",
     }
-    expected_errors = {
-        "systemd": "Requires target plus serializable SSH credentials",
-        "payload_keying": "payload bytes or string are required",
-    }
     context = ExecutionContext.operator(
         actor="real-plugin-worker-contract",
         approval_id="safe-fail-closed-inputs",
@@ -443,7 +470,12 @@ def test_real_plugin_commands_use_runtime_manager_and_fail_closed_before_side_ef
     for plugin_name, target in targets.items():
         action_id = f"plugin:{plugin_name}"
         adapter = catalog.require(action_id).adapter
-        assert adapter.manager is manager
+        if plugin_name == "payload_keying":
+            assert adapter.descriptor.manual_gate is True
+            assert adapter.descriptor.provider_mounted is False
+            assert not hasattr(adapter, "manager")
+        else:
+            assert adapter.manager is manager
         assert adapter.descriptor.requirements.supports_check is False
         expected_relative_path = {
             "systemd": Path("persistence/systemd.py"),
@@ -451,66 +483,24 @@ def test_real_plugin_commands_use_runtime_manager_and_fail_closed_before_side_ef
         }[plugin_name]
         assert Path(manager.plugins[plugin_name].path).resolve() == modules_root / expected_relative_path
 
-        check_command = f"plugin {plugin_name} {target} check"
-        check_result = runtime.dispatch(
-            check_command,
-            (),
-            set(),
-            context,
-        )
-        assert check_result.status is ExecutionStatus.SUCCEEDED
-        assert check_result.metadata["action_id"] == action_id
-        assert check_result.metadata["plugin_action"] == "check"
-        assert check_result.metadata["plugin_run_invoked"] is False
-        assert check_result.metadata["action_lifecycle"]["attempt"] == "attempted"
-        assert check_result.metadata["action_lifecycle"]["outcome"] == "succeeded"
-        check_payload = json.loads(check_result.stdout)
-        assert check_payload == {
-            "action": "check",
-            "confidence": 0.0,
-            "details": "check() not implemented",
-            "evidence": "",
-            "plugin": plugin_name,
-            "supports_check": False,
-            "version": "",
-            "vulnerable": False,
-        }
+        for action in ("check", "run"):
+            command = f"plugin {plugin_name} {target} {action}"
+            result = runtime.dispatch(command, (), set(), context)
 
-        stored = runtime.ingest_output(
-            "real-plugin-check",
-            target,
-            check_command,
-            check_result,
-        )
-        parsed_checks = [json.loads(item["value"]) for item in stored if item["type"] == "check_result"]
-        assert len(parsed_checks) == 1
-        assert parsed_checks[0]["status"] == "partial"
-        assert parsed_checks[0]["summary"] == {
-            "check_supported": False,
-            "confidence": 0.0,
-            "plugin": plugin_name,
-            "vulnerable": False,
-        }
-        assert all(item["trust_level"] == "trusted" for item in stored)
-
-        run_command = f"plugin {plugin_name} {target} run"
-        run_result = runtime.dispatch(
-            run_command,
-            (),
-            set(),
-            context,
-        )
-        assert run_result.status is ExecutionStatus.FAILED
-        assert run_result.metadata["action_id"] == action_id
-        assert run_result.metadata["action_lifecycle"]["attempt"] == "attempted"
-        assert run_result.metadata["action_lifecycle"]["outcome"] == "failed"
-        assert run_result.error_message == expected_errors[plugin_name]
-        assert run_result.stdout == ""
-        assert run_result.artifact_refs == ()
-        assert run_result.metadata["data"] == {}
-        assert run_result.metadata["credentials"] == []
-        assert run_result.metadata["sessions"] == []
-        assert runtime.parse_output(run_command, run_result) == []
+            assert result.executed is False
+            assert result.metadata["action_id"] == action_id
+            assert result.metadata["provider_attempts"] == 0
+            if plugin_name == "payload_keying":
+                assert result.status is ExecutionStatus.UNAVAILABLE
+                assert result.metadata["provider_status"] == "unavailable"
+                assert result.metadata["policy_denial"] is None
+            else:
+                assert result.status is ExecutionStatus.BLOCKED
+                assert result.error_message == "plugin_input_missing"
+                assert result.metadata["policy_denial"]["reason_code"] == "plugin_input_missing"
+            assert result.stdout == ""
+            assert result.artifact_refs == ()
+            assert runtime.parse_output(command, result) == []
 
     files_after = {path.relative_to(tmp_path) for path in tmp_path.rglob("*")}
     assert files_after == files_before

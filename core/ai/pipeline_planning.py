@@ -501,7 +501,8 @@ class PipelinePlanningMixin(PipelineMixinBase):
                     if (
                         isinstance(item, dict)
                         and (item.get("action_id") == canon or item.get("action") == canon)
-                        and item.get("input_state", item.get("state")) in {"blocked_by_input", "blocked_by_target"}
+                        and item.get("input_state", item.get("state"))
+                        in {"blocked_by_action", "blocked_by_input", "blocked_by_target"}
                     ):
                         return True
             return False

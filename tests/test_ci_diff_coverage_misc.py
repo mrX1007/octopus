@@ -197,13 +197,13 @@ def test_artifact_manager_tracks_and_cleans_one_inserted_line(tmp_path: Path) ->
     assert len(other.get_pending_cleanups()) == 1
 
 
-def test_quarantined_provider_stub_remains_fail_closed() -> None:
+def test_manual_gated_provider_stub_remains_fail_closed() -> None:
     definition = get_tool("pth")
 
     assert definition is not None
     assert definition.enabled is False
     assert definition.func is not None
-    assert definition.func() == "[!] Execution denied: unsafe_provider_contract_not_mounted"
+    assert definition.func() == "[!] Execution denied: provider_not_configured"
 
 
 @pytest.mark.parametrize(

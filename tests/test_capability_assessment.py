@@ -722,6 +722,45 @@ def test_plan_compiler_rejects_only_hard_provider_failures():
     assert all(item["assessment"]["requested"] for item in compilation.rejected)
 
 
+def test_plan_compiler_rejects_plugin_run_denied_by_exact_action_policy():
+    task = "plugin:synthetic_active"
+    registry = StubRegistry(
+        {
+            task: [
+                _provider_record(
+                    "plugin",
+                    command="plugin synthetic_active {target} check",
+                )
+            ]
+        }
+    )
+    policy = MutablePolicy(denied_markers=(" run",))
+    compiler = MissionPlanCompiler(CapabilityResolver(registry, policy))
+    context = {
+        "plugin_action_readiness": [
+            {
+                "action_id": task,
+                "selected_action": "run",
+                "input_state": "ready",
+            }
+        ]
+    }
+
+    compilation = compiler.compile(
+        [{"agent": "DiscoveryAgent", "task": task}],
+        target=TARGET,
+        facts=[],
+        context=context,
+        execution_context=_execution_context(),
+    )
+
+    assert compilation.plan == ()
+    assert compilation.rejected[0]["task"] == task
+    assert compilation.rejected[0]["reason"] == "capability_authorization_denied"
+    assert compilation.rejected[0]["assessment"]["authorization_decision"] == "denied"
+    assert policy.calls[0][0] == f"plugin synthetic_active {TARGET} run"
+
+
 def test_scheduler_rechecks_policy_after_an_allowed_capability_assessment():
     registry = StubRegistry({"policy_sensitive_task": [_provider_record("policy_probe")]})
     policy = MutablePolicy(allowed=True, reason="initially_allowed")

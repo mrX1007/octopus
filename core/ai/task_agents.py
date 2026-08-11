@@ -2,7 +2,7 @@
 
 import json
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from typing import Any, Optional
 
 from core.ai.evidence import EvidenceVerifier
@@ -56,7 +56,7 @@ class DiscoveryAgent:
     def __init__(
         self,
         tool_registry: ToolRegistry,
-        task_input_provider: Optional[Callable[[str, str], Mapping[str, Sequence[str]]]] = None,
+        task_input_provider: Optional[Callable[[str, str], Mapping[str, Any]]] = None,
     ):
         self.tool_registry = tool_registry
         self.task_input_provider = task_input_provider
@@ -135,7 +135,7 @@ class VerificationAgent:
         self,
         tool_registry: ToolRegistry,
         verifier: EvidenceVerifier,
-        task_input_provider: Optional[Callable[[str, str], Mapping[str, Sequence[str]]]] = None,
+        task_input_provider: Optional[Callable[[str, str], Mapping[str, Any]]] = None,
     ):
         self.tool_registry = tool_registry
         self.verifier = verifier

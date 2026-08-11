@@ -67,12 +67,17 @@ class MissionPlanCompiler:
                 agent=agent,
                 requested=True,
             )
-            if assessment.hard_unavailable:
+            plugin_authorization_denied = task.startswith("plugin:") and assessment.authorization_decision == "denied"
+            if assessment.hard_unavailable or plugin_authorization_denied:
                 rejected.append(
                     {
                         "agent": agent,
                         "task": assessment.capability,
-                        "reason": f"capability_{assessment.provider_availability}",
+                        "reason": (
+                            "capability_authorization_denied"
+                            if plugin_authorization_denied
+                            else f"capability_{assessment.provider_availability}"
+                        ),
                         "blocking_reasons": list(assessment.blocking_reasons),
                         "assessment": assessment.to_dict(),
                     }

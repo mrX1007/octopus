@@ -50,7 +50,10 @@ from core.tools.post_tools import (
     run_default_recon,
 )
 from core.tools.public import dispatch_registered_tool
-from core.tools.quarantined import QUARANTINED_CAPABILITY_NAMES
+from core.tools.quarantined import (
+    MANUAL_GATED_CAPABILITY_NAMES,
+    QUARANTINED_CAPABILITY_NAMES,
+)
 from core.tools.recon_tools import (
     run_curl_headers,
     run_dig,
@@ -161,6 +164,7 @@ __all__ = [
     "DEPRECATED_TOOL_EXPORTS",
     "DIRECT_PROVIDER_EXPORTS",
     "LOW_LEVEL_EXECUTION_EXPORTS",
+    "MANUAL_GATED_CAPABILITY_NAMES",
     "QUARANTINED_CAPABILITY_NAMES",
     "TOOLS_MENU",
     "ToolResult",

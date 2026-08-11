@@ -62,15 +62,19 @@ _CANONICAL_KEYS = {
     "executed",
     "exit_code",
     "metadata",
+    "mission_id",
     "output",
     "partial",
     "policy_decision_ref",
+    "provenance_chain",
     "request_id",
     "schema_version",
     "status",
     "stderr",
     "stdout",
+    "task_id",
     "tool_name",
+    "attempt_id",
 }
 
 TextRedactor = Callable[..., str]
@@ -378,6 +382,10 @@ class ExecutionResult:
     metadata: dict[str, Any] = field(default_factory=dict, repr=False)
     executed: bool = True
     decision: Any = field(default=None, repr=False, compare=False)
+    mission_id: str | None = None
+    task_id: str | None = None
+    attempt_id: str | None = None
+    provenance_chain: dict[str, Any] | None = field(default=None, repr=False)
 
     @property
     def output(self) -> str:
@@ -416,6 +424,10 @@ class ExecutionResult:
             "policy_decision_ref": self.policy_decision_ref,
             "metadata": _json_safe(self.metadata),
             "executed": self.executed,
+            "mission_id": self.mission_id,
+            "task_id": self.task_id,
+            "attempt_id": self.attempt_id,
+            "provenance_chain": _json_safe(self.provenance_chain) if self.provenance_chain else None,
         }
 
     def to_audit_dict(self) -> dict[str, Any]:
@@ -428,6 +440,9 @@ class ExecutionResult:
             "request_id": self.request_id,
             "execution_id": self.execution_id,
             "policy_decision_ref": self.policy_decision_ref,
+            "mission_id": self.mission_id,
+            "task_id": self.task_id,
+            "attempt_id": self.attempt_id,
             "output_bytes": len(self.stdout.encode("utf-8", "ignore")),
             "stderr_bytes": len(self.stderr.encode("utf-8", "ignore")),
             "partial": self.partial,
@@ -480,14 +495,18 @@ def adapt_execution_result(
                 "exit_code",
                 "facts",
                 "metadata",
+                "mission_id",
                 "output",
                 "partial",
+                "provenance_chain",
                 "sessions",
                 "status",
                 "stderr",
                 "stdout",
                 "success",
+                "task_id",
                 "tool_name",
+                "attempt_id",
             )
             if hasattr(value, key)
         }
@@ -591,6 +610,10 @@ def adapt_execution_result(
         metadata=safe_metadata,
         executed=was_executed,
         decision=decision if decision is not None else source_decision,
+        mission_id=_as_text(raw.get("mission_id")) or None,
+        task_id=_as_text(raw.get("task_id")) or None,
+        attempt_id=_as_text(raw.get("attempt_id")) or None,
+        provenance_chain=(dict(raw["provenance_chain"]) if isinstance(raw.get("provenance_chain"), Mapping) else None),
     )
 
 

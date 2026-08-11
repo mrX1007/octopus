@@ -15,7 +15,7 @@ from .adapters import (
     canonical_assessment_applicability,
     register_tool_adapters,
 )
-from .base import ActionAdapter
+from .base import ActionAdapter, ManualGatedActionAdapter
 from .catalog import ActionCatalog, ResolvedAction
 from .executor import ActionExecutor
 from .models import (
@@ -82,6 +82,11 @@ def build_action_catalog(
         if not (plugin_manager is not None and str(getattr(tool_def, "name", "")).strip().casefold() == "plugin")
     )
     catalog = ActionCatalog()
+    manual_catalog = ActionCatalog(include_manual_gated=True)
+    for tool_def in catalog_definitions:
+        manual = manual_catalog.resolve(str(getattr(tool_def, "name", "")))
+        if manual is not None and manual.adapter.descriptor.manual_gate:
+            catalog.register(manual.adapter)
     # With a runtime-owned manager, ``plugin`` is command grammar rather than
     # an executable provider.  Publishing its legacy registry adapter would
     # let direct action callers construct a second PluginManager and bypass the
@@ -89,11 +94,14 @@ def build_action_catalog(
     register_tool_adapters(catalog, catalog_definitions, dispatch)
     expected = {str(tool_def.name).strip().casefold() for tool_def in catalog_definitions}
     covered = {descriptor.name.strip().casefold() for descriptor in catalog.descriptors()}
-    if expected != covered:
-        missing = ", ".join(sorted(expected - covered)) or "none"
-        unexpected = ", ".join(sorted(covered - expected)) or "none"
+    missing = expected - covered
+    unexpected = covered - expected
+    if missing or unexpected:
+        missing_str = ", ".join(sorted(missing)) or "none"
+        unexpected_str = ", ".join(sorted(unexpected)) or "none"
         raise RuntimeError(
-            f"Action catalog does not match the decorator registry: missing={missing}; unexpected={unexpected}"
+            "Action catalog does not match the decorator registry: "
+            f"missing={missing_str}; unexpected={unexpected_str}"
         )
     if plugin_manager is not None:
         catalog.register_plugins(plugin_manager)
@@ -126,6 +134,7 @@ __all__ = [
     "ExploitBaseAdapter",
     "IngestionOutcome",
     "KillchainActionAdapter",
+    "ManualGatedActionAdapter",
     "MetasploitActionAdapter",
     "OutcomeStatus",
     "PartialIngestCallback",

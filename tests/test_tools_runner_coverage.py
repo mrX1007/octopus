@@ -2166,8 +2166,11 @@ def test_run_plugin_cli_key_value_argument_routing(monkeypatch: pytest.MonkeyPat
     original_init = PluginManager.__init__
 
     def counted_init(self, modules_dir: str) -> None:
+        from dataclasses import replace
+
         manager_constructions.append(modules_dir)
         original_init(self, modules_dir)
+        self.plugins["systemd"] = replace(self.plugins["systemd"], supports_check=True)
 
     plugin_tool = get_tool("plugin")
     assert plugin_tool is not None
@@ -2187,13 +2190,18 @@ def test_run_plugin_cli_key_value_argument_routing(monkeypatch: pytest.MonkeyPat
     )
     with bind_execution_context(context):
         res = runner.run_tool_by_command(
-            "plugin systemd 192.0.2.1 check payload_path=/var/tmp/agent service_name=my.service",
+            "plugin systemd 192.0.2.1 check credential_ref=credential://opaque/runner-fixture "
+            "payload_path=/var/tmp/agent service_name=my.service",
             context,
         )
     assert json.loads(res)["details"] == "fake check"
     assert captured["plugin_name"] == "systemd"
     assert captured["target"] == "192.0.2.1"
-    assert captured["kwargs"] == {"payload_path": "/var/tmp/agent", "service_name": "my.service"}
+    assert captured["kwargs"] == {
+        "credential_ref": "credential://opaque/runner-fixture",
+        "payload_path": "/var/tmp/agent",
+        "service_name": "my.service",
+    }
     assert len(manager_constructions) == 1
 
 

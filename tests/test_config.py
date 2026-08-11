@@ -263,6 +263,71 @@ class TestConfigValidation:
             "enabled": True,
         }
 
+    def test_plugin_action_control_and_nested_json_are_preserved(self, tmp_path):
+        import config
+
+        path = tmp_path / "plugin-action-inputs.yaml"
+        path.write_text(
+            """strategy:
+  task_inputs:
+    plugin_actions:
+      synthetic_active:
+        action: run
+        label: neutral fixture
+        target_info:
+          hostname: host one
+          roles: [web, api worker]
+        tags: [alpha, two words]
+""",
+            encoding="utf-8",
+        )
+
+        with patch("config._find_config", return_value=str(path)):
+            loaded = config.load_config()
+
+        assert loaded["strategy"]["task_inputs"]["plugin_actions"] == {
+            "synthetic_active": {
+                "action": "run",
+                "label": "neutral fixture",
+                "target_info": {
+                    "hostname": "host one",
+                    "roles": ["web", "api worker"],
+                },
+                "tags": ["alpha", "two words"],
+            }
+        }
+
+    @pytest.mark.parametrize("action", [123, "delete"])
+    def test_plugin_action_control_rejects_invalid_values(self, tmp_path, action):
+        import yaml
+
+        import config
+
+        path = tmp_path / "invalid-plugin-action.yaml"
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    "strategy": {
+                        "task_inputs": {
+                            "plugin_actions": {
+                                "synthetic_active": {"action": action},
+                            }
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with (
+            patch("config._find_config", return_value=str(path)),
+            pytest.raises(
+                config.ConfigValidationError,
+                match=r"strategy\.task_inputs\.plugin_actions\.synthetic_active\.action",
+            ),
+        ):
+            config.load_config()
+
     def test_typed_task_inputs_reject_non_string_scopes(self, tmp_path):
         import config
 

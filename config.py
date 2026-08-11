@@ -149,7 +149,7 @@ DEFAULTS: dict[str, Any] = {
             "zap_exports": [],
             "openapi_specs": [],
             "cloud_providers": [],
-            # Per-plugin values validated against discovered input_schema.
+            # Per-plugin action + values validated against discovered input_schema.
             # Credential/path/artifact references remain opaque at this layer.
             "plugin_actions": {},
         },
@@ -504,7 +504,18 @@ def _validate_plugin_action_inputs(value: Any, path: tuple[str, ...]) -> dict[st
             raise ConfigValidationError(
                 f"{_path_label(plugin_path)} must be a mapping; got {type(parameters).__name__}"
             )
-        result[plugin_name] = _strict_json_config_value(parameters, plugin_path)
+        normalized = _strict_json_config_value(parameters, plugin_path)
+        action = normalized.get("action")
+        if action is not None:
+            if not isinstance(action, str):
+                raise ConfigValidationError(
+                    f"{_path_label((*plugin_path, 'action'))} must be a string; got {type(action).__name__}"
+                )
+            action = action.strip().casefold()
+            if action not in {"check", "run", "scan"}:
+                raise ConfigValidationError(f"{_path_label((*plugin_path, 'action'))} must be one of check, run, scan")
+            normalized["action"] = "check" if action == "scan" else action
+        result[plugin_name] = normalized
     return result
 
 

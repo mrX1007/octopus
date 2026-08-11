@@ -307,6 +307,30 @@ def test_local_artifact_facts_cannot_escape_configured_filesystem_scope(tmp_path
     assert inputs == {"filesystem_scope": (str(allowed.resolve()),)}
 
 
+def test_resolve_task_inputs_preserves_detached_plugin_action_mapping() -> None:
+    registry = ToolRegistry()
+    configured = {
+        "plugin_actions": {
+            "synthetic_active": {
+                "action": "run",
+                "label": "neutral fixture",
+                "target_info": {"hostname": "host one"},
+                "tags": ["alpha", "two words"],
+            }
+        }
+    }
+
+    resolved = registry.resolve_task_inputs("app.example.test", configured_inputs=configured)
+
+    assert resolved["plugin_actions"] == configured["plugin_actions"]
+    assert resolved["plugin_actions"] is not configured["plugin_actions"]
+    assert resolved["plugin_actions"]["synthetic_active"] is not configured["plugin_actions"]["synthetic_active"]
+    assert (
+        resolved["plugin_actions"]["synthetic_active"]["target_info"]
+        is not configured["plugin_actions"]["synthetic_active"]["target_info"]
+    )
+
+
 def test_remote_artifact_facts_are_bound_to_the_scan_target_scope() -> None:
     registry = ToolRegistry()
 
@@ -384,6 +408,7 @@ def test_plugin_action_reachability_requires_schema_complete_inputs_without_expo
                 "name": "typed_plugin",
                 "type": "post",
                 "supports_check": True,
+                "supports_run": True,
                 "input_schema": {
                     "type": "object",
                     "properties": {
@@ -420,5 +445,88 @@ def test_plugin_action_reachability_requires_schema_complete_inputs_without_expo
     assert ready["input_state"] == "ready"
     assert ready["planner_visible"] is True
     assert ready["actions"] == ["check", "run"]
+    assert ready["selected_action"] == "check"
+    assert ready["action_state"] == "ready"
     assert ready["resolved_parameter_names"] == ["artifact", "attempts", "credential"]
     assert canary not in str(ready)
+
+
+@pytest.mark.parametrize("action", ["check", "run"])
+def test_plugin_action_control_is_not_treated_as_schema_input(action: str) -> None:
+    manager = SimpleNamespace(
+        list_plugins=lambda: [
+            {
+                "name": "synthetic_active",
+                "type": "post",
+                "supports_check": True,
+                "supports_run": True,
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "label": {"type": "string"},
+                        "target_info": {"type": "object"},
+                        "tags": {"type": "array"},
+                    },
+                    "required": ["label", "target_info", "tags"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+    )
+    registry = ToolRegistry(plugin_manager_provider=lambda: manager)
+
+    row = registry.get_discovered_plugin_action_reachability(
+        "app.example.test",
+        {
+            "synthetic_active": {
+                "action": action,
+                "label": "neutral fixture",
+                "target_info": {"hostname": "host one"},
+                "tags": ["alpha", "two words"],
+            }
+        },
+    )[0]
+
+    assert row["actions"] == ["check", "run"]
+    assert row["selected_action"] == action
+    assert row["action_state"] == "ready"
+    assert row["input_state"] == "ready"
+    assert row["planner_visible"] is True
+    assert row["resolved_parameter_names"] == ["label", "tags", "target_info"]
+    assert "action" not in row["undeclared_parameter_names"]
+
+
+def test_run_only_plugin_requires_an_explicit_action_for_planner_visibility() -> None:
+    manager = SimpleNamespace(
+        list_plugins=lambda: [
+            {
+                "name": "run_only",
+                "type": "post",
+                "supports_check": False,
+                "supports_run": True,
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"label": {"type": "string"}},
+                    "required": ["label"],
+                    "additionalProperties": False,
+                },
+            }
+        ]
+    )
+    registry = ToolRegistry(plugin_manager_provider=lambda: manager)
+
+    missing_action = registry.get_discovered_plugin_action_reachability(
+        "app.example.test",
+        {"run_only": {"label": "fixture"}},
+    )[0]
+    explicit_run = registry.get_discovered_plugin_action_reachability(
+        "app.example.test",
+        {"run_only": {"action": "run", "label": "fixture"}},
+    )[0]
+
+    assert missing_action["input_state"] == "blocked_by_action"
+    assert missing_action["action_state"] == "plugin_action_required"
+    assert missing_action["planner_visible"] is False
+    assert explicit_run["selected_action"] == "run"
+    assert explicit_run["input_state"] == "ready"
+    assert explicit_run["planner_visible"] is True

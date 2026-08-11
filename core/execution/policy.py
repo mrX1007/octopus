@@ -1,12 +1,13 @@
 """Fail-closed execution policy used at scheduling and dispatch boundaries."""
 
+from __future__ import annotations
+
 import inspect
 import ipaddress
 import logging
 import re
 import shlex
 from collections.abc import Iterable, Sequence
-from typing import Optional
 from urllib.parse import urlparse
 
 from core.execution.models import (
@@ -41,6 +42,13 @@ _DESTRUCTIVE_SHELL_RE = re.compile(
 )
 
 _MANUAL_APPROVAL_TOOLS = {
+    "ad_dcom_exec",
+    "ad_dump_lsass",
+    "ad_pass_the_ticket",
+    "ad_remote_execution",
+    "ad_sam_dump",
+    "ad_smbexec",
+    "ad_winrm_exec",
     "asrep_roast",
     "bruteforce",
     "build_go_implant",
@@ -49,11 +57,19 @@ _MANUAL_APPROVAL_TOOLS = {
     "crack_hashes",
     "dcsync",
     "deploy_c2_beacon",
+    "c2_channel_create",
+    "c2_cleanup",
+    "c2_deploy",
+    "c2_enroll",
+    "c2_task",
+    "dns_c2_channel",
     "dns_c2_listener",
     "jmx2rce_cleanup",
     "jmx2rce_rce",
     "jmx2rce_read",
     "kerberoast",
+    "kerberos_crack_tickets",
+    "kerberos_extract_tickets",
     "killchain_cleanup",
     "killchain_exfil",
     "killchain_exploit",
@@ -63,7 +79,11 @@ _MANUAL_APPROVAL_TOOLS = {
     "killchain_privesc",
     "msf_run",
     "pass_the_hash",
+    "payload_keying",
     "port_forward",
+    "pivot_proxy_scan",
+    "pivot_remote_forward",
+    "pivot_ssh_chain",
     "psexec",
     "socks_proxy",
     "ssh_exec",
@@ -105,6 +125,11 @@ _OPTIONAL_NETWORK_TARGET_TOOLS = frozenset(
         "build_go_implant",
         "build_ps_stager",
         "build_python_implant",
+        # These manual-gated identities can operate on local opaque artifacts,
+        # but an explicitly supplied target remains bound to operator scope.
+        "c2_enroll",
+        "kerberos_crack_tickets",
+        "payload_keying",
         # This provider accepts either a local artifact (no network scope) or
         # an HTTP(S) artifact URL (normal target-scope enforcement).
         "openapi_import",
@@ -323,7 +348,7 @@ def _declared_network_targets(
 def _special_registered_targets(
     name: str,
     arguments: Sequence[str],
-) -> Optional[tuple[str, ...]]:
+) -> tuple[str, ...] | None:
     """Mirror flag-aware target binding performed by the registered runner."""
 
     args = tuple(str(item) for item in arguments)
@@ -711,9 +736,17 @@ def registered_tool_requires_approval(
     arguments = tuple(str(item) for item in argv)
     requires_approval = normalized in _MANUAL_APPROVAL_TOOLS
     if normalized == "plugin":
-        fourth = arguments[3].casefold() if len(arguments) > 3 else "scan"
-        action = "scan" if "=" in fourth else fourth
-        requires_approval = action not in {"list", "ls", "scan", "check", "summary"}
+        gateway = arguments[1].casefold() if len(arguments) > 1 else ""
+        if gateway in {"list", "ls", "summary"}:
+            requires_approval = False
+        elif len(arguments) <= 3:
+            # A concrete plugin request without an explicit verb must never
+            # inherit the passive ``scan`` classification.
+            requires_approval = True
+        else:
+            fourth = arguments[3].casefold()
+            action = "scan" if "=" in fourth else fourth
+            requires_approval = action not in {"list", "ls", "scan", "check", "summary"}
     return requires_approval
 
 
@@ -728,7 +761,7 @@ def _clean_host(host: str) -> str:
         raise ValueError("invalid_idn") from exc
 
 
-def _split_target(value: str) -> tuple[str, str, Optional[int]]:
+def _split_target(value: str) -> tuple[str, str, int | None]:
     """Return target kind, normalized host/network, and optional port."""
     raw = (value or "").strip().strip("'\"")
     if not raw or len(raw) > 2048 or any(ord(char) < 32 for char in raw):
@@ -1103,7 +1136,7 @@ class ExecutionPolicy:
         allowed: bool,
         reason: str,
         context: ExecutionContext,
-        invocation: Optional[ToolInvocation] = None,
+        invocation: ToolInvocation | None = None,
     ) -> ExecutionDecision:
         decision = ExecutionDecision(allowed, reason, context, invocation)
         logger.info("execution_decision=%s", decision.to_dict())
@@ -1255,6 +1288,9 @@ class ExecutionPolicy:
         )
         if requires_approval and (not context.has(CAP_ACTIVE_TOOL) or not context.approved or not context.approval_id):
             return self._decision(False, "active_tool_requires_approval", context, invocation)
+        if not bool(getattr(registered_tool, "enabled", True)):
+            reason = str(getattr(registered_tool, "disabled_reason", "") or "provider_disabled")
+            return self._decision(False, reason, context, invocation)
         return self._decision(True, "registered_tool_authorized", context, invocation)
 
     def authorize_direct(
@@ -1404,6 +1440,79 @@ class ExecutionPolicy:
             return self.authorize_shell(command, context)
 
         return self.authorize_direct(invocation, context)
+
+    # --- unified runtime policy gates (phase-1.3) ---
+
+    def check_capability_permission(
+        self,
+        capability_class: str,
+        context: ExecutionContext,
+    ) -> ExecutionDecision:
+        """Verify that *capability_class* is permitted under *context*.
+
+        The default implementation allows all capabilities when the context
+        carries ``CAP_REGISTERED_TOOL``; subclasses or future configuration
+        may restrict specific classes.
+        """
+        if not capability_class:
+            return self._decision(True, "no_capability_restriction", context)
+        allowed = context.has(CAP_REGISTERED_TOOL)
+        reason = "capability_permitted" if allowed else f"capability_denied:{capability_class}"
+        return self._decision(allowed, reason, context)
+
+    def check_killchain_stage(
+        self,
+        stage: str | None,
+        context: ExecutionContext,
+    ) -> ExecutionDecision:
+        """Verify that *stage* is reachable under current policy."""
+        if stage is None:
+            return self._decision(True, "no_stage_restriction", context)
+        allowed = context.has(CAP_REGISTERED_TOOL)
+        reason = "stage_permitted" if allowed else f"stage_denied:{stage}"
+        return self._decision(allowed, reason, context)
+
+    def check_preconditions(
+        self,
+        required_fact_types: tuple[str, ...],
+        available_fact_types: frozenset[str],
+    ) -> tuple[bool, str]:
+        """Check whether all required precondition fact-types exist.
+
+        Returns ``(True, 'ok')`` when satisfied or
+        ``(False, 'blocked_by_input:<missing>')`` with the first missing
+        type name.
+
+        This is a pure predicate — it does **not** read mutable FactStore.
+        Evidence belongs to FactStore/snapshot; this method receives only
+        the already-evaluated immutable set.
+        """
+        for ft in required_fact_types:
+            if ft not in available_fact_types:
+                return False, f"blocked_by_input:{ft}"
+        return True, "ok"
+
+    def check_credential_authorization(
+        self,
+        credential_ref: str,
+        context: ExecutionContext,
+    ) -> ExecutionDecision:
+        """Verify that *context* is authorized to resolve *credential_ref*.
+
+        The default gate requires ``CAP_REGISTERED_TOOL`` and a non-empty
+        credential reference.  Stricter checks (e.g. per-credential ACL)
+        can be added by subclass.
+        """
+        normalized_ref = str(credential_ref or "").strip()
+        if not normalized_ref:
+            return self._decision(False, "empty_credential_ref", context)
+        if not normalized_ref.startswith("credential://") or any(
+            character.isspace() or ord(character) < 32 for character in normalized_ref
+        ):
+            return self._decision(False, "invalid_credential_ref", context)
+        allowed = context.has(CAP_REGISTERED_TOOL)
+        reason = "credential_authorized" if allowed else "credential_denied"
+        return self._decision(allowed, reason, context)
 
 
 def authorize_final_registered_arguments(

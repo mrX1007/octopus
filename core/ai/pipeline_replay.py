@@ -35,11 +35,7 @@ class PipelineReplayMixin(PipelineMixinBase):
                 "metadata",
             )
         ):
-            payload = {
-                key: value
-                for key, value in entry.items()
-                if key not in {"tool", "command", "result"}
-            }
+            payload = {key: value for key, value in entry.items() if key not in {"tool", "command", "result"}}
         else:
             payload = entry.get("output") or entry.get("raw_output") or ""
 
@@ -95,22 +91,22 @@ class PipelineReplayMixin(PipelineMixinBase):
                 payload_tool,
             ) = prepared_entry
 
-            tool = str(
-                entry.get("tool")
-                or entry.get("command")
-                or payload_tool
-                or "replay"
-            )
+            tool = str(entry.get("tool") or entry.get("command") or payload_tool or "replay")
             canonical = self.runtime.normalize_result(
                 payload,
                 tool_name=tool,
                 max_output_bytes=execution_context.max_output_bytes,
             )
+            canonical.metadata = {
+                **canonical.metadata,
+                "ingress": "replay",
+                "source_authenticated": False,
+            }
             output_text = self._output_text(canonical)
             output_hash = self.runtime.output_fingerprint(output_text)
-            identity_seed = "\0".join(
-                (scan_id, target, str(index), canonical.tool_name, output_hash)
-            ).encode("utf-8", "replace")
+            identity_seed = "\0".join((scan_id, target, str(index), canonical.tool_name, output_hash)).encode(
+                "utf-8", "replace"
+            )
             identity = hashlib.sha256(identity_seed).hexdigest()
             if not supplied_request_id:
                 canonical.request_id = f"replay-request-{identity[:32]}"
@@ -191,9 +187,7 @@ class PipelineReplayMixin(PipelineMixinBase):
         return decisions
 
     def trace_report(self, scan_id: str, target: str) -> dict[str, Any]:
-        evaluated_fact_snapshot = (
-            self.context_builder.build_evaluated_fact_snapshot(scan_id, target)
-        )
+        evaluated_fact_snapshot = self.context_builder.build_evaluated_fact_snapshot(scan_id, target)
         context = self.context_builder.build_context(
             scan_id,
             target,

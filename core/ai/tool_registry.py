@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import json
 import os
 import re
 import shlex
@@ -146,6 +148,7 @@ _PATH_INPUT_KINDS = frozenset(
 )
 _CLOUD_PROVIDERS = frozenset({"aws", "azure", "gcp", "kubernetes", "m365"})
 _OPENAPI_URL_RE = re.compile(r"(?i)(?:openapi|swagger|api-docs)(?:\.(?:json|ya?ml))?(?:[/?#]|$)")
+_PLUGIN_ACTIONS = frozenset({"check", "run"})
 
 
 class ToolRegistry:
@@ -816,6 +819,73 @@ class ToolRegistry:
         return tuple(result)
 
     @staticmethod
+    def _plugin_supported_actions(record: Mapping[str, Any]) -> tuple[str, ...]:
+        """Return executable actions advertised by one discovered plugin."""
+
+        actions = ["check"] if record.get("supports_check") is True else []
+        if record.get("supports_run", False) is True:
+            actions.append("run")
+        return tuple(actions)
+
+    @classmethod
+    def _plugin_action_selection(
+        cls,
+        record: Mapping[str, Any],
+        raw_parameters: Any,
+    ) -> tuple[tuple[str, ...], str, dict[str, Any], str]:
+        """Split framework action control from schema-owned plugin inputs."""
+
+        parameters = copy.deepcopy(dict(raw_parameters)) if isinstance(raw_parameters, Mapping) else {}
+        raw_action = parameters.pop("action", None)
+        supported = cls._plugin_supported_actions(record)
+        if raw_action is None:
+            selected = "check" if "check" in supported else ""
+            error = "" if selected else "plugin_action_required"
+            return supported, selected, parameters, error
+        if not isinstance(raw_action, str):
+            return supported, "", parameters, "plugin_action_invalid_type"
+        selected = raw_action.strip().casefold()
+        if selected == "scan":
+            selected = "check"
+        if selected not in _PLUGIN_ACTIONS or selected not in supported:
+            return supported, selected, parameters, f"plugin_action_unsupported:{selected or 'empty'}"
+        return supported, selected, parameters, ""
+
+    def _discovered_plugin_record(self, plugin_name: str) -> Mapping[str, Any] | None:
+        for record in self.get_discovered_plugins_summary():
+            if isinstance(record, Mapping) and str(record.get("name") or "").strip() == plugin_name:
+                return record
+        return None
+
+    @staticmethod
+    def _encode_plugin_metadata_value(value: Any) -> str:
+        """Encode one typed value before the command receives shell quoting."""
+
+        if isinstance(value, str):
+            return value
+        return json.dumps(
+            value,
+            allow_nan=False,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+    @classmethod
+    def _plugin_metadata_arguments(
+        cls,
+        schema: Mapping[str, Any],
+        parameters: Mapping[str, Any],
+    ) -> list[str]:
+        """Encode inputs and preflight them with the runtime-owned grammar."""
+
+        arguments = [f"{key}={cls._encode_plugin_metadata_value(parameters[key])}" for key in sorted(parameters)]
+        from core.ai.runtime import _parse_plugin_metadata_arguments
+
+        _parse_plugin_metadata_arguments(arguments, schema)
+        return arguments
+
+    @staticmethod
     def _resolved_directory(path: str) -> str:
         try:
             resolved = Path(path).expanduser().resolve(strict=True)
@@ -861,7 +931,7 @@ class ToolRegistry:
         target: str,
         facts: Iterable[Mapping[str, Any]] = (),
         configured_inputs: Mapping[str, Any] | None = None,
-    ) -> dict[str, tuple[str, ...]]:
+    ) -> dict[str, Any]:
         """Resolve typed autonomous inputs without treating the scan target as data.
 
         Filesystem access is configuration-authorized: a path fact can select an
@@ -924,7 +994,15 @@ class ToolRegistry:
             if path and configured_roots and self._path_is_within(path, configured_roots):
                 add(kind, path)
 
-        return {kind: tuple(values) for kind, values in sorted(resolved.items())}
+        result: dict[str, Any] = {kind: tuple(values) for kind, values in sorted(resolved.items())}
+        configured_plugin_actions = configured.get("plugin_actions")
+        if isinstance(configured_plugin_actions, Mapping):
+            result["plugin_actions"] = {
+                str(plugin_name): copy.deepcopy(dict(parameters))
+                for plugin_name, parameters in configured_plugin_actions.items()
+                if isinstance(plugin_name, str) and plugin_name.strip() and isinstance(parameters, Mapping)
+            }
+        return result
 
     def _input_values_for_provider(
         self,
@@ -1021,9 +1099,10 @@ class ToolRegistry:
         """
 
         from core.plugins.schema import empty_input_schema, normalize_input_schema, validate_input_parameters
+        from core.tools.quarantined import MANUAL_GATED_CAPABILITY_NAMES
 
         supplied_by_plugin = plugin_inputs if isinstance(plugin_inputs, Mapping) else {}
-        active_types = {"evasion", "exploit", "lateral", "persistence", "post"}
+        manual_gated = frozenset(MANUAL_GATED_CAPABILITY_NAMES)
         rows: list[dict[str, Any]] = []
         for record in self.get_discovered_plugins_summary():
             if not isinstance(record, Mapping):
@@ -1036,7 +1115,10 @@ class ToolRegistry:
             except ValueError:
                 continue
             raw_parameters = supplied_by_plugin.get(name, {})
-            parameters = dict(raw_parameters) if isinstance(raw_parameters, Mapping) else {}
+            actions, selected_action, parameters, action_error = self._plugin_action_selection(
+                record,
+                raw_parameters,
+            )
             properties = schema["properties"]
             required = list(schema["required"])
             missing = [parameter for parameter in required if parameter not in parameters]
@@ -1045,25 +1127,33 @@ class ToolRegistry:
             if not missing and not undeclared:
                 try:
                     validate_input_parameters(schema, parameters)
-                except ValueError as exc:
+                    self._plugin_metadata_arguments(schema, parameters)
+                except (TypeError, ValueError) as exc:
                     validation_error = str(exc)
             input_state = "ready"
             if not str(target or "").strip():
                 input_state = "blocked_by_target"
             elif missing or undeclared or validation_error:
                 input_state = "blocked_by_input"
+            elif action_error:
+                input_state = "blocked_by_action"
+            if name in manual_gated:
+                input_state = "provider_not_configured"
             plugin_type = str(record.get("type") or "").strip().casefold()
             supports_check = record.get("supports_check") is True
-            actions = (["check"] if supports_check else []) + (["run"] if plugin_type in active_types else ["scan"])
             rows.append(
                 {
                     "action_id": f"plugin:{name}",
                     "plugin": name,
                     "plugin_type": plugin_type,
-                    "actions": actions,
+                    "actions": list(actions),
+                    "selected_action": selected_action,
+                    "action_state": action_error if action_error else "ready",
                     "supports_check": supports_check,
                     "input_state": input_state,
                     "planner_visible": input_state == "ready",
+                    "manual_gate": name in manual_gated,
+                    "provider_mounted": name not in manual_gated,
                     "required_parameter_names": required,
                     "resolved_parameter_names": sorted(set(parameters).intersection(properties)),
                     "missing_parameter_names": missing,
@@ -1207,22 +1297,28 @@ class ToolRegistry:
         task = self.canonical_task(task)
         if task.startswith("plugin:"):
             plugin_name = task.split(":", 1)[1]
-            if self._is_tool_available("plugin"):
-                target_str = shlex.quote(str(target or ""))
-                cmd_tokens = ["plugin", plugin_name]
-                if target_str:
-                    cmd_tokens.append(target_str)
-                cmd_tokens.append("scan")
-                if task_inputs and isinstance(task_inputs, Mapping):
-                    p_actions = task_inputs.get("plugin_actions") or []
-                    if isinstance(p_actions, Sequence):
-                        for item in p_actions:
-                            if isinstance(item, Mapping) and item.get("plugin") == plugin_name:
-                                for k, v in item.items():
-                                    if k not in {"plugin", "target", "action"}:
-                                        cmd_tokens.append(f"{k}={shlex.quote(str(v))}")
-                return [shlex.join(cmd_tokens)]
-            return []
+            if not self._is_tool_available("plugin") or not str(target or "").strip():
+                return []
+            record = self._discovered_plugin_record(plugin_name)
+            if record is None:
+                return []
+            plugin_actions = task_inputs.get("plugin_actions") if isinstance(task_inputs, Mapping) else None
+            raw_parameters = plugin_actions.get(plugin_name, {}) if isinstance(plugin_actions, Mapping) else {}
+            _actions, selected_action, parameters, action_error = self._plugin_action_selection(
+                record,
+                raw_parameters,
+            )
+            if action_error:
+                return []
+            from core.plugins.schema import empty_input_schema, normalize_input_schema, validate_input_parameters
+
+            try:
+                schema = normalize_input_schema(record.get("input_schema", empty_input_schema()))
+                validate_input_parameters(schema, parameters)
+                metadata = self._plugin_metadata_arguments(schema, parameters)
+            except (TypeError, ValueError):
+                return []
+            return [shlex.join(["plugin", plugin_name, str(target), selected_action, *metadata])]
         _seen = _seen or set()
         if task in _seen:
             return []
@@ -1319,12 +1415,20 @@ class ToolRegistry:
         task = self.canonical_task(task)
         if task.startswith("plugin:"):
             plugin_name = task.split(":", 1)[1]
+            record = self._discovered_plugin_record(plugin_name)
+            if record is None:
+                return []
+            actions = self._plugin_supported_actions(record)
+            if not actions:
+                return []
+            default_action = actions[0]
             return [
                 {
                     "task": task,
                     "provider": "plugin",
-                    "command_template": f"plugin {plugin_name} {{target}} scan",
+                    "command_template": f"plugin {plugin_name} {{target}} {default_action}",
                     "available": self._is_tool_available("plugin"),
+                    "supported_actions": list(actions),
                 }
             ]
         return self._provider_statuses_for_task(task, set(), task)

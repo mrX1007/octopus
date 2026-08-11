@@ -239,7 +239,7 @@ class PayloadKeyingPlugin(OctopusPlugin):
             "target_info": {"type": "object"},
             "output_path": {"type": "string", "format": "path-ref"},
         },
-        "required": [],
+        "required": ["payload"],
         "additionalProperties": False,
     }
 

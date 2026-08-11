@@ -115,6 +115,15 @@ class ActionDescriptor:
     requirements: ActionRequirements = field(default_factory=ActionRequirements)
     schema_version: str = ACTION_DESCRIPTOR_SCHEMA_VERSION
 
+    # --- unified runtime extensions (phase-1.2) ---
+    input_type: type | None = None
+    capability_class: str = ""
+    risk_class: str = ""
+    required_preconditions: tuple[str, ...] = ()
+    killchain_stage: str | None = None
+    manual_gate: bool = False
+    provider_mounted: bool = True
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": self.schema_version,
@@ -127,6 +136,13 @@ class ActionDescriptor:
             "version": self.version,
             "aliases": list(self.aliases),
             "requirements": self.requirements.to_dict(),
+            "input_type": self.input_type.__name__ if self.input_type is not None else None,
+            "capability_class": self.capability_class,
+            "risk_class": self.risk_class,
+            "required_preconditions": list(self.required_preconditions),
+            "killchain_stage": self.killchain_stage,
+            "manual_gate": self.manual_gate,
+            "provider_mounted": self.provider_mounted,
         }
 
 
@@ -143,6 +159,10 @@ class ActionRequest:
     assessment_refs: tuple[str, ...] = ()
     source_execution_ids: tuple[str, ...] = ()
     provider_commands: dict[str, str] = field(default_factory=dict, repr=False)
+
+    # --- unified runtime extensions (phase-1.2) ---
+    typed_input: Any = field(default=None, repr=False)
+    precondition_refs: tuple[str, ...] = ()
 
     def provider_command_for(self, action_name: str) -> str:
         """Look up one in-memory provider command without an audit fallback."""
@@ -173,6 +193,8 @@ class ActionRequest:
             "assessment_refs": list(self.assessment_refs),
             "source_execution_ids": list(self.source_execution_ids),
             "has_handle": self.handle is not None,
+            "typed_input_type": type(self.typed_input).__name__ if self.typed_input is not None else None,
+            "precondition_ref_count": len(self.precondition_refs),
         }
 
 

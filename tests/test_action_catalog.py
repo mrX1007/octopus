@@ -439,6 +439,7 @@ class FixturePluginManager:
             python_deps=[],
             capabilities=["network"],
             supports_check=True,
+            supports_run=True,
         )
 
     def get_plugin(self, name):

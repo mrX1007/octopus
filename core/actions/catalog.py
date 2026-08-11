@@ -17,9 +17,68 @@ class ResolvedAction:
 
 
 class ActionCatalog:
-    def __init__(self) -> None:
+    def __init__(self, *, include_manual_gated: bool = False) -> None:
         self._adapters: dict[str, ActionAdapter] = {}
         self._names: dict[str, str] = {}
+        if include_manual_gated:
+            self._register_canonical_adapters()
+
+    def _register_canonical_adapters(self) -> None:
+        from .adapters_ad_credential import (
+            ADDumpLsassAdapter,
+            ADPassTheTicketAdapter,
+            ADSamDumpAdapter,
+            PassTheHashAdapter,
+        )
+        from .adapters_ad_lateral import (
+            ADDcomExecAdapter,
+            ADRemoteExecutionCapabilityAdapter,
+            ADSmbexecAdapter,
+            ADWinrmExecAdapter,
+        )
+        from .adapters_c2 import (
+            C2ChannelCreateAdapter,
+            C2CleanupAdapter,
+            C2DeployAdapter,
+            C2EnrollAdapter,
+            C2TaskAdapter,
+            DNSC2ChannelAdapter,
+        )
+        from .adapters_evasion import PayloadKeyingAdapter
+        from .adapters_kerberos import (
+            KerberosCrackTicketsAdapter,
+            KerberosExtractTicketsAdapter,
+        )
+        from .adapters_pivot import (
+            PivotProxyScanAdapter,
+            PivotRemoteForwardAdapter,
+            PivotSSHChainAdapter,
+        )
+
+        canonical_adapters: tuple[ActionAdapter, ...] = (
+            PivotRemoteForwardAdapter(),
+            PivotSSHChainAdapter(),
+            PivotProxyScanAdapter(),
+            KerberosExtractTicketsAdapter(),
+            KerberosCrackTicketsAdapter(),
+            ADPassTheTicketAdapter(),
+            PassTheHashAdapter(),
+            ADDumpLsassAdapter(),
+            ADSamDumpAdapter(),
+            ADSmbexecAdapter(),
+            ADWinrmExecAdapter(),
+            ADDcomExecAdapter(),
+            ADRemoteExecutionCapabilityAdapter(),
+            DNSC2ChannelAdapter(),
+            C2EnrollAdapter(),
+            C2DeployAdapter(),
+            C2ChannelCreateAdapter(),
+            C2TaskAdapter(),
+            C2CleanupAdapter(),
+            PayloadKeyingAdapter(),
+        )
+        for adapter in canonical_adapters:
+            self.register(adapter)
 
     @staticmethod
     def _key(value: str) -> str:
@@ -103,13 +162,25 @@ class ActionCatalog:
         from .adapters import PluginActionAdapter
 
         names = plugin_names if plugin_names is not None else sorted(manager.plugins)
-        adapters = tuple(PluginActionAdapter(manager, name) for name in names)
+        result_adapters: list[ActionAdapter] = []
         staged = ActionCatalog()
         staged._adapters = dict(self._adapters)
         staged._names = dict(self._names)
-        for adapter in adapters:
-            display_name = staged._key(adapter.descriptor.name)
-            action_id = staged._key(adapter.descriptor.action_id)
+        for name in names:
+            action_id = staged._key(f"plugin:{name}")
+            display_name = staged._key(name)
+            existing_id = staged._names.get(action_id) or staged._names.get(display_name)
+            existing = staged._adapters.get(existing_id) if existing_id else None
+            if (
+                existing is not None
+                and not isinstance(existing, PluginActionAdapter)
+                and existing.descriptor.manual_gate
+                and existing.descriptor.action_id.strip().casefold() == action_id
+            ):
+                result_adapters.append(existing)
+                continue
+
+            adapter = PluginActionAdapter(manager, name)
             display_owner = staged._names.get(display_name)
             preserve_disabled_owner = (
                 display_owner is not None
@@ -117,9 +188,10 @@ class ActionCatalog:
                 and staged._is_disabled_registry_adapter(staged._adapters[display_owner])
             )
             staged._register(adapter, claim_display_name=not preserve_disabled_owner)
+            result_adapters.append(adapter)
         self._adapters = staged._adapters
         self._names = staged._names
-        return adapters
+        return tuple(result_adapters)
 
     def candidates(
         self,

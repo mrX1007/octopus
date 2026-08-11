@@ -271,19 +271,22 @@ At this revision, the profile-accounted registry coverage command in Testing
 reports:
 
 ```text
-covered/registered: 110/110
+covered/registered: 116/116
 unknown: []
 ```
 
-The decorator inventory contains 110 canonical names and 119 unique aliases
-(229 declared names in total). Of those canonical tools, 96 are enabled and 14
-are explicitly quarantined. The AI task map contains 82 enabled leaf providers;
-the remaining 14 enabled tools have explicit profile-only roles such as
-follow-up, manual-gated, legacy or alias wrappers. The hermetic decorator-only
-catalog contract verifies that all 229 declared names resolve to their canonical
-action IDs through a stubbed provider facade. Undeclared `run_`/`_run_`
-spellings are rejected by both registries instead of becoming implicit aliases.
-No external provider is invoked by this contract.
+The decorator inventory contains 116 canonical names and 119 unique aliases
+(235 declared names in total). Of those canonical identities, 96 have mounted,
+enabled providers. The other 20 are registered as manual-gated identities with
+`provider_mounted=False`; they remain disabled and fail closed with
+`provider_not_configured`. They are not quarantined implementations:
+`QUARANTINED_CAPABILITY_NAMES` is empty. The AI task map contains 82 enabled
+leaf providers; the remaining 14 enabled tools have explicit profile-only roles
+such as follow-up, legacy, or alias wrappers. The hermetic catalog
+contract verifies identity resolution without treating registration as provider
+availability. Undeclared `run_`/`_run_` spellings are rejected by both
+registries instead of becoming implicit aliases. No external provider is
+invoked by this contract.
 
 For application integrations, the documented public execution entry point is
 `core.tools.dispatch_registered_tool(command, execution_context)`. It requires
@@ -295,35 +298,33 @@ listed in `core.tools.DEPRECATED_TOOL_EXPORTS` as migration surfaces. The AI
 pipeline imports the registered-only facade directly; no production module
 imports the top-level compatibility module.
 
-This is not yet literal end-to-end unification of every project path:
+The current lifecycle contract is deliberately narrower than complete
+repository-wide unification:
 
-- all 82 enabled AI task-map leaf providers, including `rustscan`, now resolve through
-  the decorator registry and `ActionCatalog`; unregistered direct-binary
-  execution fails closed;
-- the duplicated legacy numeric menu has 48 entries; each selection, plus the
-  `a`/`n`/`x` discovery profiles, must resolve the same identity through the
-  decorator registry and `ActionCatalog` before the final policy check. The
-  menu remains a compatibility facade outside the full `ActionExecutor`
-  lifecycle. The former JMX exploit-scan and DNS C2 listener entries were
-  removed because they had no registered policy identity; smart `n` mode only
-  reports credential-testing and `sqlmap` follow-ups as gated and never starts
-  them. The legacy menu fixes every numeric key to an immutable canonical tool
-  identity; cached-credential/post-access adapters and C2 builders that need
-  additional parameters fail closed instead of reusing a mutable label or
-  treating the scan target as build configuration;
-- the runtime-owned `PluginManager` replaces the executable shared `plugin`
-  registry adapter with one individual `PluginActionAdapter` per discovered
-  class plugin. `plugin_inventory` owns discovery evidence, while
-  `plugin NAME TARGET ACTION` command grammar resolves to the corresponding
-  `plugin:<name>` action without constructing a second manager;
+- the 96 mounted tools resolve through the decorator registry and canonical
+  policy boundary; all 82 enabled AI task-map leaf providers, including
+  `rustscan`, are accounted for by `ActionCatalog`;
+- the 20 unmounted identities have canonical `ActionDescriptor` records and
+  manual gates, typed-input/precondition checks, and explicit operator-context
+  requirements, but no provider is mounted and no execution is attempted;
+- the legacy numeric-menu bridge constructs an `ActionRequest` only when its
+  caller supplies an explicit `ExecutionContext`; it does not synthesize
+  operator approval;
+- the runtime-owned `PluginManager` publishes one individual
+  `PluginActionAdapter` per mounted class plugin. Environmental payload keying
+  retains the single canonical identity `plugin:payload_keying`, but its
+  provider is unmounted and fails closed with `provider_not_configured`;
+- direct provider calls without an explicit `ExecutionContext` fail closed at
+  the documented registered-tool facade, while retained low-level compatibility
+  helpers are still migration surfaces;
 - all 56 conceptual task-map keys have explicit scheduling risk and
-  precondition metadata; only an unknown external task receives the
-  fail-closed default `risk: unknown` profile.
+  precondition metadata; only an unknown external task receives the fail-closed
+  default `risk: unknown` profile.
 
-Accordingly, `110/110` means every decorator-registered tool is accounted for by
-an execution profile; it must not be read as “every tool path is unified.” It
-also does not imply that optional external binaries or services are installed
-in a particular environment.
+Accordingly, `116/116` is an identity-accounting invariant: 96 identities are
+mounted/enabled and 20 are manual-gated/unmounted. It is not a claim that every
+legacy entry point or optional provider is executable through one end-to-end
+lifecycle.
 
 Registry coverage is a classification invariant, not a planner-reachability
 metric. It does not prove that the Director/Planner vocabulary can select every
@@ -407,6 +408,9 @@ secret nor invokes a provider; plaintext may be revealed only after the final
 gate, inside the immediate provider's bounded material context. See
 [`docs/architecture/configuration-contract.md`](docs/architecture/configuration-contract.md)
 for ownership and test requirements.
+`SecretStore`, opaque references, and that bounded reveal are the sufficient
+plaintext boundary for the current architecture; broader credential-model
+convergence does not imply another plaintext owner.
 
 Active Metasploit execution is only promoted when:
 
@@ -521,7 +525,10 @@ export OCTOPUS_API_KEY=...
 C2 protocol v11 uses single-use enrollment tokens and per-agent session keys;
 there is no shared C2 PSK. The daemon creates its protected local key material
 on first start unless `OCTOPUS_C2_KEY_PASSPHRASE` is supplied securely at
-runtime.
+runtime. The C2 daemon is a separate supervised process, not an in-process
+`ActionExecutor` provider. The CLI reaches its Unix-domain-socket control plane
+over authenticated IPC; the presented API key resolves to the daemon-owned
+operator identity and role used for authorization and audit.
 
 ## Running
 
@@ -1180,12 +1187,12 @@ network connections or launching scanners. CI also prints a separate
 non-blocking per-module killchain coverage table so aggregate coverage cannot
 hide the remaining low modules.
 
-The configured mypy breadth ratchet now checks 197 of 236 discovered
+The configured mypy breadth ratchet now checks 214 of 254 discovered
 first-party Python files, up from 90. It still uses `follow_imports = "skip"`.
 A second required configuration checks nine clean leaf modules with normal
 import traversal and no missing-import suppression. This is an incremental
-typing boundary, not a whole-tree type-safety claim; the remaining transitive
-inventory is recorded in
+typing boundary, not a whole-tree type-safety claim: strict repo-wide transitive
+typing is not complete. The remaining transitive inventory is recorded in
 [`docs/quality/static-analysis-baseline.md`](docs/quality/static-analysis-baseline.md).
 
 Before the dedicated live lane was added, only 13 collected tests carried the

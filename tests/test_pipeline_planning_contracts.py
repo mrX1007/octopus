@@ -836,53 +836,155 @@ def test_bound_ollama_stalled_stream_is_closed_on_early_cancellation(monkeypatch
     assert not canceller.is_alive()
 
 
-def test_end_to_end_plugin_candidate_planner_compiler_runtime_flow(tmp_path):
-    """Verify candidate -> planner -> compiler -> key=value command -> canonical runtime execution."""
+@pytest.mark.parametrize("action", ["check", "run"])
+def test_end_to_end_plugin_candidate_planner_compiler_runtime_flow(
+    tmp_path,
+    monkeypatch,
+    action,
+):
+    """Route production-shaped config through planner/compiler and one inert runtime."""
+    import shlex
+    from types import SimpleNamespace
+
+    import config
+    import core.ai.context_builder as context_builder_module
     from core.ai.pipeline import AIPipeline
-    from core.ai.runtime import PipelineRuntime
-    from core.execution import ExecutionContext, ExecutionStatus
+    from core.execution import ExecutionStatus
+    from core.plugins.base import CheckResult, PluginResult
 
-    pipeline = AIPipeline(str(tmp_path / "facts.db"))
-
-    context = {
-        "host": "192.0.2.20",
-        "state": "initial_recon",
-        "services": ["ssh"],
-        "task_inputs": {
-            "plugin_actions": [
-                {"plugin": "payload_keying", "payload": "secret_bytes"}
-            ]
+    plugin_name = "synthetic_active"
+    target = "192.0.2.20"
+    scan_id = f"plugin-e2e-{action}"
+    schema = {
+        "type": "object",
+        "properties": {
+            "label": {"type": "string"},
+            "tags": {"type": "array"},
+            "target_info": {"type": "object"},
         },
-        "plugin_action_readiness": [
-            {
-                "action_id": "plugin:payload_keying",
-                "plugin": "payload_keying",
-                "state": "ready",
-                "planner_visible": True,
-            }
-        ],
+        "required": ["label", "tags", "target_info"],
+        "additionalProperties": False,
     }
-
-    # 1. Candidate enrichment in PipelinePlanningMixin
-    plan = pipeline._enrich_plan([], "vulnerability_assessment", context)
-    tasks = [step["task"] for step in plan]
-    assert "plugin:payload_keying" in tasks
-
-    # 2. Command formatting in ToolRegistry
-    commands = pipeline.tool_registry.get_commands_for_task("plugin:payload_keying", target="192.0.2.20", task_inputs=context["task_inputs"])
-    assert len(commands) == 1
-    assert "plugin payload_keying 192.0.2.20 scan payload=secret_bytes" in commands[0]
-
-    # 3. Canonical PipelineRuntime execution
-    def _dummy_runner(*_args, **_kwargs):
-        return "noop"
-
-    exec_ctx = ExecutionContext.operator(
-        actor="e2e-planner-test",
-        approval_id="approved-e2e",
-        target_scope=("192.0.2.20",),
-        allow_active_tools=True,
+    descriptor = SimpleNamespace(
+        name=plugin_name,
+        plugin_type="post",
+        description="Inert typed plugin fixture",
+        version="1.0",
+        requires=[],
+        python_deps=[],
+        capabilities=[],
+        supports_check=True,
+        supports_run=True,
+        input_schema=schema,
     )
-    runtime = PipelineRuntime(str(tmp_path / "facts.db"), runner=_dummy_runner)
-    res = runtime.dispatch(commands[0], (), set(), exec_ctx)
-    assert res.status is ExecutionStatus.SUCCEEDED
+
+    class InertManager:
+        def __init__(self):
+            self.plugins = {plugin_name: descriptor}
+            self.check_calls = []
+            self.execute_calls = []
+
+        def get_plugin(self, name):
+            return self.plugins.get(name)
+
+        def validate(self, _name):
+            return []
+
+        def list_plugins(self):
+            return [
+                {
+                    "name": plugin_name,
+                    "type": "post",
+                    "supports_check": True,
+                    "supports_run": True,
+                    "input_schema": schema,
+                }
+            ]
+
+        def check(self, name, checked_target, **kwargs):
+            self.check_calls.append((name, checked_target, dict(kwargs)))
+            return CheckResult(
+                vulnerable=True,
+                confidence=1.0,
+                details="inert check accepted typed inputs",
+            )
+
+        def execute(self, name, **kwargs):
+            self.execute_calls.append((name, dict(kwargs)))
+            return PluginResult(success=True, output="inert run completed")
+
+    configured = dict(config.CFG)
+    strategy = dict(configured.get("strategy") or {})
+    task_inputs = dict(strategy.get("task_inputs") or {})
+    task_inputs["plugin_actions"] = {
+        plugin_name: {
+            "action": action,
+            "label": "neutral fixture",
+            "tags": ["alpha", "two words"],
+            "target_info": {
+                "hostname": "host one",
+                "roles": ["web", "api worker"],
+            },
+        }
+    }
+    strategy.update(
+        {
+            "active_authorized": True,
+            "authorized_targets": [target],
+            "task_inputs": task_inputs,
+        }
+    )
+    configured["strategy"] = strategy
+    monkeypatch.setattr(config, "CFG", configured)
+    monkeypatch.setattr(context_builder_module, "CFG", configured)
+
+    manager = InertManager()
+    pipeline = AIPipeline(str(tmp_path / f"{action}.db"))
+    pipeline.runtime._plugin_manager = manager
+    pipeline.tool_registry._plugin_summary_cache = None
+    pipeline._current_scan_id = scan_id
+
+    context = pipeline.context_builder.build_context(scan_id, target)
+    readiness = {row["action_id"]: row for row in context["plugin_action_readiness"]}[f"plugin:{plugin_name}"]
+    assert readiness["selected_action"] == action
+    assert readiness["planner_visible"] is True
+
+    plan = pipeline._enrich_plan([], "vulnerability_assessment", context)
+    assert f"plugin:{plugin_name}" in {step["task"] for step in plan}
+    compiled = pipeline._compile_plan(plan, scan_id, target, context)
+    assert f"plugin:{plugin_name}" in {step["task"] for step in compiled}
+
+    commands = pipeline.discovery_agent.execute_task(f"plugin:{plugin_name}", target)
+    assert len(commands) == 1
+    tokens = shlex.split(commands[0])
+    assert tokens[:4] == ["plugin", plugin_name, target, action]
+    assert "label=neutral fixture" in tokens
+    assert 'tags=["alpha","two words"]' in tokens
+    assert 'target_info={"hostname":"host one","roles":["web","api worker"]}' in tokens
+
+    result = pipeline.runtime.dispatch(
+        commands[0],
+        (),
+        set(),
+        pipeline._execution_context(scan_id, target),
+    )
+    assert result.status is ExecutionStatus.SUCCEEDED
+    assert len(manager.check_calls) == 1
+    checked = manager.check_calls[0][2]
+    assert checked["label"] == "neutral fixture"
+    assert checked["tags"] == ["alpha", "two words"]
+    assert checked["target_info"] == {
+        "hostname": "host one",
+        "roles": ["web", "api worker"],
+    }
+    if action == "check":
+        assert manager.execute_calls == []
+    else:
+        assert len(manager.execute_calls) == 1
+        executed = manager.execute_calls[0][1]
+        assert executed["label"] == "neutral fixture"
+        assert executed["tags"] == ["alpha", "two words"]
+        assert executed["target_info"] == {
+            "hostname": "host one",
+            "roles": ["web", "api worker"],
+        }

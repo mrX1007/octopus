@@ -283,6 +283,7 @@ def test_discover_file_rejects_invalid_response_metadata(monkeypatch: pytest.Mon
             _WorkerReply(ok=True, payload={"plugins": ["not-an-object"]}),
             _WorkerReply(ok=True, payload={"plugins": [{"name": "same"}, {"name": "same"}]}),
             _WorkerReply(ok=True, payload={"plugins": [{"name": "invalid", "supports_check": "yes"}]}),
+            _WorkerReply(ok=True, payload={"plugins": [{"name": "invalid", "supports_run": "yes"}]}),
         )
     )
     monkeypatch.setattr(manager, "_invoke_worker", lambda *_args, **_kwargs: next(replies))
@@ -291,12 +292,14 @@ def test_discover_file_rejects_invalid_response_metadata(monkeypatch: pytest.Mon
     manager._discover_file("/plugins", "/plugins/object.py")
     manager._discover_file("/plugins", "/plugins/duplicate.py")
     manager._discover_file("/plugins", "/plugins/supports.py")
+    manager._discover_file("/plugins", "/plugins/runs.py")
 
     assert manager.skipped_plugins == {
         "shape": "invalid discovery response",
         "object": "plugin metadata must be an object",
         "duplicate": "duplicate plugin name 'same' in /plugins/duplicate.py",
         "supports": "plugin metadata field 'supports_check' must be a boolean",
+        "runs": "plugin metadata field 'supports_run' must be a boolean",
     }
 
 
@@ -319,6 +322,7 @@ def test_discover_file_builds_and_registers_complete_descriptors(
                 "capabilities": ["network"],
                 "hooks": ["on_session_opened"],
                 "supports_check": True,
+                "supports_run": True,
             }
         ]
     }
@@ -333,11 +337,19 @@ def test_discover_file_builds_and_registers_complete_descriptors(
     assert descriptor.author == "8"
     assert descriptor.requires == ["nmap"]
     assert descriptor.supports_check is True
+    assert descriptor.supports_run is True
     assert descriptor.depends_on == ["base"]
     assert descriptor.python_deps == ["package"]
     assert descriptor.capabilities == ["network"]
     assert descriptor.hooks == ["on_session_opened"]
     assert manager._descriptors_by_path["/plugins/complete.py"] == ["complete"]
+    actionless = manager._descriptor_from_payload(
+        {"name": "actionless"},
+        "/plugins",
+        "/plugins/actionless.py",
+        "actionless",
+    )
+    assert actionless.supports_run is False
 
 
 @pytest.mark.parametrize(

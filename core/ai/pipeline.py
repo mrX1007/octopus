@@ -114,7 +114,7 @@ class AIPipeline(
         )
         self.trace_reporter = self.runtime.reporter
 
-        def task_input_provider(task: str, target: str) -> Mapping[str, Sequence[str]]:
+        def task_input_provider(task: str, target: str) -> Mapping[str, Any]:
             return self._task_inputs_for_task(
                 self._current_scan_id,
                 target,
@@ -759,10 +759,9 @@ class AIPipeline(
         scan_id: str,
         target: str,
         task: str,
-    ) -> dict[str, tuple[str, ...]]:
+    ) -> dict[str, Any]:
         """Resolve operator-authorized/fact-backed inputs for command expansion."""
 
-        del task  # Resolution is shared; each provider consumes only its declared kind.
         if not scan_id:
             return {}
         try:
@@ -771,7 +770,16 @@ class AIPipeline(
             CFG = {}
         configured = (CFG.get("strategy") or {}).get("task_inputs") or {}
         facts = self._accepted_task_decision_facts(scan_id, target)
-        return self.tool_registry.resolve_task_inputs(target, facts, configured)
+        resolved = self.tool_registry.resolve_task_inputs(target, facts, configured)
+        canonical_task = self.tool_registry.canonical_task(task)
+        plugin_actions = resolved.get("plugin_actions")
+        if canonical_task.startswith("plugin:") and isinstance(plugin_actions, Mapping):
+            plugin_name = canonical_task.split(":", 1)[1]
+            parameters = plugin_actions.get(plugin_name)
+            resolved["plugin_actions"] = {plugin_name: dict(parameters)} if isinstance(parameters, Mapping) else {}
+        else:
+            resolved.pop("plugin_actions", None)
+        return resolved
 
     def _execute_runtime_compatibly(
         self,

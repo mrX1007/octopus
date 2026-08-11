@@ -17,11 +17,9 @@ from core.execution import (
     adapt_execution_result,
     validate_target,
 )
-from core.execution.policy import (
-    parse_invocation,
-    registered_tool_uses_network_scope,
-)
+from core.execution.policy import parse_invocation
 
+from .input_contracts import validate_typed_input
 from .models import (
     ActionCheckResult,
     ActionCleanupResult,
@@ -87,15 +85,15 @@ class ActionAdapter(ABC):
         phase: str,
     ) -> ExecutionDecision:
         invocation = self.invocation(request, phase)
-        if self.descriptor.requirements.target_required:
-            explicit_target = str(request.target or "").strip()
-            if not explicit_target:
-                return ExecutionDecision(
-                    allowed=False,
-                    reason="missing_explicit_target",
-                    context=request.execution_context,
-                    invocation=invocation,
-                )
+        explicit_target = str(request.target or "").strip()
+        if self.descriptor.requirements.target_required and not explicit_target:
+            return ExecutionDecision(
+                allowed=False,
+                reason="missing_explicit_target",
+                context=request.execution_context,
+                invocation=invocation,
+            )
+        if explicit_target and (self.descriptor.requirements.target_required or self.descriptor.manual_gate):
             invocation = replace(
                 invocation,
                 targets=tuple(
@@ -104,8 +102,7 @@ class ActionAdapter(ABC):
                     )
                 ),
             )
-            registered_name = invocation.registered_name or invocation.executable
-            if registered_tool_uses_network_scope(registered_name) and not validate_target(explicit_target):
+            if not validate_target(explicit_target):
                 return ExecutionDecision(
                     allowed=False,
                     reason=f"invalid_target:{explicit_target[:120]}",
@@ -149,6 +146,33 @@ class ActionAdapter(ABC):
     ) -> ActionCleanupResult:
         return ActionCleanupResult(succeeded=True, reason="No adapter cleanup required.")
 
+    # --- unified runtime convenience accessors (phase-1.2) ---
+
+    @property
+    def input_type(self) -> type | None:
+        """Typed input contract expected by this adapter, if any."""
+        return self.descriptor.input_type
+
+    @property
+    def capability_class(self) -> str:
+        """Capability category: recon, post_access, credential_extraction, etc."""
+        return self.descriptor.capability_class
+
+    @property
+    def risk_class(self) -> str:
+        """Risk classification: low, medium, high, critical."""
+        return self.descriptor.risk_class
+
+    @property
+    def required_preconditions(self) -> tuple[str, ...]:
+        """Fact-types that must exist before execution."""
+        return self.descriptor.required_preconditions
+
+    @property
+    def killchain_stage(self) -> str | None:
+        """Killchain stage binding, if any."""
+        return self.descriptor.killchain_stage
+
     def normalize_result(
         self,
         value: Any,
@@ -173,4 +197,47 @@ class ActionAdapter(ABC):
         return replace(invocation, registered_name=registered_name)
 
 
-__all__ = ["ActionAdapter", "DataRedactor", "TextRedactor"]
+class ManualGatedActionAdapter(ActionAdapter):
+    """Canonical identity whose operational provider is deliberately absent."""
+
+    def applicability(self, request: ActionRequest) -> ApplicabilityResult:
+        base = super().applicability(request)
+        missing = list(base.missing_requirements)
+        if self.descriptor.input_type is not None:
+            missing.extend(
+                validate_typed_input(
+                    request.typed_input,
+                    self.descriptor.input_type,
+                    request_target=request.target,
+                )
+            )
+        if request.handle is not None:
+            missing.append("blocked_by_input:ambient_handle")
+        if request.command or request.provider_commands or request.arguments or request.parameters:
+            missing.append("blocked_by_input:typed_input_only")
+        return ApplicabilityResult(
+            applicable=not missing,
+            reasons=("manual_gated_contract_satisfied",) if not missing else (),
+            missing_requirements=tuple(dict.fromkeys(missing)),
+        )
+
+    def execute(self, request: ActionRequest) -> Any:
+        del request
+        return {
+            "status": "unavailable",
+            "executed": False,
+            "error_class": "ProviderNotConfigured",
+            "error_message": f"provider_not_configured:{self.descriptor.name}",
+            "metadata": {
+                "manual_gate": True,
+                "provider_mounted": False,
+            },
+        }
+
+
+__all__ = [
+    "ActionAdapter",
+    "DataRedactor",
+    "ManualGatedActionAdapter",
+    "TextRedactor",
+]

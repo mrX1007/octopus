@@ -232,9 +232,9 @@ static-analysis job red. The next safe migration must remove this global skip
 while fixing or explicitly owning each newly followed module; it must not hide
 the inventory behind a broader ignore.
 
-## Expanded direct and import-aware ratchets (2026-08-01)
+## Expanded direct and import-aware ratchets (updated 2026-08-11)
 
-The configured direct-check boundary now covers 197 of 236 first-party Python
+The configured direct-check boundary now covers 214 of 254 first-party Python
 sources discovered by the coverage gate, up from 90 sources. The expansion
 checks all of `core/ai`, `core/cli`, and `core/knowledge`, plus clean C2,
 killchain, OSINT, tooling, transport, entrypoint, packaging, and quality-gate
@@ -243,15 +243,14 @@ tree:
 
 ```text
 venv/bin/python -m mypy --no-incremental
-Success: no issues found in 197 source files
+Success: no issues found in 214 source files
 ```
 
 The primary breadth ratchet retains `follow_imports = "skip"` while its known
-dependency backlog is resolved. Enabling normal import traversal even for the
-`core/actions` and `core/execution` boundary currently exposes 136 errors in 26
-transitive files. Those errors include missing third-party stubs and existing
-types in configuration, C2, killchain, and tool modules; they are not hidden by
-new suppressions in this revision.
+dependency backlog is resolved. Enabling normal import traversal for the
+`core/actions` boundary still exposes missing third-party stubs and existing
+type errors in C2, AD/killchain, and tool modules. Those errors are not hidden
+by new suppressions in this revision.
 
 To make import traversal itself a required ratchet, CI also runs a separate
 configuration over nine isolated runtime and quality-infrastructure leaves.

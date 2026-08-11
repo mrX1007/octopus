@@ -24,13 +24,13 @@ class SystemdPersistence(OctopusPlugin):
     input_schema: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            "payload_path": {"type": "string", "format": "path-ref"},
+            "payload_path": {"type": "string"},
             "service_name": {"type": "string"},
             "username": {"type": "string"},
-            "password": {"type": "string", "format": "credential-ref"},
+            "credential_ref": {"type": "string", "format": "credential-ref"},
             "port": {"type": "integer"},
         },
-        "required": [],
+        "required": ["credential_ref"],
         "additionalProperties": False,
     }
 
@@ -47,7 +47,7 @@ class SystemdPersistence(OctopusPlugin):
             from core.killchain.ssh_helpers import _ssh_connect
 
             username = kwargs.get("username") or kwargs.get("user")
-            password = kwargs.get("password") or kwargs.get("pwd") or kwargs.get("credential_ref")
+            password = kwargs.get("credential_ref") or kwargs.get("password") or kwargs.get("pwd")
             port = int(kwargs.get("port", 22))
 
             if is_credential_handle(password):

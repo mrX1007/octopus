@@ -200,6 +200,7 @@ class CapabilityResolver:
             target,
             execution_context,
             agent,
+            context=context,
         )
         provider_availability = self._provider_availability(canonical, providers, agent)
         authorization_decision, authorization_reason = self._aggregate_authorization(
@@ -341,6 +342,8 @@ class CapabilityResolver:
         target: str,
         execution_context: ExecutionContext | None,
         agent: str,
+        *,
+        context: Mapping[str, Any] | None = None,
     ) -> tuple[ProviderAssessment, ...]:
         if capability == "conclude":
             return (
@@ -369,11 +372,26 @@ class CapabilityResolver:
         ):
             return ()
 
+        selected_plugin_actions: dict[str, str] = {}
+        readiness = (context or {}).get("plugin_action_readiness") or []
+        if isinstance(readiness, list):
+            for item in readiness:
+                if not isinstance(item, Mapping):
+                    continue
+                action_id = str(item.get("action_id") or "")
+                selected_action = str(item.get("selected_action") or "").strip().casefold()
+                if action_id.startswith("plugin:") and selected_action in {"check", "run"}:
+                    selected_plugin_actions[action_id] = selected_action
+
         records: list[dict[str, Any]] = []
         for task in tasks:
             for raw_record in self.tool_registry.get_provider_statuses_for_task(task):
                 record = dict(raw_record)
                 record["task"] = task
+                configured_action = selected_plugin_actions.get(task)
+                if configured_action and task.startswith("plugin:"):
+                    plugin_name = task.split(":", 1)[1]
+                    record["command_template"] = f"plugin {plugin_name} {{target}} {configured_action}"
                 records.append(record)
 
         grouped: dict[tuple[str, str], dict[str, Any]] = {}

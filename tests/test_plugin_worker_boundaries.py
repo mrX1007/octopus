@@ -286,6 +286,7 @@ def test_enum_metadata_and_plugin_selection_boundaries() -> None:
         "capabilities": ["a", "z"],
         "hooks": ["on_credential_found"],
         "supports_check": False,
+        "supports_run": False,
         "input_schema": {
             "type": "object",
             "properties": {},
@@ -297,6 +298,9 @@ def test_enum_metadata_and_plugin_selection_boundaries() -> None:
     assert worker._metadata(empty)["capabilities"] == []
     checked = _plugin_class(module, "Checked", "checked", check=lambda *_args, **_kwargs: CheckResult())
     assert worker._metadata(checked)["supports_check"] is True
+    assert worker._metadata(checked)["supports_run"] is False
+    runnable = _plugin_class(module, "Runnable", "runnable", run=lambda *_args, **_kwargs: PluginResult(True))
+    assert worker._metadata(runnable)["supports_run"] is True
     assert worker._select_plugin(module, "complete") is complete
     with pytest.raises(LookupError, match="Plugin 'missing' not found"):
         worker._select_plugin(module, "missing")
