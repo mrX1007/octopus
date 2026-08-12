@@ -196,11 +196,11 @@ def test_action_models_serialize_commands_lifecycle_and_audit(monkeypatch):
         "fact_count": 1,
         "evidence_fact_ids": [3],
         "assessment_refs": ["assessment-1"],
-            "source_execution_ids": ["source-1"],
-            "has_handle": True,
-            "typed_input_type": None,
-            "precondition_ref_count": 0,
-        }
+        "source_execution_ids": ["source-1"],
+        "has_handle": True,
+        "typed_input_type": None,
+        "precondition_ref_count": 0,
+    }
 
     applicability = ApplicabilityResult(False, ("reason",), ("dependency",))
     verification = ActionVerificationResult(

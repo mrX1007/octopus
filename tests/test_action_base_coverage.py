@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
 from core.actions import base
-from core.actions.base import ActionAdapter
+from core.actions.base import ActionAdapter, ManualGatedActionAdapter
+from core.actions.input_contracts import ScanTarget
 from core.actions.models import (
     ActionDescriptor,
     ActionKind,
@@ -39,6 +41,22 @@ class FixtureAdapter(ActionAdapter):
 
     def execute(self, request: ActionRequest):
         return {"target": request.target}
+
+
+class ManualFixtureAdapter(ManualGatedActionAdapter):
+    descriptor = ActionDescriptor(
+        action_id="fixture:manual",
+        name="fixture-manual",
+        kind=ActionKind.REGISTERED_TOOL,
+        provider="fixture",
+        input_type=ScanTarget,
+        manual_gate=True,
+        provider_mounted=False,
+    )
+
+    def invocation(self, request: ActionRequest, phase: str):
+        del phase
+        return self.registered_invocation(f"fixture-manual {request.target}", "fixture-manual")
 
 
 def _request(
@@ -237,4 +255,47 @@ def test_normalize_result_forwards_redaction_and_resource_boundaries(
         "max_output_bytes": 321,
         "redact_text": redact_text,
         "redact_data": redact_data,
+    }
+
+
+def test_manual_gated_adapter_validates_typed_input_and_stays_inert() -> None:
+    adapter = ManualFixtureAdapter()
+    context = _request().execution_context
+    valid = ActionRequest(
+        "example.com",
+        context,
+        typed_input=ScanTarget(host="example.com"),
+    )
+
+    applicability = adapter.applicability(valid)
+    assert applicability.applicable is True
+    assert applicability.reasons == ("manual_gated_contract_satisfied",)
+
+    untyped_adapter = ManualFixtureAdapter()
+    untyped_adapter.descriptor = replace(adapter.descriptor, input_type=None)
+    assert untyped_adapter.applicability(_request()).applicable is True
+
+    invalid = ActionRequest(
+        "example.com",
+        context,
+        command="fixture-manual example.com",
+        handle=object(),
+    )
+    blocked = adapter.applicability(invalid)
+    assert blocked.applicable is False
+    assert blocked.missing_requirements == (
+        "blocked_by_input:typed_input:ScanTarget",
+        "blocked_by_input:ambient_handle",
+        "blocked_by_input:typed_input_only",
+    )
+
+    assert adapter.execute(valid) == {
+        "status": "unavailable",
+        "executed": False,
+        "error_class": "ProviderNotConfigured",
+        "error_message": "provider_not_configured:fixture-manual",
+        "metadata": {
+            "manual_gate": True,
+            "provider_mounted": False,
+        },
     }

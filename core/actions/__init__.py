@@ -100,8 +100,7 @@ def build_action_catalog(
         missing_str = ", ".join(sorted(missing)) or "none"
         unexpected_str = ", ".join(sorted(unexpected)) or "none"
         raise RuntimeError(
-            "Action catalog does not match the decorator registry: "
-            f"missing={missing_str}; unexpected={unexpected_str}"
+            f"Action catalog does not match the decorator registry: missing={missing_str}; unexpected={unexpected_str}"
         )
     if plugin_manager is not None:
         catalog.register_plugins(plugin_manager)

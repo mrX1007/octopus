@@ -103,6 +103,16 @@ def test_empty_display_names_and_aliases_are_ignored() -> None:
     assert catalog.require("tool:only-id").adapter is adapter
 
 
+def test_provider_registration_can_leave_display_name_unclaimed() -> None:
+    catalog = ActionCatalog()
+    adapter = FakeAdapter("tool:provider-only", "shared-display")
+
+    catalog._register(adapter, claim_display_name=False)
+
+    assert catalog.require("tool:provider-only").adapter is adapter
+    assert catalog.resolve("shared-display") is None
+
+
 def test_convenience_registration_wraps_providers_and_plugin_order(
     monkeypatch,
 ) -> None:
