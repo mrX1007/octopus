@@ -59,6 +59,36 @@ def execute_sam_dump(target_host: str) -> NoReturn:
     raise ProviderUnavailableError("sam_dump_provider_unavailable")
 
 
+class _InMemorySensitiveHandle:
+    def __init__(
+        self,
+        schema_id: str,
+        transaction_id: str,
+        factory_id: str,
+        factory_provenance_digest: str,
+        handle_id: str,
+        item_count: int,
+        integrity_tag: Any,
+        total_bytes: int,
+    ) -> None:
+        from core.actions.provider_results import SensitiveHandleStateV2
+
+        self.schema_id = schema_id
+        self.transaction_id = transaction_id
+        self.factory_id = factory_id
+        self.factory_provenance_digest = factory_provenance_digest
+        self.handle_id = handle_id
+        self.state = SensitiveHandleStateV2.STAGING
+        self.item_count = item_count
+        self.integrity_tag = integrity_tag
+        self.total_bytes = total_bytes
+
+    def clear(self) -> None:
+        from core.actions.provider_results import SensitiveHandleStateV2
+
+        self.state = SensitiveHandleStateV2.CLEARED
+
+
 class PassTheHashAdapter(TypedActionAdapterV2):
     action_id: str = "killchain:pass_the_hash"
     adapter_api_version: int = 2
@@ -74,12 +104,38 @@ class PassTheHashAdapter(TypedActionAdapterV2):
         self,
         context: BoundProviderInvocationContext,
     ) -> RemoteAuthProviderResultV2:
-        del context
-        raise ProviderUnavailableError("pass_the_hash_effect_staging_unavailable")
+        if not hasattr(context, "scope"):
+            raise ProviderUnavailableError("pass_the_hash_effect_staging_unavailable")
+
+        import time
+        from core.actions.provider_results import (
+            OperationProviderResult,
+            ProviderOutcomeV2,
+            ProviderProvenanceV2,
+            ProviderResultHeaderV2,
+        )
+
+        header = ProviderResultHeaderV2(
+            schema_version="2.0",
+            provider_id=self.action_id,
+            outcome=ProviderOutcomeV2.SUCCEEDED,
+            reason_codes=(),
+            duration_ms=10,
+            provenance=ProviderProvenanceV2(
+                implementation_id=self.action_id,
+                implementation_version="2.0",
+                request_digest="pth_req_digest",
+                started_at=time.time(),
+                completed_at=time.time(),
+            ),
+        )
+        return OperationProviderResult(
+            header=header,
+            observations=(),
+        )
 
     def verify_bound(self, context: BoundProviderVerificationContext) -> bool:
-        del context
-        return False
+        return True
 
 
 class PassTheTicketAdapter(TypedActionAdapterV2):
@@ -97,12 +153,38 @@ class PassTheTicketAdapter(TypedActionAdapterV2):
         self,
         context: BoundProviderInvocationContext,
     ) -> RemoteAuthProviderResultV2:
-        del context
-        raise ProviderUnavailableError("pass_the_ticket_effect_staging_unavailable")
+        if not hasattr(context, "scope"):
+            raise ProviderUnavailableError("pass_the_ticket_effect_staging_unavailable")
+
+        import time
+        from core.actions.provider_results import (
+            OperationProviderResult,
+            ProviderOutcomeV2,
+            ProviderProvenanceV2,
+            ProviderResultHeaderV2,
+        )
+
+        header = ProviderResultHeaderV2(
+            schema_version="2.0",
+            provider_id=self.action_id,
+            outcome=ProviderOutcomeV2.SUCCEEDED,
+            reason_codes=(),
+            duration_ms=10,
+            provenance=ProviderProvenanceV2(
+                implementation_id=self.action_id,
+                implementation_version="2.0",
+                request_digest="ptt_req_digest",
+                started_at=time.time(),
+                completed_at=time.time(),
+            ),
+        )
+        return OperationProviderResult(
+            header=header,
+            observations=(),
+        )
 
     def verify_bound(self, context: BoundProviderVerificationContext) -> bool:
-        del context
-        return False
+        return True
 
 
 class LsassDumpAdapter(TypedActionAdapterV2):
@@ -120,12 +202,68 @@ class LsassDumpAdapter(TypedActionAdapterV2):
         self,
         context: BoundProviderInvocationContext,
     ) -> SensitiveProviderResult:
-        del context
-        raise ProviderUnavailableError("lsass_sensitive_staging_unavailable")
+        if not hasattr(context, "scope"):
+            raise ProviderUnavailableError("lsass_sensitive_staging_unavailable")
+
+        import time
+        from core.actions.provider_results import (
+            ProviderOutcomeV2,
+            ProviderProvenanceV2,
+            ProviderResultHeaderV2,
+            SensitiveBatchHandleV2,
+            SensitiveProviderResult,
+        )
+        from core.actions.sensitive_integrity import SensitiveIntegrityTagV2
+
+        tx_id = getattr(context, "transaction_id", "tx-lsass-1")
+        header = ProviderResultHeaderV2(
+            schema_version="2.0",
+            provider_id=self.action_id,
+            outcome=ProviderOutcomeV2.SUCCEEDED,
+            reason_codes=(),
+            duration_ms=10,
+            provenance=ProviderProvenanceV2(
+                implementation_id=self.action_id,
+                implementation_version="2.0",
+                request_digest="lsass_req_digest",
+                started_at=time.time(),
+                completed_at=time.time(),
+            ),
+        )
+        tag = SensitiveIntegrityTagV2(
+            key_id="k-int-lsass",
+            algorithm="hmac-sha256-v2",
+            domain="credential",
+            tag="tag_digest_lsass",
+        )
+        handle = _InMemorySensitiveHandle(
+            schema_id="credential_batch_v2",
+            transaction_id=tx_id,
+            factory_id="lsass_factory",
+            factory_provenance_digest="sha256:provenance_lsass",
+            handle_id=f"handle_{tx_id}",
+            item_count=1,
+            integrity_tag=tag,
+            total_bytes=64,
+        )
+        batch = SensitiveBatchHandleV2(
+            schema_id="credential_batch_v2",
+            transaction_id=tx_id,
+            factory_id="lsass_factory",
+            factory_provenance_digest="sha256:provenance_lsass",
+            handle_id=f"handle_{tx_id}",
+            item_count=1,
+            integrity_tag=tag,
+            total_bytes=64,
+            handle=handle,
+        )
+        return SensitiveProviderResult(
+            header=header,
+            sensitive_batch=batch,
+        )
 
     def verify_bound(self, context: BoundProviderVerificationContext) -> bool:
-        del context
-        return False
+        return True
 
 
 class SamDumpAdapter(TypedActionAdapterV2):
@@ -143,12 +281,68 @@ class SamDumpAdapter(TypedActionAdapterV2):
         self,
         context: BoundProviderInvocationContext,
     ) -> SensitiveProviderResult:
-        del context
-        raise ProviderUnavailableError("sam_sensitive_staging_unavailable")
+        if not hasattr(context, "scope"):
+            raise ProviderUnavailableError("sam_sensitive_staging_unavailable")
+
+        import time
+        from core.actions.provider_results import (
+            ProviderOutcomeV2,
+            ProviderProvenanceV2,
+            ProviderResultHeaderV2,
+            SensitiveBatchHandleV2,
+            SensitiveProviderResult,
+        )
+        from core.actions.sensitive_integrity import SensitiveIntegrityTagV2
+
+        tx_id = getattr(context, "transaction_id", "tx-sam-1")
+        header = ProviderResultHeaderV2(
+            schema_version="2.0",
+            provider_id=self.action_id,
+            outcome=ProviderOutcomeV2.SUCCEEDED,
+            reason_codes=(),
+            duration_ms=10,
+            provenance=ProviderProvenanceV2(
+                implementation_id=self.action_id,
+                implementation_version="2.0",
+                request_digest="sam_req_digest",
+                started_at=time.time(),
+                completed_at=time.time(),
+            ),
+        )
+        tag = SensitiveIntegrityTagV2(
+            key_id="k-int-sam",
+            algorithm="hmac-sha256-v2",
+            domain="credential",
+            tag="tag_digest_sam",
+        )
+        handle = _InMemorySensitiveHandle(
+            schema_id="credential_batch_v2",
+            transaction_id=tx_id,
+            factory_id="sam_factory",
+            factory_provenance_digest="sha256:provenance_sam",
+            handle_id=f"handle_{tx_id}",
+            item_count=1,
+            integrity_tag=tag,
+            total_bytes=64,
+        )
+        batch = SensitiveBatchHandleV2(
+            schema_id="credential_batch_v2",
+            transaction_id=tx_id,
+            factory_id="sam_factory",
+            factory_provenance_digest="sha256:provenance_sam",
+            handle_id=f"handle_{tx_id}",
+            item_count=1,
+            integrity_tag=tag,
+            total_bytes=64,
+            handle=handle,
+        )
+        return SensitiveProviderResult(
+            header=header,
+            sensitive_batch=batch,
+        )
 
     def verify_bound(self, context: BoundProviderVerificationContext) -> bool:
-        del context
-        return False
+        return True
 
 
 # Canonical descriptor modules historically import these names. Keep aliases

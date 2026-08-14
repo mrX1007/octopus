@@ -64,7 +64,12 @@ def test_runtime_build_sources_and_service_are_in_wheel_and_sdist_manifests() ->
     }
     assert "core.opsec" not in payload["package-data"]
     assert payload["exclude-package-data"]["core.opsec"] == ["ja3_client.go"]
-    assert payload["data-files"]["share/octopus-security/systemd"] == ["data/octopus-c2.service"]
+    assert payload["data-files"]["share/octopus-security/systemd"] == [
+        "data/octopus-c2.service",
+        "data/octopus-c2.socket",
+        "data/octopus-c2.sysusers",
+        "data/octopus-c2.tmpfiles",
+    ]
     manifest = set((ROOT / "MANIFEST.in").read_text(encoding="utf-8").splitlines())
     assert {
         "include config.yaml",
@@ -74,6 +79,9 @@ def test_runtime_build_sources_and_service_are_in_wheel_and_sdist_manifests() ->
         "include core/c2/toolchain.json",
         "include core/opsec/ja3_client.go",
         "include data/octopus-c2.service",
+        "include data/octopus-c2.socket",
+        "include data/octopus-c2.sysusers",
+        "include data/octopus-c2.tmpfiles",
     } <= manifest
 
     toolchain = (ROOT / "core" / "c2" / "toolchain.json").read_text(encoding="utf-8")
@@ -84,7 +92,9 @@ def test_runtime_build_sources_and_service_are_in_wheel_and_sdist_manifests() ->
 def test_systemd_service_template_is_portable_and_non_root() -> None:
     service = (ROOT / "data" / "octopus-c2.service").read_text(encoding="utf-8")
 
-    assert "DynamicUser=yes" in service
+    assert "DynamicUser=yes" not in service
+    assert "User=octopus-c2" in service
+    assert "Group=octopus-c2" in service
     assert "StateDirectory=octopus" in service
     assert "RuntimeDirectory=octopus" in service
     assert "ExecStart=/usr/bin/env octopus-c2" in service

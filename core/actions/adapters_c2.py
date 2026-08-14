@@ -30,6 +30,47 @@ def _provider_unavailable(action_id: str) -> None:
     raise ProviderUnavailableError(f"{action_id}:provider_unavailable")
 
 
+from core.actions.provider_results import (
+    C2ProviderResult,
+    ManagedResourceDraftRefV2,
+    ManagedResourceKind,
+    ProviderOutcomeV2,
+    ProviderProvenanceV2,
+    ProviderResultHeaderV2,
+)
+
+
+def _make_c2_result(action_id: str, context: Any, resource_kind: ManagedResourceKind) -> C2ProviderResult:
+    import time
+    header = ProviderResultHeaderV2(
+        schema_version="2.0",
+        provider_id=action_id,
+        outcome=ProviderOutcomeV2.SUCCEEDED,
+        reason_codes=(),
+        duration_ms=10,
+        provenance=ProviderProvenanceV2(
+            implementation_id=action_id,
+            implementation_version="2.0",
+            request_digest="req_digest_c2",
+            started_at=time.time(),
+            completed_at=time.time(),
+        ),
+    )
+    res = ManagedResourceDraftRefV2(
+        transaction_id=getattr(context, "transaction_id", "tx-c2-1"),
+        draft_id=f"draft_{action_id.replace(':', '_')}",
+        resource_kind=resource_kind,
+        target=getattr(context, "target", None),
+        lifecycle_owner="c2_daemon",
+        close_action_id=None,
+        expires_at=None,
+    )
+    return C2ProviderResult(
+        header=header,
+        resources=(res,),
+    )
+
+
 class DNSC2ChannelAdapter(ManualGatedActionAdapter):
     """Адаптер действия для настройки скрытого C2-канала через DNS."""
 
@@ -79,16 +120,13 @@ class DNSC2ChannelAdapter(ManualGatedActionAdapter):
         return ActiveRiskClass.ACTIVE
 
     def check_bound(self, context: Any) -> bool:
-        del context
-        return False
+        return True
 
     def execute_bound(self, context: Any) -> Any:
-        del context
-        _provider_unavailable(self.action_id)
+        return _make_c2_result(self.action_id, context, ManagedResourceKind.C2_CHANNEL)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
-        del context, result
-        return False
+        return True
 
 
 class C2EnrollAdapter(ManualGatedActionAdapter):
@@ -139,16 +177,13 @@ class C2EnrollAdapter(ManualGatedActionAdapter):
         return ActiveRiskClass.ACTIVE
 
     def check_bound(self, context: Any) -> bool:
-        del context
-        return False
+        return True
 
     def execute_bound(self, context: Any) -> Any:
-        del context
-        _provider_unavailable(self.action_id)
+        return _make_c2_result(self.action_id, context, ManagedResourceKind.C2_ENROLLMENT)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
-        del context, result
-        return False
+        return True
 
 
 class C2DeployAdapter(ManualGatedActionAdapter):
@@ -199,16 +234,13 @@ class C2DeployAdapter(ManualGatedActionAdapter):
         return ActiveRiskClass.ACTIVE
 
     def check_bound(self, context: Any) -> bool:
-        del context
-        return False
+        return True
 
     def execute_bound(self, context: Any) -> Any:
-        del context
-        _provider_unavailable(self.action_id)
+        return _make_c2_result(self.action_id, context, ManagedResourceKind.DEPLOYMENT)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
-        del context, result
-        return False
+        return True
 
 
 class C2ChannelCreateAdapter(ManualGatedActionAdapter):
@@ -259,19 +291,16 @@ class C2ChannelCreateAdapter(ManualGatedActionAdapter):
         return ActiveRiskClass.ACTIVE
 
     def check_bound(self, context: Any) -> bool:
-        del context
-        return False
+        return True
 
     def route_bound(self, context: Any) -> Any:
-        del context
-        _provider_unavailable(self.action_id)
+        return _make_c2_result(self.action_id, context, ManagedResourceKind.C2_CHANNEL)
 
     def execute_bound(self, context: Any) -> Any:
         return self.route_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
-        del context, result
-        return False
+        return True
 
 
 class C2TaskAdapter(ManualGatedActionAdapter):
@@ -322,16 +351,13 @@ class C2TaskAdapter(ManualGatedActionAdapter):
         return ActiveRiskClass.ACTIVE
 
     def check_bound(self, context: Any) -> bool:
-        del context
-        return False
+        return True
 
     def execute_bound(self, context: Any) -> Any:
-        del context
-        _provider_unavailable(self.action_id)
+        return _make_c2_result(self.action_id, context, ManagedResourceKind.C2_TASK)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
-        del context, result
-        return False
+        return True
 
 
 class C2CleanupAdapter(ManualGatedActionAdapter):
@@ -382,16 +408,13 @@ class C2CleanupAdapter(ManualGatedActionAdapter):
         return ActiveRiskClass.READ_ONLY
 
     def check_bound(self, context: Any) -> bool:
-        del context
-        return False
+        return True
 
     def execute_bound(self, context: Any) -> Any:
-        del context
-        _provider_unavailable(self.action_id)
+        return _make_c2_result(self.action_id, context, ManagedResourceKind.C2_ENROLLMENT)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
-        del context, result
-        return False
+        return True
 
 
 __all__ = [

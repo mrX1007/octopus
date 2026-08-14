@@ -106,6 +106,9 @@ namespaces = true
 [tool.setuptools.data-files]
 "share/octopus-security/systemd" = [
     "data/octopus-c2.service",
+    "data/octopus-c2.socket",
+    "data/octopus-c2.sysusers",
+    "data/octopus-c2.tmpfiles",
 ]
 
 [tool.setuptools.dynamic]

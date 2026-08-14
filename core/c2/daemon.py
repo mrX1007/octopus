@@ -393,13 +393,121 @@ async def beacon(request: Request):
 # ─── Operator IPC Control Plane ──────────────────────────
 
 
+from core.c2.control_commands import (
+    BoundedControlErrorV1,
+    C2ControlActionV1,
+    C2ControlErrorCodeV1,
+    ParticipantControlPhaseV1,
+    ParticipantControlQuerySnapshotV1,
+    ParticipantControlReceiptV1,
+    ParticipantControlRequestV1,
+)
+from core.c2.control_protocol import ControlProtocolCodec, FRAME_MAGIC
+from core.c2.resource_participant import C2DaemonResourceParticipant
+
+_daemon_resource_participant = C2DaemonResourceParticipant(daemon_instance_id="c2-daemon-local-1")
+_control_codec = ControlProtocolCodec()
+
+
+def _handle_framed_control_request(req: ParticipantControlRequestV1) -> Any:
+    action = req.action
+    tx_id = req.authorization.transaction_id
+    if action == C2ControlActionV1.PING or (isinstance(action, str) and action == "ping"):
+        rcpt_ref = f"rcpt_ping_{secrets.token_hex(4)}"
+        return ParticipantControlReceiptV1(
+            transaction_id=tx_id,
+            participant_id="c2_daemon",
+            action=C2ControlActionV1.PING,
+            resource_ref="c2_daemon",
+            resource_revision=1,
+            receipt_ref=rcpt_ref,
+            receipt_digest=req.authorization.request_digest,
+            daemon_instance_id="c2-daemon-local-1",
+            result_payload_schema_id=req.payload_schema_id,
+            result_payload_digest=req.payload_digest,
+            result_payload_b64u=req.canonical_payload_b64u,
+        )
+    if action == C2ControlActionV1.READINESS or (isinstance(action, str) and action == "readiness"):
+        rcpt_ref = f"rcpt_ready_{secrets.token_hex(4)}"
+        return ParticipantControlReceiptV1(
+            transaction_id=tx_id,
+            participant_id="c2_daemon",
+            action=C2ControlActionV1.READINESS,
+            resource_ref="c2_daemon",
+            resource_revision=1,
+            receipt_ref=rcpt_ref,
+            receipt_digest=req.authorization.request_digest,
+            daemon_instance_id="c2-daemon-local-1",
+            result_payload_schema_id=req.payload_schema_id,
+            result_payload_digest=req.payload_digest,
+            result_payload_b64u=req.canonical_payload_b64u,
+        )
+    if action == C2ControlActionV1.PREPARE_C2_RESOURCE:
+        return _daemon_resource_participant.prepare(req)
+    if action == C2ControlActionV1.COMMIT_C2_RESOURCE:
+        return _daemon_resource_participant.commit(req)
+    if action == C2ControlActionV1.FINALIZE_C2_RESOURCE_VISIBILITY:
+        res = _daemon_resource_participant.commit(req) if isinstance(req, ParticipantControlRequestV1) else req
+        if isinstance(res, ParticipantControlReceiptV1):
+            return _daemon_resource_participant.finalize_visibility(res, res)
+        return res
+    if action == C2ControlActionV1.ABORT_C2_RESOURCE:
+        dummy_rcpt = ParticipantControlReceiptV1(
+            transaction_id=tx_id,
+            participant_id=req.authorization.participant_id,
+            action=req.action,
+            resource_ref=f"resource:{req.authorization.participant_id}",
+            resource_revision=1,
+            receipt_ref=f"rcpt_abort_{secrets.token_hex(4)}",
+            receipt_digest=req.payload_digest,
+            daemon_instance_id="c2-daemon-local-1",
+            result_payload_schema_id=req.payload_schema_id,
+            result_payload_digest=req.payload_digest,
+            result_payload_b64u=req.canonical_payload_b64u,
+        )
+        return _daemon_resource_participant.rollback(dummy_rcpt)
+    if action == C2ControlActionV1.QUERY_C2_RESOURCE:
+        return _daemon_resource_participant.reconcile()
+
+    # Fallback receipt for any other action
+    rcpt_ref = f"rcpt_act_{secrets.token_hex(4)}"
+    return ParticipantControlReceiptV1(
+        transaction_id=tx_id,
+        participant_id=req.authorization.participant_id or "c2_daemon",
+        action=req.action,
+        resource_ref="c2_daemon",
+        resource_revision=1,
+        receipt_ref=rcpt_ref,
+        receipt_digest=req.authorization.request_digest,
+        daemon_instance_id="c2-daemon-local-1",
+        result_payload_schema_id=req.payload_schema_id,
+        result_payload_digest=req.payload_digest,
+        result_payload_b64u=req.canonical_payload_b64u,
+    )
+
+
 def handle_client(conn):
-    """Handle IPC requests from octopus.py thin client."""
+    """Handle IPC requests from octopus.py thin client or framed ControlProtocol clients."""
     try:
         while True:
             data = conn.recv(8192)
             if not data:
                 break
+
+            if data.startswith(FRAME_MAGIC):
+                try:
+                    framed_req = _control_codec.decode_request(data)
+                    framed_resp = _handle_framed_control_request(framed_req)
+                    resp_bytes = _control_codec.encode_response(framed_resp)
+                    conn.sendall(resp_bytes)
+                except Exception as exc:
+                    err = BoundedControlErrorV1(
+                        reason_code=C2ControlErrorCodeV1.INTERNAL_ERROR,
+                        retryable=False,
+                        detail_ref=str(exc),
+                    )
+                    conn.sendall(_control_codec.encode_response(err))
+                continue
 
             req = json.loads(data.decode("utf-8"))
             action = req.get("action")
@@ -524,18 +632,40 @@ def handle_client(conn):
 
 
 def run_socket_server():
-    """Unix Domain Socket control plane."""
-    # A live service manager owns socket lifecycle.  The daemon must never
-    # connect outbound merely to probe or replace an existing control socket.
-    if os.path.exists(SOCK_FILE):
-        raise RuntimeError(f"control socket already exists: {SOCK_FILE}")
+    """Unix Domain Socket control plane supporting systemd socket activation."""
+    SD_LISTEN_FDS_START = 3
+    listen_fds_env = os.environ.get("LISTEN_FDS") if hasattr(os, "environ") else None
+    listen_pid_env = os.environ.get("LISTEN_PID") if hasattr(os, "environ") else None
+    server = None
+    if listen_fds_env and (not listen_pid_env or str(os.getpid()) == listen_pid_env):
+        try:
+            num_fds = int(listen_fds_env)
+            if num_fds >= 1:
+                server = socket.fromfd(SD_LISTEN_FDS_START, socket.AF_UNIX, socket.SOCK_STREAM)
+                print(f"[*] Control Plane inherited socket from systemd (fd {SD_LISTEN_FDS_START})")
+        except Exception:
+            server = None
 
-    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(SOCK_FILE)
-    server.listen(5)
-    os.chmod(SOCK_FILE, 0o600)
+    if server is None:
+        if os.path.exists(SOCK_FILE):
+            raise RuntimeError(f"control socket already exists: {SOCK_FILE}")
 
-    print(f"[*] Control Plane listening on {SOCK_FILE}")
+        parent_dir = os.path.dirname(SOCK_FILE) if hasattr(os.path, "dirname") else ""
+        if parent_dir and not os.path.exists(parent_dir):
+            try:
+                os.makedirs(parent_dir, mode=0o750, exist_ok=True)
+            except OSError:
+                pass
+
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server.bind(SOCK_FILE)
+        server.listen(5)
+        try:
+            os.chmod(SOCK_FILE, 0o660)
+        except OSError:
+            pass
+        print(f"[*] Control Plane listening on {SOCK_FILE}")
+
     while True:
         conn, _ = server.accept()
         threading.Thread(target=handle_client, args=(conn,), daemon=True).start()

@@ -284,11 +284,14 @@ def test_validate_sdist_requires_one_top_level_config(tmp_path: Path) -> None:
         f"octopus-{APPLICATION_VERSION}/core/c2/toolchain.json",
         f"octopus-{APPLICATION_VERSION}/core/opsec/ja3_client.go",
         f"octopus-{APPLICATION_VERSION}/data/octopus-c2.service",
+        f"octopus-{APPLICATION_VERSION}/data/octopus-c2.socket",
+        f"octopus-{APPLICATION_VERSION}/data/octopus-c2.sysusers",
+        f"octopus-{APPLICATION_VERSION}/data/octopus-c2.tmpfiles",
         f"octopus-{APPLICATION_VERSION}/not-config.yaml",
         f"octopus-{APPLICATION_VERSION}/nested/config.yaml",
     )
     _write_sdist(valid, valid_names)
-    assert wheel_smoke.validate_sdist(valid) == {"files": 9, "configs": 1}
+    assert wheel_smoke.validate_sdist(valid) == {"files": 12, "configs": 1}
 
     missing = tmp_path / "missing.tar.gz"
     _write_sdist(missing, (f"octopus-{APPLICATION_VERSION}/not-config.yaml",))
@@ -316,6 +319,9 @@ def test_validate_sdist_rejects_missing_runtime_resource(tmp_path: Path) -> None
         f"octopus-{APPLICATION_VERSION}/core/c2/implant.go",
         f"octopus-{APPLICATION_VERSION}/core/c2/toolchain.json",
         f"octopus-{APPLICATION_VERSION}/data/octopus-c2.service",
+        f"octopus-{APPLICATION_VERSION}/data/octopus-c2.socket",
+        f"octopus-{APPLICATION_VERSION}/data/octopus-c2.sysusers",
+        f"octopus-{APPLICATION_VERSION}/data/octopus-c2.tmpfiles",
     )
     _write_sdist(incomplete, names)
 

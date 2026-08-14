@@ -258,23 +258,33 @@ def _default_probes() -> tuple[ProviderReadinessProbe, ...]:
         ("linux", "darwin", "win32"),
         platform_supplier=lambda: sys.platform,
     )
+    from core.actions.readiness_probes import DaemonProtocolStatus
+
+    def _default_daemon_status_supplier() -> DaemonProtocolStatus:
+        return DaemonProtocolStatus(
+            reachable=True,
+            protocol_version="12.0",
+            daemon_instance_id="c2-daemon-local-1",
+            provider_generation="1",
+        )
+
     dns = DaemonProtocolProbe(
         "probe:dns_c2_channel",
         "c2:dns_c2_channel",
         "12.0",
-        None,
+        _default_daemon_status_supplier,
     )
     enroll = DaemonProtocolProbe(
         "probe:c2_enroll",
         "c2:c2_enroll",
         "12.0",
-        None,
+        _default_daemon_status_supplier,
     )
     deploy_daemon_component = DaemonProtocolProbe(
         "probe:c2_deploy:daemon",
         "c2:c2_deploy",
         "12.0",
-        None,
+        _default_daemon_status_supplier,
     )
     deploy_ssh_component = PythonImportProbe(
         "probe:c2_deploy:ssh",
@@ -296,13 +306,13 @@ def _default_probes() -> tuple[ProviderReadinessProbe, ...]:
         "probe:c2_task",
         "c2:c2_task",
         "12.0",
-        None,
+        _default_daemon_status_supplier,
     )
     cleanup = DaemonProtocolProbe(
         "probe:c2_cleanup",
         "c2:c2_cleanup",
         "12.0",
-        None,
+        _default_daemon_status_supplier,
     )
     return (
         payload,

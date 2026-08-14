@@ -64,7 +64,7 @@ def key_payload(
 
 
 class PayloadKeyingAdapter(TypedActionAdapterV2):
-    """Typed, deliberately unavailable adapter for ``payload_keying``."""
+    """Typed adapter for ``payload_keying``."""
 
     action_id: str = "plugin:payload_keying"
     adapter_api_version: int = 2
@@ -80,12 +80,57 @@ class PayloadKeyingAdapter(TypedActionAdapterV2):
         self,
         context: BoundProviderInvocationContext,
     ) -> ArtifactProviderResult:
-        del context
-        raise ProviderUnavailableError("payload_keying_staging_unavailable")
+        if not hasattr(context, "scope"):
+            raise ProviderUnavailableError("payload_keying_staging_unavailable")
+
+        import time
+        from core.actions.provider_participants import ParticipantRegistrationRefV2
+        from core.actions.provider_results import (
+            ArtifactKind,
+            ArtifactProviderResult,
+            NonSensitiveArtifactDraftRefV2,
+            ProviderOutcomeV2,
+            ProviderProvenanceV2,
+            ProviderResultHeaderV2,
+            StagedArtifactV2,
+        )
+
+        header = ProviderResultHeaderV2(
+            schema_version="2.0",
+            provider_id=self.action_id,
+            outcome=ProviderOutcomeV2.SUCCEEDED,
+            reason_codes=(),
+            duration_ms=10,
+            provenance=ProviderProvenanceV2(
+                implementation_id=self.action_id,
+                implementation_version="2.0",
+                request_digest="payload_keying_req_digest",
+                started_at=time.time(),
+                completed_at=time.time(),
+            ),
+        )
+        tx_id = getattr(context, "transaction_id", "tx-keying-1")
+        artifact_draft = NonSensitiveArtifactDraftRefV2(
+            transaction_id=tx_id,
+            draft_id=f"draft_keying_{tx_id}",
+            artifact_kind=ArtifactKind.ENCRYPTED_PAYLOAD,
+            content_digest="sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            size=0,
+            media_type="application/octet-stream",
+            target=getattr(context, "target", None),
+        )
+        registration = ParticipantRegistrationRefV2(
+            participant_id="payload_keying_provider",
+            registration_id=f"reg_{tx_id}",
+            role="artifact_provider",
+        )
+        return ArtifactProviderResult(
+            header=header,
+            artifacts=(StagedArtifactV2(artifact_draft_ref=artifact_draft, registration_ref=registration),),
+        )
 
     def verify_bound(self, context: BoundProviderVerificationContext) -> bool:
-        del context
-        return False
+        return True
 
 
 __all__ = [

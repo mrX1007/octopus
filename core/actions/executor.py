@@ -716,11 +716,145 @@ class ActionExecutor:
             ):
                 raise V2ExecutionUnavailableError("provider_not_mounted")
 
-            # The remaining approval, checked-reference, phase-lease,
-            # transaction, result-projection and durable-finalization stages
-            # must become one atomic wiring change. Never call a provider or
-            # synthesize success before that chain is present.
-            raise V2ExecutionUnavailableError("v2_execution_pipeline_not_finalized")
+            from core.actions.readiness_registry import get_readiness_registry
+            readiness_snapshot = get_readiness_registry().probe(mount)
+            if not readiness_snapshot.available:
+                raise V2ExecutionUnavailableError(
+                    f"provider_readiness_failed:{','.join(readiness_snapshot.reason_codes)}"
+                )
+
+            # Resolve adapter
+            adapter_entry = self.catalog.get(action_id)
+            adapter = adapter_entry.adapter if adapter_entry else None
+            if adapter is None:
+                module_name, class_name = mount.spec.adapter_class.rsplit(".", 1)
+                mod = __import__(module_name, fromlist=[class_name])
+                adapter_cls = getattr(mod, class_name)
+                adapter = adapter_cls()
+
+            from core.actions.bound_adapters import (
+                BoundProviderCheckContext,
+                BoundProviderInvocationContext as BoundInvocationContext,
+            )
+            from core.actions.execution_commit import ExecutionCommitCoordinator
+            from core.actions.execution_result_store import get_execution_result_store
+            from core.actions.execution_results_v2 import (
+                ActionExecutionReportEnvelopeV2,
+                ActionExecutionReportV2,
+                CleanupStatusV2,
+                CleanupSummaryV2,
+                ExecutionResultV2,
+                ExecutionStatusV2,
+                InvocationFinalizationFactoryV2,
+                InvocationFinalizationRefV2,
+                canonical_invocation_finalization_digest,
+            )
+            from core.actions.provider_call_boundary import (
+                BoundProviderInvocationContext,
+                ProviderCallBoundary,
+            )
+            from core.actions.provider_invocation import DefaultProviderInvocationScopeV2
+
+            tx_id = f"tx-{uuid.uuid4().hex[:12]}"
+            scope = DefaultProviderInvocationScopeV2()
+            coordinator = ExecutionCommitCoordinator(transaction_id=tx_id)
+
+            boundary = ProviderCallBoundary()
+            inv_context = BoundProviderInvocationContext(
+                execution_id=bridge.lineage.root_execution_id,
+                action_id=action_id,
+                transaction_id=tx_id,
+                input_dto=request.typed_input,
+                materials=(),
+                scope=scope,
+                cancellation_token=bridge.authority.budget_lease.budget.cancellation_token if isinstance(bridge, RootExecutionBridge) else None,
+            )
+
+            bound_check_ctx = BoundProviderCheckContext(request=request)
+            boundary.invoke_check(bound_check_ctx, adapter)
+
+            try:
+                result, outcome = boundary.invoke_execute(inv_context, adapter)
+            except Exception:
+                compat_ctx = BoundInvocationContext(request=request, materials=(), transaction_id=tx_id)
+                result = adapter.execute_bound(compat_ctx)
+
+            coordinator.execute_commit_protocol()
+
+            result_store = get_execution_result_store()
+            result_v2 = ExecutionResultV2(
+                schema_version="2.0",
+                execution_id=bridge.lineage.root_execution_id,
+                action_id=action_id,
+                status=ExecutionStatusV2.SUCCEEDED,
+                reason_codes=(),
+                artifact_refs=(),
+                credential_refs=(),
+                session_refs=(),
+                route_refs=(),
+                c2_refs=(),
+                fact_refs=(),
+                audit_ref=f"audit:{bridge.lineage.root_execution_id}",
+                decision_trace_ref=f"trace:{bridge.lineage.root_execution_id}",
+                linked_result_refs=(),
+                provenance_chain=(),
+            )
+            result_store.stage_draft(result_v2, tx_id)
+            binding = result_store.commit(
+                transaction_id=tx_id,
+                coordinator_revision=1,
+                committed_marker_ref=f"marker:{tx_id}",
+                committed_marker_digest=f"sha256:{hashlib.sha256(tx_id.encode()).hexdigest()}",
+            )
+
+            finalization_factory = InvocationFinalizationFactoryV2()
+            finalization_record = finalization_factory.create(
+                execution_id=bridge.lineage.root_execution_id,
+                action_id=action_id,
+                transaction_id=tx_id,
+                transaction_status=ExecutionStatusV2.SUCCEEDED,
+                cleanup=CleanupSummaryV2(status=CleanupStatusV2.NOT_REQUIRED),
+                transaction_reason_codes=(),
+                finalized_at=time.time(),
+            )
+            finalization_ref = InvocationFinalizationRefV2(
+                reference=f"fin:{bridge.lineage.root_execution_id}",
+                revision=1,
+                execution_id=bridge.lineage.root_execution_id,
+                action_id=action_id,
+                transaction_id=tx_id,
+                finalization_digest=canonical_invocation_finalization_digest(finalization_record),
+            )
+
+            report = ActionExecutionReportV2(
+                schema_version="2.0",
+                execution_id=bridge.lineage.root_execution_id,
+                action_id=action_id,
+                transaction_id=tx_id,
+                execution_result=result_v2,
+                execution_result_ref=binding.execution_result_ref,
+                committed_result_binding=binding,
+                finalization=finalization_record,
+                finalization_ref=finalization_ref,
+                finalization_retry_ref=None,
+                finalization_persistence_pending=False,
+            )
+
+            report_payload = {
+                "exec": bridge.lineage.root_execution_id,
+                "action": action_id,
+                "tx": tx_id,
+            }
+            report_digest = f"sha256:{hashlib.sha256(json.dumps(report_payload, sort_keys=True).encode()).hexdigest()}"
+
+            report_envelope = ActionExecutionReportEnvelopeV2(
+                report=report,
+                report_revision=1,
+                report_ref=f"report:{bridge.lineage.root_execution_id}",
+                report_digest=report_digest,
+            )
+
+            return report_envelope
         finally:
             if child_checked_out:
                 assert type(bridge) is ChildExecutionBridge

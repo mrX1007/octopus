@@ -1,5 +1,8 @@
 include config.yaml
 include data/octopus-c2.service
+include data/octopus-c2.socket
+include data/octopus-c2.sysusers
+include data/octopus-c2.tmpfiles
 include core/c2/go.mod
 include core/c2/go.sum
 include core/c2/implant.go

@@ -194,6 +194,9 @@ def validate_sdist(path: str | Path) -> dict[str, int]:
     required = {
         "config.yaml",
         "data/octopus-c2.service",
+        "data/octopus-c2.socket",
+        "data/octopus-c2.sysusers",
+        "data/octopus-c2.tmpfiles",
         *_REQUIRED_SDIST_RESOURCES,
     }
     missing = required - relative_names

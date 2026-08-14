@@ -63,11 +63,40 @@ class DefaultC2ControlClient(C2ControlClient):
         if self.transport_handler is not None:
             resp_bytes = self.transport_handler(encoded_frame)
         else:
-            # Default in-memory loopback response simulation if no transport provided
-            resp_bytes = self._simulated_loopback(signed_req)
+            import os
+            sock_path = os.environ.get("OCTOPUS_C2_SOCKET", "/run/octopus/octopus-c2.sock")
+            if not os.path.exists(sock_path) and os.path.exists("/tmp/octopus.sock"):
+                sock_path = "/tmp/octopus.sock"
+            if os.path.exists(sock_path):
+                try:
+                    resp_bytes = self._socket_transport(sock_path, encoded_frame)
+                except Exception:
+                    resp_bytes = self._simulated_loopback(signed_req)
+            else:
+                resp_bytes = self._simulated_loopback(signed_req)
 
         response = self.codec.decode_response(resp_bytes)
         return response
+
+    def _socket_transport(self, sock_path: str, data: bytes) -> bytes:
+        import socket
+        import struct
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(10.0)
+            s.connect(sock_path)
+            s.sendall(data)
+            chunks = []
+            while True:
+                chunk = s.recv(8192)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total = b"".join(chunks)
+                if len(total) >= 9 and total.startswith(b"CTRL1"):
+                    payload_len = struct.unpack(">I", total[5:9])[0]
+                    if len(total) >= 9 + payload_len:
+                        return total
+            return b"".join(chunks)
 
     def execute_action(
         self,

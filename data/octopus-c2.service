@@ -6,7 +6,6 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-DynamicUser=yes
 User=octopus-c2
 Group=octopus-c2
 SupplementaryGroups=octopus-c2-clients

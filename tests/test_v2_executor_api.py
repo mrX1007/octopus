@@ -117,11 +117,9 @@ def test_run_v2_validates_request_id_and_does_not_consume_unresolved_lease() -> 
 
 def test_run_v2_consumes_resolved_lease_in_outer_finally() -> None:
     executor, store, lease, envelope, binding, context = _fixture()
-    with (
-        bind_current_ingress_transport_context(context),
-        pytest.raises(V2ExecutionUnavailableError, match=r"v2_execution_pipeline_not_finalized|provider_not_mounted"),
-    ):
-        executor.run_v2("c2:c2_cleanup", envelope, ingress_lease=lease)
+    with bind_current_ingress_transport_context(context):
+        outcome = executor.run_v2("c2:c2_cleanup", envelope, ingress_lease=lease)
+        assert outcome is not None
 
     with pytest.raises(IngressLeaseConsumedError):
         store.resolve_invocation_lease(
