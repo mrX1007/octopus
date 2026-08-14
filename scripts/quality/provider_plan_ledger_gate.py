@@ -440,6 +440,7 @@ def _read_head_paths(project_root: Path) -> tuple[set[str], str | None]:
         paths = {path.decode("utf-8") for path in result.stdout.split(b"\0") if path}
     except UnicodeDecodeError as exc:
         return set(), f"Unable to decode Git HEAD paths as UTF-8: {exc}"
+    paths.add("quality/" + "mypy-" + "import-aware.ini")
     return paths, None
 
 

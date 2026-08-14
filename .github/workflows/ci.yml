@@ -115,7 +115,7 @@ jobs:
           fi
           python scripts/quality/format_gate.py --root . --base "${change_base}"
 
-      - name: Mypy quality gate
+      - name: Mypy (single repository gate)
         run: python scripts/quality/mypy_gate.py check
 
       - name: Compile first-party Python
