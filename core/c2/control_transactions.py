@@ -1,11 +1,11 @@
-"""Control transactions."""
-
 from __future__ import annotations
 
 from typing import Any
 
+
 from core.c2.control_commands import (
     BoundedControlErrorV1,
+    C2ControlErrorCodeV1,
     ParticipantControlReceiptV1,
     ParticipantControlRequestV1,
 )
@@ -28,14 +28,11 @@ class ControlTransactionCoordinator:
         p_id = request.authorization.participant_id
         participant = self._participants.get(p_id)
         if participant is None:
-            # Fall back to default participant if single participant passed or first registered
-            if self._participants:
-                participant = next(iter(self._participants.values()))
-            else:
-                from core.c2.resource_participant import C2DaemonResourceParticipant
-
-                participant = C2DaemonResourceParticipant(participant_id=p_id)
-                self._participants[p_id] = participant
+            return BoundedControlErrorV1(
+                reason_code=C2ControlErrorCodeV1.UNAVAILABLE,
+                retryable=False,
+                detail_ref=f"unregistered_participant:{p_id}",
+            )
 
         # Phase 1: Prepare
         prep_res = participant.prepare(request)
@@ -51,3 +48,4 @@ class ControlTransactionCoordinator:
         # Phase 3: Finalize Visibility
         final_res = participant.finalize_visibility(prep_res, commit_res)
         return final_res
+

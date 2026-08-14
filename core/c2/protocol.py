@@ -5,6 +5,8 @@ Changing one requires its own migration and wire-vector review.
 """
 
 C2_PROTOCOL_VERSION = "11.0"
+C2_CONTROL_PROTOCOL_VERSION = "1.0"
 C2_SESSION_KDF_CONTEXT = b"octopus-session-v10"
 
-__all__ = ["C2_PROTOCOL_VERSION", "C2_SESSION_KDF_CONTEXT"]
+__all__ = ["C2_CONTROL_PROTOCOL_VERSION", "C2_PROTOCOL_VERSION", "C2_SESSION_KDF_CONTEXT"]
+

@@ -259,100 +259,68 @@ def _default_probes() -> tuple[ProviderReadinessProbe, ...]:
         platform_supplier=lambda: sys.platform,
     )
     from core.actions.readiness_probes import DaemonProtocolStatus
+    from core.c2.protocol import C2_CONTROL_PROTOCOL_VERSION
 
     def _default_daemon_status_supplier() -> DaemonProtocolStatus:
         import os
         import secrets
-        import socket
-        import struct
         import time
 
+        from core.c2.client import DefaultC2ControlClient
+        from core.c2.control_commands import C2ControlActionV1, ParticipantControlReceiptV1
+        from core.c2.control_signing import ControlSignerV1
+
         sock_path = os.environ.get("OCTOPUS_C2_SOCKET", "/run/octopus/octopus-c2.sock")
-        if not os.path.exists(sock_path) and os.path.exists("/tmp/octopus.sock"):
-            sock_path = "/tmp/octopus.sock"
+        if not os.path.exists(sock_path) and os.environ.get("OCTOPUS_C2_ALLOW_INSECURE_DEV_SOCKET") == "1":
+            if os.path.exists("/tmp/octopus.sock"):
+                sock_path = "/tmp/octopus.sock"
+
         if not os.path.exists(sock_path):
             return DaemonProtocolStatus(
                 reachable=False,
-                protocol_version="12.0",
+                protocol_version=C2_CONTROL_PROTOCOL_VERSION,
                 daemon_instance_id=None,
                 provider_generation="unverified",
             )
-        try:
-            from core.c2.control_commands import (
-                C2ControlActionV1,
-                ParticipantControlAuthorizationV1,
-                ParticipantControlRequestV1,
-            )
-            from core.c2.control_protocol import ControlProtocolCodec
-            from core.c2.control_signing import ControlSignerV1
 
-            signer = ControlSignerV1("probe_key", b"probe_secret_key_1234567890123456")
-            codec = ControlProtocolCodec()
-            req_auth = ParticipantControlAuthorizationV1(
-                key_id="probe_key",
-                transaction_id=f"tx_ready_{secrets.token_hex(4)}",
-                participant_id="readiness_probe",
+        probe_secret = os.environ.get("OCTOPUS_C2_PROBE_SECRET", "probe_secret_key_12345678901234567890").encode("utf-8")
+        signer = ControlSignerV1("probe_key", probe_secret)
+        client = DefaultC2ControlClient(signer=signer, socket_path=sock_path)
+
+        try:
+            res = client.execute_action(
+                action=C2ControlActionV1.READINESS,
+                payload={"check": "readiness"},
                 mission_id="mission_readiness",
                 subject_id="probe_subj",
-                action_id=C2ControlActionV1.READINESS.value,
-                coordinator_revision=1,
-                request_digest="req_digest_probe",
-                expires_at=time.time() + 30.0,
-                nonce=secrets.token_hex(8),
-                signature="",
+                transaction_id=f"tx_ready_{secrets.token_hex(4)}",
+                participant_id="readiness_probe",
+                ttl_seconds=30.0,
             )
-            req = ParticipantControlRequestV1(
-                action=C2ControlActionV1.READINESS,
-                authorization=req_auth,
-                payload_schema_id="schema:readiness",
-                payload_digest="payload_digest_probe",
-                canonical_payload_b64u="",
-            )
-            signed_req = signer.sign_participant_request(req)
-            encoded = codec.encode_request(signed_req)
-
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                s.settimeout(1.0)
-                s.connect(sock_path)
-                s.sendall(encoded)
-                resp_buf = bytearray()
-                while len(resp_buf) < 9:
-                    chunk = s.recv(8192)
-                    if not chunk:
-                        break
-                    resp_buf.extend(chunk)
-                if len(resp_buf) >= 9 and resp_buf.startswith(b"CTRL1"):
-                    payload_len = struct.unpack("!I", resp_buf[5:9])[0]
-                    while len(resp_buf) < 9 + payload_len:
-                        chunk = s.recv(8192)
-                        if not chunk:
-                            break
-                        resp_buf.extend(chunk)
-                    if len(resp_buf) >= 9 + payload_len:
-                        resp = codec.decode_response(bytes(resp_buf[: 9 + payload_len]))
-                        if hasattr(resp, "daemon_instance_id"):
-                            return DaemonProtocolStatus(
-                                reachable=True,
-                                protocol_version="12.0",
-                                daemon_instance_id=resp.daemon_instance_id or "c2-daemon-local-1",
-                                provider_generation="1",
-                            )
+            if isinstance(res, ParticipantControlReceiptV1):
+                return DaemonProtocolStatus(
+                    reachable=True,
+                    protocol_version=C2_CONTROL_PROTOCOL_VERSION,
+                    daemon_instance_id=res.daemon_instance_id or "c2-daemon-local-1",
+                    provider_generation="1",
+                )
             return DaemonProtocolStatus(
                 reachable=False,
-                protocol_version="12.0",
+                protocol_version=C2_CONTROL_PROTOCOL_VERSION,
                 daemon_instance_id=None,
                 provider_generation="unverified",
             )
         except Exception:
             return DaemonProtocolStatus(
                 reachable=False,
-                protocol_version="12.0",
+                protocol_version=C2_CONTROL_PROTOCOL_VERSION,
                 daemon_instance_id=None,
                 provider_generation="unverified",
             )
 
     dns = DaemonProtocolProbe(
         "probe:dns_c2_channel",
+
         "c2:dns_c2_channel",
         "12.0",
         _default_daemon_status_supplier,

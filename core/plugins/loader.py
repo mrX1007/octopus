@@ -284,10 +284,15 @@ class PluginManager:
             "VIRTUAL_ENV",
         }
         environment = {key: value for key, value in os.environ.items() if key in allowed}
-        environment["PYTHONPATH"] = cls._project_root()
+        existing_pp = os.environ.get("PYTHONPATH", "")
+        if existing_pp:
+            environment["PYTHONPATH"] = f"{cls._project_root()}:{existing_pp}"
+        else:
+            environment["PYTHONPATH"] = cls._project_root()
         environment["PYTHONNOUSERSITE"] = "1"
         environment["OCTOPUS_PLUGIN_WORKER"] = "1"
         return environment
+
 
     @staticmethod
     def _terminate_process_group(process: subprocess.Popen[bytes]) -> None:

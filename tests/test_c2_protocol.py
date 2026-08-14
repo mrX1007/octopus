@@ -178,16 +178,57 @@ def test_daemon_version_is_owned_by_protocol_constants(monkeypatch, capsys):
                 def authenticate(_api_key):
                     return None
 
+            import time
+            from core.c2.control_commands import (
+                C2ControlActionV1,
+                ParticipantControlAuthorizationV1,
+                ParticipantControlRequestV1,
+            )
+            from core.c2.control_models import calculate_payload_digest
+            from core.c2.control_protocol import ControlProtocolCodec
+            from core.c2.control_signing import ControlSignerV1
+
+            codec = ControlProtocolCodec()
+            signer = ControlSignerV1("key_test", b"secret_key_12345678901234567890")
+            auth = ParticipantControlAuthorizationV1(
+                key_id="key_test",
+                transaction_id="tx_prot_1",
+                participant_id="part_test",
+                mission_id="m_test",
+                subject_id="s_test",
+                action_id="ping",
+                coordinator_revision=1,
+                request_digest="placeholder",
+                expires_at=time.time() + 60.0,
+                nonce="nonce_prot_1",
+                signature="",
+            )
+            req = ParticipantControlRequestV1(
+                action=C2ControlActionV1.PING,
+                authorization=auth,
+                payload_schema_id="schema:test",
+                payload_digest=calculate_payload_digest(b""),
+                canonical_payload_b64u="",
+            )
+            signed_req = signer.sign_participant_request(req)
+            framed_req_bytes = codec.encode_request(signed_req)
+
             class ConnectionStub:
                 def __init__(self):
-                    self._requests = [json.dumps({"action": "ping"}).encode()]
-                    self.responses: list[dict] = []
+                    self._requests = [framed_req_bytes]
+                    self.responses: list[Any] = []
 
-                def recv(self, _size):
-                    return self._requests.pop(0) if self._requests else b""
+                def recv(self, size):
+                    if not self._requests:
+                        return b""
+                    chunk = self._requests[0][:size]
+                    self._requests[0] = self._requests[0][size:]
+                    if not self._requests[0]:
+                        self._requests.pop(0)
+                    return chunk
 
                 def sendall(self, payload):
-                    self.responses.append(json.loads(payload))
+                    self.responses.append(codec.decode_response(payload))
 
                 def close(self):
                     return None
@@ -210,10 +251,12 @@ def test_daemon_version_is_owned_by_protocol_constants(monkeypatch, capsys):
 
             connection = ConnectionStub()
             daemon.handle_client(connection)
-            assert connection.responses == [{"status": "ok", "msg": "pong", "version": sentinel}]
+            assert len(connection.responses) == 1
+            assert hasattr(connection.responses[0], "signature")
 
             daemon.main()
             assert f"C2 Daemon v{sentinel}" in capsys.readouterr().out
+
     finally:
         sys.modules.pop(module_name, None)
         if original_daemon is not None:

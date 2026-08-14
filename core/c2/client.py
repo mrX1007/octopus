@@ -1,8 +1,9 @@
-"""C2 control client."""
-
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
+import math
 import os
 import socket
 import struct
@@ -10,16 +11,32 @@ import time
 import uuid
 from typing import Any, Callable
 
+
 from core.c2.control_commands import (
     BoundedControlErrorV1,
     C2ControlActionV1,
+    C2ControlErrorCodeV1,
     ParticipantControlAuthorizationV1,
+    ParticipantControlPhaseV1,
     ParticipantControlQuerySnapshotV1,
     ParticipantControlReceiptV1,
     ParticipantControlRequestV1,
+    SignedControlResponseV1,
 )
-from core.c2.control_models import calculate_payload_digest, calculate_request_digest
-from core.c2.control_protocol import ControlProtocolCodec
+from core.c2.control_models import (
+    calculate_canonical_request_digest,
+    calculate_payload_digest,
+    canonical_json_bytes,
+    canonical_response_envelope_dict,
+    strict_b64url_decode,
+)
+from core.c2.control_protocol import (
+    FRAME_MAGIC,
+    MAX_FRAME_SIZE,
+    ControlProtocolCodec,
+    receive_frame,
+    strict_json_loads,
+)
 from core.c2.control_signing import ControlSignerV1, ControlVerifierV1
 
 
@@ -65,11 +82,15 @@ class DefaultC2ControlClient(C2ControlClient):
         verifier: ControlVerifierV1 | None = None,
         codec: ControlProtocolCodec | None = None,
         transport_handler: Callable[[bytes], bytes] | None = None,
+        daemon_secret_key: bytes | None = None,
+        socket_path: str | None = None,
     ) -> None:
         self.signer = signer
         self.verifier = verifier
         self.codec = codec or ControlProtocolCodec()
         self.transport_handler = transport_handler
+        self.daemon_secret_key = daemon_secret_key
+        self.socket_path = socket_path
         self._is_closed = False
 
     def send_request(
@@ -85,19 +106,117 @@ class DefaultC2ControlClient(C2ControlClient):
         if self.transport_handler is not None:
             resp_bytes = self.transport_handler(encoded_frame)
         else:
-            sock_path = os.environ.get("OCTOPUS_C2_SOCKET", "/run/octopus/octopus-c2.sock")
-            if not os.path.exists(sock_path) and os.path.exists("/tmp/octopus.sock"):
-                sock_path = "/tmp/octopus.sock"
+            sock_path = self.socket_path or os.environ.get("OCTOPUS_C2_SOCKET", "/run/octopus/octopus-c2.sock")
+            if not os.path.exists(sock_path) and os.environ.get("OCTOPUS_C2_ALLOW_INSECURE_DEV_SOCKET") == "1":
+                if os.path.exists("/tmp/octopus.sock"):
+                    sock_path = "/tmp/octopus.sock"
             if not os.path.exists(sock_path):
                 raise C2DaemonUnavailable(f"C2 daemon socket not found at {sock_path}")
             resp_bytes = self._socket_transport(sock_path, encoded_frame)
 
         try:
-            response = self.codec.decode_response(resp_bytes)
+            raw_response = self.codec.decode_response(resp_bytes)
         except Exception as exc:
             raise C2ProtocolError(f"failed to decode daemon control response: {exc}") from exc
 
-        return response
+        # Handle signed response envelope
+        if isinstance(raw_response, SignedControlResponseV1):
+            return self._verify_signed_response(raw_response, signed_req)
+
+        # Correlation validation on direct receipt
+        if isinstance(raw_response, ParticipantControlReceiptV1):
+            if raw_response.transaction_id != signed_req.authorization.transaction_id:
+                raise C2ResponseVerificationError("response_transaction_id_mismatch")
+            if raw_response.participant_id != signed_req.authorization.participant_id:
+                raise C2ResponseVerificationError("response_participant_id_mismatch")
+            if raw_response.action != signed_req.action:
+                raise C2ResponseVerificationError("response_action_mismatch")
+
+        return raw_response
+
+    def _verify_signed_response(
+        self,
+        envelope: SignedControlResponseV1,
+        request: ParticipantControlRequestV1,
+    ) -> ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1:
+        """Verify signed daemon response envelope and decode inner message."""
+        req_auth = request.authorization
+        if envelope.request_digest != req_auth.request_digest:
+            raise C2ResponseVerificationError("response_request_digest_mismatch")
+        if envelope.request_nonce != req_auth.nonce:
+            raise C2ResponseVerificationError("response_nonce_mismatch")
+
+        # Verify envelope signature if secret key available
+        secret_key = self.daemon_secret_key
+        if secret_key is None and self.verifier is not None:
+            secret_key = self.verifier.resolve_key(envelope.key_id, envelope.issued_at_ms / 1000.0)
+
+        if secret_key is not None:
+            envelope_dict = canonical_response_envelope_dict(
+                protocol_version=envelope.protocol_version,
+                daemon_instance_id=envelope.daemon_instance_id,
+                daemon_generation=envelope.daemon_generation,
+                request_digest=envelope.request_digest,
+                request_nonce=envelope.request_nonce,
+                response_type=envelope.response_type,
+                response_payload_b64u=envelope.response_payload_b64u,
+                response_digest=envelope.response_digest,
+                issued_at_ms=envelope.issued_at_ms,
+                key_id=envelope.key_id,
+            )
+            canonical_bytes = b"OCTOPUS-C2-RESPONSE-V1\x00" + canonical_json_bytes(envelope_dict)
+            expected_sig = hmac.new(secret_key, canonical_bytes, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(expected_sig, envelope.signature):
+                raise C2ResponseVerificationError("invalid_daemon_response_signature")
+
+        # Decode inner payload
+        payload_bytes = strict_b64url_decode(envelope.response_payload_b64u)
+        actual_digest = hashlib.sha256(payload_bytes).hexdigest()
+        if not hmac.compare_digest(actual_digest, envelope.response_digest):
+            raise C2ResponseVerificationError("response_digest_mismatch")
+
+        inner_data = strict_json_loads(payload_bytes)
+        resp_type = inner_data.get("type", envelope.response_type)
+
+        if resp_type == "receipt":
+            receipt = ParticipantControlReceiptV1(
+                transaction_id=inner_data["transaction_id"],
+                participant_id=inner_data["participant_id"],
+                action=C2ControlActionV1(inner_data["action"]),
+                resource_ref=inner_data.get("resource_ref"),
+                resource_revision=inner_data.get("resource_revision"),
+                receipt_ref=inner_data["receipt_ref"],
+                receipt_digest=inner_data["receipt_digest"],
+                daemon_instance_id=inner_data["daemon_instance_id"],
+                result_payload_schema_id=inner_data.get("result_payload_schema_id"),
+                result_payload_digest=inner_data.get("result_payload_digest"),
+                result_payload_b64u=inner_data.get("result_payload_b64u"),
+            )
+            if receipt.transaction_id != req_auth.transaction_id:
+                raise C2ResponseVerificationError("inner_receipt_transaction_id_mismatch")
+            return receipt
+        elif resp_type == "snapshot":
+            return ParticipantControlQuerySnapshotV1(
+                transaction_id=inner_data["transaction_id"],
+                participant_id=inner_data["participant_id"],
+                resource_ref=inner_data.get("resource_ref"),
+                resource_revision=inner_data.get("resource_revision"),
+                phase=ParticipantControlPhaseV1(inner_data["phase"]),
+                receipt_ref=inner_data.get("receipt_ref"),
+                receipt_digest=inner_data.get("receipt_digest"),
+                snapshot_digest=inner_data["snapshot_digest"],
+                result_payload_schema_id=inner_data.get("result_payload_schema_id"),
+                result_payload_digest=inner_data.get("result_payload_digest"),
+                result_payload_b64u=inner_data.get("result_payload_b64u"),
+            )
+        elif resp_type == "error":
+            return BoundedControlErrorV1(
+                reason_code=C2ControlErrorCodeV1(inner_data["reason_code"]),
+                retryable=bool(inner_data["retryable"]),
+                detail_ref=inner_data.get("detail_ref"),
+            )
+        else:
+            raise C2ProtocolError(f"unknown_envelope_inner_type:{resp_type}")
 
     def _socket_transport(self, sock_path: str, data: bytes) -> bytes:
         try:
@@ -113,20 +232,12 @@ class DefaultC2ControlClient(C2ControlClient):
                     raise C2DaemonUnavailable(f"socket connect error at {sock_path}: {exc}") from exc
 
                 s.sendall(data)
-                chunks = []
-                while True:
-                    chunk = s.recv(8192)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-                    total = b"".join(chunks)
-                    if len(total) >= 9 and total.startswith(b"CTRL1"):
-                        payload_len = struct.unpack("!I", total[5:9])[0]
-                        if len(total) >= 9 + payload_len:
-                            return total[: 9 + payload_len]
-                if not chunks:
-                    raise C2DaemonUnavailable(f"daemon at {sock_path} closed connection without response")
-                return b"".join(chunks)
+                try:
+                    return receive_frame(s, max_size=MAX_FRAME_SIZE)
+                except ConnectionResetError as exc:
+                    raise C2DaemonUnavailable(f"daemon closed connection: {exc}") from exc
+                except ValueError as exc:
+                    raise C2ProtocolError(f"frame violation from daemon: {exc}") from exc
         except socket.timeout as exc:
             raise C2ControlTimeout(f"socket operation timed out for {sock_path}") from exc
 
@@ -137,32 +248,28 @@ class DefaultC2ControlClient(C2ControlClient):
         mission_id: str,
         subject_id: str,
         transaction_id: str,
-        participant_id: str,
+        participant_id: str = "c2_daemon",
         ttl_seconds: float = 300.0,
     ) -> ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1:
+
+
         """Construct, sign, and execute a control action request."""
+        if not math.isfinite(ttl_seconds) or ttl_seconds <= 0 or ttl_seconds > 300.0:
+            raise ValueError(f"invalid ttl_seconds: {ttl_seconds}, must be 0 < ttl <= 300")
+
         act_enum = C2ControlActionV1(action) if isinstance(action, str) else action
-        payload_digest = calculate_payload_digest(payload)
 
         if isinstance(payload, bytes):
-            b64u = base64.urlsafe_b64encode(payload).decode("utf-8").rstrip("=")
+            payload_bytes = payload
         elif isinstance(payload, str):
-            b64u = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("utf-8").rstrip("=")
+            payload_bytes = payload.encode("utf-8")
         else:
-            import json
+            payload_bytes = canonical_json_bytes(payload)
 
-            raw_bytes = json.dumps(payload, sort_keys=True).encode("utf-8")
-            b64u = base64.urlsafe_b64encode(raw_bytes).decode("utf-8").rstrip("=")
+        b64u = base64.urlsafe_b64encode(payload_bytes).decode("utf-8").rstrip("=")
+        payload_digest = hashlib.sha256(payload_bytes).hexdigest()
 
         nonce = uuid.uuid4().hex
-        req_digest = calculate_request_digest(
-            action=act_enum.value,
-            payload_digest=payload_digest,
-            mission_id=mission_id,
-            subject_id=subject_id,
-            nonce=nonce,
-        )
-
         expires_at = time.time() + ttl_seconds
         unsigned_auth = ParticipantControlAuthorizationV1(
             key_id=self.signer.key_id,
@@ -172,7 +279,7 @@ class DefaultC2ControlClient(C2ControlClient):
             subject_id=subject_id,
             action_id=act_enum.value,
             coordinator_revision=1,
-            request_digest=req_digest,
+            request_digest="init_digest",  # Signer will compute canonical request digest
             expires_at=expires_at,
             nonce=nonce,
             signature="",
@@ -188,10 +295,16 @@ class DefaultC2ControlClient(C2ControlClient):
 
         return self.send_request(request)
 
-    def ping(self, mission_id: str, subject_id: str) -> ParticipantControlReceiptV1:
-        """Send a PING control request and return receipt."""
-        tx_id = f"tx_ping_{uuid.uuid4().hex[:8]}"
-        part_id = "participant_daemon"
+    def ping(
+        self,
+        mission_id: str = "mission_control",
+        subject_id: str = "operator_root",
+        transaction_id: str | None = None,
+        participant_id: str | None = None,
+    ) -> ParticipantControlReceiptV1:
+        """Send a lightweight ping request to verify daemon liveness and protocol."""
+        tx_id = transaction_id or f"tx_ping_{uuid.uuid4().hex[:8]}"
+        part_id = participant_id or "participant_daemon"
         res = self.execute_action(
             action=C2ControlActionV1.PING,
             payload={"ping": True},
@@ -214,6 +327,7 @@ class DefaultC2ControlClient(C2ControlClient):
 
         def _loopback(data: bytes) -> bytes:
             req = resolved_codec.decode_request(data)
+            rcpt_dig = hashlib.sha256(f"mock:{req.authorization.transaction_id}".encode("utf-8")).hexdigest()
             receipt = ParticipantControlReceiptV1(
                 transaction_id=req.authorization.transaction_id,
                 participant_id=req.authorization.participant_id,
@@ -221,7 +335,7 @@ class DefaultC2ControlClient(C2ControlClient):
                 resource_ref=f"ref:{req.authorization.participant_id}",
                 resource_revision=1,
                 receipt_ref=f"rcpt_{uuid.uuid4().hex[:8]}",
-                receipt_digest="digest_ok",
+                receipt_digest=rcpt_dig,
                 daemon_instance_id="daemon_inst_0",
                 result_payload_schema_id=req.payload_schema_id,
                 result_payload_digest=req.payload_digest,
@@ -241,3 +355,4 @@ __all__ = [
     "C2ResponseVerificationError",
     "DefaultC2ControlClient",
 ]
+

@@ -1,11 +1,24 @@
-"""Control models."""
-
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import json
+
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING, Any
+
+from core.c2.protocol import C2_CONTROL_PROTOCOL_VERSION
+
+if TYPE_CHECKING:
+    from core.c2.control_commands import (
+        ParticipantControlQuerySnapshotV1,
+        ParticipantControlReceiptV1,
+        ParticipantControlRequestV1,
+    )
+
+MAX_BASE64_PAYLOAD_LENGTH = 16 * 1024 * 1024
 
 
 class ParticipantControlPhaseV1(str, Enum):
@@ -41,27 +54,109 @@ class ControlPayloadDigest:
             raise ValueError("digest must not be empty")
 
 
-def calculate_payload_digest(payload: bytes | str | dict) -> str:
+def canonical_json_bytes(value: object) -> bytes:
+    """Encode an object into deterministic canonical UTF-8 JSON bytes."""
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def strict_b64url_decode(value: str, max_len: int = MAX_BASE64_PAYLOAD_LENGTH) -> bytes:
+    """Strictly decode unpadded or padded base64url string with size validation."""
+    if not isinstance(value, str):
+        raise ValueError("payload_not_string")
+    if len(value) > max_len:
+        raise ValueError("encoded_payload_too_large")
+    padding = "=" * (-len(value) % 4)
+    try:
+        return base64.b64decode(value + padding, altchars=b"-_", validate=True)
+    except (ValueError, binascii.Error) as exc:
+        raise ValueError("invalid_base64url_payload") from exc
+
+
+def calculate_payload_digest(payload: bytes | str | dict, schema_id: str | None = None) -> str:
     """Calculate SHA-256 hex digest of payload data."""
     if isinstance(payload, dict):
-        raw = json.dumps(payload, sort_keys=True).encode("utf-8")
+        raw = canonical_json_bytes(payload)
     elif isinstance(payload, str):
         raw = payload.encode("utf-8")
     else:
         raw = payload
+    if schema_id:
+        raw = f"{schema_id}\x00".encode("utf-8") + raw
     return hashlib.sha256(raw).hexdigest()
 
 
+def canonical_request_dict(request: ParticipantControlRequestV1) -> dict[str, Any]:
+    """Extract canonical authority dictionary from request."""
+    auth = request.authorization
+    act_val = request.action.value if hasattr(request.action, "value") else str(request.action)
+    expires_ms = int(auth.expires_at * 1000) if isinstance(auth.expires_at, (int, float)) else 0
+    return {
+        "action": act_val,
+        "action_id": auth.action_id,
+        "coordinator_revision": int(auth.coordinator_revision),
+        "expected_resource_revision": request.expected_resource_revision if request.expected_resource_revision is not None else -1,
+        "expires_at_ms": expires_ms,
+        "mission_id": auth.mission_id,
+        "nonce": auth.nonce,
+        "participant_id": auth.participant_id,
+        "payload_digest": request.payload_digest,
+        "payload_schema_id": request.payload_schema_id,
+        "prior_receipt_digest": request.prior_receipt_digest or "",
+        "prior_receipt_ref": request.prior_receipt_ref or "",
+        "protocol_version": C2_CONTROL_PROTOCOL_VERSION,
+        "subject_id": auth.subject_id,
+        "transaction_id": auth.transaction_id,
+    }
+
+
+def calculate_canonical_request_digest(request: ParticipantControlRequestV1) -> str:
+    """Compute canonical SHA-256 request digest with domain separation."""
+    body = canonical_json_bytes(canonical_request_dict(request))
+    return hashlib.sha256(b"OCTOPUS-C2-REQUEST-V1\x00" + body).hexdigest()
+
+
 def calculate_request_digest(
-    action: str,
-    payload_digest: str,
-    mission_id: str,
-    subject_id: str,
-    nonce: str,
+    action: str | None = None,
+    payload_digest: str | None = None,
+    mission_id: str | None = None,
+    subject_id: str | None = None,
+    nonce: str | None = None,
+    *,
+    request: ParticipantControlRequestV1 | None = None,
+    **kwargs: Any,
 ) -> str:
-    """Calculate SHA-256 hex digest of control request fields."""
-    components = f"{action}:{payload_digest}:{mission_id}:{subject_id}:{nonce}"
-    return hashlib.sha256(components.encode("utf-8")).hexdigest()
+    """Calculate SHA-256 hex digest of control request."""
+    if request is not None:
+        return calculate_canonical_request_digest(request)
+    if "request" in kwargs:
+        return calculate_canonical_request_digest(kwargs["request"])
+    if action is not None and payload_digest is not None and mission_id is not None and subject_id is not None and nonce is not None:
+        canonical_dict = {
+            "action": action,
+            "action_id": kwargs.get("action_id", action),
+            "coordinator_revision": int(kwargs.get("coordinator_revision", 1)),
+            "expected_resource_revision": kwargs.get("expected_resource_revision", -1),
+            "expires_at_ms": int(kwargs.get("expires_at_ms", 0)),
+            "mission_id": mission_id,
+            "nonce": nonce,
+            "participant_id": kwargs.get("participant_id", ""),
+            "payload_digest": payload_digest,
+            "payload_schema_id": kwargs.get("payload_schema_id", "schema:c2_control_v1"),
+            "prior_receipt_digest": kwargs.get("prior_receipt_digest", ""),
+            "prior_receipt_ref": kwargs.get("prior_receipt_ref", ""),
+            "protocol_version": C2_CONTROL_PROTOCOL_VERSION,
+            "subject_id": subject_id,
+            "transaction_id": kwargs.get("transaction_id", ""),
+        }
+        body = canonical_json_bytes(canonical_dict)
+        return hashlib.sha256(b"OCTOPUS-C2-REQUEST-V1\x00" + body).hexdigest()
+    raise ValueError("insufficient arguments for calculate_request_digest")
 
 
 def calculate_receipt_digest(
@@ -71,9 +166,13 @@ def calculate_receipt_digest(
     result_payload_digest: str | None = None,
 ) -> str:
     """Calculate SHA-256 hex digest of participant control receipt."""
-    res_dig = result_payload_digest or ""
-    components = f"{transaction_id}:{participant_id}:{receipt_ref}:{res_dig}"
-    return hashlib.sha256(components.encode("utf-8")).hexdigest()
+    payload = {
+        "participant_id": participant_id,
+        "receipt_ref": receipt_ref,
+        "result_payload_digest": result_payload_digest or "",
+        "transaction_id": transaction_id,
+    }
+    return hashlib.sha256(b"OCTOPUS-C2-RECEIPT-V1\x00" + canonical_json_bytes(payload)).hexdigest()
 
 
 def calculate_snapshot_digest(
@@ -83,6 +182,44 @@ def calculate_snapshot_digest(
     receipt_digest: str | None = None,
 ) -> str:
     """Calculate SHA-256 hex digest of participant query snapshot."""
-    rec_dig = receipt_digest or ""
-    components = f"{transaction_id}:{participant_id}:{phase}:{rec_dig}"
-    return hashlib.sha256(components.encode("utf-8")).hexdigest()
+    payload = {
+        "participant_id": participant_id,
+        "phase": phase,
+        "receipt_digest": receipt_digest or "",
+        "transaction_id": transaction_id,
+    }
+    return hashlib.sha256(b"OCTOPUS-C2-SNAPSHOT-V1\x00" + canonical_json_bytes(payload)).hexdigest()
+
+
+def canonical_response_envelope_dict(
+    *,
+    protocol_version: str,
+    daemon_instance_id: str,
+    daemon_generation: str,
+    request_digest: str,
+    request_nonce: str,
+    response_type: str,
+    response_payload_b64u: str,
+    response_digest: str,
+    issued_at_ms: int,
+    key_id: str,
+) -> dict[str, Any]:
+    """Construct canonical dict for signed control response envelope."""
+    return {
+        "daemon_generation": daemon_generation,
+        "daemon_instance_id": daemon_instance_id,
+        "issued_at_ms": issued_at_ms,
+        "key_id": key_id,
+        "protocol_version": protocol_version,
+        "request_digest": request_digest,
+        "request_nonce": request_nonce,
+        "response_digest": response_digest,
+        "response_payload_b64u": response_payload_b64u,
+        "response_type": response_type,
+    }
+
+
+def calculate_response_signature_digest(envelope_dict: dict[str, Any]) -> bytes:
+    """Return the transcript bytes to sign for a daemon response envelope."""
+    return b"OCTOPUS-C2-RESPONSE-V1\x00" + canonical_json_bytes(envelope_dict)
+

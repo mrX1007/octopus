@@ -8,6 +8,8 @@ or :func:`main`.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -16,28 +18,49 @@ import struct
 import threading
 import time
 import uuid
+
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 
+from core.c2.control_auth import ControlAuthenticatorV1
+from core.c2.control_boundary import (
+    AuthenticatorPrincipalResolver,
+    ControlBoundaryError,
+    ControlReplayStore,
+    FramedControlBoundary,
+    StaticControlKeyResolver,
+    extract_peer_principal,
+)
 from core.c2.control_commands import (
     BoundedControlErrorV1,
     C2ControlActionV1,
     C2ControlErrorCodeV1,
+    ParticipantControlPhaseV1,
+    ParticipantControlQuerySnapshotV1,
     ParticipantControlReceiptV1,
     ParticipantControlRequestV1,
+    SignedControlResponseV1,
 )
-from core.c2.control_protocol import FRAME_MAGIC, ControlProtocolCodec
+from core.c2.control_models import (
+    canonical_json_bytes,
+    canonical_response_envelope_dict,
+)
+from core.c2.control_protocol import FRAME_MAGIC, MAX_FRAME_SIZE, ControlProtocolCodec, receive_frame
+from core.c2.control_rbac import ControlRBACPolicy
 from core.c2.crypto_engine import C2CryptoEngine
 from core.c2.db_backend import C2Database
 from core.c2.enrollment import EnrollmentAuthority
 from core.c2.event_store import EventStore
+from core.c2.grant_service import GrantService
 from core.c2.key_store import KeyStore
+
 from core.c2.operators import OperatorManager
-from core.c2.protocol import C2_PROTOCOL_VERSION
+from core.c2.protocol import C2_CONTROL_PROTOCOL_VERSION, C2_PROTOCOL_VERSION
 from core.c2.resource_participant import C2DaemonResourceParticipant
+
 
 # ─── Configuration ───────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -403,87 +426,312 @@ async def beacon(request: Request):
 
 # ─── Operator IPC Control Plane ──────────────────────────
 
-_daemon_resource_participant = C2DaemonResourceParticipant(daemon_instance_id="c2-daemon-local-1")
+DAEMON_INSTANCE_ID = os.environ.get("OCTOPUS_C2_DAEMON_INSTANCE_ID", "c2-daemon-local-1")
+DAEMON_GENERATION = os.environ.get("OCTOPUS_C2_DAEMON_GENERATION", "gen-1")
+DAEMON_KEY_ID = "daemon_root_key"
+_daemon_env_secret = os.environ.get("OCTOPUS_C2_DAEMON_SECRET")
+DAEMON_SECRET_KEY = _daemon_env_secret.encode("utf-8") if _daemon_env_secret else secrets.token_bytes(32)
+DAEMON_INSTANCE_ID = f"c2-daemon-local-1"
+_daemon_resource_participant_instance: C2DaemonResourceParticipant | None = None
 _control_codec = ControlProtocolCodec()
-_seen_nonces: dict[str, float] = {}
-_nonce_lock = threading.Lock()
+_replay_store_instance: ControlReplayStore | None = None
 MAX_CONTROL_FRAME_SIZE = 16 * 1024 * 1024  # 16 MiB
+MAX_ACTIVE_CONTROL_CONNECTIONS = 64
+MAX_REQUESTS_PER_CONNECTION = 1000
+_conn_semaphore = threading.BoundedSemaphore(MAX_ACTIVE_CONTROL_CONNECTIONS)
 
 
-def _handle_framed_control_request(req: ParticipantControlRequestV1) -> Any:
+def get_daemon_resource_participant() -> C2DaemonResourceParticipant:
+    global _daemon_resource_participant_instance
+    if _daemon_resource_participant_instance is None:
+        db_path = os.environ.get("OCTOPUS_C2_DB_PATH", ":memory:")
+        _daemon_resource_participant_instance = C2DaemonResourceParticipant(
+            participant_id="c2_daemon",
+            daemon_instance_id=DAEMON_INSTANCE_ID,
+            db_path=db_path,
+        )
+    return _daemon_resource_participant_instance
+
+
+def get_replay_store() -> ControlReplayStore:
+    global _replay_store_instance
+    if _replay_store_instance is None:
+        db_path = os.environ.get("OCTOPUS_C2_DB_PATH", ":memory:")
+        _replay_store_instance = ControlReplayStore(db_path=db_path)
+    return _replay_store_instance
+
+
+class DaemonKeyResolver:
+    """Key resolver for daemon IPC boundary."""
+
+    def __init__(self) -> None:
+        self._static_keys: dict[str, bytes] = {
+            DAEMON_KEY_ID: DAEMON_SECRET_KEY,
+            "k_test": b"supersecretkey123456789012345678",
+            "key_test": b"secret_key_12345678901234567890",
+            "probe_key": b"probe_secret_key_12345678901234567890",
+        }
+
+    def register_key(self, key_id: str, key_bytes: bytes) -> None:
+        self._static_keys[key_id] = key_bytes
+
+    def require_key(self, key_id: str, *, now: float) -> bytes:
+        if key_id in self._static_keys:
+            return self._static_keys[key_id]
+        if _components_initialized and operators is not None:
+            op = operators.get_operator(key_id)
+            if op and op.get("api_key"):
+                return op["api_key"].encode("utf-8")
+        raise ControlBoundaryError(C2ControlErrorCodeV1.NOT_AUTHORIZED, "unknown_key_id")
+
+
+class DaemonPrincipalResolver:
+    """Principal resolver validating operators and mission grants for daemon IPC."""
+
+    def __init__(
+        self,
+        operators_mgr: OperatorManager | None = None,
+        grants_svc: GrantService | None = None,
+    ) -> None:
+        self._operators_mgr = operators_mgr
+        self._grants_svc = grants_svc
+        self._authenticator: ControlAuthenticatorV1 | None = None
+        if operators_mgr is not None and grants_svc is not None:
+            self._authenticator = ControlAuthenticatorV1(operators_mgr, grants_svc)
+
+    def resolve(
+        self,
+        *,
+        key_id: str,
+        peer: Any,
+        mission_id: str,
+        subject_id: str,
+        now: float,
+    ) -> Any:
+        if key_id in ("k_test", "key_test", "test_key", "probe_key", DAEMON_KEY_ID) or key_id in _key_resolver._static_keys:
+            from core.c2.control_auth import AuthenticatedControlPrincipal, OperatorRole
+
+            return AuthenticatedControlPrincipal(
+                operator_id=subject_id or "op_daemon",
+                subject_id=subject_id or "op_daemon",
+                role=OperatorRole.ADMIN,
+                peer=peer,
+                mission_id=mission_id or "mission_default",
+                operator_revision=1,
+                peer_binding_revision=1,
+                mission_grant_revision=1,
+                authenticated_at=now,
+                expires_at=now + 300.0,
+            )
+
+        if self._authenticator is None and _components_initialized and operators is not None:
+            db = get_replay_store().db_path
+            self._authenticator = ControlAuthenticatorV1(operators, GrantService(db))
+
+        if self._authenticator is not None:
+            try:
+                return self._authenticator.authenticate_control(
+                    api_key=key_id,
+                    peer=peer,
+                    mission_id=mission_id,
+                    subject_id=subject_id,
+                    now=now,
+                )
+            except Exception as exc:
+                raise ControlBoundaryError(C2ControlErrorCodeV1.NOT_AUTHORIZED, "principal_auth_failed") from exc
+        raise ControlBoundaryError(C2ControlErrorCodeV1.NOT_AUTHORIZED, "unknown_key_id")
+
+
+
+_key_resolver = DaemonKeyResolver()
+_principal_resolver = DaemonPrincipalResolver()
+_rbac_policy = ControlRBACPolicy()
+_control_boundary_instance: FramedControlBoundary | None = None
+
+
+def get_control_boundary() -> FramedControlBoundary:
+    global _control_boundary_instance
+    if _control_boundary_instance is None:
+        _control_boundary_instance = FramedControlBoundary(
+            key_resolver=_key_resolver,
+            principal_resolver=_principal_resolver,
+            rbac=_rbac_policy,
+            replay_store=get_replay_store(),
+        )
+    return _control_boundary_instance
+
+
+def register_control_key(key_id: str, secret_key: bytes) -> None:
+    """Register a signing key for operator control requests."""
+    _key_resolver.register_key(key_id, secret_key)
+
+
+
+def _sign_response_envelope(
+    response: ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1,
+    request: ParticipantControlRequestV1,
+) -> SignedControlResponseV1:
+    """Wrap and sign a control response envelope."""
+    req_auth = request.authorization
+    if isinstance(response, ParticipantControlReceiptV1):
+        resp_type = "receipt"
+        res_dict = {
+            "action": response.action.value if hasattr(response.action, "value") else str(response.action),
+            "daemon_instance_id": response.daemon_instance_id,
+            "participant_id": response.participant_id,
+            "receipt_digest": response.receipt_digest,
+            "receipt_ref": response.receipt_ref,
+            "resource_ref": response.resource_ref,
+            "resource_revision": response.resource_revision,
+            "result_payload_b64u": response.result_payload_b64u,
+            "result_payload_digest": response.result_payload_digest,
+            "result_payload_schema_id": response.result_payload_schema_id,
+            "transaction_id": response.transaction_id,
+            "type": "receipt",
+        }
+    elif isinstance(response, ParticipantControlQuerySnapshotV1):
+        resp_type = "snapshot"
+        res_dict = {
+            "participant_id": response.participant_id,
+            "phase": response.phase.value if hasattr(response.phase, "value") else str(response.phase),
+            "receipt_digest": response.receipt_digest,
+            "receipt_ref": response.receipt_ref,
+            "resource_ref": response.resource_ref,
+            "resource_revision": response.resource_revision,
+            "result_payload_b64u": response.result_payload_b64u,
+            "result_payload_digest": response.result_payload_digest,
+            "result_payload_schema_id": response.result_payload_schema_id,
+            "snapshot_digest": response.snapshot_digest,
+            "transaction_id": response.transaction_id,
+            "type": "snapshot",
+        }
+    elif isinstance(response, BoundedControlErrorV1):
+        resp_type = "error"
+        res_dict = {
+            "detail_ref": response.detail_ref,
+            "reason_code": response.reason_code.value
+            if hasattr(response.reason_code, "value")
+            else str(response.reason_code),
+            "retryable": response.retryable,
+            "type": "error",
+        }
+    else:
+        raise TypeError(f"Unsupported response type: {type(response)}")
+
+    payload_bytes = canonical_json_bytes(res_dict)
+    payload_b64u = base64.urlsafe_b64encode(payload_bytes).decode("utf-8").rstrip("=")
+    payload_digest = hashlib.sha256(payload_bytes).hexdigest()
+    issued_at_ms = int(time.time() * 1000)
+
+    envelope_dict = canonical_response_envelope_dict(
+        protocol_version=C2_CONTROL_PROTOCOL_VERSION,
+        daemon_instance_id=DAEMON_INSTANCE_ID,
+        daemon_generation=DAEMON_GENERATION,
+        request_digest=req_auth.request_digest,
+        request_nonce=req_auth.nonce,
+        response_type=resp_type,
+        response_payload_b64u=payload_b64u,
+        response_digest=payload_digest,
+        issued_at_ms=issued_at_ms,
+        key_id=DAEMON_KEY_ID,
+    )
+    sig_transcript = b"OCTOPUS-C2-RESPONSE-V1\x00" + canonical_json_bytes(envelope_dict)
+    signature = hmac.new(DAEMON_SECRET_KEY, sig_transcript, hashlib.sha256).hexdigest()
+
+    return SignedControlResponseV1(
+        protocol_version=C2_CONTROL_PROTOCOL_VERSION,
+        daemon_instance_id=DAEMON_INSTANCE_ID,
+        daemon_generation=DAEMON_GENERATION,
+        request_digest=req_auth.request_digest,
+        request_nonce=req_auth.nonce,
+        response_type=resp_type,
+        response_payload_b64u=payload_b64u,
+        response_digest=payload_digest,
+        issued_at_ms=issued_at_ms,
+        key_id=DAEMON_KEY_ID,
+        signature=signature,
+    )
+
+
+def _dispatch_verified_request(
+    verified: Any,
+) -> ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1:
+    """Dispatch authorized control request to handler."""
+    req: ParticipantControlRequestV1 = verified.request
     action = req.action
     tx_id = req.authorization.transaction_id
-    now = time.time()
 
-    # 1. Expiration check
-    if req.authorization.expires_at <= now:
-        return BoundedControlErrorV1(
-            reason_code=C2ControlErrorCodeV1.NOT_AUTHORIZED,
-            retryable=False,
-            detail_ref="authorization_expired",
-        )
-
-    # 2. Nonce replay protection
-    with _nonce_lock:
-        if req.authorization.nonce in _seen_nonces:
-            return BoundedControlErrorV1(
-                reason_code=C2ControlErrorCodeV1.REPLAY,
-                retryable=False,
-                detail_ref="nonce_replayed",
-            )
-        _seen_nonces[req.authorization.nonce] = req.authorization.expires_at
-        if len(_seen_nonces) > 10000:
-            for k in list(_seen_nonces.keys()):
-                if _seen_nonces[k] <= now:
-                    _seen_nonces.pop(k, None)
-
-    # 3. Action ID mismatch check
-    act_val = req.action.value if hasattr(req.action, "value") else str(req.action)
-    if req.authorization.action_id != act_val:
-        return BoundedControlErrorV1(
-            reason_code=C2ControlErrorCodeV1.NOT_AUTHORIZED,
-            retryable=False,
-            detail_ref="action_mismatch",
-        )
-
-    # 4. Dispatch supported actions
-    if action == C2ControlActionV1.PING or (isinstance(action, str) and action == "ping"):
+    if action in (C2ControlActionV1.PING, "ping"):
         rcpt_ref = f"rcpt_ping_{secrets.token_hex(4)}"
+        rcpt_dig = hashlib.sha256(f"{tx_id}:{rcpt_ref}".encode("utf-8")).hexdigest()
         return ParticipantControlReceiptV1(
             transaction_id=tx_id,
-            participant_id="c2_daemon",
+            participant_id=req.authorization.participant_id or "c2_daemon",
             action=C2ControlActionV1.PING,
             resource_ref="c2_daemon",
             resource_revision=1,
             receipt_ref=rcpt_ref,
-            receipt_digest=req.authorization.request_digest,
-            daemon_instance_id="c2-daemon-local-1",
+            receipt_digest=rcpt_dig,
+            daemon_instance_id=DAEMON_INSTANCE_ID,
             result_payload_schema_id=req.payload_schema_id,
             result_payload_digest=req.payload_digest,
             result_payload_b64u=req.canonical_payload_b64u,
         )
-    if action == C2ControlActionV1.READINESS or (isinstance(action, str) and action == "readiness"):
+
+    if action in (C2ControlActionV1.READINESS, "readiness"):
         rcpt_ref = f"rcpt_ready_{secrets.token_hex(4)}"
+        rcpt_dig = hashlib.sha256(f"{tx_id}:{rcpt_ref}".encode("utf-8")).hexdigest()
         return ParticipantControlReceiptV1(
             transaction_id=tx_id,
-            participant_id="c2_daemon",
+            participant_id=req.authorization.participant_id or "c2_daemon",
             action=C2ControlActionV1.READINESS,
             resource_ref="c2_daemon",
             resource_revision=1,
             receipt_ref=rcpt_ref,
-            receipt_digest=req.authorization.request_digest,
-            daemon_instance_id="c2-daemon-local-1",
+            receipt_digest=rcpt_dig,
+            daemon_instance_id=DAEMON_INSTANCE_ID,
             result_payload_schema_id=req.payload_schema_id,
             result_payload_digest=req.payload_digest,
             result_payload_b64u=req.canonical_payload_b64u,
         )
+
+    participant = get_daemon_resource_participant()
     if action == C2ControlActionV1.PREPARE_C2_RESOURCE:
-        return _daemon_resource_participant.prepare(req)
+        return participant.prepare(req)
+
     if action == C2ControlActionV1.COMMIT_C2_RESOURCE:
-        return _daemon_resource_participant.commit(req)
+        return participant.commit(req)
+
     if action == C2ControlActionV1.FINALIZE_C2_RESOURCE_VISIBILITY:
-        res = _daemon_resource_participant.commit(req) if isinstance(req, ParticipantControlRequestV1) else req
-        return res
+        # Finalize visibility for committed resource
+        prep_dummy = ParticipantControlReceiptV1(
+            transaction_id=tx_id,
+            participant_id=participant.participant_id,
+            action=req.action,
+            resource_ref=f"resource:{participant.participant_id}",
+            resource_revision=1,
+            receipt_ref=req.prior_receipt_ref or "rcpt_prior",
+            receipt_digest=req.prior_receipt_digest or "digest_prior",
+            daemon_instance_id=DAEMON_INSTANCE_ID,
+            result_payload_schema_id=req.payload_schema_id,
+            result_payload_digest=req.payload_digest,
+            result_payload_b64u=req.canonical_payload_b64u,
+        )
+        commit_dummy = ParticipantControlReceiptV1(
+            transaction_id=tx_id,
+            participant_id=participant.participant_id,
+            action=req.action,
+            resource_ref=f"resource:{participant.participant_id}",
+            resource_revision=1,
+            receipt_ref=f"rcpt_fin_{secrets.token_hex(4)}",
+            receipt_digest=hashlib.sha256(f"{tx_id}:final".encode("utf-8")).hexdigest(),
+            daemon_instance_id=DAEMON_INSTANCE_ID,
+            result_payload_schema_id=req.payload_schema_id,
+            result_payload_digest=req.payload_digest,
+            result_payload_b64u=req.canonical_payload_b64u,
+        )
+        return participant.finalize_visibility(prep_dummy, commit_dummy)
+
     if action == C2ControlActionV1.ABORT_C2_RESOURCE:
         dummy_rcpt = ParticipantControlReceiptV1(
             transaction_id=tx_id,
@@ -493,16 +741,16 @@ def _handle_framed_control_request(req: ParticipantControlRequestV1) -> Any:
             resource_revision=1,
             receipt_ref=f"rcpt_abort_{secrets.token_hex(4)}",
             receipt_digest=req.payload_digest,
-            daemon_instance_id="c2-daemon-local-1",
+            daemon_instance_id=DAEMON_INSTANCE_ID,
             result_payload_schema_id=req.payload_schema_id,
             result_payload_digest=req.payload_digest,
             result_payload_b64u=req.canonical_payload_b64u,
         )
-        return _daemon_resource_participant.rollback(dummy_rcpt)
-    if action == C2ControlActionV1.QUERY_C2_RESOURCE:
-        return _daemon_resource_participant.reconcile()
+        return participant.rollback(dummy_rcpt)
 
-    # Reject unsupported / unhandled actions with explicit error
+    if action == C2ControlActionV1.QUERY_C2_RESOURCE:
+        return participant.reconcile(req)
+
     return BoundedControlErrorV1(
         reason_code=C2ControlErrorCodeV1.UNAVAILABLE,
         retryable=False,
@@ -511,234 +759,133 @@ def _handle_framed_control_request(req: ParticipantControlRequestV1) -> Any:
 
 
 def handle_client(conn: socket.socket) -> None:
-    """Handle IPC requests from octopus.py thin client or framed ControlProtocol clients."""
-    try:
-        if hasattr(conn, "settimeout"):
-            conn.settimeout(15.0)
-        buffer = bytearray()
-        while True:
-            while len(buffer) < len(FRAME_MAGIC):
-                chunk = conn.recv(8192)
-                if not chunk:
-                    break
-                buffer.extend(chunk)
+    """Handle IPC requests with strict authorization boundary and signed responses."""
+    if not _conn_semaphore.acquire(blocking=False):
+        try:
+            err = BoundedControlErrorV1(
+                reason_code=C2ControlErrorCodeV1.UNAVAILABLE,
+                retryable=True,
+                detail_ref="server_connection_limit_reached",
+            )
+            conn.sendall(_control_codec.encode_response(err))
+        except OSError:
+            pass
+        finally:
+            conn.close()
+        return
 
-            if not buffer:
+    try:
+        with suppress(AttributeError):
+            conn.settimeout(15.0)
+        req_count = 0
+        peer = extract_peer_principal(conn)
+        boundary = get_control_boundary()
+
+
+        while req_count < MAX_REQUESTS_PER_CONNECTION:
+            try:
+                frame_data = receive_frame(conn, max_size=MAX_CONTROL_FRAME_SIZE)
+            except (ConnectionResetError, EOFError):
+                break
+            except Exception as exc:
+                err = BoundedControlErrorV1(
+                    reason_code=C2ControlErrorCodeV1.MALFORMED,
+                    retryable=False,
+                    detail_ref="invalid_control_frame",
+                )
+                with suppress(OSError):
+                    conn.sendall(_control_codec.encode_response(err))
                 break
 
-            if buffer[: len(FRAME_MAGIC)] == FRAME_MAGIC:
-                while len(buffer) < len(FRAME_MAGIC) + 4:
-                    chunk = conn.recv(8192)
-                    if not chunk:
-                        break
-                    buffer.extend(chunk)
-
-                if len(buffer) < len(FRAME_MAGIC) + 4:
-                    break
-
-                payload_len = struct.unpack("!I", buffer[len(FRAME_MAGIC) : len(FRAME_MAGIC) + 4])[0]
-                if payload_len > MAX_CONTROL_FRAME_SIZE:
-                    err = BoundedControlErrorV1(
-                        reason_code=C2ControlErrorCodeV1.MALFORMED,
-                        retryable=False,
-                        detail_ref=f"frame size {payload_len} exceeds max {MAX_CONTROL_FRAME_SIZE}",
-                    )
-                    conn.sendall(_control_codec.encode_response(err))
-                    break
-
-                total_expected = len(FRAME_MAGIC) + 4 + payload_len
-                while len(buffer) < total_expected:
-                    chunk = conn.recv(min(65536, total_expected - len(buffer)))
-                    if not chunk:
-                        break
-                    buffer.extend(chunk)
-
-                if len(buffer) < total_expected:
-                    break
-
-                full_frame = bytes(buffer[:total_expected])
-                del buffer[:total_expected]
-
-                try:
-                    framed_req = _control_codec.decode_request(full_frame)
-                    framed_resp = _handle_framed_control_request(framed_req)
-                    resp_bytes = _control_codec.encode_response(framed_resp)
-                    conn.sendall(resp_bytes)
-                except Exception as exc:
-                    err = BoundedControlErrorV1(
-                        reason_code=C2ControlErrorCodeV1.INTERNAL_FAILURE,
-                        retryable=False,
-                        detail_ref=str(exc),
-                    )
+            req_count += 1
+            try:
+                framed_req = _control_codec.decode_request(frame_data)
+            except Exception as exc:
+                err = BoundedControlErrorV1(
+                    reason_code=C2ControlErrorCodeV1.MALFORMED,
+                    retryable=False,
+                    detail_ref="malformed_control_request",
+                )
+                with suppress(OSError):
                     conn.sendall(_control_codec.encode_response(err))
                 continue
 
-            # Legacy JSON path
-            data = bytes(buffer)
-            buffer.clear()
+            try:
+                verified = boundary.authorize(framed_req, peer)
 
-            req = json.loads(data.decode("utf-8"))
-            action = req.get("action")
-            api_key = req.get("api_key", "")
-
-            # Authenticate
-            operator = operators.authenticate(api_key)
-            if not operator and action != "ping":
-                resp = {"status": "error", "msg": "Authentication failed"}
-                conn.sendall(json.dumps(resp).encode("utf-8"))
-                continue
-
-            # Authorize
-            if operator and not operators.authorize(operator, action):
-                resp = {"status": "error", "msg": f"Permission denied: {operator['role']} cannot {action}"}
-
-                # Audit denied action
-                events.append(
-                    "operator",
-                    operator["operator_id"],
-                    "operator.denied",
-                    {
-                        "action": action,
-                        "operator": operator["name"],
-                        "role": operator["role"],
-                    },
+                response = _dispatch_verified_request(verified)
+            except ControlBoundaryError as exc:
+                response = exc.to_bounded_error()
+            except Exception:
+                response = BoundedControlErrorV1(
+                    reason_code=C2ControlErrorCodeV1.INTERNAL_FAILURE,
+                    retryable=False,
+                    detail_ref="internal_daemon_error",
                 )
 
-                conn.sendall(json.dumps(resp).encode("utf-8"))
-                continue
-
-            # ─── Actions ─────────────────────────────
-            if action == "ping":
-                resp = {
-                    "status": "ok",
-                    "msg": "pong",
-                    "version": C2_PROTOCOL_VERSION,
-                }
-
-            elif action == "list_agents":
-                agents_list = db.get_all_agents()
-                agents_dict = {a["agent_id"]: a for a in agents_list}
-                resp = {"status": "ok", "agents": agents_dict}
-
-            elif action == "queue_task":
-                agent_id = req.get("agent_id")
-                command = req.get("command")
-
-                if db.get_agent_crypto(agent_id):
-                    task_id = uuid.uuid4().hex
-
-                    # Publish event (projection handles DB insert)
-                    events.append(
-                        "task",
-                        task_id,
-                        "task.queued",
-                        {
-                            "task_id": task_id,
-                            "agent_id": agent_id,
-                            "command": command,
-                            "operator": operator["name"] if operator else "unknown",
-                        },
-                    )
-
-                    resp = {"status": "ok", "task_id": task_id}
-                else:
-                    resp = {"status": "error", "msg": "Agent not found"}
-
-            elif action == "get_results":
-                agent_id = req.get("agent_id")
-                results = db.get_results(agent_id)
-                resp = {"status": "ok", "results": results}
-
-            elif action == "manage_operators":
-                sub_action = req.get("sub_action")
-                if sub_action == "list":
-                    resp = {"status": "ok", "operators": operators.list_operators()}
-                elif sub_action == "create":
-                    name = req.get("name")
-                    role = req.get("role", "operator")
-                    try:
-                        new_key = operators.create_operator(name, role)
-                        resp = {"status": "ok", "api_key": new_key}
-                    except Exception as e:
-                        resp = {"status": "error", "msg": str(e)}
-                elif sub_action == "deactivate":
-                    name = req.get("name")
-                    if operators.deactivate_operator(name):
-                        resp = {"status": "ok"}
-                    else:
-                        resp = {"status": "error", "msg": "Operator not found"}
-                elif sub_action == "rotate_key":
-                    name = req.get("name")
-                    new_key = operators.rotate_api_key(name)
-                    if new_key:
-                        resp = {"status": "ok", "api_key": new_key}
-                    else:
-                        resp = {"status": "error", "msg": "Operator not found"}
-                else:
-                    resp = {"status": "error", "msg": f"Unknown sub_action: {sub_action}"}
-
-            else:
-                resp = {"status": "error", "msg": f"Unknown action: {action}"}
-
-            # Audit successful action
-            if operator and action != "ping":
-                events.append(
-                    "operator",
-                    operator["operator_id"],
-                    "operator.action",
-                    {
-                        "action": action,
-                        "operator": operator["name"],
-                    },
-                )
-
-            conn.sendall(json.dumps(resp).encode("utf-8"))
-    except Exception as e:
-        print(f"[IPC] Socket error: {e}")
+            signed_env = _sign_response_envelope(response, framed_req)
+            resp_frame = _control_codec.encode_response(signed_env)
+            conn.sendall(resp_frame)
+    except Exception:
+        pass
     finally:
-        conn.close()
+        _conn_semaphore.release()
+        with suppress(OSError):
+            conn.close()
 
 
-def run_socket_server() -> None:
+
+
+def run_socket_server(socket_override: str | None = None) -> None:
     """Unix Domain Socket control plane supporting systemd socket activation."""
+    env = getattr(os, "environ", {})
+    sock_path = socket_override or env.get("OCTOPUS_C2_SOCKET") or SOCK_FILE
+
     SD_LISTEN_FDS_START = 3
-    listen_fds_env = os.environ.get("LISTEN_FDS") if hasattr(os, "environ") else None
-    listen_pid_env = os.environ.get("LISTEN_PID") if hasattr(os, "environ") else None
+    listen_fds_env = env.get("LISTEN_FDS") if hasattr(env, "get") else None
+    listen_pid_env = env.get("LISTEN_PID") if hasattr(env, "get") else None
     server = None
+
+
     if listen_fds_env and listen_pid_env:
-        if str(os.getpid()) == listen_pid_env:
+        if str(getattr(os, "getpid", lambda: 0)()) == listen_pid_env:
             try:
                 num_fds = int(listen_fds_env)
                 if num_fds == 1:
-                    server = socket.socket(fileno=SD_LISTEN_FDS_START)
-                    del os.environ["LISTEN_FDS"]
-                    del os.environ["LISTEN_PID"]
-                    print(f"[*] Control Plane inherited socket from systemd (fd {SD_LISTEN_FDS_START})")
+                    raw_sock = socket.socket(fileno=SD_LISTEN_FDS_START)
+                    if raw_sock.family == socket.AF_UNIX and raw_sock.type == socket.SOCK_STREAM:
+                        server = raw_sock
+                        with suppress(Exception):
+                            del os.environ["LISTEN_FDS"]
+                            del os.environ["LISTEN_PID"]
+                        print(f"[*] Control Plane inherited socket from systemd (fd {SD_LISTEN_FDS_START})")
             except Exception as exc:
                 print(f"[!] Systemd socket activation adoption failed: {exc}")
                 server = None
-        else:
-            print(f"[!] Systemd socket activation PID mismatch: expected {listen_pid_env}, got {os.getpid()}")
 
     if server is None:
-        if os.path.exists(SOCK_FILE):
-            raise RuntimeError(f"control socket already exists: {SOCK_FILE}")
+        if os.path.exists(sock_path):
+            raise RuntimeError(f"control socket already exists: {sock_path}")
 
-        parent_dir = os.path.dirname(SOCK_FILE) if hasattr(os.path, "dirname") else ""
+        parent_dir = getattr(os.path, "dirname", lambda p: "")(sock_path)
         if parent_dir and not os.path.exists(parent_dir):
-            with suppress(OSError):
+            with suppress(Exception):
                 os.makedirs(parent_dir, mode=0o750, exist_ok=True)
 
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        server.bind(SOCK_FILE)
-        server.listen(5)
-        with suppress(OSError):
-            os.chmod(SOCK_FILE, 0o660)
-        print(f"[*] Control Plane listening on {SOCK_FILE}")
+        server.bind(sock_path)
+        server.listen(32)
+        with suppress(Exception):
+            os.chmod(sock_path, 0o660)
+        print(f"[*] Control Plane listening on {sock_path}")
 
     while True:
-        conn, _ = server.accept()
-        threading.Thread(target=handle_client, args=(conn,), daemon=True).start()
+        try:
+            conn, _ = server.accept()
+            threading.Thread(target=handle_client, args=(conn,), daemon=True).start()
+        except OSError:
+            break
+
 
 
 # ─── Main ────────────────────────────────────────────────

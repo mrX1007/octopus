@@ -17,8 +17,10 @@ def test_imports_from_read_only_working_directory(tmp_path: Path, profile: str) 
     read_only.mkdir()
     read_only.chmod(0o555)
     env = dict(os.environ)
-    env["PYTHONPATH"] = str(ROOT)
+    existing_pythonpath = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = f"{str(ROOT)}:{existing_pythonpath}" if existing_pythonpath else str(ROOT)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+
     # Point C2 persistence inside the read-only directory. A pure import must
     # neither try to create this path nor touch the operator's workspace data.
     env["OCTOPUS_DATA_DIR"] = str(read_only / "forbidden-runtime-data")

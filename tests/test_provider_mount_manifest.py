@@ -37,7 +37,7 @@ def test_provider_mount_registry_has_20_v2_entries() -> None:
 
 def test_provider_rollout_does_not_claim_premature_mounts() -> None:
     snapshots = get_provider_mount_registry().snapshots()
-    assert all(snapshot.spec.mounted for snapshot in snapshots)
+    assert not any(snapshot.spec.mounted for snapshot in snapshots)
 
 
 def test_mount_revisions_digests_and_current_checks_are_exact() -> None:
@@ -84,5 +84,6 @@ def test_manifest_snapshot_matches_runtime_registry() -> None:
     checked_in = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert checked_in == generate_mount_manifest()
     assert checked_in["entry_count"] == 20
-    assert all(entry["spec"]["mounted"] for entry in checked_in["entries"])
+    assert not any(entry["spec"]["mounted"] for entry in checked_in["entries"])
     assert not any("available" in entry["spec"] for entry in checked_in["entries"])
+

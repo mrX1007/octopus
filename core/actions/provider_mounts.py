@@ -180,10 +180,11 @@ def _spec(
         execution_mode=execution_mode,
         readiness_probe_id=readiness_probe_id,
         configured=True,
-        mounted=True,
+        mounted=False,
         typed_action_supported=True,
         raw_command_supported=False,
     )
+
 
 
 _IN_PROCESS = ProviderTransport.IN_PROCESS

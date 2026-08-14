@@ -16,13 +16,23 @@ from core.c2.control_commands import (
     C2ControlActionV1,
     C2ControlErrorCodeV1,
     ParticipantControlAuthorizationV1,
+    ParticipantControlQuerySnapshotV1,
     ParticipantControlReceiptV1,
     ParticipantControlRequestV1,
+    SignedControlResponseV1,
 )
-from core.c2.control_protocol import FRAME_MAGIC, ControlProtocolCodec
+from core.c2.control_models import (
+    calculate_canonical_request_digest,
+    calculate_payload_digest,
+    strict_b64url_decode,
+)
+from core.c2.control_protocol import FRAME_MAGIC, ControlProtocolCodec, strict_json_loads
 from core.c2.control_signing import ControlSignerV1
 
 pytestmark = pytest.mark.unit
+
+TEST_KEY_SECRET = b"test_secret_01234567890123456789"
+daemon.register_control_key("test_key", TEST_KEY_SECRET)
 
 
 def _create_signed_request(
@@ -31,7 +41,7 @@ def _create_signed_request(
     action_id: str | None = None,
     nonce: str | None = None,
 ) -> tuple[ParticipantControlRequestV1, bytes]:
-    signer = ControlSignerV1("test_key", b"test_secret_01234567890123456789")
+    signer = ControlSignerV1("test_key", TEST_KEY_SECRET)
     codec = ControlProtocolCodec()
     act_id = action_id if action_id is not None else action.value
     n = nonce if nonce is not None else uuid.uuid4().hex
@@ -43,7 +53,7 @@ def _create_signed_request(
         subject_id="s_test",
         action_id=act_id,
         coordinator_revision=1,
-        request_digest="req_digest_1",
+        request_digest="req_digest_init",
         expires_at=time.time() + ttl_seconds,
         nonce=n,
         signature="",
@@ -52,12 +62,13 @@ def _create_signed_request(
         action=action,
         authorization=auth,
         payload_schema_id="schema:test",
-        payload_digest="payload_digest_1",
+        payload_digest=calculate_payload_digest(b""),
         canonical_payload_b64u="",
     )
     signed = signer.sign_participant_request(req)
     encoded = codec.encode_request(signed)
     return signed, encoded
+
 
 
 def _recv_frame(sock: socket.socket) -> bytes:
@@ -84,6 +95,40 @@ def _recv_frame(sock: socket.socket) -> bytes:
     return bytes(hdr + payload)
 
 
+def _unpack_response(
+    raw_resp: bytes, codec: ControlProtocolCodec
+) -> ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1 | SignedControlResponseV1:
+    resp = codec.decode_response(raw_resp)
+    if isinstance(resp, SignedControlResponseV1):
+        if resp.response_payload_b64u:
+            payload_bytes = strict_b64url_decode(resp.response_payload_b64u)
+            data = strict_json_loads(payload_bytes)
+            msg_type = data.get("type")
+            if msg_type == "receipt":
+                return ParticipantControlReceiptV1(
+                    transaction_id=data["transaction_id"],
+                    participant_id=data["participant_id"],
+                    action=C2ControlActionV1(data["action"]),
+                    resource_ref=data.get("resource_ref"),
+                    resource_revision=data.get("resource_revision"),
+                    receipt_ref=data["receipt_ref"],
+                    receipt_digest=data["receipt_digest"],
+                    daemon_instance_id=data["daemon_instance_id"],
+                    result_payload_schema_id=data.get("result_payload_schema_id"),
+                    result_payload_digest=data.get("result_payload_digest"),
+                    result_payload_b64u=data.get("result_payload_b64u"),
+                )
+            elif msg_type == "error":
+                return BoundedControlErrorV1(
+                    reason_code=C2ControlErrorCodeV1(data["reason_code"]),
+                    retryable=bool(data.get("retryable", False)),
+                    detail_ref=data.get("detail_ref", ""),
+                )
+
+    return resp
+
+
+
 def test_socket_framing_fragmented_byte_by_byte():
     server_sock, client_sock = socket.socketpair()
     client_sock.settimeout(3.0)
@@ -102,7 +147,7 @@ def test_socket_framing_fragmented_byte_by_byte():
             time.sleep(0.001)
 
         raw_resp = _recv_frame(client_sock)
-        resp = codec.decode_response(raw_resp)
+        resp = _unpack_response(raw_resp, codec)
         assert isinstance(resp, ParticipantControlReceiptV1)
         assert resp.action == C2ControlActionV1.PING
         assert resp.daemon_instance_id == "c2-daemon-local-1"
@@ -128,12 +173,12 @@ def test_socket_framing_coalesced_frames():
         client_sock.sendall(encoded1 + encoded2)
 
         raw_resp1 = _recv_frame(client_sock)
-        resp1 = codec.decode_response(raw_resp1)
+        resp1 = _unpack_response(raw_resp1, codec)
         assert isinstance(resp1, ParticipantControlReceiptV1)
         assert resp1.action == C2ControlActionV1.PING
 
         raw_resp2 = _recv_frame(client_sock)
-        resp2 = codec.decode_response(raw_resp2)
+        resp2 = _unpack_response(raw_resp2, codec)
         assert isinstance(resp2, ParticipantControlReceiptV1)
         assert resp2.action == C2ControlActionV1.READINESS
     finally:
@@ -156,7 +201,7 @@ def test_socket_framing_oversized_declared_length_rejected():
         client_sock.sendall(header)
 
         raw_resp = _recv_frame(client_sock)
-        resp = codec.decode_response(raw_resp)
+        resp = _unpack_response(raw_resp, codec)
         assert isinstance(resp, BoundedControlErrorV1)
         assert resp.reason_code == C2ControlErrorCodeV1.MALFORMED
     finally:
@@ -178,7 +223,7 @@ def test_socket_framing_rejects_expired_authorization():
         client_sock.sendall(encoded)
 
         raw_resp = _recv_frame(client_sock)
-        resp = codec.decode_response(raw_resp)
+        resp = _unpack_response(raw_resp, codec)
         assert isinstance(resp, BoundedControlErrorV1)
         assert resp.reason_code == C2ControlErrorCodeV1.NOT_AUTHORIZED
         assert resp.detail_ref == "authorization_expired"
@@ -203,13 +248,13 @@ def test_socket_framing_rejects_nonce_replay():
 
         client_sock.sendall(encoded1)
         raw_resp1 = _recv_frame(client_sock)
-        resp1 = codec.decode_response(raw_resp1)
+        resp1 = _unpack_response(raw_resp1, codec)
         assert isinstance(resp1, ParticipantControlReceiptV1)
 
         # Second request with same nonce must be rejected
         client_sock.sendall(encoded2)
         raw_resp2 = _recv_frame(client_sock)
-        resp2 = codec.decode_response(raw_resp2)
+        resp2 = _unpack_response(raw_resp2, codec)
         assert isinstance(resp2, BoundedControlErrorV1)
         assert resp2.reason_code == C2ControlErrorCodeV1.REPLAY
         assert resp2.detail_ref == "nonce_replayed"
@@ -232,7 +277,7 @@ def test_socket_framing_rejects_action_mismatch():
         client_sock.sendall(encoded)
 
         raw_resp = _recv_frame(client_sock)
-        resp = codec.decode_response(raw_resp)
+        resp = _unpack_response(raw_resp, codec)
         assert isinstance(resp, BoundedControlErrorV1)
         assert resp.reason_code == C2ControlErrorCodeV1.NOT_AUTHORIZED
         assert resp.detail_ref == "action_mismatch"
@@ -255,10 +300,11 @@ def test_socket_framing_rejects_unsupported_action():
         client_sock.sendall(encoded)
 
         raw_resp = _recv_frame(client_sock)
-        resp = codec.decode_response(raw_resp)
+        resp = _unpack_response(raw_resp, codec)
         assert isinstance(resp, BoundedControlErrorV1)
         assert resp.reason_code == C2ControlErrorCodeV1.UNAVAILABLE
         assert resp.detail_ref == "unsupported_control_action"
     finally:
         client_sock.close()
         handler_thread.join(timeout=1.0)
+

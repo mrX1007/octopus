@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import time
 
 import pytest
@@ -12,9 +13,17 @@ from core.c2.control_commands import (
     ParticipantControlAuthorizationV1,
     ParticipantControlRequestV1,
 )
+from core.c2.control_models import strict_b64url_decode
 from core.c2.control_signing import ControlSignerV1, ControlVerifierV1
 
 pytestmark = pytest.mark.unit
+
+
+def _valid_test_payload() -> tuple[str, str]:
+    b64u = "e30"  # b"{}"
+    payload_bytes = strict_b64url_decode(b64u)
+    pdig = hashlib.sha256(payload_bytes).hexdigest()
+    return b64u, pdig
 
 
 def test_signer_verifier_participant_request():
@@ -23,6 +32,7 @@ def test_signer_verifier_participant_request():
     verifier = ControlVerifierV1()
     verifier.register_key("k_test", secret)
 
+    b64u, pdig = _valid_test_payload()
     unsigned_auth = ParticipantControlAuthorizationV1(
         key_id="k_test",
         transaction_id="tx_100",
@@ -40,15 +50,16 @@ def test_signer_verifier_participant_request():
         action=C2ControlActionV1.PING,
         authorization=unsigned_auth,
         payload_schema_id="s1",
-        payload_digest="pdig1",
-        canonical_payload_b64u="e30",
+        payload_digest=pdig,
+        canonical_payload_b64u=b64u,
     )
 
     signed_req = signer.sign_participant_request(unsigned_req)
     assert signed_req.authorization.signature != ""
 
     # Verify signature passes
-    verifier.verify_participant_request(signed_req)
+    payload_bytes = verifier.verify_participant_request(signed_req)
+    assert payload_bytes == b"{}"
 
 
 def test_verifier_invalid_signature_raises():
@@ -57,6 +68,7 @@ def test_verifier_invalid_signature_raises():
     verifier = ControlVerifierV1()
     verifier.register_key("k_test", b"wrongsecretkey123456789012345678")
 
+    b64u, pdig = _valid_test_payload()
     unsigned_auth = ParticipantControlAuthorizationV1(
         key_id="k_test",
         transaction_id="tx_100",
@@ -74,8 +86,8 @@ def test_verifier_invalid_signature_raises():
         action=C2ControlActionV1.PING,
         authorization=unsigned_auth,
         payload_schema_id="s1",
-        payload_digest="pdig1",
-        canonical_payload_b64u="e30",
+        payload_digest=pdig,
+        canonical_payload_b64u=b64u,
     )
     signed_req = signer.sign_participant_request(unsigned_req)
 
@@ -89,6 +101,7 @@ def test_verifier_expired_request_raises():
     verifier = ControlVerifierV1()
     verifier.register_key("k_test", secret)
 
+    b64u, pdig = _valid_test_payload()
     expired_auth = ParticipantControlAuthorizationV1(
         key_id="k_test",
         transaction_id="tx_100",
@@ -106,8 +119,8 @@ def test_verifier_expired_request_raises():
         action=C2ControlActionV1.PING,
         authorization=expired_auth,
         payload_schema_id="s1",
-        payload_digest="pdig1",
-        canonical_payload_b64u="e30",
+        payload_digest=pdig,
+        canonical_payload_b64u=b64u,
     )
     signed_req = signer.sign_participant_request(unsigned_req)
 
@@ -130,7 +143,7 @@ def test_execution_request_signing_and_verification():
         coordinator_revision=1,
         request_digest="reqdig",
         expires_at=time.time() + 300,
-        nonce="nonce_x",
+        nonce="nonce_x_1234",
         signature="",
     )
 
@@ -148,3 +161,4 @@ def test_execution_request_signing_and_verification():
         payload_schema_id="schema_exec",
         payload_digest="pdig_exec",
     )
+

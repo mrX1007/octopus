@@ -1,7 +1,8 @@
 {
+  "entry_count": 20,
   "entries": [
     {
-      "mount_digest": "sha256:c3d7a6b2d336de956fe1702f3277040bdde75e5b9d0c0ad56df87ee2b2ab8912",
+      "mount_digest": "sha256:93d1a9051849f4a26b9693b6cae476e9a0e67f99a2e10c1a9c9091fbfe45ba6b",
       "revision": 1,
       "spec": {
         "action_id": "c2:c2_channel_create",
@@ -9,7 +10,7 @@
         "adapter_class": "core.actions.adapters_c2.C2ChannelCreateAdapter",
         "configured": true,
         "execution_mode": "child_executor",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "c2_channel_create",
         "provider_transport": "child_executor",
         "raw_command_supported": false,
@@ -19,7 +20,7 @@
       }
     },
     {
-      "mount_digest": "sha256:024fcbbada2a1a952789539cfa2ba9fe2b93a518841f8c40800f61cb22df1d51",
+      "mount_digest": "sha256:0a425485ced8abd5aa64c68819b360633b37ff3d76d24dca33911e06885afa06",
       "revision": 2,
       "spec": {
         "action_id": "c2:c2_cleanup",
@@ -27,7 +28,7 @@
         "adapter_class": "core.actions.adapters_c2.C2CleanupAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "c2_cleanup",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -37,7 +38,7 @@
       }
     },
     {
-      "mount_digest": "sha256:ec4076507addbedcb4d8135c78ec8d09ac7d6b7d2e53c5294035f90e169beb94",
+      "mount_digest": "sha256:0563b9c97e3021cb1ccb796603d5370c94b1908baded1c4e39144f380220e682",
       "revision": 3,
       "spec": {
         "action_id": "c2:c2_deploy",
@@ -45,7 +46,7 @@
         "adapter_class": "core.actions.adapters_c2.C2DeployAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "c2_deploy",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -55,7 +56,7 @@
       }
     },
     {
-      "mount_digest": "sha256:c25832cd420f8ac557ce621e5d37f7987995232d7fedf8d34b2a6d1c74ac451a",
+      "mount_digest": "sha256:ad94ad8e53ad78b2bdb9b79a0559f9b644eae634d504679d106d9e9916c38770",
       "revision": 4,
       "spec": {
         "action_id": "c2:c2_enroll",
@@ -63,7 +64,7 @@
         "adapter_class": "core.actions.adapters_c2.C2EnrollAdapter",
         "configured": true,
         "execution_mode": "deadline_local_ipc",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "c2_enroll",
         "provider_transport": "local_daemon_ipc",
         "raw_command_supported": false,
@@ -73,7 +74,7 @@
       }
     },
     {
-      "mount_digest": "sha256:2e388a90f22c82d79cf852913d1095283d8bba4b6676668a955cdde7fd2327b2",
+      "mount_digest": "sha256:ec2245064f4d8c5a9cc9fe4a527a23a9e7caeb584767397b89299e96d7f32b9b",
       "revision": 5,
       "spec": {
         "action_id": "c2:c2_task",
@@ -81,7 +82,7 @@
         "adapter_class": "core.actions.adapters_c2.C2TaskAdapter",
         "configured": true,
         "execution_mode": "deadline_local_ipc",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "c2_task",
         "provider_transport": "local_daemon_ipc",
         "raw_command_supported": false,
@@ -91,7 +92,7 @@
       }
     },
     {
-      "mount_digest": "sha256:a2cf25eb247a166e6471d19c253256a12250ae97e337918ad16704cb7abd1779",
+      "mount_digest": "sha256:cf6942a2a4574035fb0a428a302f93d0e8f03b361ca7dc41206b8aeecb5be035",
       "revision": 6,
       "spec": {
         "action_id": "c2:dns_c2_channel",
@@ -99,7 +100,7 @@
         "adapter_class": "core.actions.adapters_c2.DNSC2ChannelAdapter",
         "configured": true,
         "execution_mode": "deadline_local_ipc",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "dns_c2_channel",
         "provider_transport": "local_daemon_ipc",
         "raw_command_supported": false,
@@ -109,7 +110,7 @@
       }
     },
     {
-      "mount_digest": "sha256:e9f7bac23c3bea582a450fcfd0921c7aacf4ffce785f5e8b774dfa7db4539107",
+      "mount_digest": "sha256:9cc67d5c31e9a60eecc2ac172c21e8b1d95a93997e26c3f7baa7e0cab6dc8860",
       "revision": 7,
       "spec": {
         "action_id": "killchain:ad_dcom_exec",
@@ -117,7 +118,7 @@
         "adapter_class": "core.actions.adapters_ad_lateral.ADDcomExecAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "ad_dcom_exec",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -127,7 +128,7 @@
       }
     },
     {
-      "mount_digest": "sha256:58a3abbaf40da242a555d2ab970a05dbba8dd95285ffe057d6a991dd42512477",
+      "mount_digest": "sha256:48d3d19750f3849495fcaf46439e18dd5b9e25665d0ecd8458a3ca8a79ad4b2b",
       "revision": 8,
       "spec": {
         "action_id": "killchain:ad_dump_lsass",
@@ -135,7 +136,7 @@
         "adapter_class": "core.actions.adapters_ad_credential.ADDumpLsassAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "ad_dump_lsass",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -145,7 +146,7 @@
       }
     },
     {
-      "mount_digest": "sha256:1c191e7e005400df7e70ba84ad7d04a786ef90ff1f5756101ac654c8d495f50c",
+      "mount_digest": "sha256:8f58404a5c158fecd05255074c3fe2c07321eba103174cec55a86a910bd120f2",
       "revision": 9,
       "spec": {
         "action_id": "killchain:ad_pass_the_ticket",
@@ -153,7 +154,7 @@
         "adapter_class": "core.actions.adapters_ad_credential.ADPassTheTicketAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "ad_pass_the_ticket",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -163,7 +164,7 @@
       }
     },
     {
-      "mount_digest": "sha256:11bf7e39b29744a03e55d8433e459a64c50dd578d3bc673e9e2a2bc9f2fb9078",
+      "mount_digest": "sha256:599ccf2f583125b252dfd2abb24a0318d33b6d71281b73bba605c30c68d4d96e",
       "revision": 10,
       "spec": {
         "action_id": "killchain:ad_remote_execution",
@@ -171,7 +172,7 @@
         "adapter_class": "core.actions.adapters_ad_lateral.ADRemoteExecutionCapabilityAdapter",
         "configured": true,
         "execution_mode": "child_executor",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "ad_remote_execution",
         "provider_transport": "child_executor",
         "raw_command_supported": false,
@@ -181,7 +182,7 @@
       }
     },
     {
-      "mount_digest": "sha256:ae712714851a4a46254c3d573d7d8f0a3e5c9751bec76ee25a67c17dd744a6e9",
+      "mount_digest": "sha256:49ac219cfe10a97a5cf4950fd4920ae76e7384fc0b0af7e8dbe38e5c80c43bff",
       "revision": 11,
       "spec": {
         "action_id": "killchain:ad_sam_dump",
@@ -189,7 +190,7 @@
         "adapter_class": "core.actions.adapters_ad_credential.ADSamDumpAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "ad_sam_dump",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -199,7 +200,7 @@
       }
     },
     {
-      "mount_digest": "sha256:dc8cac4381634a14111d9432661d73e751f3a6d0172005af4dbbcc7ea5424729",
+      "mount_digest": "sha256:c9752e4e574a743d7c33b9dcf256cc8f31d3c8d095f6f09d2fbf45297d583bfa",
       "revision": 12,
       "spec": {
         "action_id": "killchain:ad_smbexec",
@@ -207,7 +208,7 @@
         "adapter_class": "core.actions.adapters_ad_lateral.ADSmbexecAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "ad_smbexec",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -217,7 +218,7 @@
       }
     },
     {
-      "mount_digest": "sha256:9145bbe40ee11b383fc528d6419be0735abe5264d45dd54b2ce00bd1e5dd3e68",
+      "mount_digest": "sha256:5d20437453d1d740bb7dd2036b23d70ace7b290aeed859c518725db09cf16b2e",
       "revision": 13,
       "spec": {
         "action_id": "killchain:ad_winrm_exec",
@@ -225,7 +226,7 @@
         "adapter_class": "core.actions.adapters_ad_lateral.ADWinrmExecAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "ad_winrm_exec",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -235,7 +236,7 @@
       }
     },
     {
-      "mount_digest": "sha256:8fd3e10b7ca9ff10d3713f1821846676dfa6aea3daaea462bef2692c768e360a",
+      "mount_digest": "sha256:bf6ea4ead193a5090786b1ecfdd1094f875f84b6cac05daedfea2dc6478f021f",
       "revision": 14,
       "spec": {
         "action_id": "killchain:kerberos_crack_tickets",
@@ -243,7 +244,7 @@
         "adapter_class": "core.actions.adapters_kerberos.KerberosCrackTicketsAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "kerberos_crack_tickets",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -253,7 +254,7 @@
       }
     },
     {
-      "mount_digest": "sha256:0c1194506d9af738cd9ed868eba23c7a693270ef300c7915db861fbc6e1a61b6",
+      "mount_digest": "sha256:13bf0b0b97ce60fde0a2f687113d2a732d9908da68ae0941bf9e5af00afe286a",
       "revision": 15,
       "spec": {
         "action_id": "killchain:kerberos_extract_tickets",
@@ -261,7 +262,7 @@
         "adapter_class": "core.actions.adapters_kerberos.KerberosExtractTicketsAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "kerberos_extract_tickets",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -271,7 +272,7 @@
       }
     },
     {
-      "mount_digest": "sha256:5c5a36efc53b664e70e93365706eb13a0df47cc2ea7d544b984d95107808a5bf",
+      "mount_digest": "sha256:31eccd1353256d86fe55930e3cac0f933bf18f0819c2dbb026ead6f2d1d99ed5",
       "revision": 16,
       "spec": {
         "action_id": "killchain:pass_the_hash",
@@ -279,7 +280,7 @@
         "adapter_class": "core.actions.adapters_ad_credential.PassTheHashAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "pass_the_hash",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -289,7 +290,7 @@
       }
     },
     {
-      "mount_digest": "sha256:5d6d4e29a0e21abd72fdd1551d8189176e9fd04c9dbf0ebc290bb62b6c2640da",
+      "mount_digest": "sha256:69b4530ee023390282894954b22a8d9ddea5e312b92de0f45fb312f4da06f718",
       "revision": 17,
       "spec": {
         "action_id": "killchain:pivot_proxy_scan",
@@ -297,7 +298,7 @@
         "adapter_class": "core.actions.adapters_pivot.PivotProxyScanAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "pivot_proxy_scan",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -307,7 +308,7 @@
       }
     },
     {
-      "mount_digest": "sha256:915b5963e8ebb211c8ce8cf93892b27020d5f92a34ce99e6aabbc35109cb2b9e",
+      "mount_digest": "sha256:cc74e0707d8183ad3817572184c59efc7fe2152499a3ad5ddf27f8858f5d04e5",
       "revision": 18,
       "spec": {
         "action_id": "killchain:pivot_remote_forward",
@@ -315,7 +316,7 @@
         "adapter_class": "core.actions.adapters_pivot.PivotRemoteForwardAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "pivot_remote_forward",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -325,7 +326,7 @@
       }
     },
     {
-      "mount_digest": "sha256:8521024d6ad73b76ec5de060c936b09edc01ea9c038e69293b89da623e999409",
+      "mount_digest": "sha256:e652aeeec9f0d284a62b57c015b0658836db17a42b66e8e5e64216cef23bc549",
       "revision": 19,
       "spec": {
         "action_id": "killchain:pivot_ssh_chain",
@@ -333,7 +334,7 @@
         "adapter_class": "core.actions.adapters_pivot.PivotSSHChainAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "pivot_ssh_chain",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -343,7 +344,7 @@
       }
     },
     {
-      "mount_digest": "sha256:561b0cc67fc7e428169bfebf1bcecb2b8daa9e26d234648a4bcd8710f1c075d4",
+      "mount_digest": "sha256:7a8498c0acf8242341564c391f006fdc601ff705521cf365e928d07c2112b222",
       "revision": 20,
       "spec": {
         "action_id": "plugin:payload_keying",
@@ -351,7 +352,7 @@
         "adapter_class": "core.actions.adapters_evasion.PayloadKeyingAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": true,
+        "mounted": false,
         "provider_owner": "payload_keying",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -361,6 +362,5 @@
       }
     }
   ],
-  "entry_count": 20,
   "schema_version": "2.0"
 }

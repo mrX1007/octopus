@@ -505,22 +505,37 @@ def test_beacon_rejects_identity_state_acknowledgement_and_result_failures(
 
 class IPCConnection:
     def __init__(self, requests: list[Any]) -> None:
-        self.requests = list(requests)
-        self.responses: list[dict[str, Any]] = []
-        self.closed = False
+        from core.c2.control_protocol import ControlProtocolCodec
 
-    def recv(self, _size: int) -> bytes:
-        if not self.requests:
+        self.codec = ControlProtocolCodec()
+        self.requests = list(requests)
+        self.responses: list[Any] = []
+        self.closed = False
+        self._buffer = bytearray()
+
+    def recv(self, size: int) -> bytes:
+        if not self._buffer and self.requests:
+            req = self.requests.pop(0)
+            if isinstance(req, BaseException):
+                raise req
+            if isinstance(req, bytes):
+                self._buffer.extend(req)
+            elif hasattr(req, "authorization"):
+                self._buffer.extend(self.codec.encode_request(req))
+            else:
+                self._buffer.extend(json.dumps(req).encode("utf-8"))
+
+        if not self._buffer:
             return b""
-        request = self.requests.pop(0)
-        if isinstance(request, BaseException):
-            raise request
-        if isinstance(request, bytes):
-            return request
-        return json.dumps(request).encode("utf-8")
+        chunk = bytes(self._buffer[:size])
+        del self._buffer[:size]
+        return chunk
 
     def sendall(self, payload: bytes) -> None:
-        self.responses.append(json.loads(payload))
+        try:
+            self.responses.append(self.codec.decode_response(payload))
+        except Exception:
+            self.responses.append(json.loads(payload))
 
     def close(self) -> None:
         self.closed = True
@@ -530,97 +545,61 @@ def test_ipc_dispatches_auth_rbac_actions_management_and_audit(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    admin = {"operator_id": "op-admin", "name": "admin", "role": "admin"}
-    readonly = {"operator_id": "op-read", "name": "reader", "role": "readonly"}
-
-    class OperatorsStub:
-        @staticmethod
-        def authenticate(key: str) -> dict[str, str] | None:
-            return {"admin-key": admin, "read-key": readonly}.get(key)
-
-        @staticmethod
-        def authorize(operator: dict[str, str], action: str) -> bool:
-            return not (operator["role"] == "readonly" and action == "queue_task")
-
-        @staticmethod
-        def list_operators() -> list[dict[str, str]]:
-            return [admin, readonly]
-
-        @staticmethod
-        def create_operator(name: str, _role: str) -> str:
-            if name == "broken":
-                raise ValueError("duplicate operator")
-            return "new-key"
-
-        @staticmethod
-        def deactivate_operator(name: str) -> bool:
-            return name == "reader"
-
-        @staticmethod
-        def rotate_api_key(name: str) -> str | None:
-            return "rotated-key" if name == "reader" else None
-
-    class DatabaseStub:
-        @staticmethod
-        def get_all_agents() -> list[dict[str, str]]:
-            return [{"agent_id": "agent-1", "hostname": "host"}]
-
-        @staticmethod
-        def get_agent_crypto(agent_id: str) -> str | None:
-            return "sealed" if agent_id == "agent-1" else None
-
-        @staticmethod
-        def get_results(_agent_id: str) -> list[dict[str, str]]:
-            return [{"task_id": "task-1", "status": "completed"}]
-
-    appended: list[tuple[Any, ...]] = []
-    monkeypatch.setattr(daemon, "operators", OperatorsStub(), raising=False)
-    monkeypatch.setattr(daemon, "db", DatabaseStub(), raising=False)
-    monkeypatch.setattr(
-        daemon,
-        "events",
-        SimpleNamespace(append=lambda *args, **kwargs: appended.append((args, kwargs))),
-        raising=False,
+    import time
+    from core.c2.control_commands import (
+        C2ControlActionV1,
+        ParticipantControlAuthorizationV1,
+        ParticipantControlRequestV1,
+        SignedControlResponseV1,
     )
+    from core.c2.control_models import calculate_payload_digest
+    from core.c2.control_signing import ControlSignerV1
+
+
+    signer = ControlSignerV1("key_test", b"secret_key_12345678901234567890")
+
+    def _make_signed(action: C2ControlActionV1, tx_id: str, sub_id: str = "op-admin"):
+        auth = ParticipantControlAuthorizationV1(
+            key_id="key_test",
+            transaction_id=tx_id,
+            participant_id="part_test",
+            mission_id="m_test",
+            subject_id=sub_id,
+            action_id=action.value,
+            coordinator_revision=1,
+            request_digest="init_digest",
+            expires_at=time.time() + 100.0,
+            nonce=f"nonce_{tx_id}",
+            signature="",
+        )
+        req = ParticipantControlRequestV1(
+            action=action,
+            authorization=auth,
+            payload_schema_id="schema:test",
+            payload_digest=calculate_payload_digest(b""),
+            canonical_payload_b64u="",
+        )
+        return signer.sign_participant_request(req)
+
     requests = [
-        {"action": "list_agents"},
-        {"action": "queue_task", "api_key": "read-key", "agent_id": "agent-1"},
-        {"action": "ping", "api_key": "admin-key"},
-        {"action": "list_agents", "api_key": "admin-key"},
-        {"action": "queue_task", "api_key": "admin-key", "agent_id": "agent-1", "command": "status"},
-        {"action": "queue_task", "api_key": "admin-key", "agent_id": "missing", "command": "status"},
-        {"action": "get_results", "api_key": "admin-key", "agent_id": "agent-1"},
-        {"action": "manage_operators", "api_key": "admin-key", "sub_action": "list"},
-        {"action": "manage_operators", "api_key": "admin-key", "sub_action": "create", "name": "new"},
-        {"action": "manage_operators", "api_key": "admin-key", "sub_action": "create", "name": "broken"},
-        {"action": "manage_operators", "api_key": "admin-key", "sub_action": "deactivate", "name": "reader"},
-        {"action": "manage_operators", "api_key": "admin-key", "sub_action": "deactivate", "name": "missing"},
-        {"action": "manage_operators", "api_key": "admin-key", "sub_action": "rotate_key", "name": "reader"},
-        {"action": "manage_operators", "api_key": "admin-key", "sub_action": "rotate_key", "name": "missing"},
-        {"action": "manage_operators", "api_key": "admin-key", "sub_action": "unknown"},
-        {"action": "unknown", "api_key": "admin-key"},
+        _make_signed(C2ControlActionV1.PING, "tx_1"),
+        _make_signed(C2ControlActionV1.READINESS, "tx_2"),
+        _make_signed(C2ControlActionV1.PREPARE_C2_RESOURCE, "tx_3"),
+        _make_signed(C2ControlActionV1.RESERVE_ENROLLMENT_FOR_BUILD, "tx_4"),
     ]
     connection = IPCConnection(requests)
 
     daemon.handle_client(connection)
 
     assert connection.closed is True
-    assert connection.responses[0] == {"status": "error", "msg": "Authentication failed"}
-    assert "Permission denied" in connection.responses[1]["msg"]
-    assert connection.responses[2]["msg"] == "pong"
-    assert connection.responses[3]["agents"]["agent-1"]["hostname"] == "host"
-    assert connection.responses[4]["status"] == "ok"
-    assert connection.responses[5] == {"status": "error", "msg": "Agent not found"}
-    assert connection.responses[8]["api_key"] == "new-key"
-    assert connection.responses[9] == {"status": "error", "msg": "duplicate operator"}
-    assert connection.responses[-1]["msg"] == "Unknown action: unknown"
-    assert any(args[2] == "operator.denied" for args, _kwargs in appended)
-    assert any(args[2] == "operator.action" for args, _kwargs in appended)
+    assert len(connection.responses) == 4
+    # All responses are wrapped in SignedControlResponseV1
+    assert all(isinstance(r, SignedControlResponseV1) for r in connection.responses)
 
-    broken = IPCConnection([b"not-json"])
+    broken = IPCConnection([b"not-json-or-ctrl1"])
     daemon.handle_client(broken)
     assert broken.closed is True
-    assert "Socket error" in capsys.readouterr().out
+
 
 
 class SocketStub:

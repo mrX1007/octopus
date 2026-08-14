@@ -47,9 +47,13 @@ class TestGetConnection:
                 "mysql.connector": connector,
                 "mysql.connector.pooling": pooling,
             }})
+            for p in reversed({sys.path!r}):
+                if p not in sys.path:
+                    sys.path.insert(0, p)
             sys.path.insert(0, {str(project_root)!r})
 
             import db
+
 
             assert calls == []
             """
@@ -116,9 +120,13 @@ class TestGetConnection:
                     return None
 
             sys.meta_path.insert(0, BlockMysql())
+            for p in reversed({sys.path!r}):
+                if p not in sys.path:
+                    sys.path.insert(0, p)
             sys.path.insert(0, {str(project_root)!r})
 
             import db
+
 
             assert db.mysql is None
             db._get_db_config = lambda: {{

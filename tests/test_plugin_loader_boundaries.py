@@ -395,9 +395,10 @@ def test_worker_environment_keeps_only_allowlisted_values(monkeypatch: pytest.Mo
     environment = PluginManager._worker_environment()
     assert environment["LANG"] == "C.UTF-8"
     assert "OCTOPUS_OPERATOR_SECRET" not in environment
-    assert environment["PYTHONPATH"] == PluginManager._project_root()
+    assert environment["PYTHONPATH"].startswith(PluginManager._project_root())
     assert environment["PYTHONNOUSERSITE"] == "1"
     assert environment["OCTOPUS_PLUGIN_WORKER"] == "1"
+
 
 
 @pytest.mark.parametrize(

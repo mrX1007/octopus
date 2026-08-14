@@ -63,14 +63,17 @@ def test_verifier_with_rotated_keys():
         nonce="nonce-1",
         signature="",
     )
+    from core.c2.control_models import calculate_payload_digest
+
     req = ParticipantControlRequestV1(
         action=C2ControlActionV1.PREPARE_C2_RESOURCE,
         authorization=auth,
         payload_schema_id="schema:task",
-        payload_digest="sha256:payload",
-        canonical_payload_b64u="ey...",
+        payload_digest=calculate_payload_digest(b""),
+        canonical_payload_b64u="",
     )
     signed_req = signer_old.sign_participant_request(req)
+
 
     # Keyring rotation
     keyring.rotate_key("key-new", b"new-secret" * 4, now=500.0, transition_seconds=100.0)

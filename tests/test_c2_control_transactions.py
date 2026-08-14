@@ -7,11 +7,14 @@ import time
 import pytest
 
 from core.c2.control_commands import (
+    BoundedControlErrorV1,
     C2ControlActionV1,
+    C2ControlErrorCodeV1,
     ParticipantControlAuthorizationV1,
     ParticipantControlReceiptV1,
     ParticipantControlRequestV1,
 )
+
 from core.c2.control_transactions import ControlTransactionCoordinator
 from core.c2.resource_participant import C2DaemonResourceParticipant
 
@@ -53,16 +56,20 @@ def test_coordinator_execute_transaction_success():
     assert receipt.resource_revision == 1
 
 
-def test_coordinator_auto_creates_participant():
+def test_coordinator_rejects_unregistered_participant():
     coord = ControlTransactionCoordinator()
-    req = _make_req("tx_auto_1")
-    receipt = coord.execute_transaction(req)
-    assert isinstance(receipt, ParticipantControlReceiptV1)
-    assert receipt.transaction_id == "tx_auto_1"
+    req = _make_req("tx_unregistered_1")
+    res = coord.execute_transaction(req)
+    assert not isinstance(res, ParticipantControlReceiptV1)
+    assert res.reason_code == C2ControlErrorCodeV1.UNAVAILABLE
+    assert "unregistered_participant" in res.detail_ref
 
 
 def test_coordinator_multiple_transactions():
     coord = ControlTransactionCoordinator()
+    participant = C2DaemonResourceParticipant(participant_id="part_test")
+    coord.register_participant("part_test", participant)
+
     req1 = _make_req("tx_multi_1")
     req2 = _make_req("tx_multi_2")
 
@@ -73,3 +80,4 @@ def test_coordinator_multiple_transactions():
     assert isinstance(r2, ParticipantControlReceiptV1)
     assert r1.resource_revision == 1
     assert r2.resource_revision == 2
+

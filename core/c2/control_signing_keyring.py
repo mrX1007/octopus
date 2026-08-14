@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
-class SigningKeyMetadata:
-    """Metadata describing a control signing key and its lifecycle."""
+class PublicKeyMetadata:
+    """Public descriptor for a registered signing key."""
 
     key_id: str
-    secret_key: bytes
     valid_from: float
     valid_until: float
     predecessor_id: str | None = None
@@ -19,6 +18,30 @@ class SigningKeyMetadata:
     def is_valid(self, now: float | None = None) -> bool:
         ts = time.time() if now is None else now
         return self.valid_from <= ts < self.valid_until
+
+
+@dataclass(frozen=True)
+class SigningKeyMetadata:
+    """Metadata describing a control signing key and its lifecycle."""
+
+    key_id: str
+    secret_key: bytes = field(repr=False, compare=False)
+    valid_from: float
+    valid_until: float
+    predecessor_id: str | None = None
+
+    def is_valid(self, now: float | None = None) -> bool:
+        ts = time.time() if now is None else now
+        return self.valid_from <= ts < self.valid_until
+
+    def public_metadata(self) -> PublicKeyMetadata:
+        return PublicKeyMetadata(
+            key_id=self.key_id,
+            valid_from=self.valid_from,
+            valid_until=self.valid_until,
+            predecessor_id=self.predecessor_id,
+        )
+
 
 
 class ControlSigningKeyring:
@@ -106,6 +129,10 @@ class ControlSigningKeyring:
 
     def list_keys(self) -> list[SigningKeyMetadata]:
         return list(self._keys.values())
+
+    def list_key_metadata(self) -> tuple[PublicKeyMetadata, ...]:
+        return tuple(meta.public_metadata() for meta in self._keys.values())
+
 
     def validate_keyring(self, now: float | None = None) -> list[str]:
         errors: list[str] = []
