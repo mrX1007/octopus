@@ -10,6 +10,7 @@ from core.secrets import Redactor, SecretStore, get_secret_store
 
 try:
     import chromadb
+
     HAS_CHROMA = True
 except ImportError:
     HAS_CHROMA = False
@@ -46,8 +47,7 @@ class VectorMemory:
             self.collection_name = f"session_{self.session_id}"
 
             self.collection = self.client.get_or_create_collection(
-                name=self.collection_name,
-                metadata={"description": f"Memory for session {self.session_id}"}
+                name=self.collection_name, metadata={"description": f"Memory for session {self.session_id}"}
             )
             logging.info(f"Vector memory initialized for session {self.session_id} at {mem_dir}")
         except Exception as e:
@@ -69,11 +69,7 @@ class VectorMemory:
             safe_metadata["category"] = category
             safe_metadata["timestamp"] = datetime.now().isoformat()
 
-            self.collection.add(
-                documents=[safe_content],
-                metadatas=[safe_metadata],
-                ids=[doc_id]
-            )
+            self.collection.add(documents=[safe_content], metadatas=[safe_metadata], ids=[doc_id])
             return True
         except Exception as e:
             logging.error("Failed to store finding in memory: %s", self.redactor.redact_text(e, kind="error"))
@@ -85,17 +81,20 @@ class VectorMemory:
             if self.collection.count() == 0:
                 return False
 
-            results = self.collection.query(
-                query_texts=[content],
-                n_results=1
-            )
+            results = self.collection.query(query_texts=[content], n_results=1)
 
-            return bool(results and results.get("distances") and results["distances"][0] and results["distances"][0][0] < _DEDUP_THRESHOLD)
+            return bool(
+                results
+                and results.get("distances")
+                and results["distances"][0]
+                and results["distances"][0][0] < _DEDUP_THRESHOLD
+            )
         except Exception:
             return False
 
-    def recall(self, query: str, n_results: int = 5, category: Optional[str] = None,
-               priority_first: bool = True) -> list:
+    def recall(
+        self, query: str, n_results: int = 5, category: Optional[str] = None, priority_first: bool = True
+    ) -> list:
         """Recall relevant findings, optionally promoting priority categories."""
         if not self.enabled:
             return []
@@ -104,11 +103,7 @@ class VectorMemory:
             safe_query = self.redactor.redact_text(query, kind="memory_query")
             where_clause = {"category": category} if category else None
 
-            results = self.collection.query(
-                query_texts=[safe_query],
-                n_results=n_results,
-                where=where_clause
-            )
+            results = self.collection.query(query_texts=[safe_query], n_results=n_results, where=where_clause)
 
             if not results or not results.get("documents") or not results["documents"][0]:
                 return []
@@ -116,17 +111,18 @@ class VectorMemory:
             recalled_items = []
             for i, doc in enumerate(results["documents"][0]):
                 meta = results["metadatas"][0][i] if results.get("metadatas") else {}
-                recalled_items.append({
-                    "content": self.redactor.redact_text(doc, kind="memory_result"),
-                    "metadata": self.redactor.redact_data(meta),
-                    "distance": results["distances"][0][i] if "distances" in results else 0
-                })
+                recalled_items.append(
+                    {
+                        "content": self.redactor.redact_text(doc, kind="memory_result"),
+                        "metadata": self.redactor.redact_data(meta),
+                        "distance": results["distances"][0][i] if "distances" in results else 0,
+                    }
+                )
 
             if priority_first:
-                recalled_items.sort(key=lambda x: (
-                    0 if x["metadata"].get("category", "") in _PRIORITY_CATEGORIES else 1,
-                    x["distance"]
-                ))
+                recalled_items.sort(
+                    key=lambda x: (0 if x["metadata"].get("category", "") in _PRIORITY_CATEGORIES else 1, x["distance"])
+                )
 
             return recalled_items
         except Exception as e:
@@ -141,17 +137,14 @@ class VectorMemory:
         """Store a credential as a high-priority memory item."""
         secret_ref = self.redactor.protect(password, kind="credential")
         content = f"CREDENTIALS FOUND: {service} {user}:{secret_ref}@{host}"
-        return self.store_finding("credentials", content, {
-            "service": service, "host": host,
-            "user": user, "password": secret_ref
-        })
+        return self.store_finding(
+            "credentials", content, {"service": service, "host": host, "user": user, "password": secret_ref}
+        )
 
     def store_root_access(self, host: str, user: str):
         """Store root access confirmation."""
         content = f"TARGET IS ROOTED: uid=0 access via {user}@{host}"
-        self.store_finding("root_access", content, {
-            "host": host, "user": user
-        })
+        self.store_finding("root_access", content, {"host": host, "user": user})
 
     def get_summary(self) -> str:
         """Get a summary of what's in memory by counting categories."""
@@ -173,8 +166,7 @@ class VectorMemory:
         try:
             self.client.delete_collection(self.collection_name)
             self.collection = self.client.get_or_create_collection(
-                name=self.collection_name,
-                metadata={"description": f"Memory for session {self.session_id}"}
+                name=self.collection_name, metadata={"description": f"Memory for session {self.session_id}"}
             )
         except Exception as e:
             logging.error("Failed to clear session memory: %s", self.redactor.redact_text(e, kind="error"))
@@ -182,10 +174,12 @@ class VectorMemory:
 
 _current_memory = None
 
+
 def init_memory(session_id: str) -> VectorMemory:
     global _current_memory
     _current_memory = VectorMemory(session_id)
     return _current_memory
+
 
 def get_memory() -> VectorMemory:
     return _current_memory

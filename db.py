@@ -52,12 +52,12 @@ def _get_db_config() -> dict:
     """Load DB config from config.yaml / env vars. No hardcoded fallbacks."""
     try:
         from config import CFG
+
         return CFG["db"]
     except Exception as e:
         logger.warning(f"Could not load DB config: {e}")
         raise RuntimeError(
-            "Database configuration not available. "
-            "Check config.yaml or set OCTOPUS_DB_* environment variables."
+            "Database configuration not available. Check config.yaml or set OCTOPUS_DB_* environment variables."
         ) from e
 
 
@@ -73,8 +73,7 @@ def get_connection():
         db_cfg = _get_db_config()
         if mysql is None or MySQLConnectionPool is None:
             raise RuntimeError(
-                "MySQL persistence is unavailable. Install the optional "
-                "requirements/mysql.txt dependency group."
+                "MySQL persistence is unavailable. Install the optional requirements/mysql.txt dependency group."
             )
         try:
             _pool = MySQLConnectionPool(
@@ -414,13 +413,14 @@ def init_db():
 
 # WRITE FUNCTIONS
 
+
 def create_session(target: str) -> int:
     """Insert new row into history. Returns sl_no."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with _cursor(write=True) as c:
         c.execute(
             "INSERT INTO history (target, scan_date, status) VALUES (%s, %s, %s)",
-            (_safe_text(target, 255, kind="target"), now, "active")
+            (_safe_text(target, 255, kind="target"), now, "active"),
         )
         sl_no = c.lastrowid
     return sl_no
@@ -436,13 +436,19 @@ def update_session_status(sl_no: int, status: str):
         c.execute("UPDATE history SET status = %s WHERE sl_no = %s", (status, sl_no))
 
 
-def save_vulnerability(sl_no: int, vuln_name: str, severity: str,
-                       port: str, service: str, description: str,
-                       confidence: str = "UNCONFIRMED",
-                       evidence_source: str = "",
-                       raw_evidence: str = "",
-                       repro_cmd: str = "",
-                       cvss_score: Optional[float] = None) -> int:
+def save_vulnerability(
+    sl_no: int,
+    vuln_name: str,
+    severity: str,
+    port: str,
+    service: str,
+    description: str,
+    confidence: str = "UNCONFIRMED",
+    evidence_source: str = "",
+    raw_evidence: str = "",
+    repro_cmd: str = "",
+    cvss_score: Optional[float] = None,
+) -> int:
     """Insert a vulnerability and return its identifier.
 
     Confidence accepts CONFIRMED, POSSIBLE, or UNCONFIRMED.
@@ -452,22 +458,27 @@ def save_vulnerability(sl_no: int, vuln_name: str, severity: str,
     confidence = "UNCONFIRMED" if confidence.upper() not in valid_conf else confidence.upper()
 
     with _cursor(write=True) as c:
-        c.execute("""
+        c.execute(
+            """
             INSERT INTO vulnerabilities
             (sl_no, vuln_name, severity, port, service, description,
              confidence, evidence_source, raw_evidence, repro_cmd, cvss_score)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (sl_no,
-              _safe_text(vuln_name, 100),
-              _safe_text(severity, 20),
-              _safe_text(port, 20),
-              _safe_text(service, 50),
-              _safe_text(description, 500),
-              confidence,
-              _safe_text(evidence_source, 100),
-              _safe_text(raw_evidence, 5000, kind="evidence"),
-              _safe_text(repro_cmd, 5000, kind="command"),
-              cvss_score))
+        """,
+            (
+                sl_no,
+                _safe_text(vuln_name, 100),
+                _safe_text(severity, 20),
+                _safe_text(port, 20),
+                _safe_text(service, 50),
+                _safe_text(description, 500),
+                confidence,
+                _safe_text(evidence_source, 100),
+                _safe_text(raw_evidence, 5000, kind="evidence"),
+                _safe_text(repro_cmd, 5000, kind="command"),
+                cvss_score,
+            ),
+        )
         vuln_id = c.lastrowid
     return vuln_id
 
@@ -475,47 +486,61 @@ def save_vulnerability(sl_no: int, vuln_name: str, severity: str,
 def save_fix(sl_no: int, vuln_id: int, fix_text: str, source: str = "ai"):
     """Insert a fix linked to a vulnerability."""
     with _cursor(write=True) as c:
-        c.execute("""
+        c.execute(
+            """
             INSERT INTO fixes (sl_no, vuln_id, fix_text, source)
             VALUES (%s, %s, %s, %s)
-        """, (sl_no, vuln_id, _safe_text(fix_text, 1000), _safe_text(source, 50)))
+        """,
+            (sl_no, vuln_id, _safe_text(fix_text, 1000), _safe_text(source, 50)),
+        )
 
 
 def save_exploit(sl_no, exploit_name, tool_used, payload, result, notes):
     with _cursor(write=True) as c:
-        c.execute("""
+        c.execute(
+            """
             INSERT INTO exploits_attempted (sl_no, exploit_name, tool_used, payload, result, notes)
             VALUES (%s, %s, %s, %s, %s, %s)
-        """, (sl_no,
-              _safe_text(exploit_name, 100),
-              _safe_text(tool_used, 50),
-              _safe_text(payload, 100, kind="payload"),
-              _safe_text(result, 100),
-              _safe_text(notes, 200)))
+        """,
+            (
+                sl_no,
+                _safe_text(exploit_name, 100),
+                _safe_text(tool_used, 50),
+                _safe_text(payload, 100, kind="payload"),
+                _safe_text(result, 100),
+                _safe_text(notes, 200),
+            ),
+        )
 
 
-def save_tool_result(sl_no: int, command: str, stdout: str,
-                     stderr: str = "", exit_code: int = -1,
-                     duration: float = 0.0):
+def save_tool_result(
+    sl_no: int, command: str, stdout: str, stderr: str = "", exit_code: int = -1, duration: float = 0.0
+):
     """Store a normalized tool result in the audit database."""
     with _cursor(write=True) as c:
-        c.execute("""
+        c.execute(
+            """
             INSERT INTO tool_results
             (sl_no, command, stdout, stderr, exit_code, duration_seconds)
             VALUES (%s, %s, %s, %s, %s, %s)
-        """, (sl_no,
-              _safe_text(command, 2000, kind="command"),
-              _safe_text(stdout, 50000, kind="tool_output"),
-              _safe_text(stderr, 5000, kind="tool_error"),
-              exit_code,
-              duration))
+        """,
+            (
+                sl_no,
+                _safe_text(command, 2000, kind="command"),
+                _safe_text(stdout, 50000, kind="tool_output"),
+                _safe_text(stderr, 5000, kind="tool_error"),
+                exit_code,
+                duration,
+            ),
+        )
 
 
 def save_summary(sl_no: int, raw_scan: str, ai_analysis: str, risk_level: str):
     """Create or replace the single summary associated with a session."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with _cursor(write=True) as c:
-        c.execute("""
+        c.execute(
+            """
             INSERT INTO summary (sl_no, raw_scan, ai_analysis, risk_level, generated_at)
             VALUES (%s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
@@ -523,16 +548,19 @@ def save_summary(sl_no: int, raw_scan: str, ai_analysis: str, risk_level: str):
                 ai_analysis = VALUES(ai_analysis),
                 risk_level = VALUES(risk_level),
                 generated_at = VALUES(generated_at)
-        """, (
-            sl_no,
-            _safe_text(raw_scan, kind="raw_scan"),
-            _safe_text(ai_analysis, kind="analysis"),
-            _safe_text(risk_level, 20),
-            now,
-        ))
+        """,
+            (
+                sl_no,
+                _safe_text(raw_scan, kind="raw_scan"),
+                _safe_text(ai_analysis, kind="analysis"),
+                _safe_text(risk_level, 20),
+                now,
+            ),
+        )
 
 
 # READ FUNCTIONS
+
 
 def get_all_history():
     """Return all rows from history ordered by newest first."""
@@ -563,19 +591,16 @@ def get_session(sl_no: int) -> SessionReport:
         )
         exploits = c.fetchall()
 
-        c.execute("""
+        c.execute(
+            """
             SELECT * FROM summary WHERE sl_no = %s
             ORDER BY generated_at DESC, id DESC LIMIT 1
-        """, (sl_no,))
+        """,
+            (sl_no,),
+        )
         summary = c.fetchone()
 
-    report = {
-        "history":   history,
-        "vulns":     vulns,
-        "fixes":     fixes,
-        "exploits":  exploits,
-        "summary":   summary
-    }
+    report = {"history": history, "vulns": vulns, "fixes": fixes, "exploits": exploits, "summary": summary}
     return redact_data(report)
 
 
@@ -608,6 +633,7 @@ def get_exploits(sl_no: int):
 
 # EDIT FUNCTIONS
 
+
 def edit_vulnerability(vuln_id: int, field: str, value: str):
     """Edit a single field in vulnerabilities by id."""
     allowed = {"vuln_name", "severity", "port", "service", "description"}
@@ -615,10 +641,7 @@ def edit_vulnerability(vuln_id: int, field: str, value: str):
         print(f"[!] Invalid field: {field}. Allowed: {allowed}")
         return
     with _cursor(write=True) as c:
-        c.execute(
-            f"UPDATE vulnerabilities SET {field} = %s WHERE id = %s",
-            (_safe_text(value, 500), vuln_id)
-        )
+        c.execute(f"UPDATE vulnerabilities SET {field} = %s WHERE id = %s", (_safe_text(value, 500), vuln_id))
     print(f"[+] vulnerabilities.{field} updated for id={vuln_id}")
 
 
@@ -636,10 +659,7 @@ def edit_exploit(exploit_id: int, field: str, value: str):
         print(f"[!] Invalid field: {field}. Allowed: {allowed}")
         return
     with _cursor(write=True) as c:
-        c.execute(
-            f"UPDATE exploits_attempted SET {field} = %s WHERE id = %s",
-            (_safe_text(value, 200), exploit_id)
-        )
+        c.execute(f"UPDATE exploits_attempted SET {field} = %s WHERE id = %s", (_safe_text(value, 200), exploit_id))
     print(f"[+] exploits_attempted.{field} updated for id={exploit_id}")
 
 
@@ -651,6 +671,7 @@ def edit_summary_risk(sl_no: int, risk_level: str):
 
 
 # DELETE FUNCTIONS
+
 
 def delete_vulnerability(vuln_id: int):
     """Delete a single vulnerability and its linked fixes."""
@@ -691,10 +712,11 @@ def delete_full_session(sl_no: int):
 
 # DISPLAY HELPERS
 
+
 def print_history(rows):
-    print("\n" + "─"*65)
+    print("\n" + "─" * 65)
     print(f"{'SL#':<6} {'TARGET':<28} {'DATE':<22} {'STATUS'}")
-    print("─"*65)
+    print("─" * 65)
     for row in rows:
         print(f"{row[0]:<6} {row[1]:<28} {row[2]!s:<22} {row[3]}")
     print()
@@ -702,9 +724,9 @@ def print_history(rows):
 
 def print_session(data: dict):
     h = data["history"]
-    print(f"\n{'═'*60}")
+    print(f"\n{'═' * 60}")
     print(f"  SL# {h[0]} | Target: {h[1]} | {h[2]} | {h[3]}")
-    print(f"{'═'*60}")
+    print(f"{'═' * 60}")
 
     print("\n[ VULNERABILITIES ]")
     if data["vulns"]:
@@ -743,24 +765,41 @@ def print_session(data: dict):
 
 # ENHANCED TOOL RESULT STORAGE
 
-def save_tool_result_v7(sl_no: int, command: str, stdout: str,
-                        stderr: str = "", exit_code: int = 0,
-                        duration: float = 0.0, facts: Optional[list] = None,
-                        stage: str = "RECON") -> int:
+
+def save_tool_result_v7(
+    sl_no: int,
+    command: str,
+    stdout: str,
+    stderr: str = "",
+    exit_code: int = 0,
+    duration: float = 0.0,
+    facts: Optional[list] = None,
+    stage: str = "RECON",
+) -> int:
     """Save a tool result with extracted facts and kill-chain stage."""
     import json
+
     facts_json = json.dumps(redact_data(facts)) if facts else None
     try:
         with _cursor(write=True) as c:
-            c.execute("""
+            c.execute(
+                """
                 INSERT INTO tool_results
                     (sl_no, command, stdout, stderr, exit_code,
                      duration_seconds, facts_extracted, stage)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """, (sl_no, _safe_text(command, 500, kind="command"),
-                  _safe_text(stdout, 50000, kind="tool_output"),
-                  _safe_text(stderr, 5000, kind="tool_error"), exit_code,
-                  duration, facts_json, stage))
+            """,
+                (
+                    sl_no,
+                    _safe_text(command, 500, kind="command"),
+                    _safe_text(stdout, 50000, kind="tool_output"),
+                    _safe_text(stderr, 5000, kind="tool_error"),
+                    exit_code,
+                    duration,
+                    facts_json,
+                    stage,
+                ),
+            )
             result_id = c.lastrowid
     except Exception as e:
         print(f"[!] save_tool_result_v7 failed: {e}")
@@ -784,11 +823,14 @@ def get_session_analytics(sl_no: int) -> dict:
     try:
         with _cursor() as c:
             # Tool execution stats
-            c.execute("""
+            c.execute(
+                """
                 SELECT COUNT(*), SUM(exit_code = 0), SUM(exit_code != 0),
                        SUM(duration_seconds)
                 FROM tool_results WHERE sl_no = %s
-            """, (sl_no,))
+            """,
+                (sl_no,),
+            )
             row = c.fetchone()
             if row:
                 analytics["total_tools"] = row[0] or 0
@@ -797,18 +839,24 @@ def get_session_analytics(sl_no: int) -> dict:
                 analytics["total_duration"] = round(row[3] or 0, 1)
 
             # Stages reached
-            c.execute("""
+            c.execute(
+                """
                 SELECT DISTINCT stage FROM tool_results
                 WHERE sl_no = %s AND stage IS NOT NULL
-            """, (sl_no,))
+            """,
+                (sl_no,),
+            )
             analytics["stages_reached"] = [r[0] for r in c.fetchall()]
 
             # Vulnerability counts
-            c.execute("""
+            c.execute(
+                """
                 SELECT COUNT(*),
                        SUM(confidence = 'CONFIRMED')
                 FROM vulnerabilities WHERE sl_no = %s
-            """, (sl_no,))
+            """,
+                (sl_no,),
+            )
             vrow = c.fetchone()
             if vrow:
                 analytics["vulns_found"] = vrow[0] or 0

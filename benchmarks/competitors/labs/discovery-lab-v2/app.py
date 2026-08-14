@@ -161,10 +161,7 @@ def _redirect_surface(
             "Location": "/portal",
             "X-Octobench-Evidence": "OCTOBENCH_EVIDENCE_V2_REDIRECT_SERVICE",
         }
-        body = (
-            b"OCTOBENCH_EVIDENCE_V2_REDIRECT_SERVICE\n"
-            b"Continue at the same-origin relative location /portal.\n"
-        )
+        body = b"OCTOBENCH_EVIDENCE_V2_REDIRECT_SERVICE\nContinue at the same-origin relative location /portal.\n"
         return HTTPStatus.FOUND, "text/plain; charset=utf-8", body, redirect_headers
     if path == "/portal":
         return _html_response(

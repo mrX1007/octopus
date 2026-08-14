@@ -23,28 +23,31 @@ try:
     from config import CFG, find_wordlist
 except ImportError:
     CFG = {}
-    def find_wordlist(cat): return ""
+
+    def find_wordlist(cat):
+        return ""
+
 
 # ANSI Colors
-C_GREEN  = "\033[92m"
+C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
-C_RED    = "\033[91m"
-C_CYAN   = "\033[96m"
-C_GREY   = "\033[90m"
+C_RED = "\033[91m"
+C_CYAN = "\033[96m"
+C_GREY = "\033[90m"
 C_MAGENTA = "\033[95m"
-C_RESET  = "\033[0m"
-C_BOLD   = "\033[1m"
+C_RESET = "\033[0m"
+C_BOLD = "\033[1m"
 
 # Hash type mapping: shadow prefix -> (hashcat mode, name)
 HASH_TYPES = {
-    "$1$":   (500,   "MD5crypt"),
-    "$2a$":  (3200,  "bcrypt"),
-    "$2b$":  (3200,  "bcrypt"),
-    "$2y$":  (3200,  "bcrypt"),
-    "$5$":   (7400,  "SHA-256crypt"),
-    "$6$":   (1800,  "SHA-512crypt"),
-    "$y$":   (29000, "yescrypt"),
-    "$gy$":  (29000, "yescrypt"),
+    "$1$": (500, "MD5crypt"),
+    "$2a$": (3200, "bcrypt"),
+    "$2b$": (3200, "bcrypt"),
+    "$2y$": (3200, "bcrypt"),
+    "$5$": (7400, "SHA-256crypt"),
+    "$6$": (1800, "SHA-512crypt"),
+    "$y$": (29000, "yescrypt"),
+    "$gy$": (29000, "yescrypt"),
     "$sha1$": (12000, "PBKDF2-SHA1"),
 }
 
@@ -83,10 +86,7 @@ class HashCracker:
 
         if self.hashcat:
             try:
-                r = subprocess.run(
-                    [self.hashcat, "--backend-info"],
-                    capture_output=True, text=True, timeout=10
-                )
+                r = subprocess.run([self.hashcat, "--backend-info"], capture_output=True, text=True, timeout=10)
                 if "CUDA" in r.stdout or "OpenCL" in r.stdout or "HIP" in r.stdout:
                     self.has_gpu = True
             except Exception as _exc:
@@ -115,13 +115,38 @@ class HashCracker:
                 return path
         minimal = os.path.join(self._workdir, "mini_wordlist.txt")
         with open(minimal, "w") as f:
-            f.write("\n".join([
-                "password", "123456", "12345678", "qwerty", "abc123",
-                "monkey", "1234567", "letmein", "trustno1", "dragon",
-                "baseball", "iloveyou", "master", "sunshine", "ashley",
-                "root", "toor", "admin", "test", "guest", "changeme",
-                "r00t", "p@ssw0rd", "P@ssw0rd", "P@ssword1", "m3tatr0n",
-            ]))
+            f.write(
+                "\n".join(
+                    [
+                        "password",
+                        "123456",
+                        "12345678",
+                        "qwerty",
+                        "abc123",
+                        "monkey",
+                        "1234567",
+                        "letmein",
+                        "trustno1",
+                        "dragon",
+                        "baseball",
+                        "iloveyou",
+                        "master",
+                        "sunshine",
+                        "ashley",
+                        "root",
+                        "toor",
+                        "admin",
+                        "test",
+                        "guest",
+                        "changeme",
+                        "r00t",
+                        "p@ssw0rd",
+                        "P@ssw0rd",
+                        "P@ssword1",
+                        "m3tatr0n",
+                    ]
+                )
+            )
         return minimal
 
     def _find_rules(self):
@@ -149,13 +174,15 @@ class HashCracker:
                 continue
             info = self.identify_hash_type(hash_field)
             if info.get("hashcat_mode"):
-                entries.append({
-                    "user": user,
-                    "hash": hash_field,
-                    "full_line": line,
-                    "algorithm": info["algorithm"],
-                    "hashcat_mode": info["hashcat_mode"],
-                })
+                entries.append(
+                    {
+                        "user": user,
+                        "hash": hash_field,
+                        "full_line": line,
+                        "algorithm": info["algorithm"],
+                        "hashcat_mode": info["hashcat_mode"],
+                    }
+                )
         return entries
 
     def identify_hash_type(self, hash_str):
@@ -171,8 +198,7 @@ class HashCracker:
 
     # --- CRACKING ENGINES ---
 
-    def crack_with_hashcat(self, hash_file, wordlist, hash_type=None,
-                           rules=None, timeout=None, extra_args=None):
+    def crack_with_hashcat(self, hash_file, wordlist, hash_type=None, rules=None, timeout=None, extra_args=None):
         if not self.hashcat:
             return {"error": "hashcat not found", "cracked": {}}
         timeout = timeout or self.timeout
@@ -180,11 +206,16 @@ class HashCracker:
         outfile = os.path.join(self._workdir, "cracked.txt")
         cmd = [
             self.hashcat,
-            "-m", str(hash_type or 1800),
-            "-a", "0",
-            "-w", str(self.workload),
-            "--potfile-path", potfile,
-            "-o", outfile,
+            "-m",
+            str(hash_type or 1800),
+            "-a",
+            "0",
+            "-w",
+            str(self.workload),
+            "--potfile-path",
+            potfile,
+            "-o",
+            outfile,
             "--outfile-format=3",
             hash_file,
             wordlist,
@@ -196,8 +227,10 @@ class HashCracker:
         if extra_args:
             cmd.extend(extra_args)
 
-        print(f"    {C_CYAN}[*] hashcat: mode={hash_type}, wl={os.path.basename(wordlist)}"
-              f"{', rules=' + os.path.basename(rules) if rules else ''}{C_RESET}")
+        print(
+            f"    {C_CYAN}[*] hashcat: mode={hash_type}, wl={os.path.basename(wordlist)}"
+            f"{', rules=' + os.path.basename(rules) if rules else ''}{C_RESET}"
+        )
 
         start = time.time()
         try:
@@ -240,8 +273,7 @@ class HashCracker:
 
         cracked = {}
         try:
-            show = subprocess.run([self.john, "--show", hash_file],
-                                  capture_output=True, text=True, timeout=15)
+            show = subprocess.run([self.john, "--show", hash_file], capture_output=True, text=True, timeout=15)
             for line in show.stdout.strip().splitlines():
                 if ":" in line and not line.startswith("#"):
                     parts = line.split(":")
@@ -272,7 +304,7 @@ class HashCracker:
 
         for mode, data in by_type.items():
             users = ", ".join(e["user"] for e in data["entries"][:5])
-            more = f" +{len(data['entries'])-5}" if len(data["entries"]) > 5 else ""
+            more = f" +{len(data['entries']) - 5}" if len(data["entries"]) > 5 else ""
             output += f"  {data['algorithm']} (mode {mode}): {len(data['entries'])} hashes -- {users}{more}\n"
 
         print(f"  {C_CYAN}[*] {len(entries)} crackable hashes found{C_RESET}")
@@ -329,16 +361,28 @@ class HashCracker:
                 output += f"\n[Phase 4: Mask Attack -- {data['algorithm']}]\n"
                 print(f"  {C_CYAN}[*] Phase 4: Mask attack ({data['algorithm']})...{C_RESET}")
                 masks = [
-                    "?d?d?d?d?d?d", "?d?d?d?d?d?d?d", "?d?d?d?d?d?d?d?d",
-                    "?u?l?l?l?l?d?d", "?u?l?l?l?l?l?d?d", "?l?l?l?l?l?l?d?d",
+                    "?d?d?d?d?d?d",
+                    "?d?d?d?d?d?d?d",
+                    "?d?d?d?d?d?d?d?d",
+                    "?u?l?l?l?l?d?d",
+                    "?u?l?l?l?l?l?d?d",
+                    "?l?l?l?l?l?l?d?d",
                 ]
                 potfile = os.path.join(self._workdir, "hashcat.potfile")
                 for mask in masks:
                     try:
                         mask_cmd = [
-                            self.hashcat, "-m", str(mode), "-a", "3",
-                            "-w", str(self.workload), "--potfile-path", potfile,
-                            "-o", os.path.join(self._workdir, "cracked.txt"),
+                            self.hashcat,
+                            "-m",
+                            str(mode),
+                            "-a",
+                            "3",
+                            "-w",
+                            str(self.workload),
+                            "--potfile-path",
+                            potfile,
+                            "-o",
+                            os.path.join(self._workdir, "cracked.txt"),
                             "--outfile-format=3",
                         ]
                         if self.has_gpu:
@@ -408,12 +452,14 @@ class HashCracker:
     def cleanup(self):
         try:
             import shutil as _shutil
+
             _shutil.rmtree(self._workdir, ignore_errors=True)
         except Exception as _exc:
             logging.debug(f"Suppressed in hash_cracker.py: {_exc}")
 
 
 # ---- STANDALONE FUNCTIONS ----
+
 
 def run_crack_hashes(shadow_file_or_content):
     hc = HashCracker()
