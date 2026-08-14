@@ -74,51 +74,12 @@ class PivotRemoteForwardAdapter(TypedActionAdapterV2):
         self,
         context: BoundProviderInvocationContext,
     ) -> RouteProviderResult:
-        if not hasattr(context, "scope"):
-            raise ProviderUnavailableError("pivot_route_staging_unavailable")
-
-        import time
-        from core.actions.provider_results import (
-            ManagedResourceDraftRefV2,
-            ManagedResourceKind,
-            ProviderOutcomeV2,
-            ProviderProvenanceV2,
-            ProviderResultHeaderV2,
-            RouteProviderResult,
-        )
-
-        header = ProviderResultHeaderV2(
-            schema_version="2.0",
-            provider_id=self.action_id,
-            outcome=ProviderOutcomeV2.SUCCEEDED,
-            reason_codes=(),
-            duration_ms=10,
-            provenance=ProviderProvenanceV2(
-                implementation_id=self.action_id,
-                implementation_version="2.0",
-                request_digest="remote_fwd_req_digest",
-                started_at=time.time(),
-                completed_at=time.time(),
-            ),
-        )
-        tx_id = getattr(context, "transaction_id", "tx-fwd-1")
-        route_draft = ManagedResourceDraftRefV2(
-            transaction_id=tx_id,
-            draft_id=f"draft_route_{tx_id}",
-            resource_kind=ManagedResourceKind.PIVOT_ROUTE,
-            target=getattr(context, "target", None),
-            lifecycle_owner="pivot_service",
-            close_action_id=None,
-            expires_at=None,
-        )
-        return RouteProviderResult(
-            header=header,
-            route=route_draft,
-            observations=(),
-        )
+        del context
+        raise ProviderUnavailableError("pivot_route_staging_unavailable")
 
     def verify_bound(self, context: BoundProviderVerificationContext) -> bool:
-        return True
+        del context
+        return False
 
 
 class PivotSSHChainAdapter(TypedActionAdapterV2):
@@ -136,51 +97,12 @@ class PivotSSHChainAdapter(TypedActionAdapterV2):
         self,
         context: BoundProviderInvocationContext,
     ) -> SessionProviderResult:
-        if not hasattr(context, "scope"):
-            raise ProviderUnavailableError("pivot_session_staging_unavailable")
-
-        import time
-        from core.actions.provider_results import (
-            ManagedResourceDraftRefV2,
-            ManagedResourceKind,
-            ProviderOutcomeV2,
-            ProviderProvenanceV2,
-            ProviderResultHeaderV2,
-            SessionProviderResult,
-        )
-
-        header = ProviderResultHeaderV2(
-            schema_version="2.0",
-            provider_id=self.action_id,
-            outcome=ProviderOutcomeV2.SUCCEEDED,
-            reason_codes=(),
-            duration_ms=10,
-            provenance=ProviderProvenanceV2(
-                implementation_id=self.action_id,
-                implementation_version="2.0",
-                request_digest="ssh_chain_req_digest",
-                started_at=time.time(),
-                completed_at=time.time(),
-            ),
-        )
-        tx_id = getattr(context, "transaction_id", "tx-ssh-chain-1")
-        session_draft = ManagedResourceDraftRefV2(
-            transaction_id=tx_id,
-            draft_id=f"draft_session_{tx_id}",
-            resource_kind=ManagedResourceKind.SESSION,
-            target=getattr(context, "target", None),
-            lifecycle_owner="pivot_service",
-            close_action_id=None,
-            expires_at=None,
-        )
-        return SessionProviderResult(
-            header=header,
-            session=session_draft,
-            observations=(),
-        )
+        del context
+        raise ProviderUnavailableError("pivot_session_staging_unavailable")
 
     def verify_bound(self, context: BoundProviderVerificationContext) -> bool:
-        return True
+        del context
+        return False
 
 
 class PivotProxyScanAdapter(TypedActionAdapterV2):
@@ -198,38 +120,12 @@ class PivotProxyScanAdapter(TypedActionAdapterV2):
         self,
         context: BoundProviderInvocationContext,
     ) -> OperationProviderResult:
-        if not hasattr(context, "scope"):
-            raise ProviderUnavailableError("pivot_observation_staging_unavailable")
-
-        import time
-        from core.actions.provider_results import (
-            OperationProviderResult,
-            ProviderOutcomeV2,
-            ProviderProvenanceV2,
-            ProviderResultHeaderV2,
-        )
-
-        header = ProviderResultHeaderV2(
-            schema_version="2.0",
-            provider_id=self.action_id,
-            outcome=ProviderOutcomeV2.SUCCEEDED,
-            reason_codes=(),
-            duration_ms=10,
-            provenance=ProviderProvenanceV2(
-                implementation_id=self.action_id,
-                implementation_version="2.0",
-                request_digest="proxy_scan_req_digest",
-                started_at=time.time(),
-                completed_at=time.time(),
-            ),
-        )
-        return OperationProviderResult(
-            header=header,
-            observations=(),
-        )
+        del context
+        raise ProviderUnavailableError("pivot_observation_staging_unavailable")
 
     def verify_bound(self, context: BoundProviderVerificationContext) -> bool:
-        return True
+        del context
+        return False
 
 
 # Preserve the historical spelling used by the descriptor bridge without a

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import base64
+import os
+import socket
+import struct
 import time
 import uuid
 from typing import Any
@@ -63,7 +66,6 @@ class DefaultC2ControlClient(C2ControlClient):
         if self.transport_handler is not None:
             resp_bytes = self.transport_handler(encoded_frame)
         else:
-            import os
             sock_path = os.environ.get("OCTOPUS_C2_SOCKET", "/run/octopus/octopus-c2.sock")
             if not os.path.exists(sock_path) and os.path.exists("/tmp/octopus.sock"):
                 sock_path = "/tmp/octopus.sock"
@@ -79,8 +81,6 @@ class DefaultC2ControlClient(C2ControlClient):
         return response
 
     def _socket_transport(self, sock_path: str, data: bytes) -> bytes:
-        import socket
-        import struct
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(10.0)
             s.connect(sock_path)

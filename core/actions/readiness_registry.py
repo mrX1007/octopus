@@ -261,12 +261,36 @@ def _default_probes() -> tuple[ProviderReadinessProbe, ...]:
     from core.actions.readiness_probes import DaemonProtocolStatus
 
     def _default_daemon_status_supplier() -> DaemonProtocolStatus:
-        return DaemonProtocolStatus(
-            reachable=True,
-            protocol_version="12.0",
-            daemon_instance_id="c2-daemon-local-1",
-            provider_generation="1",
-        )
+        import os
+        import socket
+
+        sock_path = os.environ.get("OCTOPUS_C2_SOCKET", "/run/octopus/octopus-c2.sock")
+        if not os.path.exists(sock_path) and os.path.exists("/tmp/octopus.sock"):
+            sock_path = "/tmp/octopus.sock"
+        if not os.path.exists(sock_path):
+            return DaemonProtocolStatus(
+                reachable=False,
+                protocol_version="12.0",
+                daemon_instance_id=None,
+                provider_generation="unverified",
+            )
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                s.connect(sock_path)
+            return DaemonProtocolStatus(
+                reachable=True,
+                protocol_version="12.0",
+                daemon_instance_id="c2-daemon-local-1",
+                provider_generation="1",
+            )
+        except Exception:
+            return DaemonProtocolStatus(
+                reachable=False,
+                protocol_version="12.0",
+                daemon_instance_id=None,
+                provider_generation="unverified",
+            )
 
     dns = DaemonProtocolProbe(
         "probe:dns_c2_channel",

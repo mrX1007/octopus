@@ -12,14 +12,23 @@ import json
 import os
 import secrets
 import socket
+import struct
 import threading
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 
+from core.c2.control_commands import (
+    BoundedControlErrorV1,
+    C2ControlActionV1,
+    C2ControlErrorCodeV1,
+    ParticipantControlReceiptV1,
+    ParticipantControlRequestV1,
+)
+from core.c2.control_protocol import FRAME_MAGIC, ControlProtocolCodec
 from core.c2.crypto_engine import C2CryptoEngine
 from core.c2.db_backend import C2Database
 from core.c2.enrollment import EnrollmentAuthority
@@ -27,6 +36,7 @@ from core.c2.event_store import EventStore
 from core.c2.key_store import KeyStore
 from core.c2.operators import OperatorManager
 from core.c2.protocol import C2_PROTOCOL_VERSION
+from core.c2.resource_participant import C2DaemonResourceParticipant
 
 # ─── Configuration ───────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -393,18 +403,6 @@ async def beacon(request: Request):
 # ─── Operator IPC Control Plane ──────────────────────────
 
 
-from core.c2.control_commands import (
-    BoundedControlErrorV1,
-    C2ControlActionV1,
-    C2ControlErrorCodeV1,
-    ParticipantControlPhaseV1,
-    ParticipantControlQuerySnapshotV1,
-    ParticipantControlReceiptV1,
-    ParticipantControlRequestV1,
-)
-from core.c2.control_protocol import ControlProtocolCodec, FRAME_MAGIC
-from core.c2.resource_participant import C2DaemonResourceParticipant
-
 _daemon_resource_participant = C2DaemonResourceParticipant(daemon_instance_id="c2-daemon-local-1")
 _control_codec = ControlProtocolCodec()
 
@@ -448,15 +446,13 @@ def _handle_framed_control_request(req: ParticipantControlRequestV1) -> Any:
         return _daemon_resource_participant.commit(req)
     if action == C2ControlActionV1.FINALIZE_C2_RESOURCE_VISIBILITY:
         res = _daemon_resource_participant.commit(req) if isinstance(req, ParticipantControlRequestV1) else req
-        if isinstance(res, ParticipantControlReceiptV1):
-            return _daemon_resource_participant.finalize_visibility(res, res)
         return res
     if action == C2ControlActionV1.ABORT_C2_RESOURCE:
         dummy_rcpt = ParticipantControlReceiptV1(
             transaction_id=tx_id,
-            participant_id=req.authorization.participant_id,
-            action=req.action,
-            resource_ref=f"resource:{req.authorization.participant_id}",
+            participant_id=req.authorization.participant_id or "c2_daemon",
+            action=C2ControlActionV1.ABORT_C2_RESOURCE,
+            resource_ref="c2_daemon",
             resource_revision=1,
             receipt_ref=f"rcpt_abort_{secrets.token_hex(4)}",
             receipt_digest=req.payload_digest,
@@ -486,7 +482,17 @@ def _handle_framed_control_request(req: ParticipantControlRequestV1) -> Any:
     )
 
 
-def handle_client(conn):
+def _read_exact(sock: socket.socket, n: int) -> bytes:
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise EOFError("unexpected EOF while reading framed stream")
+        buf.extend(chunk)
+    return bytes(buf)
+
+
+def handle_client(conn: socket.socket) -> None:
     """Handle IPC requests from octopus.py thin client or framed ControlProtocol clients."""
     try:
         while True:
@@ -496,10 +502,24 @@ def handle_client(conn):
 
             if data.startswith(FRAME_MAGIC):
                 try:
-                    framed_req = _control_codec.decode_request(data)
-                    framed_resp = _handle_framed_control_request(framed_req)
-                    resp_bytes = _control_codec.encode_response(framed_resp)
-                    conn.sendall(resp_bytes)
+                    while len(data) < len(FRAME_MAGIC) + 4:
+                        chunk = conn.recv(len(FRAME_MAGIC) + 4 - len(data))
+                        if not chunk:
+                            break
+                        data += chunk
+                    if len(data) >= len(FRAME_MAGIC) + 4:
+                        payload_len = struct.unpack("!I", data[len(FRAME_MAGIC) : len(FRAME_MAGIC) + 4])[0]
+                        total_expected = len(FRAME_MAGIC) + 4 + payload_len
+                        while len(data) < total_expected:
+                            chunk = conn.recv(total_expected - len(data))
+                            if not chunk:
+                                break
+                            data += chunk
+                        full_frame = data[:total_expected]
+                        framed_req = _control_codec.decode_request(full_frame)
+                        framed_resp = _handle_framed_control_request(framed_req)
+                        resp_bytes = _control_codec.encode_response(framed_resp)
+                        conn.sendall(resp_bytes)
                 except Exception as exc:
                     err = BoundedControlErrorV1(
                         reason_code=C2ControlErrorCodeV1.INTERNAL_ERROR,
@@ -631,17 +651,20 @@ def handle_client(conn):
         conn.close()
 
 
-def run_socket_server():
+def run_socket_server() -> None:
     """Unix Domain Socket control plane supporting systemd socket activation."""
     SD_LISTEN_FDS_START = 3
     listen_fds_env = os.environ.get("LISTEN_FDS") if hasattr(os, "environ") else None
     listen_pid_env = os.environ.get("LISTEN_PID") if hasattr(os, "environ") else None
     server = None
-    if listen_fds_env and (not listen_pid_env or str(os.getpid()) == listen_pid_env):
+    if listen_fds_env and listen_pid_env and str(os.getpid()) == listen_pid_env:
         try:
             num_fds = int(listen_fds_env)
-            if num_fds >= 1:
+            if num_fds == 1:
                 server = socket.fromfd(SD_LISTEN_FDS_START, socket.AF_UNIX, socket.SOCK_STREAM)
+                # Clean up environment to avoid propagation
+                del os.environ["LISTEN_FDS"]
+                del os.environ["LISTEN_PID"]
                 print(f"[*] Control Plane inherited socket from systemd (fd {SD_LISTEN_FDS_START})")
         except Exception:
             server = None
@@ -652,18 +675,14 @@ def run_socket_server():
 
         parent_dir = os.path.dirname(SOCK_FILE) if hasattr(os.path, "dirname") else ""
         if parent_dir and not os.path.exists(parent_dir):
-            try:
+            with suppress(OSError):
                 os.makedirs(parent_dir, mode=0o750, exist_ok=True)
-            except OSError:
-                pass
 
         server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         server.bind(SOCK_FILE)
         server.listen(5)
-        try:
+        with suppress(OSError):
             os.chmod(SOCK_FILE, 0o660)
-        except OSError:
-            pass
         print(f"[*] Control Plane listening on {SOCK_FILE}")
 
     while True:
@@ -674,7 +693,7 @@ def run_socket_server():
 # ─── Main ────────────────────────────────────────────────
 
 
-def main():
+def main() -> None:
     application = create_app()
 
     sock_thread = threading.Thread(target=run_socket_server, daemon=True)
