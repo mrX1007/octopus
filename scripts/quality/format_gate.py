@@ -10,7 +10,14 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-_EXCLUDED_PARTS = {"data", "tests/fixtures", "vendor", "venv"}
+_EXCLUDED_PARTS = {
+    "benchmarks/competitors/lab",
+    "benchmarks/competitors/labs",
+    "data",
+    "tests/fixtures",
+    "vendor",
+    "venv",
+}
 
 
 class FormatGateError(RuntimeError):

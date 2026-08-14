@@ -141,6 +141,8 @@ extend-exclude = [
     "venv",
     "vendor",
     "data",
+    "benchmarks/competitors/lab",
+    "benchmarks/competitors/labs",
 ]
 
 [tool.ruff.lint]
