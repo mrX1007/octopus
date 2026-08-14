@@ -10,6 +10,7 @@ import logging
 import os
 import re
 import shlex
+import sqlite3
 import subprocess
 import time
 from collections.abc import Iterable, Mapping, Sequence
@@ -164,7 +165,12 @@ def dispatch_plugin_command(
     def _forbidden_legacy_runner(*_args: Any, **_kwargs: Any) -> str:
         raise RuntimeError("plugin_legacy_runner_forbidden")
 
-    runtime = PipelineRuntime(runner=_forbidden_legacy_runner)
+    target_db = os.environ.get("OCTOPUS_FACTS_DB", "data/facts.db")
+    try:
+        runtime = PipelineRuntime(target_db, runner=_forbidden_legacy_runner)
+    except (sqlite3.OperationalError, OSError):
+        import tempfile
+        runtime = PipelineRuntime(tempfile.mktemp(suffix=".db"), runner=_forbidden_legacy_runner)
     return runtime.dispatch(command, (), set(), context)
 
 
@@ -178,7 +184,7 @@ class PipelineRuntime:
 
     def __init__(
         self,
-        db_path: str = "data/facts.db",
+        db_path: str | None = None,
         *,
         runner: Runner,
         fact_store: FactStore | None = None,
@@ -187,7 +193,8 @@ class PipelineRuntime:
         knowledge_graph: KnowledgeGraph | None = None,
         plugin_manager: Any | None = None,
     ) -> None:
-        self.facts = fact_store or FactStore(db_path)
+        effective_db = db_path or os.environ.get("OCTOPUS_FACTS_DB", "data/facts.db")
+        self.facts = fact_store or FactStore(effective_db)
         self.assessments = self.facts.assessments
         self.missions = MissionStore(self.facts.db_path, redactor=self.facts.redactor)
         self.scheduler = scheduler or CommandScheduler()

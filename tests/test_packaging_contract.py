@@ -39,6 +39,7 @@ def test_package_has_build_backend_version_and_console_entrypoints() -> None:
         "octobench-competitors": "core.benchmarks.competitors.__main__:main",
         "octopus": "core.application:main",
         "octopus-c2": "octopus_c2:main",
+        "octopus-c2-bootstrap-admin": "scripts.bootstrap_c2_admin:main",
     }
 
 

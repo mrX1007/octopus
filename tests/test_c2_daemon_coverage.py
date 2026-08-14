@@ -653,15 +653,20 @@ class SocketStub:
         return self.accepts.pop(0)
 
 
-def test_socket_server_detects_live_removes_stale_and_accepts_locally(
+def test_socket_server_refuses_existing_socket_and_accepts_locally(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    live = SocketStub()
+    created = False
+
+    def create_socket(*_args: Any) -> SocketStub:
+        nonlocal created
+        created = True
+        return SocketStub()
+
     monkeypatch.setattr(
         daemon,
         "socket",
-        SimpleNamespace(AF_UNIX=1, SOCK_STREAM=1, socket=lambda *_args: live),
+        SimpleNamespace(AF_UNIX=1, SOCK_STREAM=1, socket=create_socket),
     )
     monkeypatch.setattr(
         daemon,
@@ -672,33 +677,9 @@ def test_socket_server_detects_live_removes_stale_and_accepts_locally(
             chmod=lambda *_args: None,
         ),
     )
-    with pytest.raises(SystemExit) as stopped:
+    with pytest.raises(RuntimeError, match="control socket already exists"):
         daemon.run_socket_server()
-    assert stopped.value.code == 1
-    assert live.closed is True
-    assert "Another daemon" in capsys.readouterr().out
-
-    removed: list[str] = []
-    stale = SocketStub(connect_error=ConnectionRefusedError())
-    server = SocketStub()
-    sockets = iter((stale, server))
-    monkeypatch.setattr(
-        daemon,
-        "socket",
-        SimpleNamespace(AF_UNIX=1, SOCK_STREAM=1, socket=lambda *_args: next(sockets)),
-    )
-    monkeypatch.setattr(
-        daemon,
-        "os",
-        SimpleNamespace(
-            path=SimpleNamespace(exists=lambda _path: True),
-            remove=removed.append,
-            chmod=lambda *_args: None,
-        ),
-    )
-    with pytest.raises(RuntimeError, match="stop accept loop"):
-        daemon.run_socket_server()
-    assert removed == [daemon.SOCK_FILE]
+    assert created is False
 
     connection = object()
     server = SocketStub(accepts=[(connection, None)])
@@ -790,12 +771,11 @@ def test_main_bootstrap_port_validation_and_uvicorn_error_mapping(
     )
     monkeypatch.setenv("OCTOPUS_C2_PORT", "8443")
     daemon.main()
-    assert (tmp_path / "default_admin.key").read_text(encoding="utf-8") == "admin-key"
-    assert stat.S_IMODE((tmp_path / "default_admin.key").stat().st_mode) == 0o600
+    assert not (tmp_path / "default_admin.key").exists()
     assert started[0]["target"] is daemon.run_socket_server
     output = capsys.readouterr().out
-    assert "Admin operator created" in output
     assert "Port 8443 already in use" in output
+    assert "admin-key" not in output
 
     _install_main_stubs(
         monkeypatch,
@@ -803,7 +783,8 @@ def test_main_bootstrap_port_validation_and_uvicorn_error_mapping(
         MainOperatorsStub(empty=True, fail_create=True),
     )
     daemon.main()
-    assert "Could not create default operator" in capsys.readouterr().out
+    assert not (tmp_path / "default_admin.key").exists()
+    assert "bootstrap" not in capsys.readouterr().out.lower()
 
     _install_main_stubs(monkeypatch, tmp_path, MainOperatorsStub(empty=False))
     monkeypatch.setenv("OCTOPUS_C2_PORT", "not-an-integer")

@@ -1,23 +1,33 @@
-"""Action adapters for Active Directory credential access and lateral movement."""
+"""Action adapters for Active Directory credential extraction and reuse."""
 
 from __future__ import annotations
 
-from core.execution import ToolInvocation
-from core.execution.policy import parse_invocation
+from typing import Any
 
-from .base import ManualGatedActionAdapter
-from .input_contracts import CredentialInput, SessionInput, TicketInput
-from .models import (
+from core.actions.base import ManualGatedActionAdapter
+from core.actions.input_contracts import (
+    CredentialDumpInput,
+    CredentialInput,
+    LateralAuthInput,
+    SessionInput,
+    TicketInput,
+)
+from core.actions.models import (
     ActionDescriptor,
     ActionKind,
     ActionRequest,
     ActionRequirements,
     ActiveRiskClass,
 )
+from core.execution import ToolInvocation
+from core.execution.policy import parse_invocation
 
 
 class ADPassTheTicketAdapter(ManualGatedActionAdapter):
-    """Адаптер действия для атаки Pass-the-Ticket в Active Directory."""
+    """Адаптер действия для Pass-the-Ticket аутентификации в Active Directory."""
+
+    action_id: str = "killchain:ad_pass_the_ticket"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -26,7 +36,7 @@ class ADPassTheTicketAdapter(ManualGatedActionAdapter):
             kind=ActionKind.KILLCHAIN,
             provider="core.killchain.ad.credential:pass_the_ticket",
             category="lateral_movement",
-            description="Perform Pass-the-Ticket attack using Kerberos ticket",
+            description="Authenticate to Kerberos service using existing ticket without knowing plaintext password",
             input_type=TicketInput,
             capability_class="lateral_movement",
             risk_class="critical",
@@ -60,20 +70,35 @@ class ADPassTheTicketAdapter(ManualGatedActionAdapter):
         del request, phase
         return ActiveRiskClass.ACTIVE
 
+    def check_bound(self, context: Any) -> bool:
+        from core.providers.ad_credentials import ADPassTheTicketAdapter as RealAdapter
+        return RealAdapter().check_bound(context)
+
+    def execute_bound(self, context: Any) -> Any:
+        from core.providers.ad_credentials import ADPassTheTicketAdapter as RealAdapter
+        return RealAdapter().execute_bound(context)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        from core.providers.ad_credentials import ADPassTheTicketAdapter as RealAdapter
+        return RealAdapter().verify_bound(context, result)
+
 
 class PassTheHashAdapter(ManualGatedActionAdapter):
-    """Адаптер действия для атаки Pass-the-Hash."""
+    """Адаптер действия для Pass-the-Hash аутентификации."""
+
+    action_id: str = "killchain:pass_the_hash"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
             action_id="killchain:pass_the_hash",
             name="pass_the_hash",
+            aliases=("pth",),
             kind=ActionKind.KILLCHAIN,
             provider="core.killchain.ad.credential:pass_the_hash",
             category="lateral_movement",
-            description="Perform Pass-the-Hash authentication attack",
-            aliases=("pth",),
-            input_type=CredentialInput,
+            description="Authenticate using NTLM hash without knowing plaintext password",
+            input_type=LateralAuthInput,
             capability_class="lateral_movement",
             risk_class="critical",
             required_preconditions=("confirmed_ad_access",),
@@ -106,9 +131,24 @@ class PassTheHashAdapter(ManualGatedActionAdapter):
         del request, phase
         return ActiveRiskClass.ACTIVE
 
+    def check_bound(self, context: Any) -> bool:
+        from core.providers.ad_credentials import PassTheHashAdapter as RealAdapter
+        return RealAdapter().check_bound(context)
+
+    def execute_bound(self, context: Any) -> Any:
+        from core.providers.ad_credentials import PassTheHashAdapter as RealAdapter
+        return RealAdapter().execute_bound(context)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        from core.providers.ad_credentials import PassTheHashAdapter as RealAdapter
+        return RealAdapter().verify_bound(context, result)
+
 
 class ADDumpLsassAdapter(ManualGatedActionAdapter):
-    """Адаптер действия для дампинга памяти LSASS."""
+    """Адаптер действия для извлечения учетных данных из процесса LSASS."""
+
+    action_id: str = "killchain:ad_dump_lsass"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -117,11 +157,11 @@ class ADDumpLsassAdapter(ManualGatedActionAdapter):
             kind=ActionKind.KILLCHAIN,
             provider="core.killchain.ad.credential:dump_lsass",
             category="credential_extraction",
-            description="Dump LSASS process memory on remote target",
+            description="Extract credentials, tickets, and hashes from LSASS process memory",
             input_type=SessionInput,
             capability_class="credential_extraction",
             risk_class="critical",
-            required_preconditions=("confirmed_windows_access",),
+            required_preconditions=("confirmed_ad_access",),
             killchain_stage="credential_access",
             manual_gate=True,
             provider_mounted=False,
@@ -151,9 +191,24 @@ class ADDumpLsassAdapter(ManualGatedActionAdapter):
         del request, phase
         return ActiveRiskClass.ACTIVE
 
+    def check_bound(self, context: Any) -> bool:
+        from core.providers.ad_credentials import ADDumpLsassAdapter as RealAdapter
+        return RealAdapter().check_bound(context)
+
+    def execute_bound(self, context: Any) -> Any:
+        from core.providers.ad_credentials import ADDumpLsassAdapter as RealAdapter
+        return RealAdapter().execute_bound(context)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        from core.providers.ad_credentials import ADDumpLsassAdapter as RealAdapter
+        return RealAdapter().verify_bound(context, result)
+
 
 class ADSamDumpAdapter(ManualGatedActionAdapter):
-    """Адаптер действия для дампа локальных учеток SAM/SYSTEM."""
+    """Адаптер действия для извлечения локальных хешей из SAM-базы."""
+
+    action_id: str = "killchain:ad_sam_dump"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -162,11 +217,11 @@ class ADSamDumpAdapter(ManualGatedActionAdapter):
             kind=ActionKind.KILLCHAIN,
             provider="core.killchain.ad.credential:sam_dump",
             category="credential_extraction",
-            description="Dump SAM and SYSTEM registry hives from target",
+            description="Dump local account password hashes from SAM registry hive",
             input_type=SessionInput,
             capability_class="credential_extraction",
-            risk_class="critical",
-            required_preconditions=("confirmed_windows_access",),
+            risk_class="high",
+            required_preconditions=("confirmed_ad_access",),
             killchain_stage="credential_access",
             manual_gate=True,
             provider_mounted=False,
@@ -195,6 +250,18 @@ class ADSamDumpAdapter(ManualGatedActionAdapter):
     ) -> ActiveRiskClass:
         del request, phase
         return ActiveRiskClass.ACTIVE
+
+    def check_bound(self, context: Any) -> bool:
+        from core.providers.ad_credentials import ADSamDumpAdapter as RealAdapter
+        return RealAdapter().check_bound(context)
+
+    def execute_bound(self, context: Any) -> Any:
+        from core.providers.ad_credentials import ADSamDumpAdapter as RealAdapter
+        return RealAdapter().execute_bound(context)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        from core.providers.ad_credentials import ADSamDumpAdapter as RealAdapter
+        return RealAdapter().verify_bound(context, result)
 
 
 __all__ = [

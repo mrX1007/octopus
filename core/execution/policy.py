@@ -1293,6 +1293,26 @@ class ExecutionPolicy:
             return self._decision(False, reason, context, invocation)
         return self._decision(True, "registered_tool_authorized", context, invocation)
 
+    def authorize_coarse(
+        self,
+        action_id: str,
+        context: ExecutionContext,
+    ) -> ExecutionDecision:
+        if not context.actor:
+            return self._decision(False, "missing_actor", context, None)
+        return self._decision(True, "coarse_authorization_granted", context, None)
+
+    def authorize_deep(
+        self,
+        action_id: str,
+        context: ExecutionContext,
+        target_scope: tuple[str, ...],
+    ) -> ExecutionDecision:
+        allowed, reason = self._targets_allowed(target_scope, context)
+        if not allowed:
+            return self._decision(False, reason, context, None)
+        return self._decision(True, "deep_authorization_granted", context, None)
+
     def authorize_direct(
         self,
         invocation: ToolInvocation,

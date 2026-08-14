@@ -65,7 +65,6 @@ class OctopusCLIApplication:
                 self.workflows.error("Critical pre-flight checks failed. Fix issues above and restart.")
                 return 1
             self.workflows.info(f"Logging to: {log_file}")
-            self.workflows._start_c2_daemon()
             self._discover_extensions()
             self.workflows.main_menu()
             return 0

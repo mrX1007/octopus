@@ -2,22 +2,26 @@
 
 from __future__ import annotations
 
-from core.execution import ToolInvocation
-from core.execution.policy import parse_invocation
+from typing import Any
 
-from .base import ManualGatedActionAdapter
-from .input_contracts import PayloadKeyingInput
-from .models import (
+from core.actions.base import ManualGatedActionAdapter
+from core.actions.input_contracts import PayloadKeyingInput
+from core.actions.models import (
     ActionDescriptor,
     ActionKind,
     ActionRequest,
     ActionRequirements,
     ActiveRiskClass,
 )
+from core.execution import ToolInvocation
+from core.execution.policy import parse_invocation
 
 
 class PayloadKeyingAdapter(ManualGatedActionAdapter):
     """Manual-gated canonical identity for environmental payload keying."""
+
+    action_id: str = "plugin:payload_keying"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -58,6 +62,18 @@ class PayloadKeyingAdapter(ManualGatedActionAdapter):
     ) -> ActiveRiskClass:
         del request, phase
         return ActiveRiskClass.ACTIVE
+
+    def check_bound(self, context: Any) -> bool:
+        from core.providers.payload_keying import PayloadKeyingAdapter as RealAdapter
+        return RealAdapter().check_bound(context)
+
+    def execute_bound(self, context: Any) -> Any:
+        from core.providers.payload_keying import PayloadKeyingAdapter as RealAdapter
+        return RealAdapter().execute_bound(context)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        from core.providers.payload_keying import PayloadKeyingAdapter as RealAdapter
+        return RealAdapter().verify_bound(context, result)
 
 
 __all__ = [

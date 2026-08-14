@@ -13,6 +13,7 @@ import warnings
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from enum import Enum
 
 from core.credential_ranking import KEY_AUTH_MARKER
 from core.secrets import SecretStore, get_secret_store, is_secret_ref
@@ -22,6 +23,25 @@ SSH_KEY_AUTH_REF = "credential-auth://ssh-key"
 
 C_GREEN = "\033[92m"
 C_RESET = "\033[0m"
+
+
+class CredentialAuthKind(str, Enum):
+    PASSWORD = "password"
+    NT_HASH = "nt_hash"
+    SSH_KEY = "ssh_key"
+
+
+def decode_credential_auth_kind(value: object) -> CredentialAuthKind:
+    """Decode the exact legacy/current persisted values, failing closed."""
+
+    if type(value) is CredentialAuthKind:
+        return value
+    if type(value) is not str:
+        raise ValueError("credential_auth_kind_invalid")
+    try:
+        return CredentialAuthKind(value)
+    except ValueError as exc:
+        raise ValueError("credential_auth_kind_invalid") from exc
 
 
 def is_credential_handle(value: object) -> bool:
@@ -36,10 +56,13 @@ class CredentialRef:
     service: str
     target: str
     username: str
-    auth_kind: str = "password"
+    auth_kind: CredentialAuthKind = CredentialAuthKind.PASSWORD
     source: str = ""
     verified: bool = False
     port: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "auth_kind", decode_credential_auth_kind(self.auth_kind))
 
     def audit_dict(self) -> dict[str, object]:
         return {
@@ -47,7 +70,7 @@ class CredentialRef:
             "service": self.service,
             "target": self.target,
             "username": self.username,
-            "auth_kind": self.auth_kind,
+            "auth_kind": self.auth_kind.value,
             "source": self.source,
             "verified": self.verified,
             "port": self.port,
@@ -215,7 +238,7 @@ class CredentialStore:
         username: str,
         secret_ref: str,
         *,
-        auth_kind: str = "password",
+        auth_kind: CredentialAuthKind | str = CredentialAuthKind.PASSWORD,
         source: str = "",
         verified: bool = False,
         port: int = 0,
@@ -224,13 +247,14 @@ class CredentialStore:
         target = str(target or "").strip()
         username = str(username or "").strip()
         normalized_port = max(0, int(port or 0))
+        normalized_auth_kind = decode_credential_auth_kind(auth_kind)
         payload = "\x1f".join(
             (
                 service,
                 target,
                 username,
                 secret_ref,
-                auth_kind,
+                normalized_auth_kind.value,
                 str(normalized_port),
             )
         )
@@ -240,7 +264,7 @@ class CredentialStore:
             service=service,
             target=target,
             username=username,
-            auth_kind=auth_kind,
+            auth_kind=normalized_auth_kind,
             source=str(source or ""),
             verified=bool(verified),
             port=normalized_port,
@@ -665,11 +689,13 @@ def deprecated_plaintext_credential_for_execution(
 __all__ = [
     "CREDENTIAL_HANDLE_PREFIX",
     "SSH_KEY_AUTH_REF",
+    "CredentialAuthKind",
     "CredentialMaterial",
     "CredentialRef",
     "CredentialStore",
     "call_credential_provider",
     "credential_material_for_execution",
+    "decode_credential_auth_kind",
     "deprecated_plaintext_credential_for_execution",
     "get_all_credential_refs_for_target",
     "get_best_credential_ref",

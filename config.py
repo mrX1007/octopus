@@ -77,6 +77,15 @@ DEFAULTS: dict[str, Any] = {
         "password": "",
         "database": "octopus",
     },
+    "c2": {
+        "enrollment": {
+            "ttl_min_seconds": 60,
+            "ttl_default_seconds": 900,
+            "ttl_max_seconds": 3600,
+            "max_uses_default": 1,
+            "max_uses_max": 1,
+        },
+    },
     "ollama": {
         "url": os.environ.get("OCTOPUS_OLLAMA_URL", "http://localhost:11434/api/generate"),
         "model": os.environ.get("OCTOPUS_OLLAMA_MODEL", "octopus-qwen"),
@@ -316,6 +325,11 @@ _EMPTY_LIST_ITEM_TYPES: dict[tuple[str, ...], type] = {
 }
 
 _NUMERIC_RANGES: dict[tuple[str, ...], tuple[Optional[float], Optional[float]]] = {
+    ("c2", "enrollment", "ttl_min_seconds"): (1, 86_400),
+    ("c2", "enrollment", "ttl_default_seconds"): (1, 86_400),
+    ("c2", "enrollment", "ttl_max_seconds"): (1, 86_400),
+    ("c2", "enrollment", "max_uses_default"): (1, 1),
+    ("c2", "enrollment", "max_uses_max"): (1, 1),
     ("ollama", "max_tokens"): (1, None),
     ("ollama", "json_max_tokens"): (1, None),
     ("ollama", "temperature"): (0, 2),
@@ -610,6 +624,30 @@ def load_config() -> dict:
     )
     if env_num_ctx is not None:
         cfg["ollama"]["num_ctx"] = env_num_ctx
+
+    enrollment_environment = {
+        "ttl_min_seconds": "OCTOPUS_C2_ENROLLMENT_TTL_MIN_SECONDS",
+        "ttl_default_seconds": "OCTOPUS_C2_ENROLLMENT_TTL_DEFAULT_SECONDS",
+        "ttl_max_seconds": "OCTOPUS_C2_ENROLLMENT_TTL_MAX_SECONDS",
+        "max_uses_default": "OCTOPUS_C2_ENROLLMENT_MAX_USES_DEFAULT",
+        "max_uses_max": "OCTOPUS_C2_ENROLLMENT_MAX_USES_MAX",
+    }
+    for field_name, environment_name in enrollment_environment.items():
+        value = _env_int(environment_name, ("c2", "enrollment", field_name))
+        if value is not None:
+            cfg["c2"]["enrollment"][field_name] = value
+
+    enrollment = cfg["c2"]["enrollment"]
+    if not (
+        1
+        <= enrollment["ttl_min_seconds"]
+        <= enrollment["ttl_default_seconds"]
+        <= enrollment["ttl_max_seconds"]
+        <= 86_400
+    ):
+        raise ConfigValidationError("C2 enrollment TTL bounds must satisfy min <= default <= max")
+    if enrollment["max_uses_default"] != 1 or enrollment["max_uses_max"] != 1:
+        raise ConfigValidationError("C2 enrollment max_uses must remain exactly 1")
 
     return cfg
 

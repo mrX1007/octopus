@@ -19,7 +19,6 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 import core.c2.enrollment as enrollment_module
 import core.c2.implants.python_implant as implant_module
-import core.c2.operators as operators_module
 from core.c2.enrollment import EnrollmentAuthority
 from core.c2.event_store import Event, EventStore
 from core.c2.implants.python_implant import _encrypt_config, _split_key, generate_python_implant
@@ -272,33 +271,23 @@ def test_event_store_replay_offsets_upsert_and_transaction_rollback(tmp_path: Pa
     assert store.get_subscriber_offset("rolled-back") == 0
 
 
-def test_operator_manager_bootstrap_authentication_rbac_and_key_lifecycle(
+def test_operator_manager_does_not_auto_create_admin(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    counter = [0]
-
-    def token_hex(size: int) -> str:
-        counter[0] += 1
-        return f"{counter[0]:0{size * 2}x}"[-size * 2 :]
-
-    monkeypatch.setattr(operators_module, "secrets", SimpleNamespace(token_hex=token_hex))
     db_path = tmp_path / "operators.db"
     manager = OperatorManager(str(db_path))
+    assert manager.list_operators() == []
+    assert not (tmp_path / "default_admin.key").exists()
 
-    key_file = tmp_path / "default_admin.key"
-    default_key = key_file.read_text(encoding="utf-8")
-    assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
-    default_admin = manager.authenticate(default_key)
-    assert default_admin is not None
-    assert default_admin["name"] == "default-admin"
-    assert default_admin["role"] == ROLE_ADMIN
-
-    listed = manager.list_operators()
-    assert len(listed) == 1
-    assert "api_key_hash" not in listed[0]
+    admin_key = manager.create_operator("admin", ROLE_ADMIN, subject_id="subject:admin")
+    admin = manager.authenticate(admin_key)
+    assert admin is not None
+    assert admin["name"] == "admin"
+    assert admin["role"] == ROLE_ADMIN
+    assert admin["subject_id"] == "subject:admin"
+    assert "api_key_hash" not in admin
     assert manager.authenticate("wrong-key") is None
-    assert _hash_api_key(default_key) == hashlib.sha256(default_key.encode("utf-8")).hexdigest()
+    assert _hash_api_key(admin_key) == hashlib.sha256(admin_key.encode("utf-8")).hexdigest()
 
     operator_key = manager.create_operator("alice", ROLE_OPERATOR)
     readonly_key = manager.create_operator("viewer", ROLE_READONLY)
@@ -326,10 +315,9 @@ def test_operator_manager_bootstrap_authentication_rbac_and_key_lifecycle(
     assert manager.rotate_api_key("missing") is None
     assert manager.deactivate_operator("missing") is False
 
-    original_default_key = key_file.read_text(encoding="utf-8")
     reopened = OperatorManager(str(db_path))
     assert len(reopened.list_operators()) == 3
-    assert key_file.read_text(encoding="utf-8") == original_default_key
+    assert not (tmp_path / "default_admin.key").exists()
 
 
 def test_implant_config_encryption_and_key_split_are_lossless(

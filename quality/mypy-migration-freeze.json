@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "state": "frozen",
+  "parent_pr19_commit": "HEAD",
+  "freeze_base_commit": "HEAD",
+  "total_diagnostics": 0,
+  "authorized_modify_paths": [],
+  "authorized_stub_paths": []
+}

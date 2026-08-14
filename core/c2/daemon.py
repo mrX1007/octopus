@@ -12,7 +12,6 @@ import json
 import os
 import secrets
 import socket
-import sys
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -495,20 +494,10 @@ def handle_client(conn):
 
 def run_socket_server():
     """Unix Domain Socket control plane."""
-    # Remove stale socket
+    # A live service manager owns socket lifecycle.  The daemon must never
+    # connect outbound merely to probe or replace an existing control socket.
     if os.path.exists(SOCK_FILE):
-        try:
-            # Test if something is actually listening
-            test_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            test_sock.settimeout(1)
-            test_sock.connect(SOCK_FILE)
-            test_sock.close()
-            # Something is listening — another daemon is running
-            print(f"[!] Another daemon is already listening on {SOCK_FILE}")
-            sys.exit(1)
-        except (ConnectionRefusedError, OSError):
-            # Stale socket — safe to remove
-            os.remove(SOCK_FILE)
+        raise RuntimeError(f"control socket already exists: {SOCK_FILE}")
 
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(SOCK_FILE)
@@ -525,19 +514,6 @@ def run_socket_server():
 
 def main():
     application = create_app()
-
-    # Ensure at least one operator exists (bootstrap)
-    if not operators.list_operators():
-        print("[*] No operators found — creating default admin...")
-        try:
-            admin_key = operators.create_operator("admin", "admin")
-            key_file = os.path.join(DATA_DIR, "default_admin.key")
-            with open(key_file, "w") as f:
-                f.write(admin_key)
-            os.chmod(key_file, 0o600)
-            print(f"[+] Admin operator created. Key saved to {key_file}")
-        except Exception as e:
-            print(f"[!] Warning: Could not create default operator: {e}")
 
     sock_thread = threading.Thread(target=run_socket_server, daemon=True)
     sock_thread.start()

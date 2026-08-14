@@ -284,7 +284,6 @@ def test_interactive_lifecycle_orders_effects_and_restores_signal(monkeypatch) -
     workflows.preflight_checks = lambda: events.append("preflight") or True
     workflows.info = lambda message: events.append(f"info:{message}")
     workflows.error = lambda message: events.append(f"error:{message}")
-    workflows._start_c2_daemon = lambda: events.append("c2")
     workflows.main_menu = lambda: events.append("menu")
 
     previous_handler = object()
@@ -315,7 +314,6 @@ def test_interactive_lifecycle_orders_effects_and_restores_signal(monkeypatch) -
         "supervisor",
         "preflight",
         "info:Logging to: fixture.log",
-        "c2",
         "plugins",
         "menu",
     ]

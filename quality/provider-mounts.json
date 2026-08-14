@@ -1,0 +1,366 @@
+{
+  "entries": [
+    {
+      "mount_digest": "sha256:c3d7a6b2d336de956fe1702f3277040bdde75e5b9d0c0ad56df87ee2b2ab8912",
+      "revision": 1,
+      "spec": {
+        "action_id": "c2:c2_channel_create",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_c2.C2ChannelCreateAdapter",
+        "configured": true,
+        "execution_mode": "child_executor",
+        "mounted": true,
+        "provider_owner": "c2_channel_create",
+        "provider_transport": "child_executor",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:c2_channel_create",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:024fcbbada2a1a952789539cfa2ba9fe2b93a518841f8c40800f61cb22df1d51",
+      "revision": 2,
+      "spec": {
+        "action_id": "c2:c2_cleanup",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_c2.C2CleanupAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "c2_cleanup",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:c2_cleanup",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:ec4076507addbedcb4d8135c78ec8d09ac7d6b7d2e53c5294035f90e169beb94",
+      "revision": 3,
+      "spec": {
+        "action_id": "c2:c2_deploy",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_c2.C2DeployAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "c2_deploy",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:c2_deploy",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:c25832cd420f8ac557ce621e5d37f7987995232d7fedf8d34b2a6d1c74ac451a",
+      "revision": 4,
+      "spec": {
+        "action_id": "c2:c2_enroll",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_c2.C2EnrollAdapter",
+        "configured": true,
+        "execution_mode": "deadline_local_ipc",
+        "mounted": true,
+        "provider_owner": "c2_enroll",
+        "provider_transport": "local_daemon_ipc",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:c2_enroll",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:2e388a90f22c82d79cf852913d1095283d8bba4b6676668a955cdde7fd2327b2",
+      "revision": 5,
+      "spec": {
+        "action_id": "c2:c2_task",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_c2.C2TaskAdapter",
+        "configured": true,
+        "execution_mode": "deadline_local_ipc",
+        "mounted": true,
+        "provider_owner": "c2_task",
+        "provider_transport": "local_daemon_ipc",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:c2_task",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:a2cf25eb247a166e6471d19c253256a12250ae97e337918ad16704cb7abd1779",
+      "revision": 6,
+      "spec": {
+        "action_id": "c2:dns_c2_channel",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_c2.DNSC2ChannelAdapter",
+        "configured": true,
+        "execution_mode": "deadline_local_ipc",
+        "mounted": true,
+        "provider_owner": "dns_c2_channel",
+        "provider_transport": "local_daemon_ipc",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:dns_c2_channel",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:e9f7bac23c3bea582a450fcfd0921c7aacf4ffce785f5e8b774dfa7db4539107",
+      "revision": 7,
+      "spec": {
+        "action_id": "killchain:ad_dcom_exec",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_ad_lateral.ADDcomExecAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "ad_dcom_exec",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:ad_dcom_exec",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:58a3abbaf40da242a555d2ab970a05dbba8dd95285ffe057d6a991dd42512477",
+      "revision": 8,
+      "spec": {
+        "action_id": "killchain:ad_dump_lsass",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_ad_credential.ADDumpLsassAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "ad_dump_lsass",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:ad_dump_lsass",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:1c191e7e005400df7e70ba84ad7d04a786ef90ff1f5756101ac654c8d495f50c",
+      "revision": 9,
+      "spec": {
+        "action_id": "killchain:ad_pass_the_ticket",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_ad_credential.ADPassTheTicketAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "ad_pass_the_ticket",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:ad_pass_the_ticket",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:11bf7e39b29744a03e55d8433e459a64c50dd578d3bc673e9e2a2bc9f2fb9078",
+      "revision": 10,
+      "spec": {
+        "action_id": "killchain:ad_remote_execution",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_ad_lateral.ADRemoteExecutionCapabilityAdapter",
+        "configured": true,
+        "execution_mode": "child_executor",
+        "mounted": true,
+        "provider_owner": "ad_remote_execution",
+        "provider_transport": "child_executor",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:ad_remote_execution",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:ae712714851a4a46254c3d573d7d8f0a3e5c9751bec76ee25a67c17dd744a6e9",
+      "revision": 11,
+      "spec": {
+        "action_id": "killchain:ad_sam_dump",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_ad_credential.ADSamDumpAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "ad_sam_dump",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:ad_sam_dump",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:dc8cac4381634a14111d9432661d73e751f3a6d0172005af4dbbcc7ea5424729",
+      "revision": 12,
+      "spec": {
+        "action_id": "killchain:ad_smbexec",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_ad_lateral.ADSmbexecAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "ad_smbexec",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:ad_smbexec",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:9145bbe40ee11b383fc528d6419be0735abe5264d45dd54b2ce00bd1e5dd3e68",
+      "revision": 13,
+      "spec": {
+        "action_id": "killchain:ad_winrm_exec",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_ad_lateral.ADWinrmExecAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "ad_winrm_exec",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:ad_winrm_exec",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:8fd3e10b7ca9ff10d3713f1821846676dfa6aea3daaea462bef2692c768e360a",
+      "revision": 14,
+      "spec": {
+        "action_id": "killchain:kerberos_crack_tickets",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_kerberos.KerberosCrackTicketsAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "kerberos_crack_tickets",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:kerberos_crack_tickets",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:0c1194506d9af738cd9ed868eba23c7a693270ef300c7915db861fbc6e1a61b6",
+      "revision": 15,
+      "spec": {
+        "action_id": "killchain:kerberos_extract_tickets",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_kerberos.KerberosExtractTicketsAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "kerberos_extract_tickets",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:kerberos_extract_tickets",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:5c5a36efc53b664e70e93365706eb13a0df47cc2ea7d544b984d95107808a5bf",
+      "revision": 16,
+      "spec": {
+        "action_id": "killchain:pass_the_hash",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_ad_credential.PassTheHashAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "pass_the_hash",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:pass_the_hash",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:5d6d4e29a0e21abd72fdd1551d8189176e9fd04c9dbf0ebc290bb62b6c2640da",
+      "revision": 17,
+      "spec": {
+        "action_id": "killchain:pivot_proxy_scan",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_pivot.PivotProxyScanAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "pivot_proxy_scan",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:pivot_proxy_scan",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:915b5963e8ebb211c8ce8cf93892b27020d5f92a34ce99e6aabbc35109cb2b9e",
+      "revision": 18,
+      "spec": {
+        "action_id": "killchain:pivot_remote_forward",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_pivot.PivotRemoteForwardAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "pivot_remote_forward",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:pivot_remote_forward",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:8521024d6ad73b76ec5de060c936b09edc01ea9c038e69293b89da623e999409",
+      "revision": 19,
+      "spec": {
+        "action_id": "killchain:pivot_ssh_chain",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_pivot.PivotSSHChainAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "pivot_ssh_chain",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:pivot_ssh_chain",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    },
+    {
+      "mount_digest": "sha256:561b0cc67fc7e428169bfebf1bcecb2b8daa9e26d234648a4bcd8710f1c075d4",
+      "revision": 20,
+      "spec": {
+        "action_id": "plugin:payload_keying",
+        "adapter_api_version": 2,
+        "adapter_class": "core.actions.adapters_evasion.PayloadKeyingAdapter",
+        "configured": true,
+        "execution_mode": "cooperative_in_process",
+        "mounted": true,
+        "provider_owner": "payload_keying",
+        "provider_transport": "in_process",
+        "raw_command_supported": false,
+        "readiness_probe_id": "probe:payload_keying",
+        "schema_version": "2.0",
+        "typed_action_supported": true
+      }
+    }
+  ],
+  "entry_count": 20,
+  "schema_version": "2.0"
+}

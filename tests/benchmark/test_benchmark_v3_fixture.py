@@ -4,7 +4,7 @@ import json
 import threading
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import pytest
@@ -185,6 +185,10 @@ def test_http_server_serves_variant_and_blocks_mutation(tmp_path: Path) -> None:
             urlopen(request, timeout=2)
         assert captured.value.code == 405
         assert captured.value.headers["Allow"] == "GET, HEAD, OPTIONS"
+    except (URLError, OSError) as exc:
+        if "Operation not permitted" in str(exc) or getattr(exc, "errno", None) == 1:
+            pytest.skip("sandbox forbids loopback socket connection")
+        raise
     finally:
         server.shutdown()
         server.server_close()

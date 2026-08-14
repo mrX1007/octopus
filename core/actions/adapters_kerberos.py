@@ -2,22 +2,26 @@
 
 from __future__ import annotations
 
-from core.execution import ToolInvocation
-from core.execution.policy import parse_invocation
+from typing import Any
 
-from .base import ManualGatedActionAdapter
-from .input_contracts import SessionInput, TicketInput
-from .models import (
+from core.actions.base import ManualGatedActionAdapter
+from core.actions.input_contracts import SessionInput, TicketInput
+from core.actions.models import (
     ActionDescriptor,
     ActionKind,
     ActionRequest,
     ActionRequirements,
     ActiveRiskClass,
 )
+from core.execution import ToolInvocation
+from core.execution.policy import parse_invocation
 
 
 class KerberosExtractTicketsAdapter(ManualGatedActionAdapter):
     """Адаптер действия для извлечения билетов Kerberos из памяти/системы."""
+
+    action_id: str = "killchain:kerberos_extract_tickets"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -60,9 +64,24 @@ class KerberosExtractTicketsAdapter(ManualGatedActionAdapter):
         del request, phase
         return ActiveRiskClass.ACTIVE
 
+    def check_bound(self, context: Any) -> bool:
+        from core.providers.kerberos import KerberosExtractAdapter
+        return KerberosExtractAdapter().check_bound(context)
+
+    def execute_bound(self, context: Any) -> Any:
+        from core.providers.kerberos import KerberosExtractAdapter
+        return KerberosExtractAdapter().execute_bound(context)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        from core.providers.kerberos import KerberosExtractAdapter
+        return KerberosExtractAdapter().verify_bound(context)
+
 
 class KerberosCrackTicketsAdapter(ManualGatedActionAdapter):
-    """Адаптер действия для оффлайн взлома Kerberos билетов (Kerberoast/AS-REP Roast)."""
+    """Адаптер действия для локального/удаленного взлома билетов Kerberos."""
+
+    action_id: str = "killchain:kerberos_crack_tickets"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -70,16 +89,17 @@ class KerberosCrackTicketsAdapter(ManualGatedActionAdapter):
             name="kerberos_crack_tickets",
             kind=ActionKind.KILLCHAIN,
             provider="core.killchain.ad.kerberos:crack_tickets",
-            category="credential_extraction",
-            description="Perform offline hash cracking on extracted Kerberos tickets",
+            category="credential_cracking",
+            description="Crack extracted Kerberos tickets offline",
             input_type=TicketInput,
             capability_class="credential_extraction",
-            risk_class="high",
+            risk_class="medium",
+            required_preconditions=(),
             killchain_stage="credential_access",
             manual_gate=True,
             provider_mounted=False,
             requirements=ActionRequirements(
-                active=True,
+                active=False,
                 target_required=False,
             ),
         )
@@ -102,7 +122,19 @@ class KerberosCrackTicketsAdapter(ManualGatedActionAdapter):
         phase: str = "execute",
     ) -> ActiveRiskClass:
         del request, phase
-        return ActiveRiskClass.ACTIVE
+        return ActiveRiskClass.READ_ONLY
+
+    def check_bound(self, context: Any) -> bool:
+        from core.providers.kerberos import KerberosCrackAdapter
+        return KerberosCrackAdapter().check_bound(context)
+
+    def execute_bound(self, context: Any) -> Any:
+        from core.providers.kerberos import KerberosCrackAdapter
+        return KerberosCrackAdapter().execute_bound(context)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        from core.providers.kerberos import KerberosCrackAdapter
+        return KerberosCrackAdapter().verify_bound(context)
 
 
 __all__ = [

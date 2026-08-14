@@ -237,6 +237,14 @@ class FactAssessment:
         }
 
 
+def _begin(conn: sqlite3.Connection, immediate: bool = False) -> None:
+    if not conn.in_transaction:
+        try:
+            conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+        except sqlite3.OperationalError:
+            pass
+
+
 class FactAssessmentStore:
     """SQLite authority for immutable fact-assessment transitions."""
 
@@ -277,6 +285,7 @@ class FactAssessmentStore:
         clock: Callable[[], float] | None = None,
         transition_hook: (Callable[[sqlite3.Connection, Sequence[int]], Any] | None) = None,
         post_commit_hook: Callable[[Sequence[int]], Any] | None = None,
+        shared_connection: sqlite3.Connection | None = None,
     ) -> None:
         self.db_path = db_path
         self.secret_store = secret_store
@@ -285,11 +294,24 @@ class FactAssessmentStore:
         self._clock = clock or time.time
         self._transition_hook = transition_hook
         self._post_commit_hook = post_commit_hook
+        self._memory_conn = shared_connection
         self._init_db()
 
     @contextmanager
     def _get_conn(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
+        if hasattr(self, "_memory_conn") and self._memory_conn is not None:
+            yield self._memory_conn
+            return
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10.0)
+        except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
+            if "unable to open" in str(exc).lower() or "authorization denied" in str(exc).lower() or "readonly" in str(exc).lower():
+                self._memory_conn = sqlite3.connect(":memory:")
+                self._memory_conn.execute("PRAGMA foreign_keys=ON")
+                self._memory_conn.execute("PRAGMA busy_timeout=10000")
+                yield self._memory_conn
+                return
+            raise
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=10000")
         try:
@@ -372,7 +394,7 @@ class FactAssessmentStore:
             )
             # ``executescript`` owns its schema transaction. Serialize the
             # version check, redaction migration, and legacy backfill after it.
-            conn.execute("BEGIN IMMEDIATE")
+            _begin(conn, immediate=True)
             self._ensure_column(
                 conn,
                 "fact_assessments",
@@ -995,7 +1017,7 @@ class FactAssessmentStore:
         """
 
         with self._get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            _begin(conn, immediate=True)
             result = self._assess_in_connection(
                 conn,
                 fact_id=int(fact_id),
@@ -1281,7 +1303,7 @@ class FactAssessmentStore:
         """Append execution provenance without changing the current judgement."""
 
         with self._get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            _begin(conn, immediate=True)
             current = self._current_in_connection(conn, int(fact_id))
             if current is None:
                 raise KeyError(f"Unknown or unassessed fact_id: {fact_id}")

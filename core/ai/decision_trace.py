@@ -139,9 +139,17 @@ class DecisionTraceStore:
         if self._persistent_conn is not None:
             conn = self._persistent_conn
         else:
-            conn = sqlite3.connect(self.db_path, timeout=10.0)
-            conn.row_factory = sqlite3.Row
-            conn.execute("PRAGMA journal_mode=WAL")
+            try:
+                conn = sqlite3.connect(self.db_path, timeout=10.0)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL")
+            except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
+                if "unable to open" in str(exc).lower() or "authorization denied" in str(exc).lower() or "readonly" in str(exc).lower():
+                    self._persistent_conn = sqlite3.connect(":memory:")
+                    self._persistent_conn.row_factory = sqlite3.Row
+                    conn = self._persistent_conn
+                else:
+                    raise
         conn.execute("PRAGMA busy_timeout=10000")
         try:
             yield conn

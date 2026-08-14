@@ -308,12 +308,10 @@ def test_exploit_selector_handles_local_inventory_without_msf_run():
     assert "MSF run gated:" not in output
 
 
-def test_pipeline_feeds_known_recon_facts_into_exploit_selector():
-    import uuid
-
+def test_pipeline_feeds_known_recon_facts_into_exploit_selector(tmp_path):
     from core.ai.pipeline import AIPipeline
 
-    db_path = f"/tmp/octopus_pipeline_exploit_select_{uuid.uuid4().hex}.db"
+    db_path = str(tmp_path / "octopus_pipeline_exploit_select.db")
     pipeline = AIPipeline(db_path)
     scan_id = "scan-exploit-select"
     host = "10.0.0.5"
@@ -326,12 +324,10 @@ def test_pipeline_feeds_known_recon_facts_into_exploit_selector():
     assert "compact_state ->" in cmd
 
 
-def test_pipeline_feeds_compact_state_to_exploit_selector_without_raw_recon_bits():
-    import uuid
-
+def test_pipeline_feeds_compact_state_to_exploit_selector_without_raw_recon_bits(tmp_path):
     from core.ai.pipeline import AIPipeline
 
-    db_path = f"/tmp/octopus_pipeline_exploit_select_compact_{uuid.uuid4().hex}.db"
+    db_path = str(tmp_path / "octopus_pipeline_exploit_select_compact.db")
     pipeline = AIPipeline(db_path)
     scan_id = "scan-exploit-select-compact"
     host = "10.0.0.5"
@@ -362,12 +358,10 @@ def test_exploit_selector_strips_compact_state_before_regex_parsing():
     assert not any("compact_state" in svc["version"] or "{" in svc["service"] for svc in services)
 
 
-def test_fact_driven_actions_enrich_internal_and_web_surfaces():
-    import uuid
-
+def test_fact_driven_actions_enrich_internal_and_web_surfaces(tmp_path):
     from core.ai.pipeline import AIPipeline
 
-    db_path = f"/tmp/octopus_pipeline_all_surface_actions_{uuid.uuid4().hex}.db"
+    db_path = str(tmp_path / "octopus_pipeline_all_surface_actions.db")
     pipeline = AIPipeline(db_path)
     pipeline.tool_registry._is_tool_available = lambda name: name != "msf_check"
     scan_id = "scan-all-surfaces"
@@ -395,9 +389,7 @@ def test_fact_driven_actions_enrich_internal_and_web_surfaces():
     assert f"scrapling_crawl http://{host}" in commands
 
 
-def test_msf_ssh_login_success_drives_controlled_internal_inventory():
-    import uuid
-
+def test_msf_ssh_login_success_drives_controlled_internal_inventory(tmp_path):
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -431,12 +423,63 @@ Services analyzed: 1
 $ hostname
 web01
 
-[+] Kernel
-$ uname -a
-Linux web01 5.15.0 x86_64 GNU/Linux
+--- OS & KERNEL ---
+Linux web01 4.19.0-6-amd64 #1 SMP Debian 4.19.67-2+deb10u2 (2019-11-11) x86_64 GNU/Linux
+PRETTY_NAME="Debian GNU/Linux 10 (buster)"
 
-[+] Network addresses
-$ ip -o addr show 2>/dev/null || ip addr show 2>/dev/null
+--- CURRENT USER ---
+uid=1001(support) gid=1001(support) groups=1001(support)
+
+--- NETWORK INTERFACES & IP ADDRESSES ---
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    inet 127.0.0.1/8 scope host lo
+2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast state UP group default qlen 1000
+    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0
+
+--- ROUTING TABLE ---
+default via 10.0.0.1 dev eth0 onlink
+10.0.0.0/24 dev eth0 proto kernel scope link src 10.0.0.5
+
+--- LISTENING SERVICES ---
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      -
+tcp        0      0 127.0.0.1:3306          0.0.0.0:*               LISTEN      -
+
+--- RUNNING PROCESSES (SUMMARY) ---
+root         1  0.0  0.1  57144  8920 ?        Ss   10:00   0:01 /sbin/init
+support   1234  0.0  0.0  14560  3210 ?        S    10:15   0:00 /bin/bash
+
+--- SUDO PRIVILEGES ---
+User support may run the following commands on web01:
+    (ALL : ALL) ALL
+
+--- SUID / SGID BINARIES ---
+-rwsr-xr-x 1 root root 63568 Jan 10  2019 /usr/bin/sudo
+
+--- INTERESTING / SENSITIVE FILES ---
+-rw-r--r-- 1 root root 450 Nov 12 10:30 /etc/hosts
+
+--- ACTIVE SESSIONS & LOGGED-IN USERS ---
+support  pts/0        2026-03-30 10:15 (10.0.0.1)
+
+--- NEIGHBOR HOSTS (ARP/IP NEIGH) ---
+10.0.0.1 dev eth0 lladdr 00:50:56:ea:01:01 REACHABLE
+10.0.0.20 dev eth0 lladdr 00:50:56:ea:01:20 STALE
+
+--- CONTAINER / VIRTUALIZATION HINTS ---
+Virtualization: vmware
+
+--- SCHEDULED TASKS / CRON JOBS ---
+# /etc/crontab: system-wide crontab
+17 * * * * root    cd / && run-parts --report /etc/cron.hourly
+
+--- SHELL HISTORY ---
+ls -la
+cd /var/www
+
+--- INSTALLED SECURITY TOOLS / DEFENSES ---
+AppArmor: active
+
+--- IP ADDR / IP ROUTE FALLBACKS ---
 2: eth0    inet 10.0.0.5/24 brd 10.0.0.255 scope global eth0
 
 [+] SSH inventory completed
@@ -445,7 +488,7 @@ $ ip -o addr show 2>/dev/null || ip addr show 2>/dev/null
 
     pipeline_mod.run_arbitrary_cmd = fake_runner
     try:
-        db_path = f"/tmp/octopus_pipeline_msf_login_inventory_{uuid.uuid4().hex}.db"
+        db_path = str(tmp_path / "octopus_pipeline_msf_login_inventory.db")
         pipeline = AIPipeline(db_path)
         pipeline.tool_registry._is_tool_available = lambda name: True
         facts = [
@@ -471,9 +514,7 @@ $ ip -o addr show 2>/dev/null || ip addr show 2>/dev/null
     assert result["new_facts"] >= 6
 
 
-def test_pipeline_promotes_msf_run_only_after_positive_check_and_scope():
-    import uuid
-
+def test_pipeline_promotes_msf_run_only_after_positive_check_and_scope(tmp_path):
     import config
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
@@ -507,7 +548,7 @@ def test_pipeline_promotes_msf_run_only_after_positive_check_and_scope():
     )
     pipeline_mod.run_arbitrary_cmd = fake_runner
     try:
-        db_path = f"/tmp/octopus_pipeline_active_msf_{uuid.uuid4().hex}.db"
+        db_path = str(tmp_path / "octopus_pipeline_active_msf.db")
         pipeline = AIPipeline(db_path)
         pipeline.tool_registry._is_tool_available = lambda name: True
         result = pipeline._run_task_commands(
@@ -528,9 +569,7 @@ def test_pipeline_promotes_msf_run_only_after_positive_check_and_scope():
     assert result["parsed_facts"] >= 6
 
 
-def test_pipeline_does_not_promote_msf_run_outside_authorized_scope():
-    import uuid
-
+def test_pipeline_does_not_promote_msf_run_outside_authorized_scope(tmp_path):
     import config
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
@@ -562,7 +601,7 @@ def test_pipeline_does_not_promote_msf_run_outside_authorized_scope():
     )
     pipeline_mod.run_arbitrary_cmd = fake_runner
     try:
-        db_path = f"/tmp/octopus_pipeline_active_scope_{uuid.uuid4().hex}.db"
+        db_path = str(tmp_path / "octopus_pipeline_active_scope.db")
         pipeline = AIPipeline(db_path)
         pipeline.tool_registry._is_tool_available = lambda name: True
         pipeline._run_task_commands(
@@ -579,12 +618,10 @@ def test_pipeline_does_not_promote_msf_run_outside_authorized_scope():
     assert not any(cmd.startswith("msf_run 10.0.0.5") for cmd in calls)
 
 
-def test_fact_driven_actions_map_evidence_to_next_commands():
-    import uuid
-
+def test_fact_driven_actions_map_evidence_to_next_commands(tmp_path):
     from core.ai.pipeline import AIPipeline
 
-    db_path = f"/tmp/octopus_pipeline_fact_actions_{uuid.uuid4().hex}.db"
+    db_path = str(tmp_path / "octopus_pipeline_fact_actions.db")
     pipeline = AIPipeline(db_path)
     pipeline.tool_registry._is_tool_available = lambda name: name != "searchsploit"
     scan_id = "scan-fact-actions"
@@ -605,12 +642,10 @@ def test_fact_driven_actions_map_evidence_to_next_commands():
     assert f"scrapling https://{host}:8443/_reports" in commands
 
 
-def test_fact_driven_actions_add_protocol_and_db_probes():
-    import uuid
-
+def test_fact_driven_actions_add_protocol_and_db_probes(tmp_path):
     from core.ai.pipeline import AIPipeline
 
-    db_path = f"/tmp/octopus_pipeline_service_actions_{uuid.uuid4().hex}.db"
+    db_path = str(tmp_path / "octopus_pipeline_service_actions.db")
     pipeline = AIPipeline(db_path)
     pipeline._known_credentials_for_target = lambda target: {"postgresql": [("postgres", "secret")]}
     scan_id = "scan-service-actions"
@@ -632,9 +667,7 @@ def test_fact_driven_actions_add_protocol_and_db_probes():
     assert f"db_inventory {host} 3306 mysql" not in commands
 
 
-def test_fact_driven_actions_recurse_from_crawl_links_to_pages():
-    import uuid
-
+def test_fact_driven_actions_recurse_from_crawl_links_to_pages(tmp_path):
     import core.ai.pipeline as pipeline_mod
     from core.ai.pipeline import AIPipeline
 
@@ -676,7 +709,7 @@ Forms (1):
 
     pipeline_mod.run_arbitrary_cmd = fake_runner
     try:
-        db_path = f"/tmp/octopus_pipeline_deep_web_{uuid.uuid4().hex}.db"
+        db_path = str(tmp_path / "octopus_pipeline_deep_web.db")
         pipeline = AIPipeline(db_path)
         pipeline.tool_registry._is_tool_available = lambda name: True
         scan_id = "scan-deep-web"
@@ -837,12 +870,12 @@ def test_registry_exposes_asm_api_secret_code_cloud_categories():
     assert "bloodhound_ingest" in registry._tool_names_for_task("ad_security_review")
 
 
-def test_msf_check_results_separate_login_check_and_active_run_modes():
+def test_msf_check_results_separate_login_check_and_active_run_modes(tmp_path):
     import json
 
     from core.ai.pipeline import AIPipeline
 
-    pipeline = AIPipeline("/tmp/octopus_msf_modes.db")
+    pipeline = AIPipeline(str(tmp_path / "octopus_msf_modes.db"))
     login_fact = pipeline._command_check_result_fact(
         "msf_check 10.0.0.5 auxiliary/scanner/ssh/ssh_login RPORT=22 USERNAME=root PASSWORD=toor",
         "10.0.0.5",

@@ -112,7 +112,7 @@ def test_application_run_covers_success_and_both_early_failures(
 
     assert successful.run() == 0
     successful_workflows.info.assert_called_once_with("Logging to: fixture.log")
-    successful_workflows._start_c2_daemon.assert_called_once_with()
+    successful_workflows._start_c2_daemon.assert_not_called()
     discover.assert_called_once_with()
     successful_workflows.main_menu.assert_called_once_with()
     supervisor.stop.assert_called_once_with()

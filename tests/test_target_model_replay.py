@@ -6,12 +6,10 @@ import pytest
 pytestmark = pytest.mark.replay
 
 
-def test_replay_outputs_builds_target_model_and_snapshot_actions():
-    import uuid
-
+def test_replay_outputs_builds_target_model_and_snapshot_actions(tmp_path):
     from core.ai.pipeline import AIPipeline
 
-    db_path = f"/tmp/octopus_replay_target_model_{uuid.uuid4().hex}.db"
+    db_path = str(tmp_path / "octopus_replay_target_model.db")
     pipeline = AIPipeline(db_path)
     scan_id = "scan-replay"
     target = "10.0.0.5"
@@ -54,15 +52,14 @@ Links:
     assert any(command.startswith("exploit_select 10.0.0.5") for command in actions)
 
 
-def test_real_app_replay_ssh_only_log_builds_state_without_web_or_msf_noise():
+def test_real_app_replay_ssh_only_log_builds_state_without_web_or_msf_noise(tmp_path):
     import pathlib
-    import uuid
 
     from core.ai.pipeline import AIPipeline
 
     fixture = pathlib.Path(__file__).parent / "fixtures" / "replay_ssh_only_real_app.log"
     raw_log = fixture.read_text()
-    db_path = f"/tmp/octopus_real_replay_ssh_{uuid.uuid4().hex}.db"
+    db_path = str(tmp_path / "octopus_real_replay_ssh.db")
     pipeline = AIPipeline(db_path)
     scan_id = "scan-real-ssh"
     target = "83.166.241.164"
@@ -87,14 +84,13 @@ def test_real_app_replay_ssh_only_log_builds_state_without_web_or_msf_noise():
     assert any(service["service"] == "ssh" and service["port"] == 22 for service in model["services"])
 
 
-def test_target_model_exposes_typed_check_results_and_endpoint_coverage():
+def test_target_model_exposes_typed_check_results_and_endpoint_coverage(tmp_path):
     import json
-    import uuid
 
     from core.ai.fact_store import FactStore
     from core.ai.target_model import TargetModel
 
-    store = FactStore(f"/tmp/octopus_typed_coverage_{uuid.uuid4().hex}.db")
+    store = FactStore(str(tmp_path / "octopus_typed_coverage.db"))
     scan_id = "scan-typed"
     target = "10.0.0.5"
     endpoint = json.dumps(
@@ -134,12 +130,10 @@ def test_target_model_exposes_typed_check_results_and_endpoint_coverage():
     )
 
 
-def test_target_model_exposes_assets_api_and_security_findings():
-    import uuid
-
+def test_target_model_exposes_assets_api_and_security_findings(tmp_path):
     from core.ai.pipeline import AIPipeline
 
-    pipeline = AIPipeline(f"/tmp/octopus_target_model_asm_{uuid.uuid4().hex}.db")
+    pipeline = AIPipeline(str(tmp_path / "octopus_target_model_asm.db"))
     scan_id = "scan-asm"
     target = "example.com"
     for fact_type, value in (
@@ -182,12 +176,10 @@ def test_target_model_exposes_assets_api_and_security_findings():
     assert model["unknowns"]["code_security"] == "confirmed_present"
 
 
-def test_target_model_exposes_web_app_security_layer():
-    import uuid
-
+def test_target_model_exposes_web_app_security_layer(tmp_path):
     from core.ai.pipeline import AIPipeline
 
-    pipeline = AIPipeline(f"/tmp/octopus_target_model_webapp_{uuid.uuid4().hex}.db")
+    pipeline = AIPipeline(str(tmp_path / "octopus_target_model_webapp.db"))
     scan_id = "scan-webapp"
     target = "app.example.com"
     for fact_type, value in (
@@ -208,12 +200,10 @@ def test_target_model_exposes_web_app_security_layer():
     assert any(item["value"] == "alg:none" for item in model["web_app"]["jwt"])
 
 
-def test_asset_graph_models_interface_subnet_endpoint_and_secret():
-    import uuid
-
+def test_asset_graph_models_interface_subnet_endpoint_and_secret(tmp_path):
     from core.ai.pipeline import AIPipeline
 
-    pipeline = AIPipeline(f"/tmp/octopus_asset_graph_{uuid.uuid4().hex}.db")
+    pipeline = AIPipeline(str(tmp_path / "octopus_asset_graph.db"))
     scan_id = "scan-graph"
     host = "10.0.0.5"
     for fact_type, value in (
@@ -257,12 +247,10 @@ def test_surface_state_and_policy_filter_confirmed_absent_tasks():
     assert [step["task"] for step in filtered] == ["api_security_testing"]
 
 
-def test_target_model_risk_analysis_correlates_ad_cloud_secret_and_code():
-    import uuid
-
+def test_target_model_risk_analysis_correlates_ad_cloud_secret_and_code(tmp_path):
     from core.ai.pipeline import AIPipeline
 
-    pipeline = AIPipeline(f"/tmp/octopus_risk_analysis_{uuid.uuid4().hex}.db")
+    pipeline = AIPipeline(str(tmp_path / "octopus_risk_analysis.db"))
     scan_id = "scan-risk"
     target = "app.example.com"
     for fact_type, value in (
@@ -284,12 +272,10 @@ def test_target_model_risk_analysis_correlates_ad_cloud_secret_and_code():
     assert risk["code_reachability"][0]["exposed_surface_present"] is True
 
 
-def test_replay_snapshot_asserts_facts_actions_and_surface_states():
-    import uuid
-
+def test_replay_snapshot_asserts_facts_actions_and_surface_states(tmp_path):
     from core.ai.replay_snapshot import ReplaySnapshot
 
-    snapshot = ReplaySnapshot(f"/tmp/octopus_replay_snapshot_{uuid.uuid4().hex}.db")
+    snapshot = ReplaySnapshot(str(tmp_path / "octopus_replay_snapshot.db"))
     result = snapshot.assert_ok(
         {
             "scan_id": "scan-snapshot",
@@ -325,14 +311,13 @@ def test_replay_snapshot_asserts_facts_actions_and_surface_states():
     assert any(action.startswith("exploit_select 10.0.0.5") for action in result["actions"])
 
 
-def test_replay_snapshot_fixture_file_web_api():
+def test_replay_snapshot_fixture_file_web_api(tmp_path):
     import pathlib
-    import uuid
 
     from core.ai.replay_snapshot import ReplaySnapshot
 
     fixture = pathlib.Path(__file__).parent / "fixtures" / "replay_snapshot_web_api.json"
-    snapshot = ReplaySnapshot(f"/tmp/octopus_replay_snapshot_file_{uuid.uuid4().hex}.db")
+    snapshot = ReplaySnapshot(str(tmp_path / "octopus_replay_snapshot_file.db"))
     result = snapshot.assert_file_ok(str(fixture))
 
     assert result["surface_states"]["web"] == "confirmed_present"

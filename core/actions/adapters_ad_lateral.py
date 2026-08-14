@@ -2,22 +2,26 @@
 
 from __future__ import annotations
 
-from core.execution import ToolInvocation
-from core.execution.policy import parse_invocation
+from typing import Any
 
-from .base import ManualGatedActionAdapter
-from .input_contracts import RemoteExecInput
-from .models import (
+from core.actions.base import ManualGatedActionAdapter
+from core.actions.input_contracts import RemoteExecInput
+from core.actions.models import (
     ActionDescriptor,
     ActionKind,
     ActionRequest,
     ActionRequirements,
     ActiveRiskClass,
 )
+from core.execution import ToolInvocation
+from core.execution.policy import parse_invocation
 
 
 class ADSmbexecAdapter(ManualGatedActionAdapter):
     """Адаптер действия для удаленного выполнения команд через SMBExec."""
+
+    action_id: str = "killchain:ad_smbexec"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -60,9 +64,24 @@ class ADSmbexecAdapter(ManualGatedActionAdapter):
         del request, phase
         return ActiveRiskClass.ACTIVE
 
+    def check_bound(self, context: Any) -> bool:
+        from core.providers.ad_lateral import ADSmbexecAdapter as RealAdapter
+        return RealAdapter().check_bound(context)
+
+    def execute_bound(self, context: Any) -> Any:
+        from core.providers.ad_lateral import ADSmbexecAdapter as RealAdapter
+        return RealAdapter().execute_bound(context)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        from core.providers.ad_lateral import ADSmbexecAdapter as RealAdapter
+        return RealAdapter().verify_bound(context)
+
 
 class ADWinrmExecAdapter(ManualGatedActionAdapter):
     """Адаптер действия для удаленного выполнения команд через WinRM."""
+
+    action_id: str = "killchain:ad_winrm_exec"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -105,9 +124,24 @@ class ADWinrmExecAdapter(ManualGatedActionAdapter):
         del request, phase
         return ActiveRiskClass.ACTIVE
 
+    def check_bound(self, context: Any) -> bool:
+        from core.providers.ad_lateral import ADWinRMExecAdapter as RealAdapter
+        return RealAdapter().check_bound(context)
+
+    def execute_bound(self, context: Any) -> Any:
+        from core.providers.ad_lateral import ADWinRMExecAdapter as RealAdapter
+        return RealAdapter().execute_bound(context)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        from core.providers.ad_lateral import ADWinRMExecAdapter as RealAdapter
+        return RealAdapter().verify_bound(context)
+
 
 class ADDcomExecAdapter(ManualGatedActionAdapter):
     """Адаптер действия для удаленного выполнения команд через DCOM."""
+
+    action_id: str = "killchain:ad_dcom_exec"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -150,9 +184,24 @@ class ADDcomExecAdapter(ManualGatedActionAdapter):
         del request, phase
         return ActiveRiskClass.ACTIVE
 
+    def check_bound(self, context: Any) -> bool:
+        from core.providers.ad_lateral import ADDComExecAdapter as RealAdapter
+        return RealAdapter().check_bound(context)
+
+    def execute_bound(self, context: Any) -> Any:
+        from core.providers.ad_lateral import ADDComExecAdapter as RealAdapter
+        return RealAdapter().execute_bound(context)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        from core.providers.ad_lateral import ADDComExecAdapter as RealAdapter
+        return RealAdapter().verify_bound(context)
+
 
 class ADRemoteExecutionCapabilityAdapter(ManualGatedActionAdapter):
-    """Unmounted composite identity; any future leaf must re-enter ActionExecutor."""
+    """Composite router for Active Directory remote execution; re-enters ActionExecutor."""
+
+    action_id: str = "killchain:ad_remote_execution"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -161,7 +210,7 @@ class ADRemoteExecutionCapabilityAdapter(ManualGatedActionAdapter):
             kind=ActionKind.KILLCHAIN,
             provider="core.killchain.ad.lateral:remote_execution",
             category="lateral_movement",
-            description="Unmounted composite AD remote execution identity without leaf delegation",
+            description="Composite router for AD remote execution selecting WinRM/SMB/DCOM",
             input_type=RemoteExecInput,
             capability_class="lateral_movement",
             risk_class="critical",
@@ -195,10 +244,34 @@ class ADRemoteExecutionCapabilityAdapter(ManualGatedActionAdapter):
         del request, phase
         return ActiveRiskClass.ACTIVE
 
+    def check_bound(self, context: Any) -> bool:
+        from core.providers.ad_lateral import ADRemoteExecutionRouter
+        return ADRemoteExecutionRouter().check_bound(context)
+
+    def route_bound(self, context: Any) -> Any:
+        from core.providers.ad_lateral import ADRemoteExecutionRouter
+        return ADRemoteExecutionRouter().route_bound(context)
+
+    def execute_bound(self, context: Any) -> Any:
+        from core.providers.ad_lateral import ADRemoteExecutionRouter
+        return ADRemoteExecutionRouter().execute_bound(context)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        from core.providers.ad_lateral import ADRemoteExecutionRouter
+        return ADRemoteExecutionRouter().verify_bound(context)
+
+
+ADWinRMExecAdapter = ADWinrmExecAdapter
+ADDComExecAdapter = ADDcomExecAdapter
+ADRemoteExecutionAdapter = ADRemoteExecutionCapabilityAdapter
+
 
 __all__ = [
+    "ADDComExecAdapter",
     "ADDcomExecAdapter",
+    "ADRemoteExecutionAdapter",
     "ADRemoteExecutionCapabilityAdapter",
     "ADSmbexecAdapter",
+    "ADWinRMExecAdapter",
     "ADWinrmExecAdapter",
 ]

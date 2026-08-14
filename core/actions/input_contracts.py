@@ -11,7 +11,17 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from enum import Enum
+from typing import Any, Literal, Optional, Union
+
+from typing_extensions import TypeAlias
+
+from core.actions.operation_catalog import RemoteExecOperationId, RemoteExecService
+from core.c2.build_models import C2DeploymentSource
+from core.c2.deployment_profiles import C2DeploymentMethod, C2DeploymentProfileId
+from core.c2.resource_types import C2CleanupReason
+from core.c2.task_catalog import C2TaskOperationId, C2TaskPayload, TaskOperationCatalog
+from core.c2.transport_catalog import C2Transport, C2TransportConfig, DNSChannelConfig
 
 
 @dataclass(frozen=True)
@@ -125,6 +135,209 @@ class PayloadKeyingInput:
     keying_parameters: dict[str, Any] = field(default_factory=dict)
 
 
+# Canonical V2 contracts.  The legacy classes above remain the V1 compatibility
+# surface; no V2 decoder constructs them.
+
+
+class PayloadKeyingProfileId(str, Enum):
+    HOSTNAME = "keying://hostname"
+    USER = "keying://user"
+    MAC = "keying://mac"
+    MACHINE_ID = "keying://machine-id"
+    MULTI = "keying://multi"
+
+
+class KerberosHashMode(str, Enum):
+    KERBEROAST = "kerberoast"
+    ASREP = "asrep"
+
+
+@dataclass(frozen=True)
+class PayloadKeyingInputV2:
+    payload_ref: str
+    profile_id: PayloadKeyingProfileId
+    target_metadata_ref: Optional[str]  # noqa: UP045 -- local cp39 decoder compatibility
+
+
+@dataclass(frozen=True)
+class KerberosExtractInputV2:
+    credential_ref: str
+    target: str
+
+
+@dataclass(frozen=True)
+class KerberosCrackInputV2:
+    ticket_ref: str
+    mode: KerberosHashMode
+    wordlist_ref: str
+
+
+@dataclass(frozen=True)
+class PassTheTicketInputV2:
+    ticket_ref: str
+    target: str
+    operation_id: RemoteExecOperationId
+
+
+@dataclass(frozen=True)
+class PassTheHashInputV2:
+    credential_ref: str
+    target: str
+    operation_id: RemoteExecOperationId
+
+
+@dataclass(frozen=True)
+class CredentialDumpInputV2:
+    credential_ref: str
+    target: str
+
+
+@dataclass(frozen=True)
+class RemoteExecInputV2:
+    credential_ref: str
+    target: str
+    operation_id: RemoteExecOperationId
+    service: Optional[RemoteExecService] = None  # noqa: UP045 -- local cp39 decoder compatibility
+
+
+@dataclass(frozen=True)
+class RemoteForwardInputV2:
+    session_ref: str
+    target: str
+    remote_port: int
+    destination_host: str
+    destination_port: int
+
+    def __post_init__(self) -> None:
+        for field_name in ("remote_port", "destination_port"):
+            value = getattr(self, field_name)
+            if isinstance(value, bool) or not 1 <= value <= 65535:
+                raise ValueError(f"{field_name} must be an integer in 1..65535")
+
+
+@dataclass(frozen=True)
+class SSHChainHopInputV2:
+    target: str
+    credential_ref: str
+    port: int = 22
+
+    def __post_init__(self) -> None:
+        if isinstance(self.port, bool) or not 1 <= self.port <= 65535:
+            raise ValueError("port must be an integer in 1..65535")
+
+
+@dataclass(frozen=True)
+class SSHChainInputV2:
+    hops: tuple[SSHChainHopInputV2, ...]
+
+    def __post_init__(self) -> None:
+        if not self.hops:
+            raise ValueError("hops must not be empty")
+        if any(type(hop) is not SSHChainHopInputV2 for hop in self.hops):
+            raise ValueError("hops contains an invalid variant")
+
+
+@dataclass(frozen=True)
+class PivotProxyScanInputV2:
+    route_ref: str
+    target: str
+    ports: tuple[int, ...]
+    timeout_seconds: int
+
+    def __post_init__(self) -> None:
+        if not self.ports or len(self.ports) > 65535:
+            raise ValueError("ports must not be empty")
+        if any(isinstance(port, bool) or not 1 <= port <= 65535 for port in self.ports):
+            raise ValueError("ports must contain only integers in 1..65535")
+        if len(set(self.ports)) != len(self.ports):
+            raise ValueError("ports must be unique")
+        if isinstance(self.timeout_seconds, bool) or not 1 <= self.timeout_seconds <= 3600:
+            raise ValueError("timeout_seconds must be an integer in 1..3600")
+
+
+@dataclass(frozen=True)
+class C2EnrollmentIssueInput:
+    channel_ref: str
+    target: str
+    profile_id: C2DeploymentProfileId
+    agent_protocol_version: Literal["12.0"]
+    ttl_seconds: int
+    max_uses: Literal[1] = 1
+
+    def __post_init__(self) -> None:
+        if self.agent_protocol_version != "12.0":
+            raise ValueError("agent_protocol_version must be 12.0")
+        if isinstance(self.ttl_seconds, bool) or not 1 <= self.ttl_seconds <= 86_400:
+            raise ValueError("ttl_seconds is outside the absolute decoder bound")
+        if self.max_uses != 1 or isinstance(self.max_uses, bool):
+            raise ValueError("max_uses must be exactly 1")
+
+
+@dataclass(frozen=True)
+class C2TaskInputV2:
+    agent_ref: str
+    target: Optional[str]  # noqa: UP045 -- local cp39 decoder compatibility
+    operation_id: C2TaskOperationId
+    payload: C2TaskPayload
+
+    def __post_init__(self) -> None:
+        TaskOperationCatalog().validate(self.operation_id, self.payload)
+
+
+@dataclass(frozen=True)
+class C2DeployInputV3:
+    target: str
+    source: C2DeploymentSource
+    channel_ref: str
+    enrollment_ref: str
+    access_session_ref: str
+    profile_id: C2DeploymentProfileId
+    method: C2DeploymentMethod
+
+
+@dataclass(frozen=True)
+class DNSC2ChannelInputV2:
+    target: str
+    config: DNSChannelConfig
+
+
+@dataclass(frozen=True)
+class C2ChannelCreateInputV2:
+    target: str
+    transport: C2Transport
+    config: C2TransportConfig
+
+    def __post_init__(self) -> None:
+        if self.transport is not C2Transport.DNS or type(self.config) is not DNSChannelConfig:
+            raise ValueError("transport/config variant mismatch")
+
+
+@dataclass(frozen=True)
+class C2CleanupInputV2:
+    resource_ref: str
+    reason: C2CleanupReason
+
+
+V2InputUnion: TypeAlias = Union[
+    PayloadKeyingInputV2,
+    KerberosExtractInputV2,
+    KerberosCrackInputV2,
+    PassTheTicketInputV2,
+    PassTheHashInputV2,
+    CredentialDumpInputV2,
+    RemoteExecInputV2,
+    RemoteForwardInputV2,
+    SSHChainInputV2,
+    PivotProxyScanInputV2,
+    C2EnrollmentIssueInput,
+    C2TaskInputV2,
+    C2DeployInputV3,
+    DNSC2ChannelInputV2,
+    C2ChannelCreateInputV2,
+    C2CleanupInputV2,
+]
+
+
 _REFERENCE_PREFIXES: dict[str, tuple[str, ...]] = {
     "credential_ref": ("credential://",),
     "session_ref": ("session://",),
@@ -229,18 +442,50 @@ def validate_typed_input(
     return tuple(dict.fromkeys(failures))
 
 
+CredentialDumpInput = CredentialInput
+LateralAuthInput = CredentialInput
+PivotProxyScanInput = PivotRouteInput
+PivotRemoteForwardInput = PivotRouteInput
+PivotSSHChainInput = PivotRouteInput
+
+
 __all__ = [
     "ArtifactInput",
     "C2AgentInput",
+    "C2ChannelCreateInputV2",
     "C2ChannelInput",
     "C2CleanupInput",
+    "C2CleanupInputV2",
+    "C2DeployInputV3",
     "C2EnrollmentInput",
+    "C2EnrollmentIssueInput",
+    "C2TaskInputV2",
+    "CredentialDumpInput",
+    "CredentialDumpInputV2",
     "CredentialInput",
+    "DNSC2ChannelInputV2",
+    "KerberosCrackInputV2",
+    "KerberosExtractInputV2",
+    "KerberosHashMode",
+    "LateralAuthInput",
+    "PassTheHashInputV2",
+    "PassTheTicketInputV2",
     "PayloadKeyingInput",
+    "PayloadKeyingInputV2",
+    "PayloadKeyingProfileId",
+    "PivotProxyScanInput",
+    "PivotProxyScanInputV2",
+    "PivotRemoteForwardInput",
     "PivotRouteInput",
+    "PivotSSHChainInput",
     "RemoteExecInput",
+    "RemoteExecInputV2",
+    "RemoteForwardInputV2",
+    "SSHChainHopInputV2",
+    "SSHChainInputV2",
     "ScanTarget",
     "SessionInput",
     "TicketInput",
+    "V2InputUnion",
     "validate_typed_input",
 ]

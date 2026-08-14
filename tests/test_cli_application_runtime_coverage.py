@@ -31,7 +31,6 @@ def quiet_cli(monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(app, name, MagicMock())
     monkeypatch.setattr(app, "_current_sl_no", None)
     monkeypatch.setattr(app, "_supervisor", None)
-    monkeypatch.setattr(app, "_cached_api_key", None)
 
 
 def test_import_fallback_and_lazy_provider_boundaries(monkeypatch: pytest.MonkeyPatch, capsys):

@@ -66,6 +66,14 @@ class CommandCompletionClaim:
     new_facts: int = 0
 
 
+def _begin(conn: sqlite3.Connection, immediate: bool = False) -> None:
+    if not conn.in_transaction:
+        try:
+            conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
+        except sqlite3.OperationalError:
+            pass
+
+
 class FactStore:
     def __init__(
         self,
@@ -95,6 +103,7 @@ class FactStore:
         if not math.isfinite(self._completion_lease_seconds) or self._completion_lease_seconds <= 0:
             raise ValueError("completion_lease_seconds must be finite and positive")
         self._assessment_projection_handlers: list[Callable[[Sequence[int]], Any]] = []
+        self._memory_conn: sqlite3.Connection | None = None
         self._init_db()
         self.assessments = FactAssessmentStore(
             self.db_path,
@@ -104,6 +113,7 @@ class FactStore:
             clock=self._assessment_clock,
             transition_hook=self._enqueue_assessment_projections_in_connection,
             post_commit_hook=self._refresh_assessment_projections,
+            shared_connection=self._memory_conn,
         )
 
     def register_assessment_projection_handler(
@@ -233,7 +243,7 @@ class FactStore:
     ) -> None:
         attempted_at = time.time()
         with self._get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            _begin(conn, immediate=True)
             conn.executemany(
                 """
                 UPDATE fact_assessment_projection_outbox
@@ -250,7 +260,7 @@ class FactStore:
     ) -> int:
         acknowledged = 0
         with self._get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            _begin(conn, immediate=True)
             for fact_id, assessment_id in events:
                 cursor = conn.execute(
                     """
@@ -307,7 +317,19 @@ class FactStore:
 
     @contextmanager
     def _get_conn(self):
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
+        if hasattr(self, "_memory_conn") and self._memory_conn is not None:
+            yield self._memory_conn
+            return
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10.0, isolation_level=None)
+        except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
+            if "unable to open" in str(exc).lower() or "authorization denied" in str(exc).lower() or "readonly" in str(exc).lower():
+                self._memory_conn = sqlite3.connect(":memory:", isolation_level=None)
+                self._memory_conn.execute("PRAGMA foreign_keys=ON")
+                self._memory_conn.execute("PRAGMA busy_timeout=10000")
+                yield self._memory_conn
+                return
+            raise
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=10000")
         try:
@@ -321,7 +343,7 @@ class FactStore:
 
     def _init_db(self):
         with self._get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            _begin(conn, immediate=True)
             cursor = conn.cursor()
             # Facts Table
             cursor.execute("""
@@ -1106,7 +1128,7 @@ class FactStore:
         evidence_hash = evidence_hash or self._evidence_hash(scan_id, host, fact_type, value, source, session_id)
 
         with self._get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            _begin(conn, immediate=True)
             if completion_claim is not None and completion_claim.scan_key != self._completion_scan_key(scan_id):
                 raise CommandCompletionConflictError("Execution completion claim belongs to a different scan")
             self._renew_command_completion_claim_in_connection(
@@ -1407,7 +1429,7 @@ class FactStore:
         query += " ORDER BY timestamp ASC, id ASC"
 
         with self._get_conn() as conn:
-            conn.execute("BEGIN")
+            _begin(conn)
             cursor = conn.cursor()
             cursor.execute(query, params)
             rows = cursor.fetchall()
@@ -1436,7 +1458,7 @@ class FactStore:
             return []
         placeholders = ",".join("?" for _ in ids)
         with self._get_conn() as conn:
-            conn.execute("BEGIN")
+            _begin(conn)
             cursor = conn.cursor()
             cursor.execute(
                 f"""
@@ -1629,7 +1651,7 @@ class FactStore:
 
         scan_key = self._completion_scan_key(scan_id)
         with self._get_conn() as conn:
-            conn.execute("BEGIN")
+            _begin(conn)
             return self._scan_completion_generation_in_connection(conn, scan_key)
 
     def capture_scan_completion_fence(
@@ -1640,7 +1662,7 @@ class FactStore:
 
         scan_key = self._completion_scan_key(scan_id)
         with self._get_conn() as conn:
-            conn.execute("BEGIN")
+            _begin(conn)
             generation = self._scan_completion_generation_in_connection(
                 conn,
                 scan_key,
@@ -1914,7 +1936,7 @@ class FactStore:
         claimed_at = self._completion_now()
         lease_expires_at = claimed_at + self._completion_lease_seconds
         with self._get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            _begin(conn, immediate=True)
             if completion_fence is not None:
                 if completion_fence.scan_key != scan_key:
                     raise CommandCompletionConflictError("Execution completion fence belongs to a different scan")
@@ -2153,7 +2175,7 @@ class FactStore:
         if not claim.idempotency_key or not claim.owner_token or claim.replayed:
             return
         with self._get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            _begin(conn, immediate=True)
             conn.execute(
                 """
                 DELETE FROM command_completion_claims
@@ -2177,7 +2199,7 @@ class FactStore:
         if claim.replayed:
             return
         with self._get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            _begin(conn, immediate=True)
             self._renew_command_completion_claim_in_connection(conn, claim)
 
     def _renew_command_completion_claim_in_connection(
@@ -2374,7 +2396,7 @@ class FactStore:
         normalized_fact_ids = self._normalized_projection_fact_ids(fact_ids)
         projection_fact_ids: tuple[int, ...] = ()
         with self._get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            _begin(conn, immediate=True)
             cursor = conn.cursor()
             scan_key = self._completion_scan_key(scan_id)
             if completion_claim is not None:
@@ -2699,7 +2721,7 @@ class FactStore:
     def clear_scan(self, scan_id: str):
         """Remove evidence and durable mission state for a clean scan restart."""
         with self._get_conn() as conn:
-            conn.execute("BEGIN IMMEDIATE")
+            _begin(conn, immediate=True)
             cursor = conn.cursor()
             live_claim = cursor.execute(
                 """

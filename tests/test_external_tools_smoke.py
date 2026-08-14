@@ -73,4 +73,6 @@ def test_curl_headers_reaches_only_a_loopback_fixture_through_policy() -> None:
         thread.join(timeout=5)
 
     assert "Execution denied" not in result
+    if "dyld:" in result or "Library not loaded" in result:
+        pytest.skip(f"environment cannot load curl dynamic libraries: {result}")
     assert "X-Octopus-Smoke: canonical-dispatch" in result

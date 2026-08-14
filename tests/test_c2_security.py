@@ -168,7 +168,22 @@ def test_go_client_uses_unified_bounded_acknowledged_protocol():
     assert 'registration["agent_id"]' in source
     assert "func exchangeBeacon(" in source
     assert re.search(r'"acks":\s+acknowledgements', source)
-    assert "exec.CommandContext(" in source
+    assert '"os/exec"' not in source
+    assert "exec.CommandContext(" not in source
+    assert "strings.Fields(" not in source
+    assert 'task["command"]' not in source
+    assert 'task["operation"]' not in source
+    assert '"command"' not in source
+    assert "[]map[string]string" not in source
+    assert "decoder.DisallowUnknownFields()" in source
+    assert "func executeTask(task AgentTaskV12)" in source
+    for operation_id in (
+        "c2-operation://identity",
+        "c2-operation://host-inventory",
+        "c2-operation://network-inventory",
+        "c2-operation://service-inventory",
+    ):
+        assert operation_id in source
     assert "chunk_index" not in source
     assert "sessionKey = make([]byte, 32)" not in source
     assert "InsecureSkipVerify: len(allowedPins) > 0" in source
@@ -197,8 +212,43 @@ def test_python_client_requires_enrollment_and_verified_tls():
     assert "enrollment_token" in source
     assert "ssl.CERT_NONE" not in source
     assert "shell=True" not in source
-    assert "shlex.split" in source
-    assert "shell=False" in source
+    assert "import shlex" not in source
+    assert "import subprocess" not in source
+    assert "subprocess." not in source
+    assert 'task.get("command"' not in source
+    assert '"command"' not in source
+    assert "_download_file" not in source
+    assert "_upload_file" not in source
+    assert "_self_destruct" not in source
+    assert "_CLOSED_OPERATION_SCHEMAS" in source
+
+    task = {
+        "schema_version": "12.0",
+        "task_id": "task-identity",
+        "operation_id": "c2-operation://identity",
+        "payload_schema_version": "c2-agent-payload/identity/1",
+        "result_schema_version": "c2-agent-result/identity/1",
+        "expected_agent_capabilities_revision": 1,
+        "expected_agent_capabilities_digest": "capability-digest",
+        "expected_agent_artifact_binding_digest": "artifact-digest",
+        "payload": {
+            "payload_kind": "identity",
+            "schema_version": "c2-agent-payload/identity/1",
+        },
+        "issued_at": 1.0,
+        "expires_at": 2.0,
+        "delivery_attempt": 1,
+    }
+    identity_result = namespace["_process_task"](task)
+    assert identity_result["error"] == ""
+    assert json.loads(identity_result["output"])["schema_version"] == "c2-agent-result/identity/1"
+
+    legacy_task = dict(task)
+    legacy_task["command"] = "download /etc/passwd"
+    assert namespace["_process_task"](legacy_task)["error"] == "invalid_task: envelope fields mismatch"
+
+    unknown_task = dict(task, operation_id="c2-operation://unknown")
+    assert namespace["_process_task"](unknown_task)["error"] == "unsupported_operation: c2-operation://unknown"
 
 
 def _encrypt_message(key, payload, sequence_number=1):

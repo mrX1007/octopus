@@ -2,27 +2,39 @@
 
 from __future__ import annotations
 
-from core.execution import ToolInvocation
-from core.execution.policy import parse_invocation
+from typing import Any
 
-from .base import ManualGatedActionAdapter
-from .input_contracts import (
+from core.actions.base import ManualGatedActionAdapter
+from core.actions.input_contracts import (
     C2AgentInput,
     C2ChannelInput,
     C2CleanupInput,
     C2EnrollmentInput,
 )
-from .models import (
+from core.actions.models import (
     ActionDescriptor,
     ActionKind,
     ActionRequest,
     ActionRequirements,
     ActiveRiskClass,
 )
+from core.execution import ToolInvocation
+from core.execution.policy import parse_invocation
+
+
+class ProviderUnavailableError(RuntimeError):
+    """The unmounted C2 provider has no executor-owned capability facade."""
+
+
+def _provider_unavailable(action_id: str) -> None:
+    raise ProviderUnavailableError(f"{action_id}:provider_unavailable")
 
 
 class DNSC2ChannelAdapter(ManualGatedActionAdapter):
     """Адаптер действия для настройки скрытого C2-канала через DNS."""
+
+    action_id: str = "c2:dns_c2_channel"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -66,9 +78,24 @@ class DNSC2ChannelAdapter(ManualGatedActionAdapter):
         del request, phase
         return ActiveRiskClass.ACTIVE
 
+    def check_bound(self, context: Any) -> bool:
+        del context
+        return False
+
+    def execute_bound(self, context: Any) -> Any:
+        del context
+        _provider_unavailable(self.action_id)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        del context, result
+        return False
+
 
 class C2EnrollAdapter(ManualGatedActionAdapter):
-    """Адаптер действия для выпуска и проверки токенов регистрации C2."""
+    """Адаптер действия для регистрации нового C2-агента в системе."""
+
+    action_id: str = "c2:c2_enroll"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -77,10 +104,11 @@ class C2EnrollAdapter(ManualGatedActionAdapter):
             kind=ActionKind.KILLCHAIN,
             provider="core.c2.enrollment:EnrollmentAuthority",
             category="c2",
-            description="Issue or consume authenticated C2 enrollment tokens",
+            description="Enroll and register newly connected C2 agent payload",
             input_type=C2EnrollmentInput,
             capability_class="c2",
             risk_class="critical",
+            required_preconditions=(),
             killchain_stage="command_and_control",
             manual_gate=True,
             provider_mounted=False,
@@ -110,9 +138,24 @@ class C2EnrollAdapter(ManualGatedActionAdapter):
         del request, phase
         return ActiveRiskClass.ACTIVE
 
+    def check_bound(self, context: Any) -> bool:
+        del context
+        return False
+
+    def execute_bound(self, context: Any) -> Any:
+        del context
+        _provider_unavailable(self.action_id)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        del context, result
+        return False
+
 
 class C2DeployAdapter(ManualGatedActionAdapter):
-    """Адаптер действия для развертывания стейджера или импланта C2."""
+    """Адаптер действия для развертывания и первичного запуска C2-агента."""
+
+    action_id: str = "c2:c2_deploy"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -121,12 +164,12 @@ class C2DeployAdapter(ManualGatedActionAdapter):
             kind=ActionKind.KILLCHAIN,
             provider="core.c2.daemon:deploy",
             category="c2",
-            description="Deploy C2 stager or agent payload to target host",
+            description="Deploy and execute C2 implant payload on target host",
             input_type=C2ChannelInput,
             capability_class="c2",
             risk_class="critical",
-            required_preconditions=("confirmed_target_access", "c2_channel_authorized"),
-            killchain_stage="command_and_control",
+            required_preconditions=("target_host_accessible", "execution_permission_granted"),
+            killchain_stage="installation",
             manual_gate=True,
             provider_mounted=False,
             requirements=ActionRequirements(
@@ -138,13 +181,12 @@ class C2DeployAdapter(ManualGatedActionAdapter):
     def invocation(self, request: ActionRequest, phase: str) -> ToolInvocation:
         command = f"c2_deploy {request.target}"
         invocation = parse_invocation(command)
-        callback = str(getattr(request.typed_input, "callback_endpoint", "") or "").strip()
         return ToolInvocation(
             executable=invocation.executable,
             argv=invocation.argv,
             raw_command=command,
             registered_name=self.descriptor.name,
-            targets=tuple(dict.fromkeys((*invocation.targets, *((callback,) if callback else ())))),
+            targets=invocation.targets,
             uses_shell=invocation.uses_shell,
         )
 
@@ -156,9 +198,24 @@ class C2DeployAdapter(ManualGatedActionAdapter):
         del request, phase
         return ActiveRiskClass.ACTIVE
 
+    def check_bound(self, context: Any) -> bool:
+        del context
+        return False
+
+    def execute_bound(self, context: Any) -> Any:
+        del context
+        _provider_unavailable(self.action_id)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        del context, result
+        return False
+
 
 class C2ChannelCreateAdapter(ManualGatedActionAdapter):
-    """Адаптер действия для создания транспортных каналов C2."""
+    """Composite router для создания C2 каналов связи."""
+
+    action_id: str = "c2:c2_channel_create"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -167,7 +224,7 @@ class C2ChannelCreateAdapter(ManualGatedActionAdapter):
             kind=ActionKind.KILLCHAIN,
             provider="core.c2.daemon:create_channel",
             category="c2",
-            description="Create listener or transport channel for C2 daemon",
+            description="Create command-and-control channel selecting transport",
             input_type=C2ChannelInput,
             capability_class="c2",
             risk_class="critical",
@@ -182,15 +239,14 @@ class C2ChannelCreateAdapter(ManualGatedActionAdapter):
         )
 
     def invocation(self, request: ActionRequest, phase: str) -> ToolInvocation:
-        command = f"c2_channel_create {request.target or 'localhost'}"
+        command = f"c2_channel_create {request.target}"
         invocation = parse_invocation(command)
-        callback = str(getattr(request.typed_input, "callback_endpoint", "") or "").strip()
         return ToolInvocation(
             executable=invocation.executable,
             argv=invocation.argv,
             raw_command=command,
             registered_name=self.descriptor.name,
-            targets=tuple(dict.fromkeys((*invocation.targets, *((callback,) if callback else ())))),
+            targets=invocation.targets,
             uses_shell=invocation.uses_shell,
         )
 
@@ -202,9 +258,27 @@ class C2ChannelCreateAdapter(ManualGatedActionAdapter):
         del request, phase
         return ActiveRiskClass.ACTIVE
 
+    def check_bound(self, context: Any) -> bool:
+        del context
+        return False
+
+    def route_bound(self, context: Any) -> Any:
+        del context
+        _provider_unavailable(self.action_id)
+
+    def execute_bound(self, context: Any) -> Any:
+        return self.route_bound(context)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        del context, result
+        return False
+
 
 class C2TaskAdapter(ManualGatedActionAdapter):
-    """Адаптер действия для постановки задач агентам C2."""
+    """Адаптер действия для отправки и управления задачами C2-агента."""
+
+    action_id: str = "c2:c2_task"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -213,22 +287,22 @@ class C2TaskAdapter(ManualGatedActionAdapter):
             kind=ActionKind.KILLCHAIN,
             provider="core.c2.daemon:task_agent",
             category="c2",
-            description="Queue or dispatch command tasks to registered C2 agents",
+            description="Task active C2 agent with payload instruction",
             input_type=C2AgentInput,
             capability_class="c2",
             risk_class="high",
-            required_preconditions=("c2_agent_enrolled",),
+            required_preconditions=("agent_registered_and_alive",),
             killchain_stage="command_and_control",
             manual_gate=True,
             provider_mounted=False,
             requirements=ActionRequirements(
                 active=True,
-                target_required=True,
+                target_required=False,
             ),
         )
 
     def invocation(self, request: ActionRequest, phase: str) -> ToolInvocation:
-        command = f"c2_task {request.target or 'agent'}"
+        command = "c2_task" + (f" {request.target}" if request.target else "")
         invocation = parse_invocation(command)
         return ToolInvocation(
             executable=invocation.executable,
@@ -247,9 +321,24 @@ class C2TaskAdapter(ManualGatedActionAdapter):
         del request, phase
         return ActiveRiskClass.ACTIVE
 
+    def check_bound(self, context: Any) -> bool:
+        del context
+        return False
+
+    def execute_bound(self, context: Any) -> Any:
+        del context
+        _provider_unavailable(self.action_id)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        del context, result
+        return False
+
 
 class C2CleanupAdapter(ManualGatedActionAdapter):
-    """Адаптер действия для очистки ресурсов и закрытия каналов C2."""
+    """Адаптер действия для очистки артефактов и завершения C2-сессии."""
+
+    action_id: str = "c2:c2_cleanup"
+    adapter_api_version: int = 2
 
     def __init__(self) -> None:
         self.descriptor = ActionDescriptor(
@@ -258,22 +347,22 @@ class C2CleanupAdapter(ManualGatedActionAdapter):
             kind=ActionKind.KILLCHAIN,
             provider="core.c2.daemon:cleanup",
             category="c2",
-            description="Teardown C2 channels and clear active daemon session state",
+            description="Remove agent artifacts, persistence and close C2 connection",
             input_type=C2CleanupInput,
             capability_class="c2",
             risk_class="medium",
-            required_preconditions=("c2_channel_exists",),
-            killchain_stage="command_and_control",
+            required_preconditions=(),
+            killchain_stage="actions_on_objectives",
             manual_gate=True,
             provider_mounted=False,
             requirements=ActionRequirements(
                 active=True,
-                target_required=True,
+                target_required=False,
             ),
         )
 
     def invocation(self, request: ActionRequest, phase: str) -> ToolInvocation:
-        command = f"c2_cleanup {request.target or 'localhost'}"
+        command = "c2_cleanup" + (f" {request.target}" if request.target else "")
         invocation = parse_invocation(command)
         return ToolInvocation(
             executable=invocation.executable,
@@ -290,7 +379,19 @@ class C2CleanupAdapter(ManualGatedActionAdapter):
         phase: str = "execute",
     ) -> ActiveRiskClass:
         del request, phase
-        return ActiveRiskClass.ACTIVE
+        return ActiveRiskClass.READ_ONLY
+
+    def check_bound(self, context: Any) -> bool:
+        del context
+        return False
+
+    def execute_bound(self, context: Any) -> Any:
+        del context
+        _provider_unavailable(self.action_id)
+
+    def verify_bound(self, context: Any, result: Any = None) -> bool:
+        del context, result
+        return False
 
 
 __all__ = [
@@ -300,4 +401,5 @@ __all__ = [
     "C2EnrollAdapter",
     "C2TaskAdapter",
     "DNSC2ChannelAdapter",
+    "ProviderUnavailableError",
 ]

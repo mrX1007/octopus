@@ -86,9 +86,9 @@ def test_x_mode_runs_exhaustive_applicable_coverage_without_real_tools():
     try:
         builtins.input = lambda _prompt="": "x"
         runner._run_registered_default_recon = fake_default_recon
-        fake_killchain = types.ModuleType("core.killchain")
-        fake_killchain.vuln_assess = lambda target, recon_blob: f"vuln_assess ok {target}"
-        sys.modules["core.killchain"] = fake_killchain
+        import core.killchain
+        old_vuln_assess = getattr(core.killchain, "vuln_assess", None)
+        core.killchain.vuln_assess = lambda target, recon_blob: f"vuln_assess ok {target}"
 
         for tool_name in (
             "httpx_probe",
@@ -119,10 +119,11 @@ def test_x_mode_runs_exhaustive_applicable_coverage_without_real_tools():
     finally:
         builtins.input = old_input
         runner._run_registered_default_recon = old_default_recon
-        if old_killchain is None:
-            sys.modules.pop("core.killchain", None)
+        if old_vuln_assess is None:
+            if hasattr(core.killchain, "vuln_assess"):
+                delattr(core.killchain, "vuln_assess")
         else:
-            sys.modules["core.killchain"] = old_killchain
+            core.killchain.vuln_assess = old_vuln_assess
         for tool_name, (old_func, old_requires) in patched_tools.items():
             tool_def = get_tool(tool_name)
             tool_def.func = old_func
@@ -183,9 +184,9 @@ def test_x_mode_dedupes_default_heavy_web_scanners_without_dropping_distinct_por
     try:
         builtins.input = lambda _prompt="": "x"
         runner._run_registered_default_recon = fake_default_recon
-        fake_killchain = types.ModuleType("core.killchain")
-        fake_killchain.vuln_assess = lambda target, recon_blob: f"vuln_assess ok {target}"
-        sys.modules["core.killchain"] = fake_killchain
+        import core.killchain
+        old_vuln_assess = getattr(core.killchain, "vuln_assess", None)
+        core.killchain.vuln_assess = lambda target, recon_blob: f"vuln_assess ok {target}"
 
         for tool_name in (
             "httpx_probe",
@@ -216,10 +217,11 @@ def test_x_mode_dedupes_default_heavy_web_scanners_without_dropping_distinct_por
     finally:
         builtins.input = old_input
         runner._run_registered_default_recon = old_default_recon
-        if old_killchain is None:
-            sys.modules.pop("core.killchain", None)
+        if old_vuln_assess is None:
+            if hasattr(core.killchain, "vuln_assess"):
+                delattr(core.killchain, "vuln_assess")
         else:
-            sys.modules["core.killchain"] = old_killchain
+            core.killchain.vuln_assess = old_vuln_assess
         for tool_name, (old_func, old_requires) in patched_tools.items():
             tool_def = get_tool(tool_name)
             tool_def.func = old_func

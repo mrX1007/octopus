@@ -18,6 +18,7 @@ dependencies = [
     "PyYAML>=6.0",
     "requests>=2.33.0",
     "rich>=13.7.0",
+    "typing-extensions>=4.12",
     "urllib3>=2.7.0",
 ]
 
@@ -45,6 +46,7 @@ mysql = [
 [project.scripts]
 octopus = "core.application:main"
 octopus-c2 = "octopus_c2:main"
+octopus-c2-bootstrap-admin = "scripts.bootstrap_c2_admin:main"
 octobench = "core.benchmarks.__main__:main"
 octobench-competitors = "core.benchmarks.competitors.__main__:main"
 

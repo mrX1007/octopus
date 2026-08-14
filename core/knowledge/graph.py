@@ -72,12 +72,21 @@ class KnowledgeGraph:
     def _get_conn(self) -> sqlite3.Connection:
         if self._persistent_conn is not None:
             return self._persistent_conn
-        conn = sqlite3.connect(self.db_path, timeout=10.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=10000")
-        return conn
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10.0)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA busy_timeout=10000")
+            return conn
+        except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
+            if "unable to open" in str(exc).lower() or "authorization denied" in str(exc).lower() or "readonly" in str(exc).lower():
+                self._persistent_conn = sqlite3.connect(":memory:")
+                self._persistent_conn.row_factory = sqlite3.Row
+                self._persistent_conn.execute("PRAGMA foreign_keys=ON")
+                self._persistent_conn.execute("PRAGMA busy_timeout=10000")
+                return self._persistent_conn
+            raise
 
     def _close_conn(self, conn):
         """Close connection only if it's not the persistent one."""

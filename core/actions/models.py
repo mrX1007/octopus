@@ -5,8 +5,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Literal, Union
 
+from core.actions.provider_state import ExecutionNodeKind
 from core.execution import ExecutionContext, ExecutionResult
 
 ACTION_DESCRIPTOR_SCHEMA_VERSION = "1.0"
@@ -363,12 +364,50 @@ class ActionExecutionReport:
         return payload
 
 
+LegacyActionDescriptorV1 = ActionDescriptor
+
+
+class CheckPolicyV2(str, Enum):
+    REQUIRED = "required"
+    NOT_SUPPORTED = "not_supported"
+
+
+class VerifyPolicyV2(str, Enum):
+    REQUIRED = "required"
+    NOT_SUPPORTED = "not_supported"
+
+
+@dataclass(frozen=True)
+class ActionDescriptorV2:
+    schema_version: Literal["2.0"]
+    action_id: str
+    name: str
+    aliases: tuple[str, ...]
+    input_schema_id: str
+    result_schema_id: str
+    kind: ActionKind
+    execution_node_kind: ExecutionNodeKind
+    capability_class: str
+    risk_class: str
+    required_fact_type_ids: tuple[str, ...]
+    killchain_stage: str | None
+    manual_gate: bool
+    check_policy: CheckPolicyV2
+    verify_policy: VerifyPolicyV2
+
+
+ActionDescriptorUnion = Union[ActionDescriptor, ActionDescriptorV2]
+
+
+
 __all__ = [
     "ACTION_DESCRIPTOR_SCHEMA_VERSION",
     "ACTION_LIFECYCLE_SCHEMA_VERSION",
     "ActionCheckResult",
     "ActionCleanupResult",
     "ActionDescriptor",
+    "ActionDescriptorUnion",
+    "ActionDescriptorV2",
     "ActionExecutionReport",
     "ActionKind",
     "ActionLifecycle",
@@ -379,9 +418,13 @@ __all__ = [
     "ApplicabilityResult",
     "ApplicabilityStatus",
     "AttemptStatus",
+    "CheckPolicyV2",
     "CheckStatus",
     "CleanupStatus",
+    "ExecutionNodeKind",
+    "LegacyActionDescriptorV1",
     "OutcomeStatus",
     "PolicyDenial",
     "VerificationStatus",
+    "VerifyPolicyV2",
 ]

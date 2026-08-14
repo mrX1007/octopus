@@ -6,8 +6,22 @@ import hashlib
 import json
 import re
 import time
+import uuid
 from collections.abc import Mapping
+from typing import Union, overload
 
+from typing_extensions import TypeAlias
+
+from core.actions.child_execution import ChildExecutionBridge, RootExecutionBridge
+from core.actions.execution_budget import ExecutionBudgetAuthorityV2, OwnedExecutionBudgetAuthorityV2
+from core.actions.execution_results_v2 import InvocationExecutionOutcomeV2
+from core.actions.request_v2 import (
+    ActionRequestV2,
+    ActionRequestV2EnvelopeDecoder,
+    BoundedActionRequestV2Envelope,
+)
+from core.auth.ingress_leases import IngressInvocationLease
+from core.auth.ingress_store import IngressSessionStore, get_ingress_session_store
 from core.execution import (
     CAP_ACTIVE_TOOL,
     CancellationContext,
@@ -40,6 +54,18 @@ from .models import (
     VerificationStatus,
 )
 
+V2ExecutionSource: TypeAlias = Union[
+    BoundedActionRequestV2Envelope,
+    ActionRequestV2,
+]
+ExecutionBridge: TypeAlias = Union[RootExecutionBridge, ChildExecutionBridge]
+
+
+class V2ExecutionUnavailableError(RuntimeError):
+    def __init__(self, reason_code: str) -> None:
+        self.reason_code = reason_code
+        super().__init__(reason_code)
+
 
 class ActionExecutor:
     """Execute an adapter while preserving every distinct lifecycle state."""
@@ -51,11 +77,23 @@ class ActionExecutor:
         *,
         redact_text: TextRedactor | None = None,
         redact_data: DataRedactor | None = None,
+        ingress_store: IngressSessionStore | None = None,
+        request_v2_decoder: ActionRequestV2EnvelopeDecoder | None = None,
+        budget_authority: ExecutionBudgetAuthorityV2 | None = None,
     ) -> None:
         self.catalog = catalog
         self.policy = policy
         self.redact_text = redact_text
         self.redact_data = redact_data
+        if ingress_store is not None and type(ingress_store) is not IngressSessionStore:
+            raise TypeError("V2 executor requires the canonical ingress store")
+        if request_v2_decoder is not None and type(request_v2_decoder) is not ActionRequestV2EnvelopeDecoder:
+            raise TypeError("V2 executor requires the canonical bounded request decoder")
+        if budget_authority is not None and type(budget_authority) is not OwnedExecutionBudgetAuthorityV2:
+            raise TypeError("V2 executor requires the owned budget authority")
+        self.ingress_store = ingress_store or get_ingress_session_store()
+        self.request_v2_decoder = request_v2_decoder or ActionRequestV2EnvelopeDecoder()
+        self.budget_authority = budget_authority or OwnedExecutionBudgetAuthorityV2()
 
     def run(
         self,
@@ -413,7 +451,10 @@ class ActionExecutor:
             pivot_route_ref = str(getattr(request.typed_input, "pivot_route_ref", "") or "").strip()
             if pivot_route_ref and pivot_route_ref not in refs:
                 missing.append("blocked_by_input:pivot_route_ref")
-            elif pivot_route_ref and facts_by_ref.get(pivot_route_ref) != "confirmed_pivot":
+            elif pivot_route_ref and facts_by_ref.get(pivot_route_ref) not in (
+                "confirmed_pivot",
+                "active_proxy_tunnel_present",
+            ):
                 missing.append("blocked_by_precondition:pivot_route_ref")
 
         return ApplicabilityResult(
@@ -491,6 +532,200 @@ class ActionExecutor:
                     fact_types_by_ref[raw_ref] = fact_type
         return {ref: fact_type for ref, fact_type in fact_types_by_ref.items() if ref not in duplicate_refs}
 
+    def run_v2(
+        self,
+        action_id: str,
+        serialized_envelope: bytes,
+        *,
+        ingress_lease: IngressInvocationLease,
+    ) -> InvocationExecutionOutcomeV2:
+        """The sole public V2 root entrypoint.
+
+        The caller supplies business bytes and one opaque, store-issued lease.
+        Principal, transport, budget and cancellation authority are resolved or
+        minted inside this method and never decoded from the request.
+        """
+
+        from core.actions.execution_budget import ExecutionLineage
+        from core.auth.ingress_context import get_current_ingress_transport_context
+        from core.auth.ingress_leases import IngressInvocationLease, IngressLeaseInvalidError
+
+        if type(action_id) is not str or not action_id.strip():
+            raise ValueError("action_id must be a non-empty canonical string")
+        if type(ingress_lease) is not IngressInvocationLease:
+            raise IngressLeaseInvalidError("V2 execution requires an exact store-issued ingress lease")
+
+        bounded = self.request_v2_decoder.decode(serialized_envelope)
+        transport = get_current_ingress_transport_context()
+        if transport is None:
+            raise IngressLeaseInvalidError("V2 execution requires current authenticated transport proof")
+
+        resolved = False
+        try:
+            self.ingress_store.resolve_invocation_lease(
+                ingress_lease,
+                bounded.request_id,
+                transport.channel_binding,
+                authenticated_peer_id=transport.authenticated_peer_id,
+                invocation_nonce=transport.invocation_nonce,
+                ingress_kind=transport.ingress_kind,
+            )
+            resolved = True
+            authority = self.budget_authority.issue_root(
+                ingress_lease=ingress_lease,
+                bounded_envelope=bounded,
+            )
+            execution_id = f"exec-{uuid.uuid4().hex}"
+            bridge = RootExecutionBridge(
+                ingress_lease=ingress_lease,
+                authority=authority,
+                lineage=ExecutionLineage(
+                    root_execution_id=execution_id,
+                    parent_execution_id=None,
+                    execution_graph_id=f"graph-{uuid.uuid4().hex}",
+                    child_depth=0,
+                ),
+            )
+            return self._run_v2_internal(action_id.strip(), bounded, bridge=bridge)
+        finally:
+            if resolved:
+                self.ingress_store.consume_invocation_lease(ingress_lease)
+
+    @overload
+    def _run_v2_internal(
+        self,
+        action_id: str,
+        source: BoundedActionRequestV2Envelope,
+        *,
+        bridge: RootExecutionBridge,
+    ) -> InvocationExecutionOutcomeV2: ...
+
+    @overload
+    def _run_v2_internal(
+        self,
+        action_id: str,
+        source: ActionRequestV2,
+        *,
+        bridge: ChildExecutionBridge,
+    ) -> InvocationExecutionOutcomeV2: ...
+
+    def _run_v2_internal(
+        self,
+        action_id: str,
+        source: V2ExecutionSource,
+        *,
+        bridge: ExecutionBridge,
+    ) -> InvocationExecutionOutcomeV2:
+        """Validate the exact root/child boundary and stop before incomplete wiring.
+
+        Provider execution is intentionally fail-closed until the complete
+        approval/checkout/transaction/finalization chain is installed.  This
+        replaces the previous fabricated-success path and prevents a partially
+        migrated provider from becoming reachable merely because it exists in
+        the catalog.
+        """
+
+        from core.actions.provider_mounts import get_provider_mount_registry
+        from core.actions.schema_bindings import get_v2_schema_binding
+        from core.actions.target_extraction import get_action_target_extractor_registry
+        from core.actions.typed_input_decoders import get_typed_input_decoder_registry
+        from core.auth.ingress_context import get_current_ingress_transport_context
+
+        child_checked_out = False
+        try:
+            if type(source) is BoundedActionRequestV2Envelope and type(bridge) is RootExecutionBridge:
+                if source.request_id != bridge.ingress_lease.bound_request_id:
+                    raise V2ExecutionUnavailableError("root_request_lease_mismatch")
+                self.budget_authority.validate_root(
+                    bridge.authority.budget_lease,
+                    ingress_lease=bridge.ingress_lease,
+                    request_id=source.request_id,
+                )
+                binding = get_v2_schema_binding(action_id)
+                if source.typed_input_payload.schema_id != binding.input_schema_id:
+                    raise V2ExecutionUnavailableError("action_input_schema_mismatch")
+                decoded_input = get_typed_input_decoder_registry().decode(
+                    action_id,
+                    source.typed_input_payload,
+                )
+                request = ActionRequestV2(
+                    request_id=source.request_id,
+                    action_id=action_id,
+                    mission_ref=source.mission_ref,
+                    approval_ref=source.approval_ref,
+                    precondition_fact_refs=source.precondition_fact_refs,
+                    idempotency_key=source.idempotency_key,
+                    typed_input=decoded_input,
+                )
+            elif type(source) is ActionRequestV2 and type(bridge) is ChildExecutionBridge:
+                if action_id != source.action_id or action_id != bridge.selected_child_action_id:
+                    raise V2ExecutionUnavailableError("child_action_identity_mismatch")
+                if source.request_id != bridge.ingress_lease.bound_child_request_id:
+                    raise V2ExecutionUnavailableError("child_request_lease_mismatch")
+                if (
+                    bridge.lineage.root_execution_id != bridge.ingress_lease.root_execution_id
+                    or bridge.lineage.parent_execution_id != bridge.ingress_lease.parent_execution_id
+                    or bridge.lineage.execution_graph_id != bridge.ingress_lease.execution_graph_id
+                    or bridge.lineage.child_depth != bridge.ingress_lease.child_depth
+                ):
+                    raise V2ExecutionUnavailableError("child_lineage_lease_mismatch")
+
+                transport = get_current_ingress_transport_context()
+                if transport is None:
+                    raise V2ExecutionUnavailableError("child_ingress_transport_missing")
+                self.ingress_store.resolve_invocation_lease(
+                    bridge.ingress_lease,
+                    source.request_id,
+                    transport.channel_binding,
+                    authenticated_peer_id=transport.authenticated_peer_id,
+                    root_execution_id=bridge.lineage.root_execution_id,
+                    parent_execution_id=bridge.lineage.parent_execution_id,
+                    execution_graph_id=bridge.lineage.execution_graph_id,
+                    child_depth=bridge.lineage.child_depth,
+                )
+                child_checked_out = True
+                if type(self.budget_authority) is not OwnedExecutionBudgetAuthorityV2:
+                    raise V2ExecutionUnavailableError("child_budget_authority_invalid")
+                self.budget_authority._validate_child_current(
+                    bridge.budget_lease,
+                    child_lease=bridge.ingress_lease,
+                    child_action_id=action_id,
+                )
+                binding = get_v2_schema_binding(action_id)
+                request = source
+            else:
+                raise TypeError("V2 execution requires either root envelope/root bridge or child request/child bridge")
+
+            targets = get_action_target_extractor_registry().extract_checked(
+                action_id=action_id,
+                input_schema_id=binding.input_schema_id,
+                decoded_input=request.typed_input,
+                reference_snapshots=(),
+            )
+            if not targets:
+                raise V2ExecutionUnavailableError("no_authorization_targets")
+
+            mount_registry = get_provider_mount_registry()
+            mount = mount_registry.require_v2(action_id)
+            mount_registry.assert_current(mount)
+            if (
+                not mount.spec.configured
+                or not mount.spec.mounted
+                or not mount.spec.typed_action_supported
+                or mount.spec.raw_command_supported
+            ):
+                raise V2ExecutionUnavailableError("provider_not_mounted")
+
+            # The remaining approval, checked-reference, phase-lease,
+            # transaction, result-projection and durable-finalization stages
+            # must become one atomic wiring change. Never call a provider or
+            # synthesize success before that chain is present.
+            raise V2ExecutionUnavailableError("v2_execution_pipeline_not_finalized")
+        finally:
+            if child_checked_out:
+                assert type(bridge) is ChildExecutionBridge
+                self.ingress_store.consume_invocation_lease(bridge.ingress_lease)
+
     @staticmethod
     def _policy_ref(decision: ExecutionDecision, phase: str) -> str:
         payload = {"phase": phase, "decision": decision.to_dict()}
@@ -544,4 +779,9 @@ class ActionExecutor:
         }[status]
 
 
-__all__ = ["ActionExecutor"]
+__all__ = [
+    "ActionExecutor",
+    "ExecutionBridge",
+    "V2ExecutionSource",
+    "V2ExecutionUnavailableError",
+]

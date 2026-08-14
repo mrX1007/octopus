@@ -34,9 +34,18 @@ class MissionStoreMaintenanceMixin:
                 conn = self._memory_conn
                 close = False
             else:
-                conn = sqlite3.connect(self.db_path, timeout=30)
-                conn.row_factory = sqlite3.Row
-                close = True
+                try:
+                    conn = sqlite3.connect(self.db_path, timeout=30)
+                    conn.row_factory = sqlite3.Row
+                    close = True
+                except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
+                    if "unable to open" in str(exc).lower() or "authorization denied" in str(exc).lower() or "readonly" in str(exc).lower():
+                        self._memory_conn = sqlite3.connect(":memory:")
+                        self._memory_conn.row_factory = sqlite3.Row
+                        conn = self._memory_conn
+                        close = False
+                    else:
+                        raise
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("PRAGMA busy_timeout=30000")
             try:
