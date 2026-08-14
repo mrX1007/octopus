@@ -19,12 +19,7 @@ pytestmark = [pytest.mark.benchmark, pytest.mark.replay]
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
 SCENARIO_DIRECTORY = REPOSITORY_ROOT / "benchmarks" / "scenarios"
-PUBLISHED_COMPARISON = (
-    REPOSITORY_ROOT
-    / "benchmarks"
-    / "results"
-    / "noop-repeat-comparison-v1.json"
-)
+PUBLISHED_COMPARISON = REPOSITORY_ROOT / "benchmarks" / "results" / "noop-repeat-comparison-v1.json"
 
 
 def test_default_harness_runs_every_catalog_scenario_without_external_runner():
@@ -41,10 +36,7 @@ def test_default_harness_runs_every_catalog_scenario_without_external_runner():
         assert aggregate.metric_statistics["finding_recall"]["median"] == 1.0
         assert all(not run.policy_violations for run in aggregate.runs)
         assert all(run.error_class == "" for run in aggregate.runs)
-        assert all(
-            set(run.actions) <= set(aggregate.scenario.allowed_actions)
-            for run in aggregate.runs
-        )
+        assert all(set(run.actions) <= set(aggregate.scenario.allowed_actions) for run in aggregate.runs)
 
 
 def test_task_efficiency_replay_measures_noop_and_repeat_reduction():

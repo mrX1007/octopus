@@ -20,12 +20,7 @@ from core.benchmarks import (
 pytestmark = pytest.mark.benchmark
 
 SCENARIO_DIRECTORY = Path(__file__).parents[2] / "benchmarks" / "scenarios"
-JSON_SCHEMA_PATH = (
-    Path(__file__).parents[2]
-    / "docs"
-    / "schemas"
-    / "benchmark-scenario-v1.schema.json"
-)
+JSON_SCHEMA_PATH = Path(__file__).parents[2] / "docs" / "schemas" / "benchmark-scenario-v1.schema.json"
 
 
 def test_portable_json_schema_matches_runtime_contract():
@@ -34,9 +29,7 @@ def test_portable_json_schema_matches_runtime_contract():
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["properties"]["schema_version"] == {"const": "1.0"}
     assert schema["properties"]["repetitions"]["minimum"] == 5
-    assert set(schema["properties"]["category"]["enum"]) == set(
-        REQUIRED_SCENARIO_CATEGORIES
-    )
+    assert set(schema["properties"]["category"]["enum"]) == set(REQUIRED_SCENARIO_CATEGORIES)
 
 
 def test_required_scenario_catalog_is_versioned_and_complete():
@@ -90,9 +83,7 @@ def test_harness_runs_five_repetitions_and_publishes_median_variance(tmp_path):
 
 
 def test_runner_namespace_separates_system_identity_without_changing_scenario():
-    scenario = load_scenario(
-        SCENARIO_DIRECTORY / "06-clean-negative.json"
-    )
+    scenario = load_scenario(SCENARIO_DIRECTORY / "06-clean-negative.json")
 
     def runner(_scenario, _repetition, _seed):
         return {
@@ -168,9 +159,7 @@ def test_runner_failure_records_only_error_class():
 
 
 def test_harness_derives_expected_coverage_gaps_and_preserves_runner_gaps():
-    scenario = load_scenario(
-        SCENARIO_DIRECTORY / "01-service-discovery-verification.json"
-    )
+    scenario = load_scenario(SCENARIO_DIRECTORY / "01-service-discovery-verification.json")
 
     def runner(_scenario, _repetition, _seed):
         return {
@@ -182,16 +171,12 @@ def test_harness_derives_expected_coverage_gaps_and_preserves_runner_gaps():
     aggregate = BenchmarkHarness(runner, clock=lambda: 1.0).run(scenario)
 
     assert all(
-        run.result_summary["coverage_gaps"]
-        == ["https_service", "runner_specific_gap"]
-        for run in aggregate.runs
+        run.result_summary["coverage_gaps"] == ["https_service", "runner_specific_gap"] for run in aggregate.runs
     )
 
 
 def test_ablations_require_explicitly_stable_toggle():
-    payload = load_scenario(
-        SCENARIO_DIRECTORY / "01-service-discovery-verification.json"
-    ).to_dict()
+    payload = load_scenario(SCENARIO_DIRECTORY / "01-service-discovery-verification.json").to_dict()
     payload["ablations"] = [{"toggle": "stable_parser_mode", "values": [False, True]}]
     scenario = BenchmarkScenario.from_dict(payload)
 
@@ -225,9 +210,7 @@ def test_schema_and_runtime_reject_less_than_five_repetitions():
 
 
 def test_schema_validates_observational_budgets_and_explicit_policy():
-    payload = load_scenario(
-        SCENARIO_DIRECTORY / "01-service-discovery-verification.json"
-    ).to_dict()
+    payload = load_scenario(SCENARIO_DIRECTORY / "01-service-discovery-verification.json").to_dict()
     payload["budgets"].update(
         {
             "max_model_tokens": 1000,
@@ -259,9 +242,7 @@ def test_schema_validates_observational_budgets_and_explicit_policy():
     ],
 )
 def test_schema_rejects_invalid_observational_budget_values(name, value, error):
-    payload = load_scenario(
-        SCENARIO_DIRECTORY / "01-service-discovery-verification.json"
-    ).to_dict()
+    payload = load_scenario(SCENARIO_DIRECTORY / "01-service-discovery-verification.json").to_dict()
     payload["budgets"][name] = value
 
     with pytest.raises(BenchmarkSchemaError, match=error):
@@ -269,9 +250,7 @@ def test_schema_rejects_invalid_observational_budget_values(name, value, error):
 
 
 def test_observational_budgets_require_explicit_enforcement_policy():
-    payload = load_scenario(
-        SCENARIO_DIRECTORY / "01-service-discovery-verification.json"
-    ).to_dict()
+    payload = load_scenario(SCENARIO_DIRECTORY / "01-service-discovery-verification.json").to_dict()
     payload["budgets"]["max_model_tokens"] = 1000
 
     with pytest.raises(BenchmarkSchemaError, match=r"missing:budgets\.policy"):

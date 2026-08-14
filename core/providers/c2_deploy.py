@@ -1,9 +1,11 @@
 """C2 deploy provider adapter."""
+
 from __future__ import annotations
 
 import time
 import uuid
-from typing import Dict, Any
+from typing import Any
+
 from core.c2.deployment import C2DeploymentService
 
 
@@ -13,7 +15,7 @@ class C2DeployProvider:
     def __init__(self, deployment_service: C2DeploymentService | None = None) -> None:
         self.deployment_service = deployment_service or C2DeploymentService()
 
-    def validate_input(self, params: Dict[str, Any]) -> bool:
+    def validate_input(self, params: dict[str, Any]) -> bool:
         """Validate deployment request parameters."""
         if not isinstance(params, dict):
             return False
@@ -23,7 +25,7 @@ class C2DeployProvider:
         """Check provider readiness."""
         return True
 
-    def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, params: dict[str, Any]) -> dict[str, Any]:
         """Execute agent deployment."""
         if not self.validate_input(params):
             raise ValueError("Invalid deploy parameters: target_os and backend_name required")
@@ -42,4 +44,3 @@ class C2DeployProvider:
             "deployment_result": res,
             "deployed_at": time.time(),
         }
-

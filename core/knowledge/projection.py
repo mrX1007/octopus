@@ -91,18 +91,13 @@ class GraphProjectionService:
         return [self.project_fact(fact) for fact in self.fact_store.get_facts(scan_id, host)]
 
     def project_fact_ids(self, fact_ids: Sequence[int]) -> list[ProjectionResult]:
-        return [
-            self.project_fact(fact)
-            for fact in self.fact_store.get_facts_by_ids(fact_ids)
-        ]
+        return [self.project_fact(fact) for fact in self.fact_store.get_facts_by_ids(fact_ids)]
 
     def project_fact(self, fact: Mapping[str, Any]) -> ProjectionResult:
         fact_id = self._positive_int(fact.get("id"))
         assessment = fact.get("assessment")
         assessment = dict(assessment) if isinstance(assessment, Mapping) else {}
-        assessment_id = str(
-            assessment.get("assessment_id") or fact.get("assessment_id") or ""
-        )
+        assessment_id = str(assessment.get("assessment_id") or fact.get("assessment_id") or "")
         if not fact_id or not assessment_id:
             return ProjectionResult(
                 fact_id=fact_id,
@@ -358,8 +353,7 @@ class GraphProjectionService:
             )
 
         access_marker = any(
-            marker in value.lower()
-            for marker in ("access", "authenticated", "login_success", "session", "uid=")
+            marker in value.lower() for marker in ("access", "authenticated", "login_success", "session", "uid=")
         )
         if not access_marker and str(fact.get("type") or "") != "session":
             return
@@ -424,9 +418,7 @@ class GraphProjectionService:
         edge_keys: list[str],
     ) -> None:
         if not self.graph.link(source, destination, edge_type, **properties):
-            raise RuntimeError(
-                f"Unable to project edge {source} -[{edge_type.value}]-> {destination}"
-            )
+            raise RuntimeError(f"Unable to project edge {source} -[{edge_type.value}]-> {destination}")
         edge_keys.append(f"{source}|{edge_type.value}|{destination}")
 
     @staticmethod
@@ -441,9 +433,7 @@ class GraphProjectionService:
         execution_ids = [str(item) for item in assessment.get("source_execution_ids") or () if item]
         timestamp = float(fact.get("timestamp", 0.0) or 0.0)
         observations = [item for item in fact.get("observations") or () if isinstance(item, Mapping)]
-        last_seen = max(
-            [timestamp, *(float(item.get("timestamp", 0.0) or 0.0) for item in observations)]
-        )
+        last_seen = max([timestamp, *(float(item.get("timestamp", 0.0) or 0.0) for item in observations)])
         sources = [str(item) for item in fact.get("sources") or () if item]
         if not sources and fact.get("source"):
             sources = [str(fact["source"])]
@@ -560,11 +550,7 @@ class GraphProjectionService:
             return {}
         if not isinstance(loaded, dict):
             return {}
-        return {
-            key: loaded[key]
-            for key in ("status", "title")
-            if loaded.get(key) not in (None, "")
-        }
+        return {key: loaded[key] for key in ("status", "title") if loaded.get(key) not in (None, "")}
 
     @staticmethod
     def _endpoint_url(value: str, host: str) -> str:
@@ -572,11 +558,7 @@ class GraphProjectionService:
             loaded = json.loads(value)
         except (TypeError, ValueError, json.JSONDecodeError):
             loaded = {}
-        raw = (
-            str(loaded.get("url") or loaded.get("endpoint") or "").strip()
-            if isinstance(loaded, dict)
-            else ""
-        )
+        raw = str(loaded.get("url") or loaded.get("endpoint") or "").strip() if isinstance(loaded, dict) else ""
         raw = raw or value.strip()
         match = re.search(r"https?://[^\s'\"<>]+", raw, re.IGNORECASE)
         if match:

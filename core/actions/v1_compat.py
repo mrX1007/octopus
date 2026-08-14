@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
-def compat_v1(v1_input: Dict[str, Any]) -> Dict[str, Any]:
+
+def compat_v1(v1_input: dict[str, Any]) -> dict[str, Any]:
     """Compatibility wrapper for converting legacy V1 adapter parameters to normalized dictionary format."""
     normalized = dict(v1_input)
     if "target_host" in normalized and "target" not in normalized:

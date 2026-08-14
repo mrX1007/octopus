@@ -1,13 +1,17 @@
 """Resource participant models."""
+
 from __future__ import annotations
-from enum import Enum
+
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Literal
+
 
 class C2DaemonResourceKindV1(str, Enum):
     ENROLLMENT = "enrollment"
     TASK = "task"
     DNS_CHANNEL = "dns_channel"
+
 
 class C2DaemonResourceStateV1(str, Enum):
     PENDING = "pending"
@@ -16,12 +20,14 @@ class C2DaemonResourceStateV1(str, Enum):
     ABORTED = "aborted"
     FAILED = "failed"
 
+
 @dataclass(frozen=True)
 class C2DaemonResourceControlPayloadV1:
     resource_kind: C2DaemonResourceKindV1
     payload_schema_id: str
     payload_digest: str
     canonical_payload: bytes = field(repr=False, compare=False)
+
 
 @dataclass(frozen=True)
 class C2DaemonResourcePrepareReceiptV1:
@@ -35,6 +41,7 @@ class C2DaemonResourcePrepareReceiptV1:
     receipt_digest: str
     state: Literal[C2DaemonResourceStateV1.PENDING]
 
+
 @dataclass(frozen=True)
 class C2DaemonResourceCommitReceiptV1:
     transaction_id: str
@@ -43,6 +50,7 @@ class C2DaemonResourceCommitReceiptV1:
     resource_revision: int
     commit_digest: str
     state: Literal[C2DaemonResourceStateV1.COMMITTED_HIDDEN]
+
 
 @dataclass(frozen=True)
 class C2DaemonResourceFinalizeReceiptV1:

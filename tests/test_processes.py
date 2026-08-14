@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import sys
+
 import pytest
 
-from core.execution.processes import ProcessRunnerV1, ProcessExecutionModel, ProcessExecutionResult
+from core.execution.processes import ProcessExecutionModel, ProcessExecutionResult, ProcessRunnerV1
 
 pytestmark = pytest.mark.unit
 

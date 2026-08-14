@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from typing import Any
 
 from core.execution.remote_operation_models import (
     HostRemoteOperationOutputV1,
-    RemoteOperationAttemptStateV1,
     RemoteOperationBackendRequestV1,
     RemoteOperationEffectDispositionV1,
     RemoteOperationEffectProbeV1,

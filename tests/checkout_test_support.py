@@ -251,8 +251,7 @@ class FakeReferenceStore:
         snapshot = self.snapshots[reference]
         if (
             snapshot.revision != expected_metadata_revision
-            or snapshot.authorization.authorization_revision
-            != expected_authorization_revision
+            or snapshot.authorization.authorization_revision != expected_authorization_revision
         ):
             raise RuntimeError("reference_revision_mismatch")
         receipt = ReferenceCheckout(
@@ -482,18 +481,13 @@ def build_fixture(
         approval_store=approval_store,
         approval_lease=approval_lease,
     )
-    snapshots = tuple(
-        make_credential(f"credential://test/{index}", target)
-        for index in range(reference_count)
-    )
+    snapshots = tuple(make_credential(f"credential://test/{index}", target) for index in range(reference_count))
     reference_store = FakeReferenceStore(
         snapshots,
         checkout_id="checkout://test-1",
         events=event_log,
     )
-    modes = access_modes or tuple(
-        ReferenceAccessMode.MATERIAL for _ in range(reference_count)
-    )
+    modes = access_modes or tuple(ReferenceAccessMode.MATERIAL for _ in range(reference_count))
     if len(modes) != reference_count:
         raise ValueError("one access mode is required per reference")
     reference_requests = tuple(
@@ -510,14 +504,18 @@ def build_fixture(
         for snapshot, mode in zip(snapshots, modes)
     )
     fact_requests = (
-        FactCheckoutRequest(
-            fact_ref=facts[0].fact_ref,
-            expected_revision=facts[0].revision,
-            expected_payload_digest=facts[0].payload_digest,
-            required_fact_type=facts[0].fact_type.value,
-            target=target,
-        ),
-    ) if facts else ()
+        (
+            FactCheckoutRequest(
+                fact_ref=facts[0].fact_ref,
+                expected_revision=facts[0].revision,
+                expected_payload_digest=facts[0].payload_digest,
+                required_fact_type=facts[0].fact_type.value,
+                target=target,
+            ),
+        )
+        if facts
+        else ()
+    )
     request = ExecutorCheckoutRequestBundle(
         references=reference_requests,
         ingress_session=IngressSessionCheckoutRequest(

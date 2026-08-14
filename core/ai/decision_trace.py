@@ -144,7 +144,11 @@ class DecisionTraceStore:
                 conn.row_factory = sqlite3.Row
                 conn.execute("PRAGMA journal_mode=WAL")
             except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
-                if "unable to open" in str(exc).lower() or "authorization denied" in str(exc).lower() or "readonly" in str(exc).lower():
+                if (
+                    "unable to open" in str(exc).lower()
+                    or "authorization denied" in str(exc).lower()
+                    or "readonly" in str(exc).lower()
+                ):
                     self._persistent_conn = sqlite3.connect(":memory:")
                     self._persistent_conn.row_factory = sqlite3.Row
                     conn = self._persistent_conn

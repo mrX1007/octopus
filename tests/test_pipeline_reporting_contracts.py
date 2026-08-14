@@ -5,6 +5,7 @@ import pytest
 
 pytestmark = pytest.mark.contract
 
+
 def test_reporting_groups_repeated_msf_checks_without_marking_exploited():
     from core.ai.reporting import build_finding_groups
 
@@ -89,22 +90,26 @@ def test_coverage_summary_dedupes_repeated_timeout_signals():
         {
             "id": 1,
             "type": "check_result",
-            "value": json.dumps({
-                "tool": "nikto",
-                "kind": "web_vulnerability",
-                "status": "timeout",
-                "scope": {"type": "endpoint", "value": "http://10.0.0.5"},
-            }),
+            "value": json.dumps(
+                {
+                    "tool": "nikto",
+                    "kind": "web_vulnerability",
+                    "status": "timeout",
+                    "scope": {"type": "endpoint", "value": "http://10.0.0.5"},
+                }
+            ),
         },
         {
             "id": 2,
             "type": "check_result",
-            "value": json.dumps({
-                "tool": "nikto",
-                "kind": "web_vulnerability",
-                "status": "timeout",
-                "scope": {"type": "endpoint", "value": "http://10.0.0.5:8080"},
-            }),
+            "value": json.dumps(
+                {
+                    "tool": "nikto",
+                    "kind": "web_vulnerability",
+                    "status": "timeout",
+                    "scope": {"type": "endpoint", "value": "http://10.0.0.5:8080"},
+                }
+            ),
         },
         {"id": 3, "type": "service_status", "value": "tool_timeout:nikto"},
     ]
@@ -182,28 +187,32 @@ def test_cli_results_table_prints_reporting_sections(monkeypatch, capsys):
     import core.cli as cli
 
     monkeypatch.setattr(cli, "RICH_AVAILABLE", False)
-    cli.print_results_table({
-        "risk_level": "HIGH",
-        "vulnerabilities": [],
-        "confirmed_facts": [],
-        "outcome_summary": ["Exploit check positive; execution not performed"],
-        "finding_groups": [{
-            "module": "exploit/linux/redis/redis_replication_cmd_exec",
-            "service": "redis",
-            "ports": [49153, 49154],
-            "candidate": True,
-            "verified": True,
-            "exploited": False,
-            "impact_confirmed": False,
-        }],
-        "coverage": {
-            "confidence": "partial",
-            "degraded": [{"tool": "nuclei_safe", "status": "timeout", "impact": "coverage incomplete"}],
-            "checked_but_not_confirmed": [{"status": "sqlmap_no_get_parameters_found"}],
-        },
-        "attack_path": [{"stage": "Verification", "status": "positive", "detail": "msf check positive"}],
-        "remediations": [{"service": "redis", "recommendation": "Restrict Redis to trusted networks."}],
-    })
+    cli.print_results_table(
+        {
+            "risk_level": "HIGH",
+            "vulnerabilities": [],
+            "confirmed_facts": [],
+            "outcome_summary": ["Exploit check positive; execution not performed"],
+            "finding_groups": [
+                {
+                    "module": "exploit/linux/redis/redis_replication_cmd_exec",
+                    "service": "redis",
+                    "ports": [49153, 49154],
+                    "candidate": True,
+                    "verified": True,
+                    "exploited": False,
+                    "impact_confirmed": False,
+                }
+            ],
+            "coverage": {
+                "confidence": "partial",
+                "degraded": [{"tool": "nuclei_safe", "status": "timeout", "impact": "coverage incomplete"}],
+                "checked_but_not_confirmed": [{"status": "sqlmap_no_get_parameters_found"}],
+            },
+            "attack_path": [{"stage": "Verification", "status": "positive", "detail": "msf check positive"}],
+            "remediations": [{"service": "redis", "recommendation": "Restrict Redis to trusted networks."}],
+        }
+    )
 
     output = capsys.readouterr().out
 
@@ -218,17 +227,21 @@ def test_cli_results_table_explains_critical_access_without_vulnerabilities(monk
     import core.cli as cli
 
     monkeypatch.setattr(cli, "RICH_AVAILABLE", False)
-    cli.print_results_table({
-        "risk_level": "CRITICAL",
-        "vulnerabilities": [],
-        "confirmed_facts": [],
-        "access_findings": [{
-            "severity": "CRITICAL",
-            "name": "Root access confirmed on target",
-            "evidence": ["credential: ssh_login_success:root@10.0.0.5", "system_access: uid=0"],
-        }],
-        "risk_explanation": "Risk is CRITICAL because root-level access was verified, even if no CVE-style vulnerability was parsed.",
-    })
+    cli.print_results_table(
+        {
+            "risk_level": "CRITICAL",
+            "vulnerabilities": [],
+            "confirmed_facts": [],
+            "access_findings": [
+                {
+                    "severity": "CRITICAL",
+                    "name": "Root access confirmed on target",
+                    "evidence": ["credential: ssh_login_success:root@10.0.0.5", "system_access: uid=0"],
+                }
+            ],
+            "risk_explanation": "Risk is CRITICAL because root-level access was verified, even if no CVE-style vulnerability was parsed.",
+        }
+    )
 
     output = capsys.readouterr().out
 
@@ -284,10 +297,21 @@ def test_save_results_persists_deterministic_remediation_when_fix_missing(monkey
     }
     fake_db.print_session = lambda data: None
     for name in [
-        "get_connection", "create_session", "update_session_status",
-        "get_all_history", "get_vulnerabilities", "get_fixes", "get_exploits",
-        "edit_vulnerability", "edit_fix", "edit_exploit", "edit_summary_risk",
-        "delete_vulnerability", "delete_exploit", "delete_fix", "delete_full_session",
+        "get_connection",
+        "create_session",
+        "update_session_status",
+        "get_all_history",
+        "get_vulnerabilities",
+        "get_fixes",
+        "get_exploits",
+        "edit_vulnerability",
+        "edit_fix",
+        "edit_exploit",
+        "edit_summary_risk",
+        "delete_vulnerability",
+        "delete_exploit",
+        "delete_fix",
+        "delete_full_session",
         "print_history",
     ]:
         setattr(fake_db, name, lambda *args, **kwargs: None)
@@ -308,36 +332,44 @@ def test_save_results_persists_deterministic_remediation_when_fix_missing(monkey
         octopus = importlib.import_module("octopus")
         monkeypatch.setattr(octopus, "confirm", lambda _question: False)
         monkeypatch.setattr(octopus, "print_results_table", lambda _result: None)
-        octopus._save_and_show_results(99, {
-            "vulnerabilities": [{
-                "vuln_name": "CVE-2099-0001 fixture vulnerability",
-                "severity": "HIGH",
-                "port": "443",
-                "service": "https",
-                "description": "Fixture vulnerability with an AI-provided fix.",
-                "confidence": "CONFIRMED",
-                "evidence_tool": "fixture",
-                "fix": "Apply the vendor patch.",
-            }, {
-                "vuln_name": "msf_check_positive:exploit/linux/redis/redis_replication_cmd_exec",
-                "severity": "HIGH",
-                "port": "49153",
-                "service": "redis",
-                "description": "Metasploit check positive; exploit execution not confirmed.",
-                "confidence": "VERIFIED",
-                "evidence_tool": "msf_check",
-            }],
-            "exploits": [],
-            "risk_level": "HIGH",
-            "raw_scan": "",
-            "full_response": "",
-            "confirmed_facts": [],
-            "remediations": [{
-                "finding": "exploit/linux/redis/redis_replication_cmd_exec",
-                "service": "redis",
-                "recommendation": "Restrict Redis to trusted networks.",
-            }],
-        })
+        octopus._save_and_show_results(
+            99,
+            {
+                "vulnerabilities": [
+                    {
+                        "vuln_name": "CVE-2099-0001 fixture vulnerability",
+                        "severity": "HIGH",
+                        "port": "443",
+                        "service": "https",
+                        "description": "Fixture vulnerability with an AI-provided fix.",
+                        "confidence": "CONFIRMED",
+                        "evidence_tool": "fixture",
+                        "fix": "Apply the vendor patch.",
+                    },
+                    {
+                        "vuln_name": "msf_check_positive:exploit/linux/redis/redis_replication_cmd_exec",
+                        "severity": "HIGH",
+                        "port": "49153",
+                        "service": "redis",
+                        "description": "Metasploit check positive; exploit execution not confirmed.",
+                        "confidence": "VERIFIED",
+                        "evidence_tool": "msf_check",
+                    },
+                ],
+                "exploits": [],
+                "risk_level": "HIGH",
+                "raw_scan": "",
+                "full_response": "",
+                "confirmed_facts": [],
+                "remediations": [
+                    {
+                        "finding": "exploit/linux/redis/redis_replication_cmd_exec",
+                        "service": "redis",
+                        "recommendation": "Restrict Redis to trusted networks.",
+                    }
+                ],
+            },
+        )
     finally:
         sys.modules.pop("octopus", None)
         if old_octopus is not None:
@@ -373,7 +405,12 @@ def test_llm_health_facts_are_visible_in_trace_report():
         scan_id,
         target,
         "director",
-        {"llm_status": "failed", "llm_error": "No JSON found in LLM response", "fallback": True, "goal": "service_discovery"},
+        {
+            "llm_status": "failed",
+            "llm_error": "No JSON found in LLM response",
+            "fallback": True,
+            "goal": "service_discovery",
+        },
         1,
     )
 

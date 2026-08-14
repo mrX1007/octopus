@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from threading import RLock
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 
 class IdempotencyStateV1(str, Enum):
@@ -29,7 +29,7 @@ class IdempotencyRecordV1:
     payload_digest: str
     state: IdempotencyStateV1
     created_at: float
-    response_json: Optional[str] = None
+    response_json: str | None = None
 
 
 class IdempotencyConflictError(ValueError):
@@ -46,8 +46,7 @@ def compute_idempotency_fingerprint(
 ) -> str:
     """Compute domain-separated canonical digest of idempotency binding."""
     raw = (
-        f"OCTOPUS-IDEMPOTENCY-V1:{operator_id}:{subject_id}:{mission_id}:"
-        f"{action}:{payload_schema_id}:{payload_digest}"
+        f"OCTOPUS-IDEMPOTENCY-V1:{operator_id}:{subject_id}:{mission_id}:{action}:{payload_schema_id}:{payload_digest}"
     )
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -57,8 +56,8 @@ class IdempotencyStoreV1:
 
     def __init__(self) -> None:
         self._lock = RLock()
-        self._by_key: Dict[Tuple[str, str, str, str, str], IdempotencyRecordV1] = {}
-        self._by_request_id: Dict[Tuple[str, str], IdempotencyRecordV1] = {}
+        self._by_key: dict[tuple[str, str, str, str, str], IdempotencyRecordV1] = {}
+        self._by_request_id: dict[tuple[str, str], IdempotencyRecordV1] = {}
 
     def reserve(
         self,
@@ -71,7 +70,7 @@ class IdempotencyStoreV1:
         request_id: str,
         payload_schema_id: str,
         payload_digest: str,
-        now: Optional[float] = None,
+        now: float | None = None,
     ) -> IdempotencyRecordV1:
         ts = time.time() if now is None else now
         key_tuple = (operator_id, subject_id, mission_id, action, idempotency_key)
@@ -102,9 +101,7 @@ class IdempotencyStoreV1:
                     or existing_req.action != action
                     or existing_req.payload_digest != payload_digest
                 ):
-                    raise IdempotencyConflictError(
-                        f"Request ID {request_id} already used with different parameters"
-                    )
+                    raise IdempotencyConflictError(f"Request ID {request_id} already used with different parameters")
                 return existing_req
 
             rec = IdempotencyRecordV1(

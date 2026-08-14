@@ -740,8 +740,7 @@ def derive_effective_status_and_reasons(
     transaction_status: ExecutionStatusV2,
     cleanup: CleanupSummaryV2,
     reason_codes: tuple[str, ...],
-) -> tuple[ExecutionStatusV2, tuple[str, ...]]:
-    ...
+) -> tuple[ExecutionStatusV2, tuple[str, ...]]: ...
 
 
 @dataclass(frozen=True)
@@ -852,6 +851,7 @@ class InvocationFinalizationRecordV2:
 
 class InvocationFinalizationFactoryV2:
     _construction_token: _FinalizationConstructionTokenV2
+
     def create(
         self,
         *,
@@ -912,9 +912,7 @@ class ActionExecutionReportV2:
             self.execution_result_ref,
             self.committed_result_binding,
         )
-        if any(part is None for part in committed_parts) and any(
-            part is not None for part in committed_parts
-        ):
+        if any(part is None for part in committed_parts) and any(part is not None for part in committed_parts):
             raise ValueError("committed_result_all_or_none")
         commit_status = self.finalization.transaction_status in (
             ExecutionStatusV2.SUCCEEDED,
@@ -933,9 +931,7 @@ class ActionExecutionReportV2:
             or self.finalization.transaction_id != self.transaction_id
         ):
             raise ValueError("finalization_identity")
-        if self.execution_result is not None and (
-            self.finalization.transaction_status != self.execution_result.status
-        ):
+        if self.execution_result is not None and (self.finalization.transaction_status != self.execution_result.status):
             raise ValueError("transaction_status_mismatch")
         if self.execution_result is not None:
             assert self.execution_result_ref is not None
@@ -949,10 +945,8 @@ class ActionExecutionReportV2:
                 or self.execution_result_ref.result_digest != result_digest
                 or self.committed_result_binding.transaction_id != self.transaction_id
                 or self.committed_result_binding.commit_state != "committed"
-                or self.committed_result_binding.execution_result_ref
-                != self.execution_result_ref
-                or self.committed_result_binding.canonical_result_digest
-                != result_digest
+                or self.committed_result_binding.execution_result_ref != self.execution_result_ref
+                or self.committed_result_binding.canonical_result_digest != result_digest
             ):
                 raise ValueError("committed_result_binding_mismatch")
         expected_effective, expected_reasons = derive_effective_status_and_reasons(
@@ -969,8 +963,7 @@ class ActionExecutionReportV2:
             self.finalization_ref.execution_id != self.execution_id
             or self.finalization_ref.action_id != self.action_id
             or self.finalization_ref.transaction_id != self.transaction_id
-            or self.finalization_ref.finalization_digest
-            != canonical_invocation_finalization_digest(self.finalization)
+            or self.finalization_ref.finalization_digest != canonical_invocation_finalization_digest(self.finalization)
         ):
             raise ValueError("finalization_ref_mismatch")
         if self.finalization_retry_ref is not None and (
@@ -987,10 +980,8 @@ class ActionExecutionReportV2:
             self.execution_result_ref is None
             or self.execution_result is None
             or self.committed_result_binding is None
-            or self.execution_result.status
-            not in (ExecutionStatusV2.SUCCEEDED, ExecutionStatusV2.PARTIAL)
-            or self.finalization.effective_status
-            not in (ExecutionStatusV2.SUCCEEDED, ExecutionStatusV2.PARTIAL)
+            or self.execution_result.status not in (ExecutionStatusV2.SUCCEEDED, ExecutionStatusV2.PARTIAL)
+            or self.finalization.effective_status not in (ExecutionStatusV2.SUCCEEDED, ExecutionStatusV2.PARTIAL)
         ):
             raise ChildExecutionHasNoCommittedResult(self.execution_id)
         result_digest = canonical_execution_result_digest(self.execution_result)
@@ -1082,13 +1073,9 @@ class ActionExecutionReportEnvelopeV2:
     report_digest: str
 
 
-ExecutionReportViewV2: TypeAlias = (
-    ExecutionProgressReportV2 | ActionExecutionReportEnvelopeV2
-)
+ExecutionReportViewV2: TypeAlias = ExecutionProgressReportV2 | ActionExecutionReportEnvelopeV2
 
-InvocationExecutionOutcomeV2: TypeAlias = (
-    ExecutionProgressReportV2 | ActionExecutionReportEnvelopeV2
-)
+InvocationExecutionOutcomeV2: TypeAlias = ExecutionProgressReportV2 | ActionExecutionReportEnvelopeV2
 
 
 @dataclass(frozen=True)
@@ -1101,9 +1088,7 @@ class FinalizationRetryEnqueuedV2:
     retry_ref: InvocationFinalizationRetryRefV2
 
 
-FinalizationPersistenceOutcomeV2: TypeAlias = (
-    FinalizationPersistedV2 | FinalizationRetryEnqueuedV2
-)
+FinalizationPersistenceOutcomeV2: TypeAlias = FinalizationPersistedV2 | FinalizationRetryEnqueuedV2
 
 
 def canonical_finalization_persistence_outcome_digest(
@@ -1240,8 +1225,6 @@ class FinalizationRetryReconcilerV2:
         self,
         reference: InvocationFinalizationRetryRefV2,
     ) -> ActionExecutionReportEnvelopeV2: ...
-
-
 ```
 
 The retry record/store/reconciler are PR-5-owned finalization services (shown
@@ -1707,6 +1690,7 @@ class OpaqueSecretValueFactoryV2:
     """Sole concrete construction owner used by SecretStore and legacy adapter."""
 
     _construction_token: _SecretValueConstructionTokenV2
+
     def from_owned_buffer(
         self,
         *,
@@ -1720,6 +1704,7 @@ class LegacySecretValueAdapterV2:
 
     _secret_store: SecretStore
     _factory: OpaqueSecretValueFactoryV2
+
     def checkout(self, secret_ref: str, *, consumer_id: str) -> OpaqueSecretValueV2: ...
 
 
@@ -2463,7 +2448,6 @@ class OwnedExecutionBudgetAuthorityV2:
         child_lease: ChildIngressLease,
         child_action_id: str,
     ) -> ExecutionBudget: ...
-
 ```
 
 `ExecutionBudgetLeaseV2` has a module-private construction token and is minted
@@ -2516,8 +2500,7 @@ class ActionExecutor:
         source: BoundedActionRequestV2Envelope,
         *,
         bridge: RootExecutionBridge,
-    ) -> InvocationExecutionOutcomeV2:
-        ...  # fail closed at the unregistered exact-decoder boundary
+    ) -> InvocationExecutionOutcomeV2: ...  # fail closed at the unregistered exact-decoder boundary
 ```
 
 PR-6 creates `ActionRequestV2` and `V2InputUnion`, then modifies the same single
@@ -2526,6 +2509,7 @@ internal method with overloads; it does not create a second internal API:
 ```python
 V2ExecutionSource: TypeAlias = BoundedActionRequestV2Envelope | ActionRequestV2
 ExecutionBridge: TypeAlias = RootExecutionBridge | ChildExecutionBridge
+
 
 @overload
 def _run_v2_internal(
@@ -2536,6 +2520,7 @@ def _run_v2_internal(
     bridge: RootExecutionBridge,
 ) -> InvocationExecutionOutcomeV2: ...
 
+
 @overload
 def _run_v2_internal(
     self,
@@ -2545,14 +2530,14 @@ def _run_v2_internal(
     bridge: ChildExecutionBridge,
 ) -> InvocationExecutionOutcomeV2: ...
 
+
 def _run_v2_internal(
     self,
     action_id: str,
     source: V2ExecutionSource,
     *,
     bridge: ExecutionBridge,
-) -> InvocationExecutionOutcomeV2:
-    ...
+) -> InvocationExecutionOutcomeV2: ...
 ```
 
 Допустимы только пары:
@@ -2678,8 +2663,7 @@ class TrustedFactDecoder:
         self,
         stored_fact: StoredFactRecord,
         expected_ref: str,
-    ) -> TrustedFactSnapshot:
-        ...
+    ) -> TrustedFactSnapshot: ...
 
 
 def canonical_stored_fact_payload_digest(record: StoredFactRecord) -> str:
@@ -2725,8 +2709,7 @@ class ActionTargetExtractor(Protocol, Generic[TDecodedV2Input]):
         self,
         typed_input: TDecodedV2Input,
         reference_snapshots: tuple[ReferenceMetadataSnapshot, ...],
-    ) -> tuple[ExtractedActionTarget, ...]:
-        ...
+    ) -> tuple[ExtractedActionTarget, ...]: ...
 
 
 class ActionTargetExtractorRegistry:
@@ -2737,8 +2720,7 @@ class ActionTargetExtractorRegistry:
         input_schema_id: str,
         input_type: type[TDecodedV2Input],
         extractor: ActionTargetExtractor[TDecodedV2Input],
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def extract_checked(
         self,
@@ -2747,8 +2729,7 @@ class ActionTargetExtractorRegistry:
         input_schema_id: str,
         decoded_input: object,
         reference_snapshots: tuple[ReferenceMetadataSnapshot, ...],
-    ) -> tuple[ExtractedActionTarget, ...]:
-        ...
+    ) -> tuple[ExtractedActionTarget, ...]: ...
 ```
 
 The private type-erased registry slot uses `object`, never `Any`, and must check
@@ -2797,6 +2778,7 @@ class ExtractedActionTarget:
     port: int | None = None
     protocol: NetworkProtocol | None = None
 
+
 @dataclass(frozen=True)
 class TargetScopeRule:
     role: TargetRole | None
@@ -2805,6 +2787,7 @@ class TargetScopeRule:
     port: int | None = None
     protocol: NetworkProtocol | None = None
     allow_containment: bool = False
+
 
 @dataclass(frozen=True)
 class TargetScopeSnapshot:
@@ -2825,6 +2808,7 @@ class TargetRole(str, Enum):
     CALLBACK = "callback"
     RESOURCE_BOUND = "resource_bound"
 
+
 class TargetKind(str, Enum):
     IPV4 = "ipv4"
     IPV6 = "ipv6"
@@ -2833,6 +2817,7 @@ class TargetKind(str, Enum):
     HOST = "host"
     NETWORK_ENDPOINT = "network_endpoint"
     RESOURCE_BOUND_TARGET = "resource_bound_target"
+
 
 class NetworkProtocol(str, Enum):
     TCP = "tcp"
@@ -2978,9 +2963,7 @@ class SensitiveArtifactReferenceSnapshot:
     expires_at: float | None
 
 
-ArtifactReferenceSnapshot: TypeAlias = (
-    NonSensitiveArtifactReferenceSnapshot | SensitiveArtifactReferenceSnapshot
-)
+ArtifactReferenceSnapshot: TypeAlias = NonSensitiveArtifactReferenceSnapshot | SensitiveArtifactReferenceSnapshot
 
 
 @dataclass(frozen=True)
@@ -3604,8 +3587,7 @@ class ReferenceStore(Protocol):
         mission: MissionAuthorizationSnapshot,
         action_id: str,
         targets: tuple[ExtractedActionTarget, ...],
-    ) -> ReferenceCheckout:
-        ...
+    ) -> ReferenceCheckout: ...
 ```
 
 Одна store transaction/lock выполняет в указанном порядке:
@@ -3712,14 +3694,12 @@ class ReferenceCheckoutCoordinator:
     def checkout_many(
         self,
         request: ExecutorCheckoutRequestBundle,
-    ) -> ExecutorCheckoutBundle:
-        ...
+    ) -> ExecutorCheckoutBundle: ...
 
     def open_materials(
         self,
         checkout: ExecutorCheckoutBundle,
-    ) -> ExecutorOpenedMaterialBundleV2:
-        ...
+    ) -> ExecutorOpenedMaterialBundleV2: ...
 
     def checkpoint_existing_recovery_state(
         self,
@@ -4367,9 +4347,7 @@ class ExecutionCommitDecisionBindingV2:
     binding_digest: str
 
     def __post_init__(self) -> None:
-        if (self.external_effect_participant_id is None) != (
-            self.external_effect_registration_digest is None
-        ):
+        if (self.external_effect_participant_id is None) != (self.external_effect_registration_digest is None):
             raise ValueError("commit_effect_binding_fields_all_or_none")
         if self.binding_digest != canonical_execution_commit_decision_binding_digest(self):
             raise ValueError("commit_decision_binding_digest_mismatch")
@@ -4540,8 +4518,6 @@ class ResolvedDraftReferenceV2:
     disposition: ResolutionDispositionV2
     no_fact_receipt_ref: str | None
     no_fact_receipt_digest: str | None
-
-
 
 
 @dataclass(frozen=True)
@@ -5150,6 +5126,8 @@ class ReversibleParticipantPrepareReceiptV2:
     participant_revision: int
     state: Literal[ParticipantStateV2.PREPARED]
     effect_disposition: Literal[PrepareEffectDispositionV2.REVERSIBLE]
+
+
 @dataclass(frozen=True)
 class ExternalEffectConfirmedReceiptV2:
     transaction_id: str
@@ -5162,9 +5140,7 @@ class ExternalEffectConfirmedReceiptV2:
     effect_disposition: Literal[PrepareEffectDispositionV2.EFFECT_CONFIRMED]
 
 
-ParticipantPrepareReceiptV2: TypeAlias = (
-    ReversibleParticipantPrepareReceiptV2 | ExternalEffectConfirmedReceiptV2
-)
+ParticipantPrepareReceiptV2: TypeAlias = ReversibleParticipantPrepareReceiptV2 | ExternalEffectConfirmedReceiptV2
 
 
 @dataclass(frozen=True)
@@ -5192,20 +5168,13 @@ class ParticipantInDoubtReceiptV2:
 
 
 ParticipantPrepareOutcomeV2: TypeAlias = (
-    ParticipantPrepareReceiptV2
-    | ParticipantPrepareFailedReceiptV2
-    | ParticipantInDoubtReceiptV2
+    ParticipantPrepareReceiptV2 | ParticipantPrepareFailedReceiptV2 | ParticipantInDoubtReceiptV2
 )
 
-ReversiblePrepareOutcomeV2: TypeAlias = (
-    ReversibleParticipantPrepareReceiptV2
-    | ParticipantPrepareFailedReceiptV2
-)
+ReversiblePrepareOutcomeV2: TypeAlias = ReversibleParticipantPrepareReceiptV2 | ParticipantPrepareFailedReceiptV2
 
 TerminalEffectPrepareOutcomeV2: TypeAlias = (
-    ExternalEffectConfirmedReceiptV2
-    | ParticipantPrepareFailedReceiptV2
-    | ParticipantInDoubtReceiptV2
+    ExternalEffectConfirmedReceiptV2 | ParticipantPrepareFailedReceiptV2 | ParticipantInDoubtReceiptV2
 )
 
 
@@ -5305,9 +5274,7 @@ class ParticipantNeverPreparedReceiptV2:
     state: Literal[ParticipantStateV2.ABORTED_UNPREPARED]
 
 
-ParticipantAbortEvidenceV2: TypeAlias = (
-    ParticipantRollbackReceiptV2 | ParticipantNeverPreparedReceiptV2
-)
+ParticipantAbortEvidenceV2: TypeAlias = ParticipantRollbackReceiptV2 | ParticipantNeverPreparedReceiptV2
 
 
 class ReconcileDispositionV2(str, Enum):
@@ -6192,9 +6159,7 @@ class ExecutionNoReturnAdmissionBodyV2:
     external_effect_registration_digest: str | None
 
     def __post_init__(self) -> None:
-        if (self.external_effect_participant_id is None) != (
-            self.external_effect_registration_digest is None
-        ):
+        if (self.external_effect_participant_id is None) != (self.external_effect_registration_digest is None):
             raise ValueError("external_effect_admission_fields_all_or_none")
 
 
@@ -6221,9 +6186,7 @@ class ExecutionNoReturnAdmissionReceiptV2:
     def __post_init__(self) -> None:
         if self.admission_ref.transaction_id != self.body.transaction_id:
             raise ValueError("admission_transaction_mismatch")
-        if self.admission_ref.admission_digest != (
-            canonical_execution_no_return_admission_digest(self.body)
-        ):
+        if self.admission_ref.admission_digest != (canonical_execution_no_return_admission_digest(self.body)):
             raise ValueError("admission_digest_mismatch")
 
 
@@ -7087,9 +7050,7 @@ class SensitiveArtifactStageRequestV2:
     target: str | None
 
 
-ArtifactStageRequestV2: TypeAlias = (
-    NonSensitiveArtifactStageRequestV2 | SensitiveArtifactStageRequestV2
-)
+ArtifactStageRequestV2: TypeAlias = NonSensitiveArtifactStageRequestV2 | SensitiveArtifactStageRequestV2
 
 
 @dataclass(frozen=True)
@@ -7145,7 +7106,6 @@ class ProviderStagingFacade(Protocol):
         self,
         request: ParticipantPayloadStageRequestV2,
     ) -> StagedParticipantPayloadV2: ...
-
 ```
 
 PR-5 deliberately does not mention `C2ArtifactBuildOutput`,
@@ -7960,29 +7920,36 @@ class RemoteExecService(str, Enum):
     WINRM = "winrm"
     DCOM = "dcom"
 
+
 class C2DeploymentProfileId(str, Enum):
     GO_AGENT = "deployment://go-agent"
     PYTHON_AGENT = "deployment://python-agent"
     POWERSHELL_STAGER = "deployment://powershell-stager"
 
+
 class C2DeploymentMethod(str, Enum):
     SSH_SESSION = "ssh-session"
+
 
 class C2TargetOS(str, Enum):
     LINUX = "linux"
     WINDOWS = "windows"
     DARWIN = "darwin"
 
+
 class C2TargetArch(str, Enum):
     AMD64 = "amd64"
     ARM64 = "arm64"
+
 
 class DNSRecordType(str, Enum):
     TXT = "TXT"
     A = "A"
 
+
 class C2Transport(str, Enum):
     DNS = "dns"
+
 
 class C2CleanupReason(str, Enum):
     OPERATOR_REQUEST = "operator-request"
@@ -8212,6 +8179,7 @@ class AgentCapabilitySetV12:
     supported_payload_schema_versions: tuple[AgentPayloadSchemaIdV12, ...]
     supported_result_schema_versions: tuple[AgentResultSchemaIdV12, ...]
     capabilities_digest: str
+
 
 @dataclass(frozen=True)
 class AgentRegistrationV12:
@@ -8985,6 +8953,7 @@ class IdentityTaskPayload:
         default="c2-control-payload/identity/1", init=False
     )
 
+
 @dataclass(frozen=True)
 class HostInventoryTaskPayload:
     include_processes: bool
@@ -8994,6 +8963,7 @@ class HostInventoryTaskPayload:
     schema_version: Literal["c2-control-payload/host-inventory/1"] = field(
         default="c2-control-payload/host-inventory/1", init=False
     )
+
 
 @dataclass(frozen=True)
 class NetworkInventoryTaskPayload:
@@ -9005,6 +8975,7 @@ class NetworkInventoryTaskPayload:
         default="c2-control-payload/network-inventory/1", init=False
     )
 
+
 @dataclass(frozen=True)
 class ServiceInventoryTaskPayload:
     service_names: tuple[str, ...]
@@ -9014,11 +8985,9 @@ class ServiceInventoryTaskPayload:
         default="c2-control-payload/service-inventory/1", init=False
     )
 
+
 C2TaskPayload = (
-    IdentityTaskPayload
-    | HostInventoryTaskPayload
-    | NetworkInventoryTaskPayload
-    | ServiceInventoryTaskPayload
+    IdentityTaskPayload | HostInventoryTaskPayload | NetworkInventoryTaskPayload | ServiceInventoryTaskPayload
 )
 ```
 
@@ -9066,6 +9035,7 @@ class DNSChannelConfig:
     record_type: DNSRecordType
     listen_address: str
     listen_port: int
+
 
 C2TransportConfig: TypeAlias = DNSChannelConfig
 ```
@@ -9292,9 +9262,7 @@ class CompositeRouteProgressV2:
     child_progress: ExecutionProgressReportV2
 
 
-CompositeRouteOutcomeV2: TypeAlias = (
-    CompositeProviderResult | CompositeRouteProgressV2
-)
+CompositeRouteOutcomeV2: TypeAlias = CompositeProviderResult | CompositeRouteProgressV2
 
 
 @dataclass(frozen=True)
@@ -9580,8 +9548,6 @@ class TypedCompositeRouterV2(Protocol):
         result: ProviderResultReadViewV2,
         context: BoundProviderVerificationContext,
     ) -> ActionVerificationResultV2: ...
-
-
 ```
 
 The exact `ProviderCallBoundary.invoke_route(..., *, _phase_controller)` method
@@ -9775,10 +9741,7 @@ class ParticipantRegistrationReadViewV2:
 
 
 ProviderVisibleResultDraftRefV2: TypeAlias = (
-    ObservationDraftRefV2
-    | ArtifactDraftRefV2
-    | ManagedResourceDraftRefV2
-    | SensitiveBatchDraftRefV2
+    ObservationDraftRefV2 | ArtifactDraftRefV2 | ManagedResourceDraftRefV2 | SensitiveBatchDraftRefV2
 )
 
 
@@ -11992,6 +11955,7 @@ class ExecutionResultStore(Protocol):
 
     def get(self, reference: ExecutionResultRefV2) -> ExecutionResultV2: ...
 
+
 @runtime_checkable
 class InvocationFinalizationStore(Protocol):
     def persist_or_enqueue(
@@ -12011,7 +11975,6 @@ class ReportQueryRequestV2:
 
 @runtime_checkable
 class ExecutionReportQueryServiceV2(Protocol):
-
     def get_latest_report(
         self,
         *,
@@ -12354,9 +12317,7 @@ class SensitiveArtifactDraftRefV2:
     target: str | None
 
 
-ArtifactDraftRefV2: TypeAlias = (
-    NonSensitiveArtifactDraftRefV2 | SensitiveArtifactDraftRefV2
-)
+ArtifactDraftRefV2: TypeAlias = NonSensitiveArtifactDraftRefV2 | SensitiveArtifactDraftRefV2
 
 
 @dataclass(frozen=True)
@@ -12455,16 +12416,19 @@ class _SensitiveAuthenticatorConstructionTokenV2:
 
 class OwnedSensitiveIntegrityKeyLeaseV2(SensitiveIntegrityKeyLeaseV2):
     """Final non-exporting concrete lease with OPEN→TRANSFERRED|CLOSED state."""
+
     ...
 
 
 class OwnedHmacSensitiveIntegrityStreamV2(SensitiveIntegrityStreamV2):
     """Final streaming HMAC implementation; zeroizes key state on terminal."""
+
     ...
 
 
 class PersistentSensitiveIntegrityKeyringV2(SensitiveIntegrityKeyringV2):
     """Final persistent key-id resolver retaining verification-only rotations."""
+
     ...
 
 
@@ -13174,9 +13138,7 @@ class SensitiveProviderResult:
     result_kind: Literal[ProviderResultKind.SENSITIVE] = field(default=ProviderResultKind.SENSITIVE, init=False)
 
 
-RemoteAuthProviderResultV2: TypeAlias = (
-    OperationProviderResult | SessionProviderResult
-)
+RemoteAuthProviderResultV2: TypeAlias = OperationProviderResult | SessionProviderResult
 
 ProviderResult: TypeAlias = (
     OperationProviderResult
@@ -13487,6 +13449,7 @@ tests/integration/test_payload_keying_provider_e2e.py
        machine_id: str | None
        metadata_revision: int
 
+
    @dataclass(frozen=True, repr=False)
    class PayloadKeyingBackendResult:
        encrypted_payload: BackendOwnedTransientReceiptV2 = field(repr=False, compare=False)
@@ -13494,6 +13457,7 @@ tests/integration/test_payload_keying_provider_e2e.py
        encrypted_payload_digest: str
        loader_digest: str
        profile_id: PayloadKeyingProfileId
+
 
    def key_payload(
        payload: BoundNonSensitiveArtifactMaterial,
@@ -15443,9 +15407,7 @@ class BoundedControlErrorV1:
 
 
 ParticipantControlResponseV1: TypeAlias = (
-    ParticipantControlReceiptV1
-    | ParticipantControlQuerySnapshotV1
-    | BoundedControlErrorV1
+    ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1
 )
 
 
@@ -15770,11 +15732,13 @@ class ResultAckSelectionV1:
     result_ref: str
     expected_revision: int
 
+
 @dataclass(frozen=True)
 class ResultAckRequestV1:
     mission_id: str
     agent_ref: str
     selections: tuple[ResultAckSelectionV1, ...]
+
 
 @dataclass(frozen=True)
 class ResultAcknowledgementRecordV1:
@@ -16176,9 +16140,8 @@ Wire payload DTOs:
 @dataclass(frozen=True)
 class AgentIdentityTaskPayloadV12:
     payload_kind: Literal["identity"] = field(default="identity", init=False)
-    schema_version: Literal["c2-agent-payload/identity/1"] = field(
-        default="c2-agent-payload/identity/1", init=False
-    )
+    schema_version: Literal["c2-agent-payload/identity/1"] = field(default="c2-agent-payload/identity/1", init=False)
+
 
 @dataclass(frozen=True)
 class AgentHostInventoryTaskPayloadV12:
@@ -16190,6 +16153,7 @@ class AgentHostInventoryTaskPayloadV12:
         default="c2-agent-payload/host-inventory/1", init=False
     )
 
+
 @dataclass(frozen=True)
 class AgentNetworkInventoryTaskPayloadV12:
     include_routes: bool
@@ -16200,6 +16164,7 @@ class AgentNetworkInventoryTaskPayloadV12:
         default="c2-agent-payload/network-inventory/1", init=False
     )
 
+
 @dataclass(frozen=True)
 class AgentServiceInventoryTaskPayloadV12:
     service_names: tuple[str, ...]
@@ -16208,6 +16173,7 @@ class AgentServiceInventoryTaskPayloadV12:
     schema_version: Literal["c2-agent-payload/service-inventory/1"] = field(
         default="c2-agent-payload/service-inventory/1", init=False
     )
+
 
 AgentTaskPayloadV12 = (
     AgentIdentityTaskPayloadV12
@@ -16263,6 +16229,7 @@ class AgentTaskStatus(str, Enum):
     UNSUPPORTED_OPERATION = "unsupported_operation"
     INVALID_PAYLOAD = "invalid_payload"
 
+
 class AgentTaskErrorCode(str, Enum):
     INVALID_PAYLOAD = "invalid_payload"
     UNSUPPORTED_OPERATION = "unsupported_operation"
@@ -16271,20 +16238,24 @@ class AgentTaskErrorCode(str, Enum):
     OUTPUT_LIMIT = "output_limit"
     EXECUTION_FAILED = "execution_failed"
 
+
 @dataclass(frozen=True)
 class AgentProcessSummaryV12:
     pid: int
     name: str
+
 
 @dataclass(frozen=True)
 class AgentServiceSummaryV12:
     name: str
     status: str
 
+
 @dataclass(frozen=True)
 class AgentInterfaceSummaryV12:
     name: str
     addresses: tuple[str, ...]
+
 
 @dataclass(frozen=True)
 class AgentRouteSummaryV12:
@@ -16292,12 +16263,14 @@ class AgentRouteSummaryV12:
     gateway: str | None
     interface: str
 
+
 @dataclass(frozen=True)
 class AgentConnectionSummaryV12:
     protocol: NetworkProtocol
     local_endpoint: str
     remote_endpoint: str | None
     state: str
+
 
 @dataclass(frozen=True)
 class AgentIdentityTaskOutputV12:
@@ -16309,29 +16282,39 @@ class AgentIdentityTaskOutputV12:
     user: str
     process_id: int
 
+
 @dataclass(frozen=True)
 class AgentHostInventoryTaskOutputV12:
-    schema_version: Literal["c2-agent-result/host-inventory/1"] = field(default="c2-agent-result/host-inventory/1", init=False)
+    schema_version: Literal["c2-agent-result/host-inventory/1"] = field(
+        default="c2-agent-result/host-inventory/1", init=False
+    )
     output_kind: Literal["host_inventory"] = field(default="host_inventory", init=False)
     processes: tuple[AgentProcessSummaryV12, ...]
     services: tuple[AgentServiceSummaryV12, ...]
     truncated: bool
 
+
 @dataclass(frozen=True)
 class AgentNetworkInventoryTaskOutputV12:
-    schema_version: Literal["c2-agent-result/network-inventory/1"] = field(default="c2-agent-result/network-inventory/1", init=False)
+    schema_version: Literal["c2-agent-result/network-inventory/1"] = field(
+        default="c2-agent-result/network-inventory/1", init=False
+    )
     output_kind: Literal["network_inventory"] = field(default="network_inventory", init=False)
     interfaces: tuple[AgentInterfaceSummaryV12, ...]
     routes: tuple[AgentRouteSummaryV12, ...]
     connections: tuple[AgentConnectionSummaryV12, ...]
     truncated: bool
 
+
 @dataclass(frozen=True)
 class AgentServiceInventoryTaskOutputV12:
-    schema_version: Literal["c2-agent-result/service-inventory/1"] = field(default="c2-agent-result/service-inventory/1", init=False)
+    schema_version: Literal["c2-agent-result/service-inventory/1"] = field(
+        default="c2-agent-result/service-inventory/1", init=False
+    )
     output_kind: Literal["service_inventory"] = field(default="service_inventory", init=False)
     services: tuple[AgentServiceSummaryV12, ...]
     truncated: bool
+
 
 AgentTaskOutput = (
     AgentIdentityTaskOutputV12
@@ -16394,8 +16377,7 @@ class AgentTaskResultDecoderV12:
         *,
         expected_envelope: AgentTaskEnvelopeV12,
         authenticated_agent_ref: str,
-    ) -> AgentTaskResultV12:
-        ...
+    ) -> AgentTaskResultV12: ...
 ```
 
 The decoder resolves its immutable `AgentTaskResultDecodePolicyV12` from the daemon-owned `AgentTaskResultDecodePolicyRegistryV12`. No call site may pass limit values, a narrowing DTO or a replacement policy. Decoder rejects unknown fields,
@@ -16541,7 +16523,6 @@ class AgentTaskResultDecodeLimitsV12:
     max_interfaces: int = 256
     max_routes: int = 1_024
     max_connections: int = 2_048
-
 
 
 @dataclass(frozen=True)
@@ -18455,10 +18436,7 @@ c2-results-list-ack-e2e
 ```python
 mounts = PROVIDER_MOUNT_REGISTRY.snapshots()
 specs = tuple(mount.spec for mount in mounts)
-descriptors = {
-    descriptor.action_id: descriptor
-    for descriptor in action_catalog.descriptors()
-}
+descriptors = {descriptor.action_id: descriptor for descriptor in action_catalog.descriptors()}
 
 assert len(specs) == 20
 assert len({mount.revision for mount in mounts}) == 20
@@ -18469,10 +18447,7 @@ assert all(spec.mounted for spec in specs)
 assert all(spec.typed_action_supported for spec in specs)
 assert not any(spec.raw_command_supported for spec in specs)
 
-assert all(
-    descriptors[spec.action_id].manual_gate
-    for spec in specs
-)
+assert all(descriptors[spec.action_id].manual_gate for spec in specs)
 ```
 
 Single-owner assertions:
@@ -18491,10 +18466,7 @@ assert "provider_mounted" in LegacyActionDescriptorV1.__dataclass_fields__
 Reference runtime:
 
 ```python
-assert all(
-    readiness_registry.probe(mount).available
-    for mount in mounts
-)
+assert all(readiness_registry.probe(mount).available for mount in mounts)
 ```
 
 Compatibility:

@@ -64,11 +64,14 @@ def test_root_bootstrap_creates_first_admin_peer_and_system_control_grant(
     assert operators[0]["role"] == ROLE_ADMIN
     grants = GrantService(str(db_path))
     assert grants.resolve_peer_binding(outcome.admin_id, uid=1000, gid=1001) is not None
-    assert grants.resolve_mission_grant(
-        outcome.admin_id,
-        subject_id=outcome.subject_id,
-        mission_id=SYSTEM_CONTROL_MISSION_ID,
-    ) is not None
+    assert (
+        grants.resolve_mission_grant(
+            outcome.admin_id,
+            subject_id=outcome.subject_id,
+            mission_id=SYSTEM_CONTROL_MISSION_ID,
+        )
+        is not None
+    )
 
 
 def test_root_bootstrap_does_not_grant_operational_missions(
@@ -102,7 +105,5 @@ def test_root_bootstrap_key_file_is_root_owned_0600(
     assert (0, 0) in ownership_calls
     assert key_path.read_text(encoding="utf-8").startswith("octopus-c2-")
     with sqlite3.connect(tmp_path / "c2.db") as connection:
-        digest = connection.execute(
-            "SELECT api_key_hash FROM operators"
-        ).fetchone()[0]
+        digest = connection.execute("SELECT api_key_hash FROM operators").fetchone()[0]
     assert digest not in key_path.read_text(encoding="utf-8")

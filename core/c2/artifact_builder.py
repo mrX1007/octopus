@@ -1,11 +1,12 @@
 """Artifact builder."""
+
 from __future__ import annotations
 
 import hashlib
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Any
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -13,7 +14,7 @@ class C2ArtifactBuildSpecV1:
     build_id: str
     target_os: str
     target_arch: str
-    config_params: Dict[str, Any] = field(default_factory=dict)
+    config_params: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -40,4 +41,3 @@ class C2ArtifactBuilderV1:
             artifact_digest=digest,
             built_at=time.time(),
         )
-

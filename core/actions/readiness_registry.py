@@ -149,11 +149,7 @@ class ReadinessRegistry:
 
     def _evaluate_locked(self, mount: ProviderMountSnapshotV2) -> ProviderReadinessSnapshot:
         readiness_probe = self._probes_by_action.get(mount.spec.action_id)
-        snapshot = (
-            self._unregistered_snapshot(mount)
-            if readiness_probe is None
-            else readiness_probe.evaluate(mount)
-        )
+        snapshot = self._unregistered_snapshot(mount) if readiness_probe is None else readiness_probe.evaluate(mount)
         self._cache[mount.spec.action_id] = snapshot
         return snapshot
 

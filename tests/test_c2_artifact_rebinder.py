@@ -1,7 +1,9 @@
 """Tests for C2 artifact rebinder."""
+
 from __future__ import annotations
 
 import pytest
+
 from core.c2.artifact_rebinder import C2ArtifactRebinderV1, RebindManifestV1
 
 pytestmark = pytest.mark.unit

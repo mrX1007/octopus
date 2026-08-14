@@ -31,6 +31,7 @@ try:
     from rich.console import Console
     from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
     from rich.table import Table as RichTable
+
     RICH_AVAILABLE = True
     console = Console()
 except ImportError:
@@ -43,6 +44,7 @@ except ImportError:
     CFG = {}
 
 # BANNER
+
 
 def banner(version: str = APPLICATION_VERSION):
     """Print the OCTOPUS ASCII banner."""
@@ -66,12 +68,13 @@ def banner(version: str = APPLICATION_VERSION):
 
 # HELPERS
 
+
 def divider(label=""):
     """Print a horizontal divider with optional label."""
     if label:
-        print(f"\n\033[33m{'─'*20} {label} {'─'*20}\033[0m")
+        print(f"\n\033[33m{'─' * 20} {label} {'─' * 20}\033[0m")
     else:
-        print(f"\033[90m{'─'*60}\033[0m")
+        print(f"\033[90m{'─' * 60}\033[0m")
 
 
 def prompt(text):
@@ -111,6 +114,7 @@ def confirm(question: str) -> bool:
 
 # RICH PROGRESS HELPERS
 
+
 def run_with_spinner(description: str, func, *args, **kwargs):
     """Run a function with a Rich spinner. Falls back to plain output."""
     if RICH_AVAILABLE:
@@ -138,7 +142,7 @@ def print_rich_table(title: str, columns: list, rows: list):
             table.add_row(*[str(c) for c in row])
         console.print(table)
     else:
-        header = "  " + "".join(f"{name:<{max(15, len(name)+2)}}" for name, _ in columns)
+        header = "  " + "".join(f"{name:<{max(15, len(name) + 2)}}" for name, _ in columns)
         print(f"\033[96m{header}\033[0m")
         print(f"  {'─' * (len(columns) * 15)}")
         for row in rows:
@@ -146,6 +150,7 @@ def print_rich_table(title: str, columns: list, rows: list):
 
 
 # RESULTS TABLE
+
 
 def _truncate(value, limit=250):
     text = str(value or "")
@@ -168,10 +173,7 @@ def print_reporting_sections(result: dict):
     if access_findings:
         print("\n  \033[91m[ ACCESS FINDINGS ]\033[0m")
         for item in access_findings[:8]:
-            print(
-                f"  \033[91m  •\033[0m {item.get('severity', 'INFO')}: "
-                f"{_truncate(item.get('name'), 180)}"
-            )
+            print(f"  \033[91m  •\033[0m {item.get('severity', 'INFO')}: {_truncate(item.get('name'), 180)}")
             evidence = item.get("evidence") or []
             if evidence:
                 print(f"  \033[90m    Evidence: {_truncate('; '.join(evidence), 260)}\033[0m")
@@ -206,30 +208,29 @@ def print_reporting_sections(result: dict):
     if attack_path:
         print("\n  \033[95m[ ATTACK PATH ]\033[0m")
         for idx, step in enumerate(attack_path[:10], 1):
-            print(
-                f"  \033[95m  {idx}.\033[0m {step.get('stage')}: "
-                f"{step.get('status')} - {step.get('detail')}"
-            )
+            print(f"  \033[95m  {idx}.\033[0m {step.get('stage')}: {step.get('status')} - {step.get('detail')}")
 
     remediations = result.get("remediations") or []
     if remediations:
         print("\n  \033[92m[ REMEDIATION ]\033[0m")
         for item in remediations[:10]:
-            print(f"  \033[92m  •\033[0m {item.get('service', 'unknown')}: {_truncate(item.get('recommendation'), 240)}")
+            print(
+                f"  \033[92m  •\033[0m {item.get('service', 'unknown')}: {_truncate(item.get('recommendation'), 240)}"
+            )
 
 
 def print_results_table(result: dict):
     """Pretty table of vulnerabilities and confirmed facts."""
     vulns = result.get("vulnerabilities", [])
     facts = result.get("confirmed_facts", [])
-    risk  = result.get("risk_level", "UNKNOWN")
+    risk = result.get("risk_level", "UNKNOWN")
 
     risk_colors = {
         "CRITICAL": "\033[91m",
-        "HIGH":     "\033[91m",
-        "MEDIUM":   "\033[93m",
-        "LOW":      "\033[92m",
-        "UNKNOWN":  "\033[90m",
+        "HIGH": "\033[91m",
+        "MEDIUM": "\033[93m",
+        "LOW": "\033[92m",
+        "UNKNOWN": "\033[90m",
     }
     rc = risk_colors.get(risk, "\033[0m")
 
@@ -245,32 +246,32 @@ def print_results_table(result: dict):
         table.add_column("Vulnerability", style="white")
 
         sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-        for v in sorted(vulns, key=lambda x: sev_order.get(x['severity'].lower(), 9)):
-            sev = v['severity'].upper()
+        for v in sorted(vulns, key=lambda x: sev_order.get(x["severity"].lower(), 9)):
+            sev = v["severity"].upper()
             sev_style = {"CRITICAL": "bold red", "HIGH": "red", "MEDIUM": "yellow", "LOW": "green"}.get(sev, "dim")
             table.add_row(
                 f"[{sev_style}]{sev}[/{sev_style}]",
-                v['port'][:8],
-                v['service'][:18],
-                v['vuln_name'][:40],
+                v["port"][:8],
+                v["service"][:18],
+                v["vuln_name"][:40],
             )
         console.print(table)
     else:
         # Plain fallback
-        print(f"\n{'═'*70}")
+        print(f"\n{'═' * 70}")
         print(f"  {rc}RISK LEVEL: {risk}\033[0m")
-        print(f"{'═'*70}")
+        print(f"{'═' * 70}")
         if vulns:
             print("\n  \033[91m[ VULNERABILITIES FOUND ]\033[0m")
-            print(f"  {'─'*66}")
+            print(f"  {'─' * 66}")
             print(f"  {'SEVERITY':<12} {'PORT':<10} {'SERVICE':<20} {'NAME'}")
-            print(f"  {'─'*66}")
+            print(f"  {'─' * 66}")
             sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-            for v in sorted(vulns, key=lambda x: sev_order.get(x['severity'].lower(), 9)):
-                sev = v['severity'].upper()
-                sc  = risk_colors.get(sev, "\033[0m")
+            for v in sorted(vulns, key=lambda x: sev_order.get(x["severity"].lower(), 9)):
+                sev = v["severity"].upper()
+                sc = risk_colors.get(sev, "\033[0m")
                 print(f"  {sc}{sev:<12}\033[0m {v['port'][:8]:<10} {v['service'][:18]:<20} {v['vuln_name'][:30]}")
-            print(f"  {'─'*66}")
+            print(f"  {'─' * 66}")
         else:
             print("  \033[92m[ No vulnerabilities parsed ]\033[0m")
 
@@ -279,14 +280,14 @@ def print_results_table(result: dict):
     if facts:
         print("\n  \033[96m[ CONFIRMED INTELLIGENCE ]\033[0m")
         for f in facts:
-            clean = _re.sub(r'<thought>.*?</thought>', '', str(f), flags=_re.DOTALL).strip()
+            clean = _re.sub(r"<thought>.*?</thought>", "", str(f), flags=_re.DOTALL).strip()
             clean_lines = []
             for line in clean.splitlines():
                 stripped = line.strip()
-                if stripped and not stripped.startswith('[TOOL:') and not stripped.startswith('[DELEGATE:'):
+                if stripped and not stripped.startswith("[TOOL:") and not stripped.startswith("[DELEGATE:"):
                     clean_lines.append(stripped)
-            clean = ' '.join(clean_lines).strip()
+            clean = " ".join(clean_lines).strip()
             if clean and len(clean) > 10:
                 print(f"  \033[96m  ✓\033[0m {clean[:250]}")
 
-    print(f"\n{'═'*70}\n")
+    print(f"\n{'═' * 70}\n")

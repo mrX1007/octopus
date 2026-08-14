@@ -54,8 +54,7 @@ def test_health_checks_are_eager_even_after_failure():
     assert sv._subsystems["second"].status == "running"
 
 
-def test_start_checks_subsystems_and_clean_stop_is_not_a_crash(
-        supervisor_paths, monkeypatch):
+def test_start_checks_subsystems_and_clean_stop_is_not_a_crash(supervisor_paths, monkeypatch):
     supervisor = supervisor_paths
     checks = []
     sv = supervisor.Supervisor()
@@ -89,15 +88,28 @@ def test_dead_running_and_legacy_states_are_crashes(supervisor_paths, monkeypatc
     sv = supervisor.Supervisor()
     monkeypatch.setattr(sv, "_is_pid_alive", lambda _pid: False)
 
-    supervisor._atomic_write_json(supervisor.STATE_FILE, {
-        "pid": 123, "lifecycle": "running", "clean_shutdown": False,
-        "started_at": 1, "saved_at": 2, "subsystems": {},
-    })
+    supervisor._atomic_write_json(
+        supervisor.STATE_FILE,
+        {
+            "pid": 123,
+            "lifecycle": "running",
+            "clean_shutdown": False,
+            "started_at": 1,
+            "saved_at": 2,
+            "subsystems": {},
+        },
+    )
     assert sv.get_crash_info()["previous_pid"] == 123
 
-    supervisor._atomic_write_json(supervisor.STATE_FILE, {
-        "pid": 456, "started_at": 1, "saved_at": 2, "subsystems": {},
-    })
+    supervisor._atomic_write_json(
+        supervisor.STATE_FILE,
+        {
+            "pid": 456,
+            "started_at": 1,
+            "saved_at": 2,
+            "subsystems": {},
+        },
+    )
     assert sv.get_crash_info()["previous_pid"] == 456
 
 

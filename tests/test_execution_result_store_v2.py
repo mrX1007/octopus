@@ -1,7 +1,10 @@
 """Tests for ExecutionResultStoreV2."""
+
 import pytest
+
 from core.actions.execution_result_store import DefaultExecutionResultStoreV2
 from core.actions.execution_results_v2 import ExecutionResultV2, ExecutionStatusV2
+
 
 @pytest.mark.unit
 def test_result_store_draft_and_commit():

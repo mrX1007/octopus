@@ -51,6 +51,7 @@ def test_builder_loads_only_x25519_public_keys(tmp_path) -> None:
 def test_builder_encrypts_an_authenticated_round_trip_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
     called = []
     import core.c2.evasion as evasion_mod
+
     orig_aes = evasion_mod.aes_encrypt_payload
 
     def spy_aes(payload: bytes):

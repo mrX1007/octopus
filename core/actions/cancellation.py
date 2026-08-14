@@ -87,6 +87,7 @@ class ExecutorCancellationController:
 
     def cancel(self, *, reason_code: str, cancelled_at: float | None = None) -> bool:
         import time
+
         with self._state.condition:
             if self._state.cancelled_at is not None:
                 return False

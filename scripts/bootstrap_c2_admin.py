@@ -18,9 +18,7 @@ from core.c2.bootstrap import (  # noqa: E402
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Offline root-only bootstrap of the first Octopus C2 administrator"
-    )
+    parser = argparse.ArgumentParser(description="Offline root-only bootstrap of the first Octopus C2 administrator")
     parser.add_argument("--db-path", type=Path, required=True)
     parser.add_argument("--client-uid", type=int, required=True)
     parser.add_argument("--client-gid", type=int, required=True)
@@ -43,9 +41,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"bootstrap failed: {exc}", file=sys.stderr)
         return 1
     # Only non-secret identifiers and the already-known destination are shown.
-    print(
-        f"first administrator {result.admin_id} committed; key published to {result.key_path}"
-    )
+    print(f"first administrator {result.admin_id} committed; key published to {result.key_path}")
     return 0
 
 

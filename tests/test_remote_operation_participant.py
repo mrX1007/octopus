@@ -1,26 +1,25 @@
 from __future__ import annotations
 
-import time
 import pytest
 
 from core.execution.remote_operation_models import (
+    HostRemoteOperationOutputV1,
     RemoteOperationBackendRequestV1,
-    RemoteOperationEffectReceiptV1,
-    RemoteOperationEffectProbeV1,
     RemoteOperationEffectDispositionV1,
+    RemoteOperationEffectProbeV1,
+    RemoteOperationEffectReceiptV1,
+    RemoteOperationOutputReservationRefV1,
     RemoteOperationPlanV1,
     RemoteOperationServiceV1,
-    RemoteOperationOutputReservationRefV1,
-    HostRemoteOperationOutputV1,
 )
 from core.execution.remote_operation_participant import (
-    RemoteOperationExternalEffectParticipant,
-    ParticipantPrepareRequestV2,
-    ParticipantCommitRequestV2,
-    ParticipantPrepareReceiptV2,
-    ParticipantCommitReceiptV2,
-    ParticipantOperationContextV2,
     ExecutionFinalizationFenceV2,
+    ParticipantCommitReceiptV2,
+    ParticipantCommitRequestV2,
+    ParticipantOperationContextV2,
+    ParticipantPrepareReceiptV2,
+    ParticipantPrepareRequestV2,
+    RemoteOperationExternalEffectParticipant,
 )
 
 pytestmark = pytest.mark.unit

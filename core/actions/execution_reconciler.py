@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
 from core.actions.execution_commit_types import ExecutionCommitStateV2
 

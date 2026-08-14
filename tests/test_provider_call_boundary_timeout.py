@@ -1,12 +1,21 @@
 """Tests for ProviderCallBoundary timeout enforcement."""
+
 import time
+
 import pytest
-from core.actions.provider_call_boundary import ProviderCallBoundary, BoundProviderInvocationContext, ProviderExecutionTimeoutError
+
+from core.actions.provider_call_boundary import (
+    BoundProviderInvocationContext,
+    ProviderCallBoundary,
+    ProviderExecutionTimeoutError,
+)
+
 
 class SlowProvider:
     def execute_bound(self, ctx):
         time.sleep(0.05)
         return "done"
+
 
 @pytest.mark.unit
 def test_call_boundary_timeout():

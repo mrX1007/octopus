@@ -43,9 +43,7 @@ def test_task_scope_rejects_noncanonical_entity_ids_but_legacy_is_explicit() -> 
     ):
         TaskScope(entity_ids=("asset:v1:" + "A" * 32,))
 
-    assert TaskScope.from_legacy("asset:10.0.0.5") == TaskScope(
-        legacy_scope="asset:10.0.0.5"
-    )
+    assert TaskScope.from_legacy("asset:10.0.0.5") == TaskScope(legacy_scope="asset:10.0.0.5")
 
 
 def _outcome(agent: str, task: str, status: str = "completed") -> TaskOutcome:
@@ -204,9 +202,7 @@ def test_task_id_rejects_conflicting_scope_or_definition_version(tmp_path):
     store = MissionStore(str(tmp_path / "selector-consistency.db"), owner_id="owner")
     mission = store.open_mission("scan-selector-consistency", "10.0.0.5")
     asset_scope = TaskScope(entity_ids=(canonical_asset("10.0.0.5").entity_id,))
-    service_scope = TaskScope(
-        entity_ids=(canonical_service("10.0.0.5", 443).entity_id,)
-    )
+    service_scope = TaskScope(entity_ids=(canonical_service("10.0.0.5", 443).entity_id,))
     task = store.register_task(
         mission.mission_id,
         "VerificationAgent",
@@ -272,9 +268,7 @@ def test_scoped_dependency_ref_selects_one_same_name_definition(tmp_path):
     store = MissionStore(str(tmp_path / "scoped-dependency.db"), owner_id="owner")
     mission = store.open_mission("scan-scoped-dependency", "10.0.0.5")
     asset_scope = TaskScope(entity_ids=(canonical_asset("10.0.0.5").entity_id,))
-    service_scope = TaskScope(
-        entity_ids=(canonical_service("10.0.0.5", 443).entity_id,)
-    )
+    service_scope = TaskScope(entity_ids=(canonical_service("10.0.0.5", 443).entity_id,))
 
     asset_parent, service_parent, child = store.register_plan(
         mission.mission_id,
@@ -336,9 +330,7 @@ def test_scoped_blocked_positions_rollback_with_plan_transaction(
     store = MissionStore(str(tmp_path / "scoped-block-rollback.db"), owner_id="owner")
     mission = store.open_mission("scan-scoped-block-rollback", "10.0.0.5")
     asset_scope = TaskScope(entity_ids=(canonical_asset("10.0.0.5").entity_id,))
-    service_scope = TaskScope(
-        entity_ids=(canonical_service("10.0.0.5", 443).entity_id,)
-    )
+    service_scope = TaskScope(entity_ids=(canonical_service("10.0.0.5", 443).entity_id,))
     definitions = (
         MissionTaskDefinition(
             agent="DiscoveryAgent",
@@ -561,9 +553,7 @@ def test_v13_task_rows_migrate_to_typed_identity_without_changing_task_id(tmp_pa
 
     assert migrated.task_id == repeated.task_id == "task-v13"
     assert migrated.task_scope == TaskScope.from_legacy("target:10.0.0.5")
-    assert migrated.capability_id == canonical_capability_id(
-        "network.service_discovery"
-    )
+    assert migrated.capability_id == canonical_capability_id("network.service_discovery")
     assert migrated.task_definition_version == TASK_DEFINITION_SCHEMA_VERSION
     assert migrated.not_before is None
     assert migrated.backoff == TaskBackoff()
@@ -581,9 +571,7 @@ def test_v13_task_rows_migrate_to_typed_identity_without_changing_task_id(tmp_pa
             WHERE task_id = 'task-v13'
             """
         ).fetchone()
-        columns = {
-            item[1] for item in conn.execute("PRAGMA table_info(mission_tasks)")
-        }
+        columns = {item[1] for item in conn.execute("PRAGMA table_info(mission_tasks)")}
 
     assert version == (MISSION_LIFECYCLE_SCHEMA_VERSION,)
     assert row is not None

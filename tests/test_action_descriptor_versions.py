@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from core.actions.models import (
     ActionDescriptor,
     ActionDescriptorV2,
@@ -15,6 +13,8 @@ from core.actions.models import (
     LegacyActionDescriptorV1,
     VerifyPolicyV2,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def test_legacy_action_descriptor_v1_alias() -> None:

@@ -1,10 +1,12 @@
 """Tests for ChannelReconciler."""
+
 from __future__ import annotations
 
 import pytest
+
 from core.c2.channel_manager import ChannelManager
+from core.c2.channel_models import ChannelConfigV1, ChannelStateV1, ChannelTypeV1
 from core.c2.channel_reconciler import ChannelReconciler, ReconciliationReportV1
-from core.c2.channel_models import ChannelConfigV1, ChannelTypeV1, ChannelStateV1
 
 pytestmark = pytest.mark.unit
 

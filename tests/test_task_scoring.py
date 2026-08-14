@@ -119,9 +119,7 @@ def test_score_has_all_rewards_penalties_and_stable_trace_explanation():
         "uncertainty=penalty(0.400000*5.000000)=-2.000000"
     )
     assert first.explanation == expected_explanation
-    assert json.dumps(first.to_trace_dict(), sort_keys=True) == json.dumps(
-        second.to_trace_dict(), sort_keys=True
-    )
+    assert json.dumps(first.to_trace_dict(), sort_keys=True) == json.dumps(second.to_trace_dict(), sort_keys=True)
 
 
 def test_weights_come_from_config_and_change_ranking_without_code_changes():
@@ -136,12 +134,8 @@ def test_weights_come_from_config_and_change_ranking_without_code_changes():
         ),
     )
 
-    value_first = TaskScorer.from_config(
-        scoring_config(information_gain=4.0, cost=1.0)
-    ).rank(candidates)
-    cost_first = TaskScorer.from_config(
-        scoring_config(information_gain=1.0, cost=4.0)
-    ).rank(candidates)
+    value_first = TaskScorer.from_config(scoring_config(information_gain=4.0, cost=1.0)).rank(candidates)
+    cost_first = TaskScorer.from_config(scoring_config(information_gain=1.0, cost=4.0)).rank(candidates)
 
     assert value_first[0].task_id == "high-information-high-cost"
     assert cost_first[0].task_id == "lower-information-low-cost"

@@ -63,22 +63,14 @@ def normalize_input_schema(value: Any) -> dict[str, Any]:
 
     unknown_root = _unsupported_keywords(value, _ROOT_KEYWORDS)
     if unknown_root:
-        raise ValueError(
-            "plugin metadata field 'input_schema' contains unsupported keyword "
-            f"'{unknown_root[0]}'"
-        )
+        raise ValueError(f"plugin metadata field 'input_schema' contains unsupported keyword '{unknown_root[0]}'")
     missing_root = sorted(_ROOT_KEYWORDS - set(value))
     if missing_root:
-        raise ValueError(
-            "plugin metadata field 'input_schema' is missing keyword "
-            f"'{missing_root[0]}'"
-        )
+        raise ValueError(f"plugin metadata field 'input_schema' is missing keyword '{missing_root[0]}'")
     if value.get("type") != "object":
         raise ValueError("plugin metadata field 'input_schema.type' must be 'object'")
     if value.get("additionalProperties") is not False:
-        raise ValueError(
-            "plugin metadata field 'input_schema.additionalProperties' must be false"
-        )
+        raise ValueError("plugin metadata field 'input_schema.additionalProperties' must be false")
 
     raw_properties = value.get("properties")
     if not isinstance(raw_properties, dict):
@@ -94,22 +86,16 @@ def normalize_input_schema(value: Any) -> dict[str, Any]:
         unknown_property = _unsupported_keywords(raw_property, _PROPERTY_KEYWORDS)
         if unknown_property:
             raise ValueError(
-                f"plugin input schema property '{name}' contains unsupported keyword "
-                f"'{unknown_property[0]}'"
+                f"plugin input schema property '{name}' contains unsupported keyword '{unknown_property[0]}'"
             )
         declared_type = raw_property.get("type")
         if not isinstance(declared_type, str) or declared_type not in INPUT_SCHEMA_TYPES:
-            raise ValueError(
-                f"plugin input schema property '{name}' has unsupported type "
-                f"'{declared_type}'"
-            )
+            raise ValueError(f"plugin input schema property '{name}' has unsupported type '{declared_type}'")
         normalized_property: dict[str, Any] = {"type": declared_type}
         if "description" in raw_property:
             description = raw_property["description"]
             if not isinstance(description, str):
-                raise ValueError(
-                    f"plugin input schema property '{name}' description must be a string"
-                )
+                raise ValueError(f"plugin input schema property '{name}' description must be a string")
             normalized_property["description"] = description
         if "format" in raw_property:
             declared_format = raw_property["format"]
@@ -118,10 +104,7 @@ def normalize_input_schema(value: Any) -> dict[str, Any]:
                 or not isinstance(declared_format, str)
                 or declared_format not in INPUT_SCHEMA_STRING_FORMATS
             ):
-                raise ValueError(
-                    f"plugin input schema property '{name}' has unsupported format "
-                    f"'{declared_format}'"
-                )
+                raise ValueError(f"plugin input schema property '{name}' has unsupported format '{declared_format}'")
             normalized_property["format"] = declared_format
         properties[name] = normalized_property
 
@@ -133,8 +116,7 @@ def normalize_input_schema(value: Any) -> dict[str, Any]:
     unknown_required = sorted(set(raw_required) - set(properties))
     if unknown_required:
         raise ValueError(
-            "plugin metadata field 'input_schema.required' contains undeclared property "
-            f"'{unknown_required[0]}'"
+            f"plugin metadata field 'input_schema.required' contains undeclared property '{unknown_required[0]}'"
         )
 
     normalized = {
@@ -176,10 +158,7 @@ def _is_strict_json_value(value: Any) -> bool:
     if isinstance(value, list):
         return all(_is_strict_json_value(item) for item in value)
     if isinstance(value, dict):
-        return all(
-            isinstance(key, str) and _is_strict_json_value(item)
-            for key, item in value.items()
-        )
+        return all(isinstance(key, str) and _is_strict_json_value(item) for key, item in value.items())
     return False
 
 
@@ -191,11 +170,7 @@ def validate_input_parameters(schema: dict[str, Any], parameters: dict[str, Any]
     """
 
     properties = schema["properties"]
-    undeclared = sorted(
-        str(name)
-        for name in parameters
-        if not isinstance(name, str) or name not in properties
-    )
+    undeclared = sorted(str(name) for name in parameters if not isinstance(name, str) or name not in properties)
     if undeclared:
         # Keep the established reason code while the closed schema replaces
         # the historical blanket denial behind it.

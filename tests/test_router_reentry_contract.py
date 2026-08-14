@@ -70,16 +70,10 @@ def _bridge(
         lineage=ExecutionLineage(
             root_execution_id=lineage_root_execution_id or root_execution_id,
             parent_execution_id=(
-                lineage_parent_execution_id
-                if lineage_parent_execution_id is not None
-                else parent_execution_id
+                lineage_parent_execution_id if lineage_parent_execution_id is not None else parent_execution_id
             ),
             execution_graph_id=lineage_execution_graph_id or execution_graph_id,
-            child_depth=(
-                lineage_child_depth
-                if lineage_child_depth is not None
-                else child_depth
-            ),
+            child_depth=(lineage_child_depth if lineage_child_depth is not None else child_depth),
         ),
         approval_graph_lease=object(),  # type: ignore[arg-type]
         selected_child_action_id=selected_action_id,
@@ -107,16 +101,12 @@ def test_pr6_adds_child_overload_to_single_run_v2_internal() -> None:
     methods = [
         node
         for node in ast.walk(source)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == "_run_v2_internal"
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "_run_v2_internal"
     ]
     assert len(methods) == 3
     assert (
         sum(
-            any(
-                isinstance(decorator, ast.Name) and decorator.id == "overload"
-                for decorator in method.decorator_list
-            )
+            any(isinstance(decorator, ast.Name) and decorator.id == "overload" for decorator in method.decorator_list)
             for method in methods
         )
         == 2

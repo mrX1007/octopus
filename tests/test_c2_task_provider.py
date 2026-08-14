@@ -1,7 +1,9 @@
 """Tests for C2 task provider."""
+
 from __future__ import annotations
 
 import pytest
+
 from core.providers.c2_task import C2TaskProvider
 
 pytestmark = pytest.mark.unit

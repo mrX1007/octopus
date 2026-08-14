@@ -12,7 +12,7 @@ lifecycle.
 |---|---|
 | `import-smoke` | Validates the lock manifest offline, installs only the hashed `cp310/runtime.txt` lock, runs `pip check`, then imports the main first-party runtime boundaries with isolated Python startup. Optional MySQL and external-tool profiles are not installed. |
 | `profile-imports` | Installs and import-smokes each optional `c2`, `reporting`, `osint-browser`, and `mysql` profile from its `cp310` lock. |
-| `static-analysis` | Validates all locks offline, installs the hashed `cp310/test.txt` lock, runs Ruff, the 197-file direct mypy ratchet, and the nine-file import-aware mypy ratchet, then compiles first-party Python sources. |
+| `static-analysis` | Validates all locks offline, installs the hashed `cp310/test.txt` lock, runs Ruff, the static mypy ratchet, then compiles first-party Python sources. |
 | `fast-tests` | Validates all locks offline, installs the matching `cp310`, `cp311`, or `cp312` test lock, and runs the hermetic selector on Python 3.10–3.12. |
 | `full-suite` | Validates all locks offline, installs the hashed `cp310/test.txt` lock, then runs the complete suite with branch coverage over every first-party Python file except the documented non-production trees. |
 | `mysql-integration` | Installs both the `cp310/test.txt` and `cp310/mysql.txt` locks, provisions MySQL 8.4, and runs the live database marker with the application's `OCTOPUS_DB_*` environment contract. |
@@ -156,8 +156,7 @@ unchanged.
 ```bash
 venv/bin/python -m pytest -q tests/test_vendor_verification.py
 venv/bin/python -m ruff check scripts/quality tests/test_vendor_verification.py
-venv/bin/python -m mypy
-venv/bin/python -m mypy --config-file quality/mypy-import-aware.ini
+venv/bin/python scripts/quality/mypy_gate.py check
 python scripts/lock_requirements.py validate
 venv/bin/python scripts/quality/coverage_gate.py \
   --root . --fail-under 94.00 \

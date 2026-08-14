@@ -367,9 +367,7 @@ class ReferenceCheckoutCoordinator:
                     record.material_open_failed = True
                     self._close_material_handles(tuple(opened_handles))
                     raise
-                record.material_handles = tuple(
-                    material.checkout_handle for material in opened
-                )
+                record.material_handles = tuple(material.checkout_handle for material in opened)
                 record.opened_bundle = opened_bundle
                 return opened_bundle
 
@@ -403,9 +401,7 @@ class ReferenceCheckoutCoordinator:
         if type(recovery_ref) is not CheckoutRecoveryRefV2:
             raise TypeError("checkout_recovery_ref_invalid")
         with self._lock:
-            bundle = self._recovery_bindings.get(
-                (recovery_ref.journal_ref, recovery_ref.journal_digest)
-            )
+            bundle = self._recovery_bindings.get((recovery_ref.journal_ref, recovery_ref.journal_digest))
             if bundle is None:
                 raise ReferenceCheckoutError("checkout_recovery_ref_not_found")
             if (
@@ -435,10 +431,7 @@ class ReferenceCheckoutCoordinator:
                 failures.extend(self._close_material_handles(record.material_handles))
                 failures.extend(
                     self._release_reference_receipts(
-                        [
-                            (binding.store, binding.checkout)
-                            for binding in record.reference_bindings
-                        ],
+                        [(binding.store, binding.checkout) for binding in record.reference_bindings],
                         suppress=True,
                     )
                 )
@@ -621,9 +614,7 @@ class ReferenceCheckoutCoordinator:
         if not bindings:
             return f"checkout://{uuid.uuid4()}", 1
         checkout_ids = {binding.checkout.lease_token.checkout_id for binding in bindings}
-        generations = {
-            binding.checkout.lease_token.fence_generation for binding in bindings
-        }
+        generations = {binding.checkout.lease_token.fence_generation for binding in bindings}
         if len(checkout_ids) != 1 or len(generations) != 1:
             raise ReferenceCheckoutError("checkout_reference_fence_group_mismatch")
         return next(iter(checkout_ids)), next(iter(generations))
@@ -666,9 +657,7 @@ class ReferenceCheckoutCoordinator:
             or snapshot.subject_type is not ingress.subject_type
         ):
             raise ReferenceCheckoutError("checkout_ingress_principal_identity_mismatch")
-        if not snapshot.active or (
-            snapshot.expires_at is not None and snapshot.expires_at <= self._now()
-        ):
+        if not snapshot.active or (snapshot.expires_at is not None and snapshot.expires_at <= self._now()):
             raise ReferenceCheckoutError("checkout_principal_inactive")
 
     def _validate_mission(
@@ -687,22 +676,14 @@ class ReferenceCheckoutCoordinator:
             or principal.subject_id not in snapshot.permitted_subject_ids
         ):
             raise ReferenceCheckoutError("checkout_mission_identity_mismatch")
-        if not snapshot.active or (
-            snapshot.expires_at is not None and snapshot.expires_at <= self._now()
-        ):
+        if not snapshot.active or (snapshot.expires_at is not None and snapshot.expires_at <= self._now()):
             raise ReferenceCheckoutError("checkout_mission_inactive")
         scope = TargetScopePolicy.evaluate(request.targets, snapshot.target_scope)
         if not scope.allowed:
             raise ReferenceCheckoutError("checkout_mission_scope_denied")
-        if any(
-            item.required_capability not in snapshot.permitted_capabilities
-            for item in request.references
-        ):
+        if any(item.required_capability not in snapshot.permitted_capabilities for item in request.references):
             raise ReferenceCheckoutError("checkout_mission_capability_denied")
-        if any(
-            item.required_capability not in principal.capabilities
-            for item in request.references
-        ):
+        if any(item.required_capability not in principal.capabilities for item in request.references):
             raise ReferenceCheckoutError("checkout_principal_capability_denied")
 
     @staticmethod
@@ -771,8 +752,7 @@ class ReferenceCheckoutCoordinator:
             metadata.reference != request.reference
             or token.reference != request.reference
             or metadata.revision != request.expected_metadata_revision
-            or metadata.authorization.authorization_revision
-            != request.expected_authorization_revision
+            or metadata.authorization.authorization_revision != request.expected_authorization_revision
         ):
             raise ReferenceCheckoutError("checkout_reference_identity_mismatch")
         if not _metadata_matches_kind(metadata, request.expected_kind):

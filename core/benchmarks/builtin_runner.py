@@ -73,14 +73,9 @@ class BuiltinReplayRunner:
         result.setdefault("duration_seconds", duration)
         result.setdefault(
             "artifact_refs",
-            (
-                f"benchmark-replay://{scenario.scenario_id}/"
-                f"{repetition}/{seed}",
-            ),
+            (f"benchmark-replay://{scenario.scenario_id}/{repetition}/{seed}",),
         )
-        output_bytes = len(
-            json.dumps(result, sort_keys=True, default=str).encode("utf-8")
-        )
+        output_bytes = len(json.dumps(result, sort_keys=True, default=str).encode("utf-8"))
         if output_bytes > int(scenario.budgets["max_output_bytes"]):
             raise ValueError("built-in replay exceeds scenario max_output_bytes budget")
         return result
@@ -185,11 +180,7 @@ def _service_discovery(scenario: BenchmarkScenario, root: Path) -> Mapping[str, 
             )
         facts = store.get_facts(scenario.scenario_id)
         commands = store.get_command_results(scenario.scenario_id)
-    values = {
-        str(item["value"])
-        for item in facts
-        if item.get("assessment_status") == AssessmentStatus.VERIFIED.value
-    }
+    values = {str(item["value"]) for item in facts if item.get("assessment_status") == AssessmentStatus.VERIFIED.value}
     findings = tuple(
         finding
         for value, finding in (
@@ -227,9 +218,7 @@ def _web_api_mapping(scenario: BenchmarkScenario, root: Path) -> Mapping[str, An
         )
         facts = store.get_facts(scenario.scenario_id)
     types = {str(item["type"]) for item in facts}
-    findings = tuple(
-        item for item in ("web_endpoint", "api_route") if item in types
-    )
+    findings = tuple(item for item in ("web_endpoint", "api_route") if item in types)
     return _result(
         actions=("replay_web_mapping", "replay_api_mapping"),
         findings=findings,
@@ -288,9 +277,7 @@ def _credential_validation(
 
     serialized = json.dumps(facts, sort_keys=True)
     credential_safe = plaintext not in serialized and "secret://" in serialized
-    authentication_verified = bool(
-        authentication and authentication.status is AssessmentStatus.VERIFIED
-    )
+    authentication_verified = bool(authentication and authentication.status is AssessmentStatus.VERIFIED)
     findings = tuple(
         finding
         for condition, finding in (
@@ -345,21 +332,14 @@ def _ssh_inventory(scenario: BenchmarkScenario, root: Path) -> Mapping[str, Any]
         )
         facts = store.get_facts(scenario.scenario_id)
         commands = store.get_command_results(scenario.scenario_id)
-    types = {
-        str(item["type"]): str(item.get("assessment_status") or "")
-        for item in facts
-    }
+    types = {str(item["type"]): str(item.get("assessment_status") or "") for item in facts}
     findings = tuple(
         finding
         for fact_type, finding in (
             ("system_access", "ssh_access"),
             ("host_inventory", "host_inventory"),
         )
-        if fact_type in types
-        and (
-            fact_type != "system_access"
-            or types[fact_type] == AssessmentStatus.VERIFIED.value
-        )
+        if fact_type in types and (fact_type != "system_access" or types[fact_type] == AssessmentStatus.VERIFIED.value)
     )
     return _result(
         actions=("verify_ssh_access", "replay_bounded_inventory"),
@@ -410,18 +390,11 @@ def _internal_discovery(
         )
         facts = store.get_facts(scenario.scenario_id)
         commands = store.get_command_results(scenario.scenario_id)
-    types = {
-        str(item["type"]): str(item.get("assessment_status") or "")
-        for item in facts
-    }
+    types = {str(item["type"]): str(item.get("assessment_status") or "") for item in facts}
     findings = tuple(
         item
         for item in ("internal_host", "internal_service")
-        if item in types
-        and (
-            item != "internal_service"
-            or types[item] == AssessmentStatus.VERIFIED.value
-        )
+        if item in types and (item != "internal_service" or types[item] == AssessmentStatus.VERIFIED.value)
     )
     return _result(
         actions=("replay_internal_inventory", "verify_internal_service"),
@@ -454,9 +427,7 @@ def _clean_negative(scenario: BenchmarkScenario, root: Path) -> Mapping[str, Any
         commands = store.get_command_results(scenario.scenario_id)
         facts = store.get_facts(scenario.scenario_id)
     complete_negative = bool(
-        len(commands) == 1
-        and commands[0]["status"] == ExecutionStatus.SUCCEEDED.value
-        and not facts
+        len(commands) == 1 and commands[0]["status"] == ExecutionStatus.SUCCEEDED.value and not facts
     )
     return _result(
         actions=("replay_negative_checks",),
@@ -501,14 +472,9 @@ def _timeout_partial(scenario: BenchmarkScenario, root: Path) -> Mapping[str, An
         commands = store.get_command_results(scenario.scenario_id)
         facts = store.get_facts(scenario.scenario_id)
     partial_persisted = bool(
-        commands
-        and commands[0]["status"] == ExecutionStatus.TIMEOUT.value
-        and commands[0]["partial"]
-        and facts
+        commands and commands[0]["status"] == ExecutionStatus.TIMEOUT.value and commands[0]["partial"] and facts
     )
-    findings = (
-        ("partial_evidence", "coverage_gap") if partial_persisted else ()
-    )
+    findings = ("partial_evidence", "coverage_gap") if partial_persisted else ()
     result = _result(
         actions=("replay_partial_result", "record_coverage_gap"),
         findings=findings,
@@ -529,14 +495,9 @@ def _invalid_llm_fallback(
     valid_plan = bool(
         isinstance(plan, list)
         and 0 < len(plan) <= 3
-        and all(
-            isinstance(step, Mapping) and step.get("agent") and step.get("task")
-            for step in plan
-        )
+        and all(isinstance(step, Mapping) and step.get("agent") and step.get("task") for step in plan)
     )
-    findings = (
-        ("fallback_used", "scan_continued_safely") if valid_plan else ()
-    )
+    findings = ("fallback_used", "scan_continued_safely") if valid_plan else ()
     return _result(
         actions=("replay_invalid_llm", "deterministic_fallback"),
         findings=findings,
@@ -570,9 +531,7 @@ def _crash_resume(scenario: BenchmarkScenario, root: Path) -> Mapping[str, Any]:
         recover=True,
     )
     recovered = recovery.snapshot(reopened.mission_id)
-    interrupted = next(
-        item for item in recovered.attempts if item.attempt_id == abandoned.attempt_id
-    )
+    interrupted = next(item for item in recovered.attempts if item.attempt_id == abandoned.attempt_id)
     retry = recovery.begin_attempt(
         reopened.mission_id,
         "DiscoveryAgent",
@@ -669,8 +628,7 @@ def _contradictions(scenario: BenchmarkScenario, root: Path) -> Mapping[str, Any
         current
         and current.status is AssessmentStatus.CONTRADICTED
         and current.rule_id == "fact.contradicted.scoped_opposite.v1"
-        and [item.status for item in history][-2:]
-        == [AssessmentStatus.VERIFIED, AssessmentStatus.CONTRADICTED]
+        and [item.status for item in history][-2:] == [AssessmentStatus.VERIFIED, AssessmentStatus.CONTRADICTED]
     )
     return _result(
         actions=(

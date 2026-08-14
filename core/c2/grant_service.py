@@ -260,9 +260,7 @@ class GrantService:
     @staticmethod
     def _require_expected(current: int, expected: int) -> None:
         if expected < 0 or current != expected:
-            raise GrantConflictError(
-                f"grant revision conflict: expected {expected}, current {current}"
-            )
+            raise GrantConflictError(f"grant revision conflict: expected {expected}, current {current}")
 
     @staticmethod
     def _require_active_operator(
@@ -391,9 +389,7 @@ class GrantService:
             connection.execute("BEGIN IMMEDIATE")
             self._fence_admin_in_transaction(connection, actor)
             self._require_active_operator(connection, operator_id)
-            current_revision = self._revision(
-                connection, "operator_peer_binding_revisions", operator_id
-            )
+            current_revision = self._revision(connection, "operator_peer_binding_revisions", operator_id)
             self._require_expected(current_revision, expected_revision)
             current = {
                 PeerBinding(uid=int(row[0]), gid=int(row[1]))
@@ -448,9 +444,7 @@ class GrantService:
             connection.execute("BEGIN IMMEDIATE")
             self._fence_admin_in_transaction(connection, actor)
             self._require_active_operator(connection, operator_id)
-            current_revision = self._revision(
-                connection, "operator_peer_binding_revisions", operator_id
-            )
+            current_revision = self._revision(connection, "operator_peer_binding_revisions", operator_id)
             self._require_expected(current_revision, expected_revision)
             cursor = connection.execute(
                 """
@@ -486,9 +480,7 @@ class GrantService:
             connection.execute("BEGIN IMMEDIATE")
             self._fence_admin_in_transaction(connection, actor)
             operator = self._require_active_operator(connection, operator_id)
-            current_revision = self._revision(
-                connection, "operator_mission_grant_revisions", operator_id
-            )
+            current_revision = self._revision(connection, "operator_mission_grant_revisions", operator_id)
             self._require_expected(current_revision, expected_revision)
             known = {
                 str(row[0])
@@ -557,9 +549,7 @@ class GrantService:
             connection.execute("BEGIN IMMEDIATE")
             self._fence_admin_in_transaction(connection, actor)
             self._require_active_operator(connection, operator_id)
-            current_revision = self._revision(
-                connection, "operator_mission_grant_revisions", operator_id
-            )
+            current_revision = self._revision(connection, "operator_mission_grant_revisions", operator_id)
             self._require_expected(current_revision, expected_revision)
             cursor = connection.execute(
                 """

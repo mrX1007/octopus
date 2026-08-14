@@ -11,7 +11,7 @@ import re
 import sqlite3
 import time
 from collections.abc import Iterable, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from typing import Any, Callable
 from uuid import uuid4
@@ -68,10 +68,8 @@ class CommandCompletionClaim:
 
 def _begin(conn: sqlite3.Connection, immediate: bool = False) -> None:
     if not conn.in_transaction:
-        try:
+        with suppress(sqlite3.OperationalError):
             conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
-        except sqlite3.OperationalError:
-            pass
 
 
 class FactStore:
@@ -323,7 +321,11 @@ class FactStore:
         try:
             conn = sqlite3.connect(self.db_path, timeout=10.0, isolation_level=None)
         except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
-            if "unable to open" in str(exc).lower() or "authorization denied" in str(exc).lower() or "readonly" in str(exc).lower():
+            if (
+                "unable to open" in str(exc).lower()
+                or "authorization denied" in str(exc).lower()
+                or "readonly" in str(exc).lower()
+            ):
                 self._memory_conn = sqlite3.connect(":memory:", isolation_level=None)
                 self._memory_conn.execute("PRAGMA foreign_keys=ON")
                 self._memory_conn.execute("PRAGMA busy_timeout=10000")

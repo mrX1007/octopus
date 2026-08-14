@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from core.c2.control_commands import (
     C2ControlActionV1,
     ParticipantControlAuthorizationV1,
@@ -42,12 +43,12 @@ def test_resource_hidden_until_finalization():
     part = C2DaemonResourceParticipant(participant_id="part-vis-1")
     prep = part.prepare(_make_req(C2ControlActionV1.PREPARE_C2_RESOURCE, "tx-vis-1"))
     assert isinstance(prep, ParticipantControlReceiptV1)
-    
+
     # Commit keeps resource COMMITTED_HIDDEN
     commit = part.commit(_make_req(C2ControlActionV1.COMMIT_C2_RESOURCE, "tx-vis-1"))
     assert isinstance(commit, ParticipantControlReceiptV1)
     assert part._committed_resources["tx-vis-1"]["phase"] == ParticipantControlPhaseV1.COMMITTED_HIDDEN
-    
+
     # Finalize visibility transitions to FINALIZED_VISIBLE
     part.finalize_visibility(prep, commit)
     assert part._committed_resources["tx-vis-1"]["phase"] == ParticipantControlPhaseV1.FINALIZED_VISIBLE

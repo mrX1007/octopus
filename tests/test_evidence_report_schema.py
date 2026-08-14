@@ -99,19 +99,14 @@ def test_machine_report_separates_verified_vulnerability_candidate_and_access(tm
     verified = sections["verified_vulnerabilities"][0]
     assert verified["status"] == "verified"
     assert verified["source_execution_ids"] == ["exec-check"]
-    assert verified["assessment_reasons"] == [
-        "The positive control matched the exact endpoint."
-    ]
+    assert verified["assessment_reasons"] == ["The positive control matched the exact endpoint."]
     assert {item["fact_id"] for item in verified["evidence_chain"]} == {
         check_id,
         vulnerability_id,
     }
     assert len(sections["access_findings"]) == 1
     assert sections["access_findings"][0]["kind"] == "root_access"
-    assert all(
-        item["kind"] != "system_access"
-        for item in sections["verified_vulnerabilities"]
-    )
+    assert all(item["kind"] != "system_access" for item in sections["verified_vulnerabilities"])
     candidates = sections["hypotheses_candidates"]
     assert any("CVE-2026-9999" in item["detail"] for item in candidates)
     assert all(item["status"] != "verified" for item in candidates)
@@ -183,17 +178,12 @@ def test_machine_report_keeps_every_operational_section_distinct(tmp_path):
     assert any(item["kind"] == "port_open" for item in sections["observations"])
     assert any(item["kind"] == "hypothesis" for item in sections["hypotheses_candidates"])
     assert any(item["kind"] == "exploit_attempted" for item in sections["attempted_unverified"])
-    assert any(
-        "authenticated_api_coverage_pending" in item["detail"]
-        for item in sections["coverage_gaps"]
-    )
+    assert any("authenticated_api_coverage_pending" in item["detail"] for item in sections["coverage_gaps"])
     degraded = sections["policy_blocked_degraded_checks"]
     assert any(item["status"] == "timeout" for item in degraded)
     assert any(item["status"] == "blocked" for item in degraded)
     assert any(item["source_execution_ids"] == ["exec-blocked"] for item in degraded)
-    assert {item["status"] for item in sections["cleanup_outcomes"]} >= {
-        "succeeded"
-    }
+    assert {item["status"] for item in sections["cleanup_outcomes"]} >= {"succeeded"}
 
 
 def test_contradiction_removes_previous_verified_classification(tmp_path):

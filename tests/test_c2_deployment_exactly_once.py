@@ -1,16 +1,19 @@
 """Tests for deployment exactly-once semantics and idempotency."""
+
 from __future__ import annotations
 
 import time
+
 import pytest
-from core.c2.deployment import C2DeploymentService
-from core.c2.resource_participant import C2DaemonResourceParticipant
+
 from core.c2.control_commands import (
     C2ControlActionV1,
     ParticipantControlAuthorizationV1,
-    ParticipantControlRequestV1,
     ParticipantControlReceiptV1,
+    ParticipantControlRequestV1,
 )
+from core.c2.deployment import C2DeploymentService
+from core.c2.resource_participant import C2DaemonResourceParticipant
 
 pytestmark = pytest.mark.unit
 

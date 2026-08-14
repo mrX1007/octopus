@@ -14,17 +14,10 @@ pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 ROOT = Path(__file__).parents[2]
 LAB_DIRECTORY = ROOT / "benchmarks" / "competitors" / "lab"
 LAB_APP = LAB_DIRECTORY / "app.py"
-V2_LAB_DIRECTORY = (
-    ROOT / "benchmarks" / "competitors" / "labs" / "discovery-lab-v2"
-)
+V2_LAB_DIRECTORY = ROOT / "benchmarks" / "competitors" / "labs" / "discovery-lab-v2"
 V2_LAB_APP = V2_LAB_DIRECTORY / "app.py"
 V2_SCENARIO_DIRECTORY = (
-    ROOT
-    / "benchmarks"
-    / "competitors"
-    / "campaigns"
-    / "linux-blackbox-small-model-v2"
-    / "scenarios"
+    ROOT / "benchmarks" / "competitors" / "campaigns" / "linux-blackbox-small-model-v2" / "scenarios"
 )
 CAMPAIGN_SCENARIOS = (
     ROOT
@@ -151,13 +144,9 @@ def test_v2_surfaces_are_deterministic_and_scenario_isolated(
         assert first[3]["X-Octobench-Scenario"] == scenario_id
 
     all_targets = {
-        target
-        for surface_requests in V2_SURFACE_REQUESTS.values()
-        for target, _evidence in surface_requests
+        target for surface_requests in V2_SURFACE_REQUESTS.values() for target, _evidence in surface_requests
     }
-    observed = b"\n".join(
-        lab.route(target, scenario_id=scenario_id)[2] for target in all_targets
-    )
+    observed = b"\n".join(lab.route(target, scenario_id=scenario_id)[2] for target in all_targets)
     foreign_evidence = {
         evidence.encode()
         for other_scenario, surface_requests in V2_SURFACE_REQUESTS.items()
@@ -193,20 +182,13 @@ def test_campaign_snapshot_refs_match_the_checked_in_lab_fixture(
     scenario_path: Path,
 ):
     scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
-    fixture_directory = (
-        V2_LAB_DIRECTORY
-        if scenario["lab"]["version"] == "discovery-lab-v2"
-        else LAB_DIRECTORY
-    )
+    fixture_directory = V2_LAB_DIRECTORY if scenario["lab"]["version"] == "discovery-lab-v2" else LAB_DIRECTORY
     fixture_paths = (
         fixture_directory / "app.py",
         fixture_directory / "Dockerfile",
         fixture_directory / "compose.yaml",
     )
-    expected_refs = [
-        f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
-        for path in fixture_paths
-    ]
+    expected_refs = [f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}" for path in fixture_paths]
 
     assert scenario["lab"]["snapshot_ref"] == expected_refs[0]
     assert scenario["artifacts"]["input_refs"] == expected_refs

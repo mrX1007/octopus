@@ -1,16 +1,16 @@
 """Tests for C2 control command structures."""
+
 from __future__ import annotations
 
-import time
 import pytest
+
 from core.c2.control_commands import (
-    C2ControlActionV1,
-    ParticipantControlAuthorizationV1,
-    ParticipantControlRequestV1,
-    ParticipantControlReceiptV1,
-    ParticipantControlPhaseV1,
-    C2ControlErrorCodeV1,
     BoundedControlErrorV1,
+    C2ControlActionV1,
+    C2ControlErrorCodeV1,
+    ParticipantControlAuthorizationV1,
+    ParticipantControlPhaseV1,
+    ParticipantControlReceiptV1,
 )
 
 pytestmark = pytest.mark.unit

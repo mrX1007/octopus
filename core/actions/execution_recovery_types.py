@@ -6,7 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal
+from typing import Literal
 
 from core.actions.checkout_models import CheckoutRecoveryRefV2
 from core.actions.execution_commit_types import ExecutionCommitStateV2
@@ -90,9 +90,7 @@ class ExecutionNoReturnAdmissionBodyV2:
     external_effect_registration_digest: str | None
 
     def __post_init__(self) -> None:
-        if (self.external_effect_participant_id is None) != (
-            self.external_effect_registration_digest is None
-        ):
+        if (self.external_effect_participant_id is None) != (self.external_effect_registration_digest is None):
             raise ValueError("external_effect_admission_fields_all_or_none")
 
 
@@ -128,9 +126,7 @@ class ExecutionNoReturnAdmissionReceiptV2:
     def __post_init__(self) -> None:
         if self.admission_ref.transaction_id != self.body.transaction_id:
             raise ValueError("admission_transaction_mismatch")
-        if self.admission_ref.admission_digest != (
-            canonical_execution_no_return_admission_digest(self.body)
-        ):
+        if self.admission_ref.admission_digest != (canonical_execution_no_return_admission_digest(self.body)):
             raise ValueError("admission_digest_mismatch")
 
 

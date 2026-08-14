@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from core.actions.execution_results_v2 import (
     CommittedExecutionResultBindingV2,
@@ -26,16 +26,16 @@ class ExecutionResultStoreV2(Protocol):
         committed_marker_digest: str,
     ) -> CommittedExecutionResultBindingV2: ...
 
-    def get(self, execution_id: str) -> Optional[ExecutionResultV2]: ...
+    def get(self, execution_id: str) -> ExecutionResultV2 | None: ...
 
 
 class DefaultExecutionResultStoreV2:
     """Production implementation of ExecutionResultStoreV2."""
 
     def __init__(self) -> None:
-        self._drafts: Dict[str, ExecutionResultV2] = {}
-        self._committed: Dict[str, ExecutionResultV2] = {}
-        self._bindings: Dict[str, CommittedExecutionResultBindingV2] = {}
+        self._drafts: dict[str, ExecutionResultV2] = {}
+        self._committed: dict[str, ExecutionResultV2] = {}
+        self._bindings: dict[str, CommittedExecutionResultBindingV2] = {}
         self._token = _CommittedBindingConstructionTokenV2()
 
     def stage_draft(self, result: ExecutionResultV2, transaction_id: str) -> ExecutionResultDraftRefV2:
@@ -80,10 +80,10 @@ class DefaultExecutionResultStoreV2:
         self._bindings[result.execution_id] = binding
         return binding
 
-    def get(self, execution_id: str) -> Optional[ExecutionResultV2]:
+    def get(self, execution_id: str) -> ExecutionResultV2 | None:
         return self._committed.get(execution_id)
 
-    def get_binding(self, execution_id: str) -> Optional[CommittedExecutionResultBindingV2]:
+    def get_binding(self, execution_id: str) -> CommittedExecutionResultBindingV2 | None:
         return self._bindings.get(execution_id)
 
 

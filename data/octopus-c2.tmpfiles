@@ -1,0 +1,3 @@
+d /run/octopus 0750 octopus-c2 octopus-c2-clients -
+d /var/lib/octopus 0700 octopus-c2 octopus-c2 -
+d /etc/octopus 0755 root root -

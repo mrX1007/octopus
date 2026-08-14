@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+
 import pytest
+
 from core.c2.control_server_identity import (
     generate_server_identity_keypair,
     sign_server_challenge,

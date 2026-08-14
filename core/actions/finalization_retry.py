@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
 
 
 class FinalizationRetryStateV2(str, Enum):
@@ -45,7 +44,7 @@ class FinalizationRetryStoreV2:
     def enqueue(self, record: FinalizationRetryRecordV2) -> None:
         self._records[record.retry_id] = record
 
-    def get(self, retry_id: str) -> Optional[FinalizationRetryRecordV2]:
+    def get(self, retry_id: str) -> FinalizationRetryRecordV2 | None:
         return self._records.get(retry_id)
 
 

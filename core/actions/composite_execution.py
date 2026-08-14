@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from core.actions.execution_results_v2 import ActionExecutionReportV2
 from core.actions.request_v2 import BoundedActionRequestV2Envelope

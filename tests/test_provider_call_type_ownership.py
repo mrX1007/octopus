@@ -1,6 +1,9 @@
 """Tests for provider_call_types module ownership."""
+
 import pytest
-from core.actions.provider_call_types import ProviderCallPhaseV2, ProviderTerminationReasonV2, ProviderPhaseCallPlanV2
+
+from core.actions.provider_call_types import ProviderCallPhaseV2, ProviderPhaseCallPlanV2
+
 
 @pytest.mark.unit
 def test_call_plan_digest():

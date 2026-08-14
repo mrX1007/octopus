@@ -83,28 +83,16 @@ def initialize_operator_schema(connection: sqlite3.Connection) -> None:
         )
         """
     )
-    columns = {
-        str(row[1])
-        for row in connection.execute("PRAGMA table_info(operators)").fetchall()
-    }
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(operators)").fetchall()}
     if "subject_id" not in columns:
         connection.execute("ALTER TABLE operators ADD COLUMN subject_id TEXT")
     if "authorization_revision" not in columns:
-        connection.execute(
-            "ALTER TABLE operators ADD COLUMN authorization_revision INTEGER NOT NULL DEFAULT 1"
-        )
+        connection.execute("ALTER TABLE operators ADD COLUMN authorization_revision INTEGER NOT NULL DEFAULT 1")
     connection.execute(
-        "UPDATE operators SET subject_id = 'legacy:' || operator_id "
-        "WHERE subject_id IS NULL OR subject_id = ''"
+        "UPDATE operators SET subject_id = 'legacy:' || operator_id WHERE subject_id IS NULL OR subject_id = ''"
     )
-    connection.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_operators_subject_id "
-        "ON operators(subject_id)"
-    )
-    connection.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_operators_api_key_hash "
-        "ON operators(api_key_hash)"
-    )
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_operators_subject_id ON operators(subject_id)")
+    connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_operators_api_key_hash ON operators(api_key_hash)")
 
 
 def insert_operator_record(

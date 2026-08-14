@@ -407,18 +407,21 @@ def validate_plan_text(
 
 def _read_head_paths(project_root: Path) -> tuple[set[str], str | None]:
     if not (project_root / ".git").exists():
-        relative_plan_path = PLAN_PATH.relative_to(PROJECT_ROOT).as_posix()
+        PLAN_PATH.relative_to(PROJECT_ROOT).as_posix()
         plan_text = PLAN_PATH.read_text(encoding="utf-8")
         try:
             current_ledger = parse_plan_ledger(plan_text, phase="planning")
             all_create = {p for actions in current_ledger.values() for p in actions["CREATE"]}
         except Exception:
             all_create = set()
-        paths = ({
-            p.relative_to(project_root).as_posix()
-            for p in project_root.rglob("*")
-            if p.is_file() and not any(part.startswith(".") for part in p.relative_to(project_root).parts)
-        } - all_create) | {
+        paths = (
+            {
+                p.relative_to(project_root).as_posix()
+                for p in project_root.rglob("*")
+                if p.is_file() and not any(part.startswith(".") for part in p.relative_to(project_root).parts)
+            }
+            - all_create
+        ) | {
             ("quality/" + "mypy-" + "import-aware.ini"),
             ".env.example",
             ".github/workflows/ci.yml",

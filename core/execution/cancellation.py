@@ -43,9 +43,7 @@ class CancellationContext:
         self._event = threading.Event()
         self._lock = threading.Lock()
         self._reason_code = ""
-        self._deadline_monotonic = (
-            float(deadline_monotonic) if deadline_monotonic is not None else None
-        )
+        self._deadline_monotonic = float(deadline_monotonic) if deadline_monotonic is not None else None
 
     @classmethod
     def with_timeout(cls, timeout_seconds: float) -> CancellationContext:

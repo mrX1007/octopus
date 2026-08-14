@@ -1,7 +1,10 @@
 """Tests for ProviderParticipantRegistrationFacade."""
+
 import pytest
+
 from core.actions.provider_participants import ProviderParticipantRegistrationFacade
 from tests.test_execution_commit_participant_protocol import SampleParticipant
+
 
 @pytest.mark.unit
 def test_registration_facade():

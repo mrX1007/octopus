@@ -1,10 +1,12 @@
 """Tests for agent capabilities negotiation."""
+
 from __future__ import annotations
 
 import pytest
+
 from core.c2.agent_capabilities import (
-    AgentCapabilitySetV12,
     AgentCapabilityNegotiatorV12,
+    AgentCapabilitySetV12,
 )
 
 pytestmark = pytest.mark.unit

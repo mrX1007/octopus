@@ -256,11 +256,14 @@ def test_v12_task_and_result_vectors_python(
     assert task_frame.startswith(b"OCT12\x01\x02")
     assert result_frame.startswith(b"OCT12\x01\x03")
     assert codec.decode_task(task_frame) == envelope
-    assert codec.decode_result(
-        result_frame,
-        expected_envelope=envelope,
-        authenticated_agent_ref="agent://fixture",
-    ) == result
+    assert (
+        codec.decode_result(
+            result_frame,
+            expected_envelope=envelope,
+            authenticated_agent_ref="agent://fixture",
+        )
+        == result
+    )
     assert ownership.calls == [("agent://fixture", envelope.task_id)]
 
 
@@ -362,15 +365,18 @@ def test_agent_registration_codec_never_generic_serializes_secret_value() -> Non
 
 
 def _raw_frame(kind: int, body: bytes) -> bytes:
-    return _HEADER.pack(
-        b"OCT12",
-        1,
-        kind,
-        len(body),
-        0,
-        hashlib.sha256(body).digest(),
-        0,
-    ) + body
+    return (
+        _HEADER.pack(
+            b"OCT12",
+            1,
+            kind,
+            len(body),
+            0,
+            hashlib.sha256(body).digest(),
+            0,
+        )
+        + body
+    )
 
 
 def test_decoder_rejects_unknown_duplicate_noncanonical_and_invalid_utf8() -> None:

@@ -1,0 +1,13 @@
+[Unit]
+Description=Octopus C2 Control Socket
+PartOf=octopus-c2.service
+
+[Socket]
+ListenStream=/run/octopus/octopus-c2.sock
+SocketUser=octopus-c2
+SocketGroup=octopus-c2-clients
+SocketMode=0660
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

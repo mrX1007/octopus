@@ -1,6 +1,9 @@
 """Tests for ExecutionCreationStoreV2."""
+
 import pytest
+
 from core.actions.execution_creation_store import DefaultExecutionCreationStoreV2, ExecutionCreationStoreV2
+
 
 @pytest.mark.unit
 def test_creation_store():

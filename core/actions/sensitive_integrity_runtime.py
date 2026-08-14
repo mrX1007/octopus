@@ -111,13 +111,7 @@ def _require_length(value: int, *, field: str) -> int:
 
 
 def _require_mutable_byte_view(view: memoryview) -> memoryview:
-    if (
-        type(view) is not memoryview
-        or view.readonly
-        or not view.contiguous
-        or view.ndim != 1
-        or view.itemsize != 1
-    ):
+    if type(view) is not memoryview or view.readonly or not view.contiguous or view.ndim != 1 or view.itemsize != 1:
         raise SensitiveIntegrityError("integrity_source_view_invalid")
     return view
 

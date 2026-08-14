@@ -1,11 +1,12 @@
 """Channel DTOs and types."""
+
 from __future__ import annotations
 
 import hashlib
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, Any
+from typing import Any
 
 
 class ChannelTypeV1(str, Enum):
@@ -31,7 +32,7 @@ class ChannelConfigV1:
     endpoint: str
     mission_id: str
     retry_interval: float = 5.0
-    parameters: Dict[str, Any] = field(default_factory=dict)
+    parameters: dict[str, Any] = field(default_factory=dict)
     config_digest: str = ""
 
     def __post_init__(self) -> None:
@@ -58,7 +59,7 @@ def calculate_channel_config_digest(
     channel_type: str,
     endpoint: str,
     mission_id: str,
-    parameters: Dict[str, Any],
+    parameters: dict[str, Any],
 ) -> str:
     """Calculate SHA-256 digest of channel config."""
     param_str = json.dumps(parameters, sort_keys=True)
@@ -70,4 +71,3 @@ def calculate_channel_record_digest(record: ChannelRecordV1) -> str:
     """Calculate SHA-256 digest of channel state record."""
     raw = f"{record.channel_id}:{record.state.value}:{record.config_digest}:{record.updated_at}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import socket
 import pytest
-from core.c2.control_protocol import ControlProtocolCodec
+
 from core.c2.control_server_identity import (
     generate_server_identity_keypair,
     sign_server_challenge,
@@ -16,7 +15,7 @@ pytestmark = pytest.mark.integration
 
 def test_systemd_socket_activation_server_verification():
     priv, pub = generate_server_identity_keypair()
-    
+
     # Simulate client stat values
     client_dev = 42
     client_ino = 1001

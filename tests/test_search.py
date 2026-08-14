@@ -29,11 +29,13 @@ def test_web_search_formats_ddgs_results(monkeypatch):
         def text(self, query, max_results):
             assert query == "example"
             assert max_results == 1
-            return [{
-                "title": "Example title",
-                "href": "https://example.test",
-                "body": "Example body",
-            }]
+            return [
+                {
+                    "title": "Example title",
+                    "href": "https://example.test",
+                    "body": "Example body",
+                }
+            ]
 
     monkeypatch.setattr(search, "DDGS", FakeDDGS)
     result = search.web_search("example", max_results=1)

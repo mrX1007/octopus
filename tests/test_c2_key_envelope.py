@@ -40,9 +40,7 @@ def _legacy_kek(kdf_id: str) -> bytes:
             p=1,
         ).derive(password)
     if kdf_id == "pbkdf2-sha256":
-        return hashlib.pbkdf2_hmac(
-            "sha256", password, _LEGACY_SALT, 600000, dklen=32
-        )
+        return hashlib.pbkdf2_hmac("sha256", password, _LEGACY_SALT, 600000, dklen=32)
     if kdf_id == "argon2id":
         return Argon2id(
             salt=_LEGACY_SALT,
@@ -56,9 +54,7 @@ def _legacy_kek(kdf_id: str) -> bytes:
 
 def _write_legacy_identity(key_dir: Path, kdf_id: str) -> bytes:
     key_dir.mkdir(parents=True, exist_ok=True)
-    ciphertext = AESGCM(_legacy_kek(kdf_id)).encrypt(
-        _LEGACY_NONCE, _LEGACY_PRIVATE_BYTES, None
-    )
+    ciphertext = AESGCM(_legacy_kek(kdf_id)).encrypt(_LEGACY_NONCE, _LEGACY_PRIVATE_BYTES, None)
     blob = _LEGACY_NONCE + ciphertext
     (key_dir / "identity.enc").write_bytes(blob)
     (key_dir / "identity.salt").write_bytes(_LEGACY_SALT)
@@ -68,12 +64,10 @@ def _write_legacy_identity(key_dir: Path, kdf_id: str) -> bytes:
 def _read_envelope(path: Path) -> dict:
     payload = path.read_bytes()
     assert payload.startswith(_ENVELOPE_MAGIC)
-    return json.loads(payload[len(_ENVELOPE_MAGIC):])
+    return json.loads(payload[len(_ENVELOPE_MAGIC) :])
 
 
-def test_generated_identity_uses_self_contained_versioned_scrypt_envelope(
-    tmp_path, monkeypatch
-):
+def test_generated_identity_uses_self_contained_versioned_scrypt_envelope(tmp_path, monkeypatch):
     key_dir = tmp_path / "keys"
     store = KeyStore(str(key_dir))
     store.generate(_PASSPHRASE)
@@ -102,16 +96,13 @@ def test_generated_identity_uses_self_contained_versioned_scrypt_envelope(
 
     envelope["kdf"]["params"]["n"] = 2**30
     (key_dir / "identity.enc").write_bytes(
-        _ENVELOPE_MAGIC
-        + json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode()
+        _ENVELOPE_MAGIC + json.dumps(envelope, separators=(",", ":"), sort_keys=True).encode()
     )
 
     def unexpected_derivation(*args, **kwargs):
         raise AssertionError("untrusted KDF parameters must be rejected first")
 
-    monkeypatch.setattr(
-        key_store_module, "_derive_scrypt_kek", unexpected_derivation
-    )
+    monkeypatch.setattr(key_store_module, "_derive_scrypt_kek", unexpected_derivation)
     assert KeyStore(str(key_dir)).unlock(_PASSPHRASE) is False
 
 
@@ -119,16 +110,16 @@ def test_generated_identity_uses_self_contained_versioned_scrypt_envelope(
     "legacy_kdf",
     ["scrypt", "pbkdf2-sha256", "argon2id"],
 )
-def test_legacy_kdf_is_autodetected_and_atomically_rewritten(
-    tmp_path, monkeypatch, legacy_kdf
-):
+def test_legacy_kdf_is_autodetected_and_atomically_rewritten(tmp_path, monkeypatch, legacy_kdf):
     key_dir = tmp_path / "keys"
     legacy_blob = _write_legacy_identity(key_dir, legacy_kdf)
-    expected_public = ed25519.Ed25519PrivateKey.from_private_bytes(
-        _LEGACY_PRIVATE_BYTES
-    ).public_key().public_bytes(
-        serialization.Encoding.Raw,
-        serialization.PublicFormat.Raw,
+    expected_public = (
+        ed25519.Ed25519PrivateKey.from_private_bytes(_LEGACY_PRIVATE_BYTES)
+        .public_key()
+        .public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
     )
 
     store = KeyStore(str(key_dir))
@@ -179,9 +170,7 @@ def test_failed_legacy_rewrite_preserves_original_blob(tmp_path, monkeypatch):
     ],
     ids=["deeply-nested-json", "oversized-envelope"],
 )
-def test_malformed_envelope_is_rejected_before_kdf(
-    tmp_path, monkeypatch, blob
-):
+def test_malformed_envelope_is_rejected_before_kdf(tmp_path, monkeypatch, blob):
     key_dir = tmp_path / "keys"
     key_dir.mkdir()
     (key_dir / "identity.enc").write_bytes(blob)
@@ -189,9 +178,7 @@ def test_malformed_envelope_is_rejected_before_kdf(
     def unexpected_derivation(*args, **kwargs):
         raise AssertionError("malformed envelopes must not reach the KDF")
 
-    monkeypatch.setattr(
-        key_store_module, "_derive_scrypt_kek", unexpected_derivation
-    )
+    monkeypatch.setattr(key_store_module, "_derive_scrypt_kek", unexpected_derivation)
 
     assert KeyStore(str(key_dir)).unlock(_PASSPHRASE) is False
 

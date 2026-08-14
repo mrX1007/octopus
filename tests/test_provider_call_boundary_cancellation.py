@@ -1,10 +1,19 @@
 """Tests for ProviderCallBoundary cancellation."""
+
 import pytest
+
 from core.actions.cancellation import ExecutorCancellationController
-from core.actions.provider_call_boundary import ProviderCallBoundary, BoundProviderInvocationContext, ProviderExecutionCancelledError
+from core.actions.provider_call_boundary import (
+    BoundProviderInvocationContext,
+    ProviderCallBoundary,
+    ProviderExecutionCancelledError,
+)
+
 
 class DummyProvider:
-    def execute_bound(self, ctx): return "ok"
+    def execute_bound(self, ctx):
+        return "ok"
+
 
 @pytest.mark.unit
 def test_call_boundary_cancellation():

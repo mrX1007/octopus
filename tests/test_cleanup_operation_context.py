@@ -1,9 +1,12 @@
 """Tests for cleanup operation context."""
+
 import pytest
+
 from core.actions.cleanup_operation_context import (
     CleanupOperationContextV2,
     ParticipantRetryPolicyV2,
 )
+
 
 @pytest.mark.unit
 def test_cleanup_operation_context():

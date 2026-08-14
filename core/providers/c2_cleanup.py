@@ -1,15 +1,16 @@
 """C2 cleanup provider adapter."""
+
 from __future__ import annotations
 
 import time
 import uuid
-from typing import Dict, Any
+from typing import Any
 
 
 class C2CleanupProvider:
     """Provider for agent and daemon cleanup operations."""
 
-    def validate_input(self, params: Dict[str, Any]) -> bool:
+    def validate_input(self, params: dict[str, Any]) -> bool:
         """Validate cleanup request input parameters."""
         if not isinstance(params, dict):
             return False
@@ -19,7 +20,7 @@ class C2CleanupProvider:
         """Check provider readiness."""
         return True
 
-    def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, params: dict[str, Any]) -> dict[str, Any]:
         """Execute cleanup for mission resources."""
         if not self.validate_input(params):
             raise ValueError("Invalid cleanup parameters: mission_id required")
@@ -31,4 +32,3 @@ class C2CleanupProvider:
             "mission_id": params["mission_id"],
             "cleaned_at": time.time(),
         }
-

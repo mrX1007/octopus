@@ -65,14 +65,17 @@ class PayloadKeyingAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.payload_keying import PayloadKeyingAdapter as RealAdapter
+
         return RealAdapter().check_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.payload_keying import PayloadKeyingAdapter as RealAdapter
+
         return RealAdapter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.payload_keying import PayloadKeyingAdapter as RealAdapter
+
         return RealAdapter().verify_bound(context, result)
 
 

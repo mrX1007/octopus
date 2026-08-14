@@ -21,20 +21,14 @@ def output_text(output: Any) -> str:
 
 def command_tool_name(cmd: str) -> str:
     """Return the lower-case first command token or the legacy fallback."""
-    return (
-        (cmd or "").strip().split(None, 1)[0].lower()
-        if (cmd or "").strip()
-        else "tool"
-    )
+    return (cmd or "").strip().split(None, 1)[0].lower() if (cmd or "").strip() else "tool"
 
 
 def normalized_check_status(cmd: str, status: str, output_str: str = "") -> str:
     """Normalize legacy check output markers without changing status strings."""
     text = (output_str or "").lower()
     if command_tool_name(cmd) == "msf_check" and (
-        "success:" in text
-        or "appears to be vulnerable" in text
-        or "is vulnerable" in text
+        "success:" in text or "appears to be vulnerable" in text or "is vulnerable" in text
     ):
         return "completed"
     if "msf login check skipped" in text:

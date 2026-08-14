@@ -1,4 +1,3 @@
-
 import base64
 import os
 import struct
@@ -45,13 +44,10 @@ class C2CryptoEngine:
         """Load an existing legacy key, but never create plaintext key material."""
         if not os.path.exists(self._legacy_priv_path):
             raise RuntimeError(
-                "C2CryptoEngine requires an explicit X25519 private key; "
-                "load or create it with an unlocked KeyStore"
+                "C2CryptoEngine requires an explicit X25519 private key; load or create it with an unlocked KeyStore"
             )
         with open(self._legacy_priv_path, "rb") as handle:
-            loaded = serialization.load_pem_private_key(
-                handle.read(), password=None
-            )
+            loaded = serialization.load_pem_private_key(handle.read(), password=None)
         if not isinstance(loaded, x25519.X25519PrivateKey):
             raise ValueError("legacy C2 private key is not X25519")
         self.private_key = loaded
@@ -100,7 +96,7 @@ class C2CryptoEngine:
             plaintext = aesgcm.decrypt(nonce, data + tag, seq_bytes)
 
             state["rx_seq"] = rx_seq
-            return plaintext.decode('utf-8')
+            return plaintext.decode("utf-8")
 
     def encrypt_aes_gcm(self, agent_id: str, plaintext: str) -> str:
         """Encrypt and inject monotonic sequence into AAD."""

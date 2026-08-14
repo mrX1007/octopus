@@ -1,14 +1,15 @@
 """E2E tests for C2 lifecycle providers."""
+
 from __future__ import annotations
 
-import time
 import pytest
-from core.providers.c2_enroll import C2EnrollProvider
-from core.providers.c2_deploy import C2DeployProvider
-from core.providers.c2_task import C2TaskProvider
-from core.providers.c2_cleanup import C2CleanupProvider
+
 from core.c2.client import DefaultC2ControlClient
 from core.c2.control_signing import ControlSignerV1
+from core.providers.c2_cleanup import C2CleanupProvider
+from core.providers.c2_deploy import C2DeployProvider
+from core.providers.c2_enroll import C2EnrollProvider
+from core.providers.c2_task import C2TaskProvider
 
 pytestmark = pytest.mark.unit
 
@@ -22,12 +23,14 @@ def test_c2_lifecycle_e2e_full_flow():
 
     # 2. Deploy
     deploy_provider = C2DeployProvider()
-    deploy_res = deploy_provider.execute({
-        "target_os": "linux",
-        "backend_name": "local",
-        "binary_path": "/tmp/agent_bin",
-        "target_dir": "/tmp/agent_dir",
-    })
+    deploy_res = deploy_provider.execute(
+        {
+            "target_os": "linux",
+            "backend_name": "local",
+            "binary_path": "/tmp/agent_bin",
+            "target_dir": "/tmp/agent_dir",
+        }
+    )
     assert deploy_res["status"] == "deployed"
 
     # 3. Task

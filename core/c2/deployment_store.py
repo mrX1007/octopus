@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from threading import RLock
-from typing import Dict, List, Optional
+
 from core.c2.deployment_attempts import DeploymentAttemptRecord
 
 
@@ -29,8 +29,8 @@ class DeploymentStore:
 
     def __init__(self) -> None:
         self._lock = RLock()
-        self._deployments: Dict[str, DeploymentRecordV1] = {}
-        self._attempts: Dict[str, DeploymentAttemptRecord] = {}
+        self._deployments: dict[str, DeploymentRecordV1] = {}
+        self._attempts: dict[str, DeploymentAttemptRecord] = {}
 
     def allocate_deployment(
         self,
@@ -43,7 +43,7 @@ class DeploymentStore:
         target_id: str,
         profile_id: str,
         method: str,
-        now: Optional[float] = None,
+        now: float | None = None,
     ) -> DeploymentRecordV1:
         ts = time.time() if now is None else now
         with self._lock:
@@ -65,11 +65,11 @@ class DeploymentStore:
             self._deployments[deployment_ref] = rec
             return rec
 
-    def get_deployment(self, deployment_ref: str) -> Optional[DeploymentRecordV1]:
+    def get_deployment(self, deployment_ref: str) -> DeploymentRecordV1 | None:
         with self._lock:
             return self._deployments.get(deployment_ref)
 
-    def list_deployments(self, mission_id: Optional[str] = None) -> List[DeploymentRecordV1]:
+    def list_deployments(self, mission_id: str | None = None) -> list[DeploymentRecordV1]:
         with self._lock:
             items = list(self._deployments.values())
             if mission_id is not None:
@@ -80,16 +80,14 @@ class DeploymentStore:
         self,
         deployment_ref: str,
         new_status: str,
-        expected_revision: Optional[int] = None,
+        expected_revision: int | None = None,
     ) -> DeploymentRecordV1:
         with self._lock:
             existing = self._deployments.get(deployment_ref)
             if existing is None:
                 raise KeyError(f"Deployment {deployment_ref} not found")
             if expected_revision is not None and existing.revision != expected_revision:
-                raise ValueError(
-                    f"Deployment revision mismatch: expected {expected_revision}, got {existing.revision}"
-                )
+                raise ValueError(f"Deployment revision mismatch: expected {expected_revision}, got {existing.revision}")
             updated = DeploymentRecordV1(
                 deployment_ref=existing.deployment_ref,
                 mission_id=existing.mission_id,
@@ -110,6 +108,6 @@ class DeploymentStore:
         with self._lock:
             self._attempts[attempt.deployment_attempt_id] = attempt
 
-    def get_attempt(self, attempt_id: str) -> Optional[DeploymentAttemptRecord]:
+    def get_attempt(self, attempt_id: str) -> DeploymentAttemptRecord | None:
         with self._lock:
             return self._attempts.get(attempt_id)

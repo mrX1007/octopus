@@ -86,9 +86,7 @@ def test_automatic_assessment_refreshes_graph_and_replay_is_idempotent(
     runtime.project_fact_ids([fact_id])
     observed = runtime.facts.assessments.current_for_fact(fact_id)
     assert observed is not None and observed.status is AssessmentStatus.OBSERVED
-    assert _service_edge(runtime.knowledge_graph)["properties"][
-        "current_assessment_refs"
-    ] == [observed.assessment_id]
+    assert _service_edge(runtime.knowledge_graph)["properties"]["current_assessment_refs"] == [observed.assessment_id]
 
     _record_success(runtime, "exec-a")
     result_id, unique = _record_success(runtime, "exec-b")
@@ -99,13 +97,14 @@ def test_automatic_assessment_refreshes_graph_and_replay_is_idempotent(
     edge = _service_edge(runtime.knowledge_graph)
     assert edge["properties"]["assessment_status"] == "verified"
     assert edge["properties"]["current_assessment_refs"] == [current.assessment_id]
-    assert edge["properties"]["provenance"][str(fact_id)]["assessment_id"] == (
-        current.assessment_id
+    assert edge["properties"]["provenance"][str(fact_id)]["assessment_id"] == (current.assessment_id)
+    assert (
+        runtime.knowledge_graph.projection_record(
+            fact_id,
+            current.assessment_id,
+        )
+        is not None
     )
-    assert runtime.knowledge_graph.projection_record(
-        fact_id,
-        current.assessment_id,
-    ) is not None
 
     before_stats = runtime.knowledge_graph.stats()
     before_edge = _service_edge(runtime.knowledge_graph)
@@ -145,9 +144,7 @@ def test_manual_assessment_transitions_refresh_graph_via_durable_outbox(
     verified_edge = _service_edge(runtime.knowledge_graph)
     assert verified_created is True
     assert verified_edge["properties"]["assessment_status"] == "verified"
-    assert verified_edge["properties"]["current_assessment_refs"] == [
-        verified.assessment_id
-    ]
+    assert verified_edge["properties"]["current_assessment_refs"] == [verified.assessment_id]
     assert runtime.facts.pending_assessment_projections() == []
 
     contradicted, contradicted_created = runtime.facts.assessments.assess_fact(
@@ -162,9 +159,7 @@ def test_manual_assessment_transitions_refresh_graph_via_durable_outbox(
     contradicted_edge = _service_edge(runtime.knowledge_graph)
     assert contradicted_created is True
     assert contradicted_edge["properties"]["assessment_status"] == "contradicted"
-    assert contradicted_edge["properties"]["current_assessment_refs"] == [
-        contradicted.assessment_id
-    ]
+    assert contradicted_edge["properties"]["current_assessment_refs"] == [contradicted.assessment_id]
     assert runtime.facts.pending_assessment_projections() == []
 
 
@@ -253,9 +248,7 @@ def test_startup_redaction_enqueues_and_repairs_current_graph_provenance(
     secret_store.store(secret, kind="learned_assessment_value")
     reopened_store = FactStore(str(facts_path), secret_store=secret_store)
     pending = reopened_store.pending_assessment_projections()
-    assert [(item["fact_id"], item["assessment_id"]) for item in pending] == [
-        (fact_id, original.assessment_id)
-    ]
+    assert [(item["fact_id"], item["assessment_id"]) for item in pending] == [(fact_id, original.assessment_id)]
 
     recovered = PipelineRuntime(
         str(facts_path),
@@ -300,9 +293,7 @@ def test_startup_backfill_enqueues_current_head_for_graph_projection(
     current = reopened_store.assessments.current_for_fact(fact_id)
     assert current is not None
     pending = reopened_store.pending_assessment_projections()
-    assert [(item["fact_id"], item["assessment_id"]) for item in pending] == [
-        (fact_id, current.assessment_id)
-    ]
+    assert [(item["fact_id"], item["assessment_id"]) for item in pending] == [(fact_id, current.assessment_id)]
 
     recovered = PipelineRuntime(
         str(facts_path),
@@ -311,9 +302,7 @@ def test_startup_backfill_enqueues_current_head_for_graph_projection(
         knowledge_graph=KnowledgeGraph(str(graph_path)),
     )
     edge = _service_edge(recovered.knowledge_graph)
-    assert edge["properties"]["current_assessment_refs"] == [
-        current.assessment_id
-    ]
+    assert edge["properties"]["current_assessment_refs"] == [current.assessment_id]
     assert recovered.facts.pending_assessment_projections() == []
 
 
@@ -374,9 +363,7 @@ def test_replay_repairs_a_post_commit_projection_failure(tmp_path: Path) -> None
     current = store.assessments.current_for_fact(fact_id)
     assert current is not None and current.status is AssessmentStatus.VERIFIED
     assert unique is True
-    assert _service_edge(graph)["properties"]["current_assessment_refs"] == [
-        observed_id
-    ]
+    assert _service_edge(graph)["properties"]["current_assessment_refs"] == [observed_id]
     assert graph.projection_record(fact_id, current.assessment_id) is None
     pending = store.pending_assessment_projections()
     assert len(pending) == 1
@@ -400,9 +387,7 @@ def test_replay_repairs_a_post_commit_projection_failure(tmp_path: Path) -> None
     assert calls == 2
     repaired_edge = _service_edge(graph)
     assert repaired_edge["properties"]["assessment_status"] == "verified"
-    assert repaired_edge["properties"]["current_assessment_refs"] == [
-        current.assessment_id
-    ]
+    assert repaired_edge["properties"]["current_assessment_refs"] == [current.assessment_id]
     assert store.pending_assessment_projections() == []
 
     before_stats = graph.stats()
@@ -465,9 +450,7 @@ def test_new_runtime_drains_durable_outbox_without_replaying_execution(
 
     current = store.assessments.current_for_fact(fact_id)
     assert current is not None and current.status is AssessmentStatus.VERIFIED
-    assert _service_edge(graph)["properties"]["current_assessment_refs"] == [
-        observed.assessment_id
-    ]
+    assert _service_edge(graph)["properties"]["current_assessment_refs"] == [observed.assessment_id]
     pending = store.pending_assessment_projections()
     assert len(pending) == 1
     assert pending[0]["fact_id"] == fact_id
@@ -489,9 +472,7 @@ def test_new_runtime_drains_durable_outbox_without_replaying_execution(
     assert recovered.facts.pending_assessment_projections() == []
     repaired_edge = _service_edge(recovered.knowledge_graph)
     assert repaired_edge["properties"]["assessment_status"] == "verified"
-    assert repaired_edge["properties"]["current_assessment_refs"] == [
-        current.assessment_id
-    ]
+    assert repaired_edge["properties"]["current_assessment_refs"] == [current.assessment_id]
     assert recovered.facts.get_command_results("scan", "10.0.0.5") == before_results
     assert recovered.facts.assessments.history(fact_id) == before_history
 
@@ -601,10 +582,13 @@ def test_automatic_contradiction_refreshes_the_other_facts_projection(
     positive_provenance = asset["properties"]["provenance"][str(positive_id)]
     assert positive_provenance["assessment_id"] == positive.assessment_id
     assert positive_provenance["assessment_status"] == "contradicted"
-    assert runtime.knowledge_graph.projection_record(
-        positive_id,
-        positive.assessment_id,
-    ) is not None
+    assert (
+        runtime.knowledge_graph.projection_record(
+            positive_id,
+            positive.assessment_id,
+        )
+        is not None
+    )
 
     before_asset = asset
     before_stats = runtime.knowledge_graph.stats()

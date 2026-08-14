@@ -90,21 +90,11 @@ def run_task_efficiency_comparison(
         },
         "profiles": profiles,
         "reduction": {
-            "no_op_tasks": int(
-                baseline_metrics["no_op_tasks"]
-                - configured_metrics["no_op_tasks"]
-            ),
-            "repeated_tasks": int(
-                baseline_metrics["repeated_tasks"]
-                - configured_metrics["repeated_tasks"]
-            ),
-            "no_op_rate_absolute": _round(
-                baseline_metrics["no_op_rate"]
-                - configured_metrics["no_op_rate"]
-            ),
+            "no_op_tasks": int(baseline_metrics["no_op_tasks"] - configured_metrics["no_op_tasks"]),
+            "repeated_tasks": int(baseline_metrics["repeated_tasks"] - configured_metrics["repeated_tasks"]),
+            "no_op_rate_absolute": _round(baseline_metrics["no_op_rate"] - configured_metrics["no_op_rate"]),
             "repeated_task_rate_absolute": _round(
-                baseline_metrics["repeated_task_rate"]
-                - configured_metrics["repeated_task_rate"]
+                baseline_metrics["repeated_task_rate"] - configured_metrics["repeated_task_rate"]
             ),
             "no_op_rate_relative": _relative_reduction(
                 baseline_metrics["no_op_rate"],

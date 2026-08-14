@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
 
 from core.actions.provider_call_types import ProviderCallPhaseV2
 from core.actions.provider_mounts import ProviderExecutionModeV2
@@ -71,7 +68,7 @@ class ProviderCallRecoveryManager:
     def register(self, record: ProviderCallRecoveryRecordV2) -> None:
         self._records[record.recovery_ref.call_id] = record
 
-    def get(self, call_id: str) -> Optional[ProviderCallRecoveryRecordV2]:
+    def get(self, call_id: str) -> ProviderCallRecoveryRecordV2 | None:
         return self._records.get(call_id)
 
 

@@ -91,7 +91,7 @@ class TraceReporter:
             "evaluated_fact_snapshot": snapshot.to_context(),
             "summary": self._summary(facts, command_results, goal_trace or [], command_trace or []),
             "surface_states": (context.get("target_model") or {}).get("surface_states")
-                or (context.get("surface_states") or {}),
+            or (context.get("surface_states") or {}),
             "asset_graph_summary": (context.get("asset_graph") or {}).get("summary", {}),
             "evidence_index": evidence_index,
             "machine_report": machine_report,
@@ -118,9 +118,7 @@ class TraceReporter:
         scan_id: str,
         target: str,
     ) -> None:
-        expected_target = (
-            canonicalize_scope_value(target) if str(target or "").strip() else ""
-        )
+        expected_target = canonicalize_scope_value(target) if str(target or "").strip() else ""
         if snapshot.scan_id != str(scan_id):
             raise ValueError("evaluated fact snapshot belongs to a different scan")
         if expected_target and expected_target not in snapshot.canonical_scope:
@@ -192,19 +190,13 @@ class TraceReporter:
         lines.append("")
         lines.append("attack_path:")
         for idx, step in enumerate(report.get("attack_path", [])[:12], 1):
-            lines.append(
-                f"  {idx}. {step.get('stage')}: {step.get('status')} - "
-                f"{self._short(step.get('detail'), 160)}"
-            )
+            lines.append(f"  {idx}. {step.get('stage')}: {step.get('status')} - {self._short(step.get('detail'), 160)}")
         if not report.get("attack_path"):
             lines.append("  none")
         lines.append("")
         lines.append("remediations:")
         for item in report.get("remediations", [])[:12]:
-            lines.append(
-                f"  - {item.get('service', 'unknown')}: "
-                f"{self._short(item.get('recommendation'), 220)}"
-            )
+            lines.append(f"  - {item.get('service', 'unknown')}: {self._short(item.get('recommendation'), 220)}")
         if not report.get("remediations"):
             lines.append("  none")
         lines.append("")
@@ -270,15 +262,17 @@ class TraceReporter:
     def _fact_flow(self, facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         flow = []
         for fact in facts:
-            flow.append({
-                "type": fact.get("type"),
-                "value": fact.get("value"),
-                "sources": fact.get("sources") or ([fact.get("source")] if fact.get("source") else []),
-                "observations": len(fact.get("observations") or []),
-                "confidence": fact.get("confidence", 100),
-                "assessment_id": fact.get("assessment_id"),
-                "assessment_status": fact.get("assessment_status", "observed"),
-            })
+            flow.append(
+                {
+                    "type": fact.get("type"),
+                    "value": fact.get("value"),
+                    "sources": fact.get("sources") or ([fact.get("source")] if fact.get("source") else []),
+                    "observations": len(fact.get("observations") or []),
+                    "confidence": fact.get("confidence", 100),
+                    "assessment_id": fact.get("assessment_id"),
+                    "assessment_status": fact.get("assessment_status", "observed"),
+                }
+            )
         return flow
 
     def _assessment_summary(self, facts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -286,26 +280,16 @@ class TraceReporter:
         return {
             "schema_version": "1.0",
             "counts": {
-                status: sum(
-                    1
-                    for fact in facts
-                    if str(fact.get("assessment_status") or "observed") == status
-                )
+                status: sum(1 for fact in facts if str(fact.get("assessment_status") or "observed") == status)
                 for status in statuses
             },
         }
 
     def _human_evidence(self, evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [
-            item for item in evidence or []
-            if self._is_human_fact_type(str(item.get("fact_type") or ""))
-        ]
+        return [item for item in evidence or [] if self._is_human_fact_type(str(item.get("fact_type") or ""))]
 
     def _human_fact_flow(self, flow: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return [
-            item for item in flow or []
-            if self._is_human_fact_type(str(item.get("type") or ""))
-        ]
+        return [item for item in flow or [] if self._is_human_fact_type(str(item.get("type") or ""))]
 
     def _is_human_fact_type(self, fact_type: str) -> bool:
         return fact_type not in {"check_result", "llm_health", "network_node", "network_edge", "external_url"}
@@ -317,23 +301,29 @@ class TraceReporter:
         llm_events: list[dict[str, Any]],
     ) -> dict[str, Any]:
         empty_events = [
-            item for item in task_outcomes
+            item
+            for item in task_outcomes
             if item.get("agent") == "AnalysisAgent"
             and item.get("status") == "failed"
             and item.get("reason") == "analysis_returned_no_hypotheses"
         ]
         failed_events = [event for event in llm_events if event.get("status") == "failed"]
         fallback_events = [
-            item for item in goal_trace
+            item
+            for item in goal_trace
             if any(marker in str(item.get("thought", "")).lower() for marker in ("policy forced", "fallback"))
         ]
         fallback_events.extend(event for event in llm_events if event.get("fallback"))
         return {
             "primary_response": "failed" if failed_events else ("empty" if empty_events else "available_or_not_needed"),
-            "empty_response_events": len(empty_events) + len([
-                event for event in failed_events
-                if "empty" in str(event.get("error", "")).lower() or "json" in str(event.get("error", "")).lower()
-            ]),
+            "empty_response_events": len(empty_events)
+            + len(
+                [
+                    event
+                    for event in failed_events
+                    if "empty" in str(event.get("error", "")).lower() or "json" in str(event.get("error", "")).lower()
+                ]
+            ),
             "fallback_policy_used": bool(fallback_events),
             "fallback_events": fallback_events[-5:],
             "scan_continued_safely": True,

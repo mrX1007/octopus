@@ -118,9 +118,7 @@ def test_generated_python_implant_uses_protocol_kdf_context(monkeypatch):
     server_public_bytes = server_private.public_key().public_bytes_raw()
     source = python_implant.generate_python_implant(
         ["https://c2.example.test:8443"],
-        server_pub_b64=__import__("base64").b64encode(
-            server_public_bytes
-        ).decode("ascii"),
+        server_pub_b64=__import__("base64").b64encode(server_public_bytes).decode("ascii"),
         enrollment_token="single-use-token",
     )
     namespace = {"__name__": "generated_protocol_test"}
@@ -153,9 +151,7 @@ def test_go_implant_represents_protocol_kdf_context_via_linker(monkeypatch):
     )
 
     flags = builder._go_linker_flags("blob", "part-one", "part-two")
-    go_source = Path(builder.__file__).with_name("implant.go").read_text(
-        encoding="utf-8"
-    )
+    go_source = Path(builder.__file__).with_name("implant.go").read_text(encoding="utf-8")
 
     assert f"main.SessionKDFContext={context.decode('ascii')}" in flags
     assert "[]byte(SessionKDFContext)" in go_source
@@ -214,9 +210,7 @@ def test_daemon_version_is_owned_by_protocol_constants(monkeypatch, capsys):
 
             connection = ConnectionStub()
             daemon.handle_client(connection)
-            assert connection.responses == [
-                {"status": "ok", "msg": "pong", "version": sentinel}
-            ]
+            assert connection.responses == [{"status": "ok", "msg": "pong", "version": sentinel}]
 
             daemon.main()
             assert f"C2 Daemon v{sentinel}" in capsys.readouterr().out

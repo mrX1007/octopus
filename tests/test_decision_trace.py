@@ -28,17 +28,19 @@ def test_decision_store_is_idempotent_bounded_and_redacted(tmp_path):
     )
 
     for index in range(7):
-        event_id, created = store.record({
-            "event_id": f"event-{index}",
-            "event_type": "goal_selection",
-            "scan_id": "scan-a",
-            "goal": f"goal-{index}-{secret}",
-            "candidates": [f"candidate-{item}" for item in range(100)],
-            "rejected": {"candidate": "unsafe", "reason": "policy_denied"},
-            "supporting_fact_ids": list(range(1, 400)),
-            "actual_outcome": {"status": "selected"},
-            "occurred_at": float(index + 1),
-        })
+        event_id, created = store.record(
+            {
+                "event_id": f"event-{index}",
+                "event_type": "goal_selection",
+                "scan_id": "scan-a",
+                "goal": f"goal-{index}-{secret}",
+                "candidates": [f"candidate-{item}" for item in range(100)],
+                "rejected": {"candidate": "unsafe", "reason": "policy_denied"},
+                "supporting_fact_ids": list(range(1, 400)),
+                "actual_outcome": {"status": "selected"},
+                "occurred_at": float(index + 1),
+            }
+        )
         assert event_id.startswith("decision://sha256/")
         assert created is True
 
@@ -48,19 +50,19 @@ def test_decision_store_is_idempotent_bounded_and_redacted(tmp_path):
     assert secret not in str(retained)
     assert "secret://" in str(retained) or "[REDACTED]" in str(retained)
     assert len(retained[-1]["candidates"]) == 64
-    assert retained[-1]["rejected"] == [
-        {"candidate": "unsafe", "reason": "policy_denied"}
-    ]
+    assert retained[-1]["rejected"] == [{"candidate": "unsafe", "reason": "policy_denied"}]
     assert len(retained[-1]["supporting_fact_ids"]) == 256
 
-    _event_id, duplicate_created = store.record({
-        "event_id": "event-6",
-        "event_type": "goal_selection",
-        "scan_id": "scan-a",
-        "goal": f"goal-6-{secret}",
-        "actual_outcome": {"status": "selected"},
-        "occurred_at": 7.0,
-    })
+    _event_id, duplicate_created = store.record(
+        {
+            "event_id": "event-6",
+            "event_type": "goal_selection",
+            "scan_id": "scan-a",
+            "goal": f"goal-6-{secret}",
+            "actual_outcome": {"status": "selected"},
+            "occurred_at": 7.0,
+        }
+    )
     assert duplicate_created is False
     assert store.count(scan_id="scan-a") == 5
 

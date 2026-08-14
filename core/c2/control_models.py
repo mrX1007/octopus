@@ -1,11 +1,11 @@
 """Control models."""
+
 from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, Union
 
 
 class ParticipantControlPhaseV1(str, Enum):
@@ -86,4 +86,3 @@ def calculate_snapshot_digest(
     rec_dig = receipt_digest or ""
     components = f"{transaction_id}:{participant_id}:{phase}:{rec_dig}"
     return hashlib.sha256(components.encode("utf-8")).hexdigest()
-

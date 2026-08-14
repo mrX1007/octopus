@@ -68,12 +68,8 @@ the `E501` ignore in the same change.
 
 ## mypy
 
-The previous configured gate checked only three files and was green. A plain
-full-tree invocation was not valid before this slice:
-
-```bash
-venv/bin/python -m mypy . --no-error-summary
-```
+The previous configured gate checked only three files and was green. The
+retired direct full-tree invocation was not valid before this slice.
 
 It stopped with a duplicate module named `base` for
 `core/plugins/base.py` and `core/transport/base.py`. These directories are
@@ -81,11 +77,7 @@ namespace packages without `__init__.py`; `explicit_package_bases = true`
 resolves their module identity without adding runtime packages merely for the
 type checker.
 
-The deterministic full inventory command was:
-
-```bash
-venv/bin/python -m mypy . --explicit-package-bases --no-incremental
-```
+The deterministic pre-gate full inventory reported:
 
 ```text
 Found 195 errors in 43 files (checked 149 source files)
@@ -145,7 +137,7 @@ The first no-suppression ratchet covers 13 verified-clean sources:
 The configured command is:
 
 ```bash
-venv/bin/python -m mypy
+venv/bin/python scripts/quality/mypy_gate.py check
 ```
 
 Each later slice must fix a bounded domain and add it to `files` in the same
@@ -166,7 +158,7 @@ runtime, credentials and secrets.
 venv/bin/ruff check .
 All checks passed!
 
-venv/bin/python -m mypy
+venv/bin/python scripts/quality/mypy_gate.py check
 Success: no issues found in 38 source files
 
 PYTHONPYCACHEPREFIX=/private/tmp/octopus-wave6-pyc \
@@ -188,7 +180,7 @@ suppression or per-file ignore was added.
 venv/bin/python -m ruff check .
 All checks passed!
 
-venv/bin/python -m mypy
+venv/bin/python scripts/quality/mypy_gate.py check
 Success: no issues found in 50 source files
 ```
 
@@ -204,7 +196,7 @@ package increased the configured mypy gate from 50 to 55 source files:
 venv/bin/python -m ruff check .
 All checks passed!
 
-venv/bin/python -m mypy
+venv/bin/python scripts/quality/mypy_gate.py check
 Success: no issues found in 55 source files
 ```
 
@@ -219,7 +211,7 @@ evaluated-fact snapshot, follow-up extraction, thin application/version seams,
 CLI history/parser/presentation modules, and the shared C2 protocol constants:
 
 ```text
-venv/bin/python -m mypy --no-incremental
+venv/bin/python scripts/quality/mypy_gate.py check
 Success: no issues found in 90 source files
 ```
 
@@ -242,7 +234,7 @@ modules. It adds no `type: ignore`, per-file suppression, or excluded source
 tree:
 
 ```text
-venv/bin/python -m mypy --no-incremental
+venv/bin/python scripts/quality/mypy_gate.py check
 Success: no issues found in 214 source files
 ```
 
@@ -252,17 +244,12 @@ dependency backlog is resolved. Enabling normal import traversal for the
 type errors in C2, AD/killchain, and tool modules. Those errors are not hidden
 by new suppressions in this revision.
 
-To make import traversal itself a required ratchet, CI also runs a separate
-configuration over nine isolated runtime and quality-infrastructure leaves.
-That gate uses `follow_imports = normal`, does not enable
-`ignore_missing_imports`, and is green without suppressions:
+The former separate nine-leaf import-aware invocation has been retired. CI and
+local verification now use the same repository-owned entrypoint:
 
-```text
-venv/bin/python -m mypy --config-file quality/mypy-import-aware.ini --no-incremental
-Success: no issues found in 9 source files
+```bash
+venv/bin/python scripts/quality/mypy_gate.py check
 ```
 
-This remains incremental static assurance rather than a whole-tree
-type-safety claim. The next expansion should first resolve the recorded
-transitive inventory, then move additional package boundaries from the broad
-direct-check gate into the import-aware gate.
+Until the full strict migration is proven and finalized, this remains migration
+assurance rather than a whole-tree type-safety claim.

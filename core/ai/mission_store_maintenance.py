@@ -39,7 +39,11 @@ class MissionStoreMaintenanceMixin:
                     conn.row_factory = sqlite3.Row
                     close = True
                 except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
-                    if "unable to open" in str(exc).lower() or "authorization denied" in str(exc).lower() or "readonly" in str(exc).lower():
+                    if (
+                        "unable to open" in str(exc).lower()
+                        or "authorization denied" in str(exc).lower()
+                        or "readonly" in str(exc).lower()
+                    ):
                         self._memory_conn = sqlite3.connect(":memory:")
                         self._memory_conn.row_factory = sqlite3.Row
                         conn = self._memory_conn

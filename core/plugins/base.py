@@ -44,8 +44,9 @@ class KillChainStage(Enum):
 @dataclass
 class CheckResult:
     """Result of a vulnerability check (non-destructive probe)."""
+
     vulnerable: bool = False
-    confidence: float = 0.0        # 0.0 to 1.0
+    confidence: float = 0.0  # 0.0 to 1.0
     details: str = ""
     version: str = ""
     evidence: str = ""
@@ -54,6 +55,7 @@ class CheckResult:
 @dataclass
 class PluginResult:
     """Result of a full plugin execution."""
+
     success: bool = False
     data: dict[str, Any] = field(default_factory=dict)
     output: str = ""
@@ -66,11 +68,12 @@ class PluginResult:
 @dataclass
 class PluginContext:
     """Runtime context passed to plugins during setup."""
+
     target: str = ""
     campaign: str = ""
     work_dir: str = "/tmp/octopus"
-    knowledge_graph: Any = None    # KnowledgeGraph instance
-    event_bus: Any = None          # EventBus instance
+    knowledge_graph: Any = None  # KnowledgeGraph instance
+    event_bus: Any = None  # EventBus instance
     credentials: dict[str, str] = field(default_factory=dict)
     config: dict[str, Any] = field(default_factory=dict)
 
@@ -107,11 +110,11 @@ class OctopusPlugin:
     plugin_type: PluginType = PluginType.AUXILIARY
     kill_chain_stage: KillChainStage = KillChainStage.RECON
 
-    depends_on: ClassVar[list[str]] = []       # other plugin names
-    requires: ClassVar[list[str]] = []         # system tools (nmap, hydra, etc.)
-    python_deps: ClassVar[list[str]] = []      # pip packages
+    depends_on: ClassVar[list[str]] = []  # other plugin names
+    requires: ClassVar[list[str]] = []  # system tools (nmap, hydra, etc.)
+    python_deps: ClassVar[list[str]] = []  # pip packages
 
-    capabilities: ClassVar[set[str]] = set()   # "network", "file_write", "shell_exec", "root"
+    capabilities: ClassVar[set[str]] = set()  # "network", "file_write", "shell_exec", "root"
 
     # Closed JSON-Schema-like metadata for top-level ``run``/``check`` kwargs.
     # Reference formats are opaque identifiers; the framework never resolves

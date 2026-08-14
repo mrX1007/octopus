@@ -63,18 +63,20 @@ def test_trusted_fact_unknown_trust_fails_closed() -> None:
         ),
         _fact("fact://ad", TrustedFactType.AD_ENVIRONMENT_DETECTED),
     )
-    assert not get_action_precondition_registry_v2().evaluate_preconditions(
-        "killchain:kerberos_extract_tickets",
-        facts,
-    ).satisfied
+    assert (
+        not get_action_precondition_registry_v2()
+        .evaluate_preconditions(
+            "killchain:kerberos_extract_tickets",
+            facts,
+        )
+        .satisfied
+    )
 
 
 def test_semantic_matrix_required_fact_ids_resolve_exactly_once() -> None:
     registry = get_action_precondition_registry_v2()
     bindings = registry.bindings()
     assert len(bindings) == len(TrustedFactType) == 12
-    assert {binding.required_fact_type_id for binding in bindings} == {
-        fact_type.value for fact_type in TrustedFactType
-    }
+    assert {binding.required_fact_type_id for binding in bindings} == {fact_type.value for fact_type in TrustedFactType}
     with pytest.raises(KeyError):
         registry.require_binding("resource_exists")

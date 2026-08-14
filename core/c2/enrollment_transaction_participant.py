@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import time
 import uuid
-from typing import Any, Optional
+from typing import Any
+
 from core.c2.enrollment_models import (
     EnrollmentEmbeddedReceipt,
     EnrollmentParticipantState,
@@ -26,7 +26,7 @@ class C2EnrollmentTransactionParticipant:
         self.enrollment_ref = enrollment_ref
         self.participant_kind = "cross_process_control"
         self._state = EnrollmentParticipantState.REGISTERED
-        self._prepare_receipt: Optional[EnrollmentPrepareReceipt] = None
+        self._prepare_receipt: EnrollmentPrepareReceipt | None = None
 
     def prepare(self, request: Any = None) -> EnrollmentPrepareReceipt:
         """Atomically transition enrollment to EMBEDDED_IN_ARTIFACT."""

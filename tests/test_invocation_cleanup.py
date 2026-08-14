@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from core.actions.invocation_scope import InvocationScope
+
+pytestmark = pytest.mark.unit
 
 
 def test_invocation_scope_lifo_cleanup() -> None:

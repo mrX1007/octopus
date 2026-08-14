@@ -399,7 +399,6 @@ class ActionDescriptorV2:
 ActionDescriptorUnion = Union[ActionDescriptor, ActionDescriptorV2]
 
 
-
 __all__ = [
     "ACTION_DESCRIPTOR_SCHEMA_VERSION",
     "ACTION_LIFECYCLE_SCHEMA_VERSION",

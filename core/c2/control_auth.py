@@ -238,10 +238,7 @@ class ControlAuthenticatorV1:
             subject_id=principal.subject_id,
             mission_id=principal.mission_id,
         )
-        return (
-            mission_grant is not None
-            and mission_grant.revision == principal.mission_grant_revision
-        )
+        return mission_grant is not None and mission_grant.revision == principal.mission_grant_revision
 
     def require_current_principal(
         self,

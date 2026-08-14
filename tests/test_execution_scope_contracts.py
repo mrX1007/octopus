@@ -56,16 +56,15 @@ def test_effective_runtime_limit_rejects_boolean_and_nonpositive_values():
 def test_x_mode_runs_exhaustive_applicable_coverage_without_real_tools():
     import builtins
     import sys
-    import types
 
     import core.tools.post_tools
-    import core.tools.recon_tools  # noqa: F401 - registers recon/deep tools
+    import core.tools.recon_tools
     import core.tools.runner as runner
     from core.tools.registry import get_tool
 
     old_input = builtins.input
     old_default_recon = runner._run_registered_default_recon
-    old_killchain = sys.modules.get("core.killchain")
+    sys.modules.get("core.killchain")
     patched_tools = {}
     calls = []
 
@@ -87,6 +86,7 @@ def test_x_mode_runs_exhaustive_applicable_coverage_without_real_tools():
         builtins.input = lambda _prompt="": "x"
         runner._run_registered_default_recon = fake_default_recon
         import core.killchain
+
         old_vuln_assess = getattr(core.killchain, "vuln_assess", None)
         core.killchain.vuln_assess = lambda target, recon_blob: f"vuln_assess ok {target}"
 
@@ -148,16 +148,15 @@ def test_x_mode_runs_exhaustive_applicable_coverage_without_real_tools():
 def test_x_mode_dedupes_default_heavy_web_scanners_without_dropping_distinct_ports():
     import builtins
     import sys
-    import types
 
     import core.tools.post_tools
-    import core.tools.recon_tools  # noqa: F401 - registers recon/deep tools
+    import core.tools.recon_tools
     import core.tools.runner as runner
     from core.tools.registry import get_tool
 
     old_input = builtins.input
     old_default_recon = runner._run_registered_default_recon
-    old_killchain = sys.modules.get("core.killchain")
+    sys.modules.get("core.killchain")
     patched_tools = {}
     calls = []
 
@@ -185,6 +184,7 @@ def test_x_mode_dedupes_default_heavy_web_scanners_without_dropping_distinct_por
         builtins.input = lambda _prompt="": "x"
         runner._run_registered_default_recon = fake_default_recon
         import core.killchain
+
         old_vuln_assess = getattr(core.killchain, "vuln_assess", None)
         core.killchain.vuln_assess = lambda target, recon_blob: f"vuln_assess ok {target}"
 

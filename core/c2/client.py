@@ -1,17 +1,19 @@
 """C2 control client."""
+
 from __future__ import annotations
 
 import base64
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any
+
 from core.c2.control_commands import (
+    BoundedControlErrorV1,
     C2ControlActionV1,
     ParticipantControlAuthorizationV1,
-    ParticipantControlRequestV1,
-    ParticipantControlReceiptV1,
     ParticipantControlQuerySnapshotV1,
-    BoundedControlErrorV1,
+    ParticipantControlReceiptV1,
+    ParticipantControlRequestV1,
 )
 from core.c2.control_models import calculate_payload_digest, calculate_request_digest
 from core.c2.control_protocol import ControlProtocolCodec
@@ -37,8 +39,8 @@ class DefaultC2ControlClient(C2ControlClient):
     def __init__(
         self,
         signer: ControlSignerV1,
-        verifier: Optional[ControlVerifierV1] = None,
-        codec: Optional[ControlProtocolCodec] = None,
+        verifier: ControlVerifierV1 | None = None,
+        codec: ControlProtocolCodec | None = None,
         transport_handler: Any = None,
     ) -> None:
         self.signer = signer
@@ -87,6 +89,7 @@ class DefaultC2ControlClient(C2ControlClient):
             b64u = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("utf-8").rstrip("=")
         else:
             import json
+
             raw_bytes = json.dumps(payload, sort_keys=True).encode("utf-8")
             b64u = base64.urlsafe_b64encode(raw_bytes).decode("utf-8").rstrip("=")
 
@@ -158,4 +161,3 @@ class DefaultC2ControlClient(C2ControlClient):
             result_payload_b64u=request.canonical_payload_b64u,
         )
         return self.codec.encode_response(receipt)
-

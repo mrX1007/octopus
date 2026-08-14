@@ -39,9 +39,16 @@ def test_recon_worker_captures_child_output_and_returns_data(monkeypatch):
         return Child()
 
     monkeypatch.setattr(octopus.subprocess, "run", fake_run)
-    result = octopus._shodan_recon_worker(1, 1, {
-        "ip": "10.0.0.1", "ports": [80], "services": [], "vulns": [],
-    })
+    result = octopus._shodan_recon_worker(
+        1,
+        1,
+        {
+            "ip": "10.0.0.1",
+            "ports": [80],
+            "services": [],
+            "vulns": [],
+        },
+    )
 
     assert result["error"] is None
     assert "NMAP DATA" in result["raw_scan"]
@@ -65,9 +72,14 @@ def test_parallel_recon_keeps_pipeline_prompts_and_persistence_on_main(monkeypat
     def fake_worker(index, total, target):
         worker_threads.append(threading.get_ident())
         return {
-            "index": index, "total": total, "target": target["ip"],
-            "raw_scan": f"raw:{target['ip']}", "error": None,
-            "traceback": "", "worker_output": "", "elapsed_seconds": 0.01,
+            "index": index,
+            "total": total,
+            "target": target["ip"],
+            "raw_scan": f"raw:{target['ip']}",
+            "error": None,
+            "traceback": "",
+            "worker_output": "",
+            "elapsed_seconds": 0.01,
         }
 
     class FakePipeline:
@@ -90,24 +102,34 @@ def test_parallel_recon_keeps_pipeline_prompts_and_persistence_on_main(monkeypat
     def save_results(*_args):
         persistence_threads.append(threading.get_ident())
 
-    monkeypatch.setattr(builtins, "input", lambda *_args: (_ for _ in ()).throw(
-        AssertionError("worker orchestration must not call input directly")
-    ))
+    monkeypatch.setattr(
+        builtins,
+        "input",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("worker orchestration must not call input directly")),
+    )
     monkeypatch.setattr(octopus, "_shodan_recon_worker", fake_worker)
     monkeypatch.setattr(octopus, "AIPipeline", FakePipeline)
     monkeypatch.setattr(octopus, "create_session", create_session)
     monkeypatch.setattr(octopus, "update_session_status", update_status)
     monkeypatch.setattr(octopus, "_save_trace_report", lambda *_args: None)
-    monkeypatch.setattr(octopus, "_adapt_state_to_result", lambda *_args: {
-        "risk_level": "LOW",
-    })
+    monkeypatch.setattr(
+        octopus,
+        "_adapt_state_to_result",
+        lambda *_args: {
+            "risk_level": "LOW",
+        },
+    )
     monkeypatch.setattr(octopus, "_save_and_show_results", save_results)
     monkeypatch.setattr(octopus, "_write_shodan_scan_log", lambda *_args: "scan.log")
     monkeypatch.setattr(octopus, "error", lambda *_args: None)
 
-    outcome = octopus._run_shodan_parallel_scans([
-        {"ip": "10.0.0.1"}, {"ip": "10.0.0.2"},
-    ], workers=999)
+    outcome = octopus._run_shodan_parallel_scans(
+        [
+            {"ip": "10.0.0.1"},
+            {"ip": "10.0.0.2"},
+        ],
+        workers=999,
+    )
 
     assert outcome == {"completed": 2, "failed": 0, "workers": 2}
     assert worker_threads and all(thread != main_thread for thread in worker_threads)
@@ -125,12 +147,18 @@ def test_recon_and_pipeline_failures_mark_every_session_terminal(monkeypatch):
     def fake_worker(index, total, target):
         if index == 1:
             return {
-                "error": "recon failed", "traceback": "trace", "raw_scan": "",
-                "worker_output": "", "elapsed_seconds": 0.0,
+                "error": "recon failed",
+                "traceback": "trace",
+                "raw_scan": "",
+                "worker_output": "",
+                "elapsed_seconds": 0.0,
             }
         return {
-            "error": None, "traceback": "", "raw_scan": "raw",
-            "worker_output": "", "elapsed_seconds": 0.0,
+            "error": None,
+            "traceback": "",
+            "raw_scan": "raw",
+            "worker_output": "",
+            "elapsed_seconds": 0.0,
         }
 
     class FailingPipeline:
@@ -147,9 +175,13 @@ def test_recon_and_pipeline_failures_mark_every_session_terminal(monkeypatch):
     monkeypatch.setattr(octopus, "_write_shodan_scan_log", lambda *_args: "scan.log")
     monkeypatch.setattr(octopus, "error", lambda *_args: None)
 
-    outcome = octopus._run_shodan_parallel_scans([
-        {"ip": "10.0.0.1"}, {"ip": "10.0.0.2"},
-    ], workers=2)
+    outcome = octopus._run_shodan_parallel_scans(
+        [
+            {"ip": "10.0.0.1"},
+            {"ip": "10.0.0.2"},
+        ],
+        workers=2,
+    )
 
     assert outcome == {"completed": 0, "failed": 2, "workers": 2}
     assert sorted(updates) == [(201, "failed"), (202, "failed")]
@@ -159,9 +191,13 @@ def test_scan_log_filename_is_exclusive_and_contained(monkeypatch, tmp_path):
     import octopus
 
     monkeypatch.setattr(octopus, "CFG", {"paths": {"logs": str(tmp_path)}})
-    path = Path(octopus._write_shodan_scan_log(
-        7, "../../bad/name\x00target", "log content",
-    ))
+    path = Path(
+        octopus._write_shodan_scan_log(
+            7,
+            "../../bad/name\x00target",
+            "log content",
+        )
+    )
 
     assert path.resolve().parent == tmp_path.resolve()
     assert ".." not in path.name
@@ -190,10 +226,12 @@ def test_shodan_db_failure_rolls_back_and_closes_cursor():
     recon = ShodanRecon.__new__(ShodanRecon)
     recon._get_db = lambda: connection
 
-    recon.save_to_db({
-        "query": "port:443",
-        "matches": [{"ip": "10.0.0.1", "port": 443}],
-    })
+    recon.save_to_db(
+        {
+            "query": "port:443",
+            "matches": [{"ip": "10.0.0.1", "port": 443}],
+        }
+    )
 
     connection.rollback.assert_called_once()
     cursor.close.assert_called_once()

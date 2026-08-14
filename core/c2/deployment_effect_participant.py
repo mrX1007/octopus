@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any
+
 from core.c2.deployment_attempts import (
-    DeploymentAttemptRecord,
     DeploymentAttemptState,
     DeploymentStartReceipt,
 )
@@ -27,7 +27,7 @@ class DeploymentEffectParticipant:
         self.participant_kind = "external_effect"
         self.effect_kind = "deployment_start"
         self._state = DeploymentAttemptState.RESERVED
-        self._receipt: Optional[DeploymentStartReceipt] = None
+        self._receipt: DeploymentStartReceipt | None = None
 
     def prepare(self, request: Any = None) -> DeploymentStartReceipt:
         """Execute remote start under exactly-once semantics."""

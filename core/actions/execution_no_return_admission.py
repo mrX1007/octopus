@@ -14,8 +14,10 @@ from core.actions.execution_recovery_types import (
     canonical_execution_no_return_admission_digest,
 )
 
+
 def canonical_digest(obj: Any) -> str:
     return hashlib.sha256(json.dumps(str(obj)).encode()).hexdigest()
+
 
 @runtime_checkable
 class ExecutionNoReturnAdmissionStoreV2(Protocol):

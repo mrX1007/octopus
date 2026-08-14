@@ -1,8 +1,10 @@
 """Channel lifecycle management."""
+
 from __future__ import annotations
 
 import time
-from typing import Dict, List, Optional, Any
+from typing import Any
+
 from core.c2.channel_models import (
     ChannelConfigV1,
     ChannelRecordV1,
@@ -16,16 +18,16 @@ class ChannelManager:
     """Manager for C2 communication channels lifecycle."""
 
     def __init__(self) -> None:
-        self._providers: Dict[str, Any] = {}
-        self._configs: Dict[str, ChannelConfigV1] = {}
-        self._records: Dict[str, ChannelRecordV1] = {}
+        self._providers: dict[str, Any] = {}
+        self._configs: dict[str, ChannelConfigV1] = {}
+        self._records: dict[str, ChannelRecordV1] = {}
 
     def register_provider(self, channel_type: ChannelTypeV1 | str, provider: Any) -> None:
         """Register a channel provider for a channel type."""
         key = channel_type.value if hasattr(channel_type, "value") else str(channel_type)
         self._providers[key] = provider
 
-    def get_provider(self, channel_type: ChannelTypeV1 | str) -> Optional[Any]:
+    def get_provider(self, channel_type: ChannelTypeV1 | str) -> Any | None:
         """Get registered channel provider."""
         key = channel_type.value if hasattr(channel_type, "value") else str(channel_type)
         return self._providers.get(key)
@@ -67,27 +69,23 @@ class ChannelManager:
         self._records[config.channel_id] = record
         return record
 
-    def get_channel(self, channel_id: str) -> Optional[ChannelRecordV1]:
+    def get_channel(self, channel_id: str) -> ChannelRecordV1 | None:
         """Retrieve a channel state record by ID."""
         return self._records.get(channel_id)
 
-    def get_config(self, channel_id: str) -> Optional[ChannelConfigV1]:
+    def get_config(self, channel_id: str) -> ChannelConfigV1 | None:
         """Retrieve a channel config by ID."""
         return self._configs.get(channel_id)
 
-    def list_channels(self, mission_id: Optional[str] = None) -> List[ChannelRecordV1]:
+    def list_channels(self, mission_id: str | None = None) -> list[ChannelRecordV1]:
         """List channels, optionally filtered by mission ID."""
         if mission_id is None:
             return list(self._records.values())
 
-        matched_ids = {
-            c_id for c_id, cfg in self._configs.items() if cfg.mission_id == mission_id
-        }
+        matched_ids = {c_id for c_id, cfg in self._configs.items() if cfg.mission_id == mission_id}
         return [rec for c_id, rec in self._records.items() if c_id in matched_ids]
 
-    def update_channel_state(
-        self, channel_id: str, new_state: ChannelStateV1
-    ) -> ChannelRecordV1:
+    def update_channel_state(self, channel_id: str, new_state: ChannelStateV1) -> ChannelRecordV1:
         """Update channel state."""
         rec = self._records.get(channel_id)
         if rec is None:
@@ -147,5 +145,3 @@ class ChannelCreateRouter:
         if provider is not None and hasattr(provider, "create_channel"):
             return provider.create_channel(config)
         return self.manager.create_channel(config)
-
-

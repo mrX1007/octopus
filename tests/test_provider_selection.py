@@ -373,12 +373,14 @@ def test_retryable_partial_output_is_ingested_before_fallback():
     events: list[str] = []
     first = SequenceAdapter(
         "test:a",
-        [{
-            "status": "timeout",
-            "stdout": "partial discovery",
-            "partial": True,
-            "error_class": "TimeoutError",
-        }],
+        [
+            {
+                "status": "timeout",
+                "stdout": "partial discovery",
+                "partial": True,
+                "error_class": "TimeoutError",
+            }
+        ],
         events,
     )
     second = SequenceAdapter(
@@ -428,11 +430,13 @@ def test_dedicated_partial_ingestion_callback_runs_only_before_fallback():
     events: list[str] = []
     first = SequenceAdapter(
         "test:a",
-        [{
-            "status": "timeout",
-            "stdout": "partial discovery",
-            "partial": True,
-        }],
+        [
+            {
+                "status": "timeout",
+                "stdout": "partial discovery",
+                "partial": True,
+            }
+        ],
         events,
     )
     second = SequenceAdapter(

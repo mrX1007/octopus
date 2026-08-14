@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from core.actions.adapter_registration import ActionAdapterV1, TypedActionAdapterRegistrationV2
-from core.actions.catalog import ActionCatalog, LegacyActionCatalogEntry, TypedActionCatalogEntry
+from core.actions.catalog import ActionCatalog, TypedActionCatalogEntry
+
+pytestmark = pytest.mark.unit
 
 
 def test_catalog_resolves_entries_with_tagged_union() -> None:

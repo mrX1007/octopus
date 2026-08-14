@@ -100,9 +100,8 @@ def test_run_v2_validates_request_id_and_does_not_consume_unresolved_lease() -> 
     executor, store, lease, envelope, binding, context = _fixture(
         lease_request_id="wrong-request",
     )
-    with bind_current_ingress_transport_context(context):
-        with pytest.raises(IngressLeaseInvalidError):
-            executor.run_v2("c2:c2_cleanup", envelope, ingress_lease=lease)
+    with bind_current_ingress_transport_context(context), pytest.raises(IngressLeaseInvalidError):
+        executor.run_v2("c2:c2_cleanup", envelope, ingress_lease=lease)
 
     # Failed resolution leaves the lease ISSUED; the correct request can still
     # resolve it.  Consumption belongs only to a checked-out invocation.
@@ -118,9 +117,11 @@ def test_run_v2_validates_request_id_and_does_not_consume_unresolved_lease() -> 
 
 def test_run_v2_consumes_resolved_lease_in_outer_finally() -> None:
     executor, store, lease, envelope, binding, context = _fixture()
-    with bind_current_ingress_transport_context(context):
-        with pytest.raises(V2ExecutionUnavailableError, match="v2_execution_pipeline_not_finalized|provider_not_mounted"):
-            executor.run_v2("c2:c2_cleanup", envelope, ingress_lease=lease)
+    with (
+        bind_current_ingress_transport_context(context),
+        pytest.raises(V2ExecutionUnavailableError, match=r"v2_execution_pipeline_not_finalized|provider_not_mounted"),
+    ):
+        executor.run_v2("c2:c2_cleanup", envelope, ingress_lease=lease)
 
     with pytest.raises(IngressLeaseConsumedError):
         store.resolve_invocation_lease(

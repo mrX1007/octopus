@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from threading import RLock
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable
+
 from core.c2.resource_participant_models import C2DaemonResourceKindV1
 
 
@@ -22,7 +23,7 @@ class C2DaemonResourcePayloadRegistry:
 
     def __init__(self) -> None:
         self._lock = RLock()
-        self._decoders: Dict[Tuple[C2DaemonResourceKindV1, str], Callable[[bytes], Any]] = {}
+        self._decoders: dict[tuple[C2DaemonResourceKindV1, str], Callable[[bytes], Any]] = {}
 
     def register(
         self,
@@ -40,7 +41,7 @@ class C2DaemonResourcePayloadRegistry:
         kind: C2DaemonResourceKindV1,
         schema_id: str,
         payload_bytes: bytes,
-        expected_digest: Optional[str] = None,
+        expected_digest: str | None = None,
     ) -> Any:
         if expected_digest is not None:
             computed = f"sha256:{hashlib.sha256(payload_bytes).hexdigest()}"
@@ -56,8 +57,6 @@ class C2DaemonResourcePayloadRegistry:
                 try:
                     return json.loads(payload_bytes.decode("utf-8"))
                 except Exception as exc:
-                    raise UnknownResourceSchemaError(
-                        f"Unknown resource payload schema {schema_id} for {kind}"
-                    ) from exc
+                    raise UnknownResourceSchemaError(f"Unknown resource payload schema {schema_id} for {kind}") from exc
 
             return decoder(payload_bytes)

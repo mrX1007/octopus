@@ -7,10 +7,7 @@ from typing import Any
 from core.actions.base import ManualGatedActionAdapter
 from core.actions.input_contracts import (
     CredentialInput,
-    PivotProxyScanInput,
-    PivotRemoteForwardInput,
     PivotRouteInput,
-    PivotSSHChainInput,
     SessionInput,
 )
 from core.actions.models import (
@@ -73,14 +70,17 @@ class PivotRemoteForwardAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.pivot import PivotRemoteForwardAdapter as RealAdapter
+
         return RealAdapter().check_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.pivot import PivotRemoteForwardAdapter as RealAdapter
+
         return RealAdapter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.pivot import PivotRemoteForwardAdapter as RealAdapter
+
         return RealAdapter().verify_bound(context, result)
 
 
@@ -133,14 +133,17 @@ class PivotSSHChainAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.pivot import PivotSshChainAdapter as RealAdapter
+
         return RealAdapter().check_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.pivot import PivotSshChainAdapter as RealAdapter
+
         return RealAdapter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.pivot import PivotSshChainAdapter as RealAdapter
+
         return RealAdapter().verify_bound(context, result)
 
 
@@ -193,14 +196,17 @@ class PivotProxyScanAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.pivot import PivotProxyScanAdapter as RealAdapter
+
         return RealAdapter().check_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.pivot import PivotProxyScanAdapter as RealAdapter
+
         return RealAdapter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.pivot import PivotProxyScanAdapter as RealAdapter
+
         return RealAdapter().verify_bound(context, result)
 
 

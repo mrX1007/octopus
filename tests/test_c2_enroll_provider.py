@@ -1,7 +1,9 @@
 """Tests for C2 enrollment provider."""
+
 from __future__ import annotations
 
 import pytest
+
 from core.providers.c2_enroll import C2EnrollProvider
 
 pytestmark = pytest.mark.unit

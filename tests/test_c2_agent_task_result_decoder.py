@@ -154,11 +154,14 @@ def test_v12_result_decoder_loads_policy_only_from_registry() -> None:
         policy_registry=registry,
         ownership_registry=ownership,
     )
-    assert decoder.decode(
-        frame,
-        expected_envelope=_envelope(),
-        authenticated_agent_ref="agent://owner",
-    ) == _identity_result()
+    assert (
+        decoder.decode(
+            frame,
+            expected_envelope=_envelope(),
+            authenticated_agent_ref="agent://owner",
+        )
+        == _identity_result()
+    )
     assert registry.calls > before
 
 
@@ -215,15 +218,18 @@ def test_v12_result_authenticated_agent_owns_task() -> None:
 
 def _raw_result_frame(body: bytes) -> bytes:
     header = struct.Struct(">5sBBII32sH")
-    return header.pack(
-        b"OCT12",
-        1,
-        3,
-        len(body),
-        0,
-        hashlib.sha256(body).digest(),
-        0,
-    ) + body
+    return (
+        header.pack(
+            b"OCT12",
+            1,
+            3,
+            len(body),
+            0,
+            hashlib.sha256(body).digest(),
+            0,
+        )
+        + body
+    )
 
 
 def test_v12_result_decoder_rejects_unknown_fields_and_duplicate_keys() -> None:
@@ -287,9 +293,7 @@ def test_v12_result_operation_id_matches_envelope() -> None:
 
 def test_v12_result_decoder_rejects_caller_dataclass() -> None:
     decoder = AgentTaskResultDecoderV12(
-        policy_registry=StaticAgentTaskResultDecodePolicyRegistryV12(
-            canonical_agent_task_result_decode_policy()
-        ),
+        policy_registry=StaticAgentTaskResultDecodePolicyRegistryV12(canonical_agent_task_result_decode_policy()),
         ownership_registry=_Ownership(),
     )
     with pytest.raises(TypeError, match="must be bytes"):
@@ -392,9 +396,7 @@ def _bounded_policy() -> AgentTaskResultDecodePolicyV12:
                     AgentInterfaceSummaryV12(name="one", addresses=("192.0.2.1",)),
                     AgentInterfaceSummaryV12(name="two", addresses=("192.0.2.2",)),
                 ),
-                routes=(
-                    AgentRouteSummaryV12(destination="0.0.0.0/0", gateway=None, interface="one"),
-                ),
+                routes=(AgentRouteSummaryV12(destination="0.0.0.0/0", gateway=None, interface="one"),),
                 connections=(
                     AgentConnectionSummaryV12(
                         protocol=NetworkProtocol.TCP,

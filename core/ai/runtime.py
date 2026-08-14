@@ -170,6 +170,7 @@ def dispatch_plugin_command(
         runtime = PipelineRuntime(target_db, runner=_forbidden_legacy_runner)
     except (sqlite3.OperationalError, OSError):
         import tempfile
+
         runtime = PipelineRuntime(tempfile.mktemp(suffix=".db"), runner=_forbidden_legacy_runner)
     return runtime.dispatch(command, (), set(), context)
 

@@ -27,10 +27,7 @@ class ProviderResultSchemaRegistryError(RuntimeError):
 
 class ResultSchemaNotRegistered(ProviderResultSchemaRegistryError):
     def __init__(self, action_id: str, result_schema_id: str) -> None:
-        super().__init__(
-            f"No result publication binding for action {action_id!r} "
-            f"and schema {result_schema_id!r}"
-        )
+        super().__init__(f"No result publication binding for action {action_id!r} and schema {result_schema_id!r}")
         self.action_id = action_id
         self.result_schema_id = result_schema_id
 
@@ -235,8 +232,7 @@ def _canonical_binding(
     )
 
 
-def canonical_provider_result_publication_bindings(
-) -> tuple[ProviderResultPublicationBindingV2, ...]:
+def canonical_provider_result_publication_bindings() -> tuple[ProviderResultPublicationBindingV2, ...]:
     return tuple(_canonical_binding(*row) for row in _CANONICAL_RESULT_TYPES)
 
 
@@ -262,14 +258,9 @@ class ProviderResultSchemaRegistry:
     ) -> None:
         self._validate_binding(binding)
         pair = (binding.action_id, binding.result_schema_id)
-        if (
-            pair in self._by_pair
-            or binding.action_id in self._by_action
-            or binding.result_schema_id in self._by_schema
-        ):
+        if pair in self._by_pair or binding.action_id in self._by_action or binding.result_schema_id in self._by_schema:
             raise DuplicateResultSchemaRegistration(
-                f"Duplicate result publication binding for {binding.action_id!r} / "
-                f"{binding.result_schema_id!r}"
+                f"Duplicate result publication binding for {binding.action_id!r} / {binding.result_schema_id!r}"
             )
         self._by_pair[pair] = binding
         self._by_action[binding.action_id] = binding
@@ -304,9 +295,7 @@ class ProviderResultSchemaRegistry:
         )
         runtime_type_id = type(provider_result).__name__
         if runtime_type_id not in binding.allowed_runtime_type_ids:
-            raise ResultVariantNotAllowed(
-                f"Runtime result type {runtime_type_id!r} is not allowed for {action_id!r}"
-            )
+            raise ResultVariantNotAllowed(f"Runtime result type {runtime_type_id!r} is not allowed for {action_id!r}")
         expected_kind = _RUNTIME_KINDS.get(runtime_type_id)
         if expected_kind is None or provider_result.result_kind is not expected_kind:
             raise ResultVariantNotAllowed("provider_result_kind_runtime_type_mismatch")
@@ -342,9 +331,7 @@ class ProviderResultSchemaRegistry:
         ):
             if _RUNTIME_KINDS.get(runtime_type_id) is not kind:
                 raise InvalidResultSchemaBinding("result_publication_binding_type_kind_mismatch")
-        canonical_runtime_types = _CANONICAL_RUNTIME_TYPES_BY_PAIR.get(
-            (binding.action_id, binding.result_schema_id)
-        )
+        canonical_runtime_types = _CANONICAL_RUNTIME_TYPES_BY_PAIR.get((binding.action_id, binding.result_schema_id))
         if canonical_runtime_types is None:
             raise InvalidResultSchemaBinding("result_publication_binding_unknown_pair")
         if binding.allowed_runtime_type_ids != canonical_runtime_types:
@@ -356,10 +343,7 @@ class ProviderResultSchemaRegistry:
             raise InvalidResultSchemaBinding("result_publication_binding_digest_mismatch")
 
     def _assert_canonical_matrix(self) -> None:
-        schema_rows = {
-            (binding.action_id, binding.result_schema_id)
-            for binding in get_all_v2_schema_bindings()
-        }
+        schema_rows = {(binding.action_id, binding.result_schema_id) for binding in get_all_v2_schema_bindings()}
         registry_rows = set(self._by_pair)
         if len(schema_rows) != 20 or registry_rows != schema_rows:
             raise InvalidResultSchemaBinding("result_publication_matrix_mismatch")

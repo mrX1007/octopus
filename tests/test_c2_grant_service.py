@@ -69,18 +69,24 @@ def _grant_target(
     admin_principal,
     target_id: str,
 ) -> None:
-    assert grants.sync_operator_peer_bindings(
-        admin_principal,
-        operator_id=target_id,
-        bindings=(PeerBinding(1000, 1001),),
-        expected_revision=0,
-    ) == 1
-    assert grants.sync_operator_mission_grants(
-        admin_principal,
-        operator_id=target_id,
-        mission_ids=("mission:test",),
-        expected_revision=0,
-    ) == 1
+    assert (
+        grants.sync_operator_peer_bindings(
+            admin_principal,
+            operator_id=target_id,
+            bindings=(PeerBinding(1000, 1001),),
+            expected_revision=0,
+        )
+        == 1
+    )
+    assert (
+        grants.sync_operator_mission_grants(
+            admin_principal,
+            operator_id=target_id,
+            mission_ids=("mission:test",),
+            expected_revision=0,
+        )
+        == 1
+    )
 
 
 def test_admin_sync_peer_bindings_revisioned(tmp_path: Path) -> None:
@@ -94,12 +100,15 @@ def test_admin_sync_peer_bindings_revisioned(tmp_path: Path) -> None:
     )
     assert revision == 1
     assert grants.resolve_peer_binding(target_id, uid=1000, gid=1001).revision == 1  # type: ignore[union-attr]
-    assert grants.sync_operator_peer_bindings(
-        admin,
-        operator_id=target_id,
-        bindings=(PeerBinding(1000, 1001),),
-        expected_revision=1,
-    ) == 1
+    assert (
+        grants.sync_operator_peer_bindings(
+            admin,
+            operator_id=target_id,
+            bindings=(PeerBinding(1000, 1001),),
+            expected_revision=1,
+        )
+        == 1
+    )
     with pytest.raises(GrantConflictError):
         grants.sync_operator_peer_bindings(
             admin,
@@ -120,12 +129,15 @@ def test_admin_revoke_peer_binding_invalidates_new_ingress(tmp_path: Path) -> No
         mission_id="mission:test",
         subject_id="subject:operator",
     )
-    assert grants.revoke_operator_peer_binding(
-        admin,
-        operator_id=target_id,
-        binding=PeerBinding(1000, 1001),
-        expected_revision=1,
-    ) == 2
+    assert (
+        grants.revoke_operator_peer_binding(
+            admin,
+            operator_id=target_id,
+            binding=PeerBinding(1000, 1001),
+            expected_revision=1,
+        )
+        == 2
+    )
     assert not auth.is_current_principal(principal)
     with pytest.raises(PermissionError, match="peer UID/GID"):
         auth.authenticate_control(
@@ -164,12 +176,15 @@ def test_admin_revoke_mission_grant_invalidates_child_reentry(tmp_path: Path) ->
         mission_id="mission:test",
         subject_id="subject:operator",
     )
-    assert grants.revoke_operator_mission_grant(
-        admin,
-        operator_id=target_id,
-        mission_id="mission:test",
-        expected_revision=1,
-    ) == 2
+    assert (
+        grants.revoke_operator_mission_grant(
+            admin,
+            operator_id=target_id,
+            mission_id="mission:test",
+            expected_revision=1,
+        )
+        == 2
+    )
     assert not auth.is_current_principal(principal)
     with pytest.raises(PermissionError, match="mission grant"):
         auth.authenticate_control(

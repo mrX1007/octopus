@@ -1,4 +1,5 @@
 """Tests for C2 control RBAC policy."""
+
 from __future__ import annotations
 
 import time

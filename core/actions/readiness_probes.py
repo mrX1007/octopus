@@ -106,13 +106,9 @@ class _ReadinessProbeBase:
 
     def evaluate(self, mount: ProviderMountSnapshotV2) -> ProviderReadinessSnapshot:
         if mount.spec.action_id != self.action_id:
-            raise ValueError(
-                f"readiness_action_binding_mismatch:{self.action_id}:{mount.spec.action_id}"
-            )
+            raise ValueError(f"readiness_action_binding_mismatch:{self.action_id}:{mount.spec.action_id}")
         if mount.spec.readiness_probe_id != self.probe_id:
-            raise ValueError(
-                f"readiness_probe_binding_mismatch:{self.probe_id}:{mount.spec.readiness_probe_id}"
-            )
+            raise ValueError(f"readiness_probe_binding_mismatch:{self.probe_id}:{mount.spec.readiness_probe_id}")
         checked_at = self._clock()
         try:
             observation = self.inspect()
@@ -423,11 +419,7 @@ class CompositeLeafProbe(_ReadinessProbeBase):
         observations = tuple(probe.inspect() for probe in self.leaf_probes)
         available_states = tuple(observation.available for observation in observations)
         available = all(available_states) if self.require_all else any(available_states)
-        dependencies = tuple(
-            dependency
-            for observation in observations
-            for dependency in observation.dependency_states
-        )
+        dependencies = tuple(dependency for observation in observations for dependency in observation.dependency_states)
         reasons = tuple(reason for observation in observations for reason in observation.reason_codes)
         generation_body = "|".join(observation.provider_generation for observation in observations).encode("utf-8")
         generation = f"composite:{hashlib.sha256(generation_body).hexdigest()}"

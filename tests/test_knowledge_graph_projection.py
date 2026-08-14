@@ -111,8 +111,7 @@ def test_verified_path_modes_and_missing_link_explanation(tmp_path: Path):
     assert verified_only["paths"] == []
     assert verified_only["missing_link"]["reason"] == "excluded_edges"
     assert all(
-        step["reason"] == "assessment_status:inferred"
-        for step in verified_only["missing_link"]["excluded_steps"]
+        step["reason"] == "assessment_status:inferred" for step in verified_only["missing_link"]["excluded_steps"]
     )
     assert len(inferred["paths"]) == 1
     assert [step["edge_type"] for step in inferred["paths"][0]["steps"]] == [
@@ -148,9 +147,9 @@ def test_verified_path_modes_and_missing_link_explanation(tmp_path: Path):
     contradicted = graph.find_verified_paths(asset_id, endpoint_id, include_inferred=True)
     assert contradicted["paths"] == []
     assert contradicted["missing_link"]["reason"] == "excluded_edges"
-    assert {
-        step["reason"] for step in contradicted["missing_link"]["excluded_steps"]
-    } == {"assessment_status:contradicted"}
+    assert {step["reason"] for step in contradicted["missing_link"]["excluded_steps"]} == {
+        "assessment_status:contradicted"
+    }
 
 
 def test_one_contradicted_fact_does_not_erase_independent_verified_support(tmp_path: Path):
@@ -230,8 +229,7 @@ def test_legacy_graph_migration_rekeys_nodes_edges_and_preserves_timestamps(tmp_
             ),
         )
         conn.execute(
-            "INSERT INTO edges(src, dst, edge_type, properties, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO edges(src, dst, edge_type, properties, created_at) VALUES (?, ?, ?, ?, ?)",
             (
                 "asset:Example.COM",
                 "svc:Example.COM:53",
@@ -252,9 +250,7 @@ def test_legacy_graph_migration_rekeys_nodes_edges_and_preserves_timestamps(tmp_
     assert asset["updated_at"] == 20.0
     assert asset["properties"]["tags"] == {"legacy": "yes"}
     assert service["id"] == service_id
-    assert graph.find_paths("asset:Example.COM", "svc:Example.COM:53") == [
-        [asset_id, "-[runs_service]->", service_id]
-    ]
+    assert graph.find_paths("asset:Example.COM", "svc:Example.COM:53") == [[asset_id, "-[runs_service]->", service_id]]
     assert graph.stats()["schema_version"] == "2.0"
 
     reopened = KnowledgeGraph(str(db_path))
@@ -293,9 +289,7 @@ def test_per_scan_read_models_reuse_canonical_entity_ids(tmp_path: Path):
 
     assert target_model["asset_id"] == expected_asset
     assert target_model["services"][0]["canonical_id"] == expected_service
-    assert {node["id"] for node in asset_graph["nodes"]}.issuperset(
-        {expected_asset, expected_service}
-    )
+    assert {node["id"] for node in asset_graph["nodes"]}.issuperset({expected_asset, expected_service})
     assert all(
         edge["from"].startswith(("asset:", "service:", "view-"))
         and edge["to"].startswith(("asset:", "service:", "view-"))

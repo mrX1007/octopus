@@ -10,12 +10,13 @@ from typing import Optional
 @dataclass
 class MetricEntry:
     """A single metric data point."""
+
     name: str
-    metric_type: str     # "counter", "gauge", "timer"
+    metric_type: str  # "counter", "gauge", "timer"
     value: float = 0.0
-    count: int = 0       # for timers: number of observations
-    total: float = 0.0   # for timers: total accumulated time
-    min_val: float = float('inf')
+    count: int = 0  # for timers: number of observations
+    total: float = 0.0  # for timers: total accumulated time
+    min_val: float = float("inf")
     max_val: float = 0.0
     last_updated: float = field(default_factory=time.time)
 
@@ -69,8 +70,7 @@ class Metrics:
             elapsed = time.time() - start
             with self._lock:
                 if name not in self._metrics:
-                    self._metrics[name] = MetricEntry(
-                        name=name, metric_type="timer")
+                    self._metrics[name] = MetricEntry(name=name, metric_type="timer")
                 entry = self._metrics[name]
                 entry.count += 1
                 entry.total += elapsed
@@ -83,8 +83,7 @@ class Metrics:
         """Record a timer value directly (without context manager)."""
         with self._lock:
             if name not in self._metrics:
-                self._metrics[name] = MetricEntry(
-                    name=name, metric_type="timer")
+                self._metrics[name] = MetricEntry(name=name, metric_type="timer")
             entry = self._metrics[name]
             entry.count += 1
             entry.total += duration
@@ -123,7 +122,7 @@ class Metrics:
                         "count": entry.count,
                         "total": round(entry.total, 3),
                         "avg": round(avg, 3),
-                        "min": round(entry.min_val, 3) if entry.min_val != float('inf') else 0,
+                        "min": round(entry.min_val, 3) if entry.min_val != float("inf") else 0,
                         "max": round(entry.max_val, 3),
                     }
 

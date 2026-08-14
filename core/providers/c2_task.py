@@ -1,9 +1,10 @@
 """C2 task provider adapter."""
+
 from __future__ import annotations
 
 import time
 import uuid
-from typing import Dict, Any
+from typing import Any
 
 
 class C2TaskProvider:
@@ -12,7 +13,7 @@ class C2TaskProvider:
     def __init__(self, task_catalog: Any = None) -> None:
         self.task_catalog = task_catalog
 
-    def validate_input(self, params: Dict[str, Any]) -> bool:
+    def validate_input(self, params: dict[str, Any]) -> bool:
         """Validate task dispatch input parameters."""
         if not isinstance(params, dict):
             return False
@@ -22,7 +23,7 @@ class C2TaskProvider:
         """Check provider readiness."""
         return True
 
-    def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, params: dict[str, Any]) -> dict[str, Any]:
         """Dispatch task to agent."""
         if not self.validate_input(params):
             raise ValueError("Invalid task parameters: agent_ref and operation_id required")
@@ -35,4 +36,3 @@ class C2TaskProvider:
             "operation_id": params["operation_id"],
             "dispatched_at": time.time(),
         }
-

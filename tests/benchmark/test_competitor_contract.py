@@ -24,18 +24,8 @@ from core.benchmarks.competitors import (
 
 pytestmark = [pytest.mark.benchmark, pytest.mark.contract]
 
-SCENARIO_PATH = (
-    Path(__file__).parents[2]
-    / "benchmarks"
-    / "scenarios"
-    / "01-service-discovery-verification.json"
-)
-JSON_SCHEMA_PATH = (
-    Path(__file__).parents[2]
-    / "docs"
-    / "schemas"
-    / "benchmark-system-v1.schema.json"
-)
+SCENARIO_PATH = Path(__file__).parents[2] / "benchmarks" / "scenarios" / "01-service-discovery-verification.json"
+JSON_SCHEMA_PATH = Path(__file__).parents[2] / "docs" / "schemas" / "benchmark-system-v1.schema.json"
 
 
 def _manifest_payload(argv: list[str]) -> dict[str, object]:
@@ -79,25 +69,17 @@ def _write_manifest(tmp_path: Path, payload: dict[str, object]) -> Path:
 def test_portable_manifest_schema_matches_runtime_canonical_keys() -> None:
     schema = json.loads(JSON_SCHEMA_PATH.read_text(encoding="utf-8"))
     adapter_schema = schema["properties"]["adapter"]
-    manifest = SystemManifest.from_dict(
-        _manifest_payload(
-            ["adapter", "{scenario_path}", "{output_path}"]
-        )
-    )
+    manifest = SystemManifest.from_dict(_manifest_payload(["adapter", "{scenario_path}", "{output_path}"]))
 
     assert schema["properties"]["schema_version"] == {"const": "1.0"}
-    assert schema["properties"]["execution_mode"] == {
-        "enum": ["live", "replay"]
-    }
+    assert schema["properties"]["execution_mode"] == {"enum": ["live", "replay"]}
     assert set(adapter_schema["required"]) == {
         "kind",
         "argv",
         "working_directory",
         "environment_passthrough",
     }
-    assert set(manifest.to_dict()["adapter"]) == set(
-        adapter_schema["required"]
-    )
+    assert set(manifest.to_dict()["adapter"]) == set(adapter_schema["required"])
     assert "adapter" not in manifest.to_public_dict()
 
 
@@ -126,17 +108,13 @@ def test_manifest_is_versioned_portable_and_never_serializes_environment_values(
     assert manifest.source_path == source.resolve()
     assert "source_path" not in public
     assert public["adapter"]["working_directory"] == "."
-    assert public["adapter"]["environment_passthrough"] == [
-        "COMPETITOR_TEST_SECRET"
-    ]
+    assert public["adapter"]["environment_passthrough"] == ["COMPETITOR_TEST_SECRET"]
     assert secret not in encoded
     assert load_system_manifests(tmp_path) == (manifest,)
 
 
 def test_manifest_rejects_unsafe_placeholders_secrets_and_false_framework_parity() -> None:
-    payload = _manifest_payload(
-        ["adapter", "{scenario_path}", "{output_path}", "{unknown}"]
-    )
+    payload = _manifest_payload(["adapter", "{scenario_path}", "{output_path}", "{unknown}"])
     with pytest.raises(CompetitorSchemaError, match="invalid_adapter_placeholder"):
         SystemManifest.from_dict(payload)
 
@@ -187,9 +165,7 @@ json.dump(payload, open(sys.argv[2], "w", encoding="utf-8"))
     )
     source = _write_manifest(
         tmp_path,
-        _manifest_payload(
-            [sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]
-        ),
+        _manifest_payload([sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]),
     )
     monkeypatch.setenv("COMPETITOR_TEST_SECRET", "available")
     monkeypatch.setenv("COMPETITOR_UNDECLARED", "must-not-pass")
@@ -206,9 +182,7 @@ json.dump(payload, open(sys.argv[2], "w", encoding="utf-8"))
         "undeclared_environment_absent": 1.0,
     }
     assert result["duration_seconds"] >= 0
-    assert "available" not in json.dumps(
-        CommandSystemRunner(load_system_manifest(source)).public_metadata()
-    )
+    assert "available" not in json.dumps(CommandSystemRunner(load_system_manifest(source)).public_metadata())
 
 
 def test_command_runner_opt_in_private_log_is_bounded_and_owner_only(
@@ -228,9 +202,7 @@ json.dump({"status": "succeeded"}, open(sys.argv[2], "w"))
     manifest = load_system_manifest(
         _write_manifest(
             tmp_path,
-            _manifest_payload(
-                [sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]
-            ),
+            _manifest_payload([sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]),
         )
     )
     private = tmp_path / "private"
@@ -255,9 +227,7 @@ def test_command_runner_rejects_nonprivate_diagnostic_parent(tmp_path: Path) -> 
     manifest = load_system_manifest(
         _write_manifest(
             tmp_path,
-            _manifest_payload(
-                [sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]
-            ),
+            _manifest_payload([sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]),
         )
     )
     unsafe = tmp_path / "unsafe"
@@ -306,9 +276,7 @@ json.dump({"actions": ["replay_service_discovery"] * 9}, open(sys.argv[2], "w"))
     manifest = load_system_manifest(
         _write_manifest(
             tmp_path,
-            _manifest_payload(
-                [sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]
-            ),
+            _manifest_payload([sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]),
         )
     )
     with pytest.raises(SystemProtocolError, match=r"^system_protocol_error$"):
@@ -364,9 +332,7 @@ json.dump(
     manifest = load_system_manifest(
         _write_manifest(
             tmp_path,
-            _manifest_payload(
-                [sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]
-            ),
+            _manifest_payload([sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]),
         )
     )
 
@@ -391,9 +357,7 @@ def test_explicit_runner_timeout_remains_an_absolute_wall_cap(
     manifest = load_system_manifest(
         _write_manifest(
             tmp_path,
-            _manifest_payload(
-                [sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]
-            ),
+            _manifest_payload([sys.executable, "adapter.py", "{scenario_path}", "{output_path}"]),
         )
     )
 
@@ -414,9 +378,7 @@ def test_unavailable_adapter_error_never_exposes_command_or_environment(
     manifest = load_system_manifest(
         _write_manifest(
             tmp_path,
-            _manifest_payload(
-                [sensitive_executable, "{scenario_path}", "{output_path}"]
-            ),
+            _manifest_payload([sensitive_executable, "{scenario_path}", "{output_path}"]),
         )
     )
 

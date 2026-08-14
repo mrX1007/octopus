@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
+
 
 @dataclass(frozen=True)
 class CommittedExecutionMarkerV2:
@@ -15,6 +16,7 @@ class CommittedExecutionMarkerV2:
     finalization_ref: str
     fence_ref: str
     marker_digest: str
+
 
 def canonical_committed_execution_marker_digest(marker: CommittedExecutionMarkerV2) -> str:
     payload = {
@@ -26,6 +28,7 @@ def canonical_committed_execution_marker_digest(marker: CommittedExecutionMarker
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
+
 
 @runtime_checkable
 class ExecutionCommitStoreV2(Protocol):
@@ -41,6 +44,7 @@ class ExecutionCommitStoreV2(Protocol):
         self,
         marker: CommittedExecutionMarkerV2,
     ) -> CommittedExecutionMarkerV2: ...
+
 
 class DefaultExecutionCommitStoreV2:
     """In-memory production implementation of ExecutionCommitStoreV2."""

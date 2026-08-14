@@ -1,10 +1,11 @@
 """Control signing."""
+
 from __future__ import annotations
 
-import hmac
 import hashlib
+import hmac
 import time
-from typing import Dict, Optional
+
 from core.c2.control_commands import (
     C2ControlActionV1,
     ExecutionControlAuthorizationV1,
@@ -38,9 +39,7 @@ class ControlSignerV1:
         )
         return hmac.new(self._secret_key, canonical.encode("utf-8"), hashlib.sha256).hexdigest()
 
-    def sign_participant_request(
-        self, unsigned_request: ParticipantControlRequestV1
-    ) -> ParticipantControlRequestV1:
+    def sign_participant_request(self, unsigned_request: ParticipantControlRequestV1) -> ParticipantControlRequestV1:
         """Compute signature and return new ParticipantControlRequestV1 with valid signature."""
         auth = unsigned_request.authorization
         sig = self._compute_participant_signature(auth)
@@ -96,16 +95,14 @@ class ControlSignerV1:
 class ControlVerifierV1:
     """Verifier for control plane participant and execution requests."""
 
-    def __init__(self, key_store: Optional[Dict[str, bytes]] = None) -> None:
-        self._key_store: Dict[str, bytes] = key_store or {}
+    def __init__(self, key_store: dict[str, bytes] | None = None) -> None:
+        self._key_store: dict[str, bytes] = key_store or {}
 
     def register_key(self, key_id: str, secret_key: bytes) -> None:
         """Register a key ID and secret key pair."""
         self._key_store[key_id] = secret_key
 
-    def verify_participant_request(
-        self, request: ParticipantControlRequestV1, now: Optional[float] = None
-    ) -> None:
+    def verify_participant_request(self, request: ParticipantControlRequestV1, now: float | None = None) -> None:
         """Verify participant request signature and expiration."""
         if now is None:
             now = time.time()
@@ -136,7 +133,7 @@ class ControlVerifierV1:
         authorization: ExecutionControlAuthorizationV1,
         payload_schema_id: str,
         payload_digest: str,
-        now: Optional[float] = None,
+        now: float | None = None,
     ) -> None:
         """Verify execution request signature and expiration."""
         if now is None:
@@ -159,4 +156,3 @@ class ControlVerifierV1:
 
         if not hmac.compare_digest(expected_sig, authorization.signature):
             raise ValueError("Invalid execution request signature")
-

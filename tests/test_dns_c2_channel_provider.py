@@ -1,8 +1,10 @@
 """Tests for DNS C2 channel provider and DNSChannel."""
+
 from __future__ import annotations
 
 import pytest
-from core.c2.channels.dns import DNSChannel, _b32_encode_safe, _b32_decode_safe
+
+from core.c2.channels.dns import DNSChannel, _b32_decode_safe, _b32_encode_safe
 
 pytestmark = pytest.mark.unit
 
@@ -23,7 +25,7 @@ def test_dns_channel_encode_decode_labels():
     labels = channel.encode_data(data)
 
     assert len(labels) > 0
-    assert all(len(l) <= 63 for l in labels)
+    assert all(len(lbl) <= 63 for lbl in labels)
 
     reassembled = channel.decode_data(labels)
     assert reassembled == data

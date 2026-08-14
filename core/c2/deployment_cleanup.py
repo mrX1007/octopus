@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Dict, Optional
+
 from core.c2.deployment_store import DeploymentStore
 
 
@@ -13,8 +13,8 @@ class DeploymentCleanupRecipe:
     recipe_id: str
     deployment_ref: str
     target_id: str
-    remote_path: Optional[str]
-    process_id: Optional[int]
+    remote_path: str | None
+    process_id: int | None
     created_at: float
 
 
@@ -23,15 +23,15 @@ class DeploymentCleanupManager:
 
     def __init__(self, store: DeploymentStore) -> None:
         self._store = store
-        self._recipes: Dict[str, DeploymentCleanupRecipe] = {}
+        self._recipes: dict[str, DeploymentCleanupRecipe] = {}
 
     def register_recipe(
         self,
         deployment_ref: str,
         target_id: str,
-        remote_path: Optional[str] = None,
-        process_id: Optional[int] = None,
-        now: Optional[float] = None,
+        remote_path: str | None = None,
+        process_id: int | None = None,
+        now: float | None = None,
     ) -> DeploymentCleanupRecipe:
         ts = time.time() if now is None else now
         recipe = DeploymentCleanupRecipe(
@@ -45,7 +45,7 @@ class DeploymentCleanupManager:
         self._recipes[deployment_ref] = recipe
         return recipe
 
-    def get_recipe(self, deployment_ref: str) -> Optional[DeploymentCleanupRecipe]:
+    def get_recipe(self, deployment_ref: str) -> DeploymentCleanupRecipe | None:
         return self._recipes.get(deployment_ref)
 
     def execute_cleanup(self, deployment_ref: str) -> bool:

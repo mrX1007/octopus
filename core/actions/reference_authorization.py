@@ -117,11 +117,7 @@ def assert_reference_authorized(
         raise ReferenceAuthorizationError("reference_targets_invalid")
 
     evaluated_at = time.time() if now is None else now
-    if (
-        isinstance(evaluated_at, bool)
-        or not isinstance(evaluated_at, (int, float))
-        or not math.isfinite(evaluated_at)
-    ):
+    if isinstance(evaluated_at, bool) or not isinstance(evaluated_at, (int, float)) or not math.isfinite(evaluated_at):
         raise ReferenceAuthorizationError("reference_authorization_time_invalid")
     if authorization.expires_at is not None and authorization.expires_at <= evaluated_at:
         raise ReferenceAuthorizationError("reference_authorization_expired")

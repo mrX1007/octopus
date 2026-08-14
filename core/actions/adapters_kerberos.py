@@ -66,14 +66,17 @@ class KerberosExtractTicketsAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.kerberos import KerberosExtractAdapter
+
         return KerberosExtractAdapter().check_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.kerberos import KerberosExtractAdapter
+
         return KerberosExtractAdapter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.kerberos import KerberosExtractAdapter
+
         return KerberosExtractAdapter().verify_bound(context)
 
 
@@ -126,14 +129,17 @@ class KerberosCrackTicketsAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.kerberos import KerberosCrackAdapter
+
         return KerberosCrackAdapter().check_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.kerberos import KerberosCrackAdapter
+
         return KerberosCrackAdapter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.kerberos import KerberosCrackAdapter
+
         return KerberosCrackAdapter().verify_bound(context)
 
 

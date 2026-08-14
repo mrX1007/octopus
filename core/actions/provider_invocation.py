@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Literal, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
+
 
 class ProviderTransientKindV2(str, Enum):
     ARTIFACT = "artifact"
@@ -15,16 +14,19 @@ class ProviderTransientKindV2(str, Enum):
     PROCESS = "process"
     TEMPORARY_FILE = "temporary_file"
 
+
 class ProviderPhaseLeaseStateV2(str, Enum):
     PENDING = "pending"
     ACTIVE = "active"
     REVOKED = "revoked"
+
 
 class CleanupDescriptorKindV2(str, Enum):
     CLOSE_TRANSIENT = "close_transient"
     RELEASE_CHECKOUT = "release_checkout"
     RELEASE_RESERVATION = "release_reservation"
     CLOSE_LOCAL_IPC = "close_local_ipc"
+
 
 @dataclass(frozen=True)
 class RecoverableCleanupDescriptorV2:
@@ -36,6 +38,7 @@ class RecoverableCleanupDescriptorV2:
     idempotency_key: str
     descriptor_digest: str
 
+
 @dataclass(frozen=True)
 class BackendOwnedTransientReceiptV2:
     backend_registry_id: str
@@ -44,9 +47,11 @@ class BackendOwnedTransientReceiptV2:
     cleanup_descriptor: RecoverableCleanupDescriptorV2
     receipt_digest: str
 
+
 @dataclass(frozen=True)
 class ProviderTransientRegistrationV2:
     creation_receipt: BackendOwnedTransientReceiptV2
+
 
 class ProviderExecutePhaseLeaseV2:
     """Read-only capability view; providers cannot change its state."""
@@ -65,6 +70,7 @@ class ProviderExecutePhaseLeaseV2:
     def require_active(self) -> None:
         if not self.active:
             raise RuntimeError(f"ProviderExecutePhaseLease is not active (state={self._state})")
+
 
 class PhaseBoundTransientRefV2:
     """Final provider view; no raw backend handle or public constructor."""
@@ -94,6 +100,7 @@ class PhaseBoundTransientRefV2:
     def require_active(self) -> None:
         self._phase_lease.require_active()
 
+
 @runtime_checkable
 class ProviderInvocationScopeV2(Protocol):
     """Provider-visible view: closed resource descriptors only."""
@@ -104,6 +111,7 @@ class ProviderInvocationScopeV2(Protocol):
         self,
         request: ProviderTransientRegistrationV2,
     ) -> PhaseBoundTransientRefV2: ...
+
 
 class DefaultProviderInvocationScopeV2:
     """Concrete implementation of ProviderInvocationScopeV2."""

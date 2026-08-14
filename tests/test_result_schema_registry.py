@@ -76,10 +76,7 @@ def test_result_schema_matrix_matches_registry() -> None:
         (binding.action_id, binding.result_schema_id)
         for binding in get_provider_result_schema_registry().publication_bindings()
     }
-    schema_rows = {
-        (binding.action_id, binding.result_schema_id)
-        for binding in get_all_v2_schema_bindings()
-    }
+    schema_rows = {(binding.action_id, binding.result_schema_id) for binding in get_all_v2_schema_bindings()}
     assert registry_rows == schema_rows
 
 
@@ -92,9 +89,7 @@ def test_each_v2_action_has_registered_result_schema() -> None:
         )
         assert publication.action_id == schema_binding.action_id
         assert publication.result_schema_id == schema_binding.result_schema_id
-        assert publication.binding_digest == canonical_provider_result_publication_binding_digest(
-            publication
-        )
+        assert publication.binding_digest == canonical_provider_result_publication_binding_digest(publication)
 
 
 def test_registry_contains_exact_result_variant_matrix() -> None:

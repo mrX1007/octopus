@@ -223,9 +223,7 @@ def test_composite_provider_result_has_only_canonical_child_fields() -> None:
         "child_result_ref",
         "result_kind",
     }
-    assert result_type_fields.isdisjoint(
-        {"approval", "lifecycle", "decision_trace_ref", "parent_execution_id"}
-    )
+    assert result_type_fields.isdisjoint({"approval", "lifecycle", "decision_trace_ref", "parent_execution_id"})
 
 
 def test_non_sensitive_provider_results_are_json_safe() -> None:

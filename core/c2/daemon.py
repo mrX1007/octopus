@@ -30,11 +30,9 @@ from core.c2.protocol import C2_PROTOCOL_VERSION
 
 # ─── Configuration ───────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DATA_DIR = os.path.abspath(
-    os.environ.get("OCTOPUS_DATA_DIR", os.path.join(BASE_DIR, "data"))
-)
-KEY_DIR  = os.path.join(DATA_DIR, "keys")
-DB_PATH  = os.path.join(DATA_DIR, "c2.db")
+DATA_DIR = os.path.abspath(os.environ.get("OCTOPUS_DATA_DIR", os.path.join(BASE_DIR, "data")))
+KEY_DIR = os.path.join(DATA_DIR, "keys")
+DB_PATH = os.path.join(DATA_DIR, "c2.db")
 SOCK_FILE = os.environ.get("OCTOPUS_C2_SOCKET", "/tmp/octopus.sock")
 KEYSTORE_PASSPHRASE_FILE = os.path.join(KEY_DIR, "keystore.passphrase")
 ENROLLMENT_KEY_FILE = os.path.join(KEY_DIR, "enrollment.key")
@@ -69,6 +67,7 @@ def _load_or_create_keystore_passphrase() -> str:
         handle.flush()
         os.fsync(handle.fileno())
     return value
+
 
 # Component names remain module-level compatibility attributes, but receive
 # values only when the executable lifecycle is explicitly entered.
@@ -149,6 +148,7 @@ def create_app() -> FastAPI:
 
 # ─── Event Handlers (Projections) ────────────────────────
 
+
 def _on_agent_registered(event):
     """Projection: update agents table from registration event."""
     p = event.payload
@@ -158,15 +158,18 @@ def _on_agent_registered(event):
         os_name=p.get("os", "Unknown"),
         user=p.get("user", "Unknown"),
         ip=p.get("ip", "Unknown"),
-        crypto_state=p.get("crypto_state")
+        crypto_state=p.get("crypto_state"),
     )
+
 
 def _on_task_queued(event):
     """Projection: insert task into tasks table."""
     p = event.payload
     db.queue_task(p["task_id"], p["agent_id"], p["command"])
 
+
 # ─── Agent-Facing HTTP Endpoints ─────────────────────────
+
 
 def _load_agent_crypto(agent_id: str) -> bool:
     """Load crypto state from DB into memory if daemon restarted."""
@@ -260,14 +263,19 @@ async def register_agent(request: Request):
         }
         resp_enc = crypto.encrypt_aes_gcm(real_agent_id, json.dumps(resp_data))
         sealed_state = _sealed_agent_crypto(real_agent_id)
-        events.append("agent", real_agent_id, "agent.registered", {
-            "agent_id": real_agent_id,
-            "hostname": data.get("hostname"),
-            "os": data.get("os"),
-            "user": data.get("user"),
-            "ip": request.client.host,
-            "crypto_state": sealed_state,
-        })
+        events.append(
+            "agent",
+            real_agent_id,
+            "agent.registered",
+            {
+                "agent_id": real_agent_id,
+                "hostname": data.get("hostname"),
+                "os": data.get("os"),
+                "user": data.get("user"),
+                "ip": request.client.host,
+                "crypto_state": sealed_state,
+            },
+        )
         if db.get_agent_crypto(real_agent_id) != sealed_state:
             crypto.agent_state.pop(real_agent_id, None)
             raise RuntimeError("agent projection failed")
@@ -298,9 +306,14 @@ async def beacon(request: Request):
         decrypted = json.loads(raw)
 
         # Publish beacon event
-        events.append("agent", agent_id, "agent.beacon", {
-            "ip": request.client.host,
-        })
+        events.append(
+            "agent",
+            agent_id,
+            "agent.beacon",
+            {
+                "ip": request.client.host,
+            },
+        )
 
         # Sync crypto state to DB
         crypto.agent_state[agent_id]
@@ -319,10 +332,7 @@ async def beacon(request: Request):
         if (
             not isinstance(acknowledgements, list)
             or len(acknowledgements) > MAX_RESULTS_PER_BEACON
-            or any(
-                not isinstance(task_id, str) or not task_id or len(task_id) > 64
-                for task_id in acknowledgements
-            )
+            or any(not isinstance(task_id, str) or not task_id or len(task_id) > 64 for task_id in acknowledgements)
         ):
             raise HTTPException(status_code=400, detail="Invalid task acknowledgements")
         if acknowledgements:
@@ -354,11 +364,16 @@ async def beacon(request: Request):
                 if not db.update_task_result(task_id, agent_id, output, error):
                     rejected.append(task_id)
                     continue
-                events.append("task", res["task_id"], "task.completed", {
-                    "task_id": task_id,
-                    "agent_id": agent_id,
-                    "status": "error" if error else "completed",
-                })
+                events.append(
+                    "task",
+                    res["task_id"],
+                    "task.completed",
+                    {
+                        "task_id": task_id,
+                        "agent_id": agent_id,
+                        "status": "error" if error else "completed",
+                    },
+                )
             if rejected:
                 raise HTTPException(status_code=409, detail="One or more task results were rejected")
 
@@ -377,6 +392,7 @@ async def beacon(request: Request):
 
 # ─── Operator IPC Control Plane ──────────────────────────
 
+
 def handle_client(conn):
     """Handle IPC requests from octopus.py thin client."""
     try:
@@ -385,7 +401,7 @@ def handle_client(conn):
             if not data:
                 break
 
-            req = json.loads(data.decode('utf-8'))
+            req = json.loads(data.decode("utf-8"))
             action = req.get("action")
             api_key = req.get("api_key", "")
 
@@ -393,7 +409,7 @@ def handle_client(conn):
             operator = operators.authenticate(api_key)
             if not operator and action != "ping":
                 resp = {"status": "error", "msg": "Authentication failed"}
-                conn.sendall(json.dumps(resp).encode('utf-8'))
+                conn.sendall(json.dumps(resp).encode("utf-8"))
                 continue
 
             # Authorize
@@ -401,13 +417,18 @@ def handle_client(conn):
                 resp = {"status": "error", "msg": f"Permission denied: {operator['role']} cannot {action}"}
 
                 # Audit denied action
-                events.append("operator", operator["operator_id"], "operator.denied", {
-                    "action": action,
-                    "operator": operator["name"],
-                    "role": operator["role"],
-                })
+                events.append(
+                    "operator",
+                    operator["operator_id"],
+                    "operator.denied",
+                    {
+                        "action": action,
+                        "operator": operator["name"],
+                        "role": operator["role"],
+                    },
+                )
 
-                conn.sendall(json.dumps(resp).encode('utf-8'))
+                conn.sendall(json.dumps(resp).encode("utf-8"))
                 continue
 
             # ─── Actions ─────────────────────────────
@@ -431,12 +452,17 @@ def handle_client(conn):
                     task_id = uuid.uuid4().hex
 
                     # Publish event (projection handles DB insert)
-                    events.append("task", task_id, "task.queued", {
-                        "task_id": task_id,
-                        "agent_id": agent_id,
-                        "command": command,
-                        "operator": operator["name"] if operator else "unknown",
-                    })
+                    events.append(
+                        "task",
+                        task_id,
+                        "task.queued",
+                        {
+                            "task_id": task_id,
+                            "agent_id": agent_id,
+                            "command": command,
+                            "operator": operator["name"] if operator else "unknown",
+                        },
+                    )
 
                     resp = {"status": "ok", "task_id": task_id}
                 else:
@@ -480,12 +506,17 @@ def handle_client(conn):
 
             # Audit successful action
             if operator and action != "ping":
-                events.append("operator", operator["operator_id"], "operator.action", {
-                    "action": action,
-                    "operator": operator["name"],
-                })
+                events.append(
+                    "operator",
+                    operator["operator_id"],
+                    "operator.action",
+                    {
+                        "action": action,
+                        "operator": operator["name"],
+                    },
+                )
 
-            conn.sendall(json.dumps(resp).encode('utf-8'))
+            conn.sendall(json.dumps(resp).encode("utf-8"))
     except Exception as e:
         print(f"[IPC] Socket error: {e}")
     finally:
@@ -512,6 +543,7 @@ def run_socket_server():
 
 # ─── Main ────────────────────────────────────────────────
 
+
 def main():
     application = create_app()
 
@@ -526,10 +558,7 @@ def main():
     if not 1 <= port <= 65535:
         raise RuntimeError("OCTOPUS_C2_PORT is outside the valid range")
 
-    print(
-        f"[*] Starting OCTOPUS C2 Daemon "
-        f"v{C2_PROTOCOL_VERSION} on {host}:{port}"
-    )
+    print(f"[*] Starting OCTOPUS C2 Daemon v{C2_PROTOCOL_VERSION} on {host}:{port}")
     print(f"[*] Event Store: {DB_PATH}")
     print(f"[*] RBAC: {len(operators.list_operators())} operator(s)")
 

@@ -121,11 +121,7 @@ def run_campaign_preflight(
     )
 
     missing_environment = sorted(
-        {
-            str(name)
-            for name in required_environment
-            if not str(environment.get(str(name), ""))
-        }
+        {str(name) for name in required_environment if not str(environment.get(str(name), ""))}
     )
     checks.append(
         PreflightCheck(
@@ -139,18 +135,12 @@ def run_campaign_preflight(
         )
     )
     if "OCTOBENCH_ACK_AUTHORIZED" in required_environment:
-        authorization_acknowledged = (
-            str(environment.get("OCTOBENCH_ACK_AUTHORIZED") or "") == "YES"
-        )
+        authorization_acknowledged = str(environment.get("OCTOBENCH_ACK_AUTHORIZED") or "") == "YES"
         checks.append(
             PreflightCheck(
                 "authorized_lab_acknowledgement",
                 authorization_acknowledged,
-                (
-                    "authorization_acknowledged"
-                    if authorization_acknowledged
-                    else "authorization_ack_required"
-                ),
+                ("authorization_acknowledged" if authorization_acknowledged else "authorization_ack_required"),
             )
         )
     for name in sorted(set(required_environment)):
@@ -206,15 +196,9 @@ def run_campaign_preflight(
         )
 
     values_to_scan: list[tuple[str, Any]] = list(placeholder_inputs)
-    values_to_scan.extend(
-        (f"system:{item.system_id}", item.to_dict()) for item in manifests
-    )
-    values_to_scan.extend(
-        (f"scenario:{item.scenario_id}", item.to_dict()) for item in scenarios
-    )
-    placeholder_locations = sorted(
-        name for name, value in values_to_scan if _contains_placeholder(value)
-    )
+    values_to_scan.extend((f"system:{item.system_id}", item.to_dict()) for item in manifests)
+    values_to_scan.extend((f"scenario:{item.scenario_id}", item.to_dict()) for item in scenarios)
+    placeholder_locations = sorted(name for name, value in values_to_scan if _contains_placeholder(value))
     placeholder_locations.extend(
         f"environment:{name}"
         for name in sorted(set(required_environment))
@@ -238,11 +222,7 @@ def _manifest_adapter_available(
     manifest: SystemManifest,
     environment: Mapping[str, str],
 ) -> tuple[Path, bool]:
-    base = (
-        manifest.source_path.parent
-        if manifest.source_path is not None
-        else Path.cwd()
-    ).resolve()
+    base = (manifest.source_path.parent if manifest.source_path is not None else Path.cwd()).resolve()
     cwd = (base / manifest.adapter.cwd).resolve()
     try:
         cwd.relative_to(base)
@@ -259,11 +239,7 @@ def _manifest_adapter_available(
     if "/" in executable:
         resolved = (cwd / candidate).resolve()
         return cwd, resolved.is_file() and os.access(resolved, os.X_OK)
-    path = (
-        environment.get("PATH", os.defpath)
-        if "PATH" in manifest.adapter.env_passthrough
-        else os.defpath
-    )
+    path = environment.get("PATH", os.defpath) if "PATH" in manifest.adapter.env_passthrough else os.defpath
     return cwd, shutil.which(executable, path=path) is not None
 
 
@@ -272,10 +248,7 @@ def _contains_placeholder(value: Any) -> bool:
         lowered = value.strip().lower()
         return any(marker in lowered for marker in _PLACEHOLDER_MARKERS)
     if isinstance(value, Mapping):
-        return any(
-            _contains_placeholder(key) or _contains_placeholder(item)
-            for key, item in value.items()
-        )
+        return any(_contains_placeholder(key) or _contains_placeholder(item) for key, item in value.items())
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
         return any(_contains_placeholder(item) for item in value)
     return False
@@ -310,14 +283,8 @@ def _matrix_inputs_compatible(manifests: Sequence[SystemManifest]) -> bool:
     if len(tracks) != 1 or len(modes) != 1 or len(fairness) != 1:
         return False
     if next(iter(tracks)) == "framework_only":
-        models = {
-            json.dumps(item.model, sort_keys=True, separators=(",", ":"))
-            for item in manifests
-        }
-        tools = {
-            json.dumps(item.tool_versions, sort_keys=True, separators=(",", ":"))
-            for item in manifests
-        }
+        models = {json.dumps(item.model, sort_keys=True, separators=(",", ":")) for item in manifests}
+        tools = {json.dumps(item.tool_versions, sort_keys=True, separators=(",", ":")) for item in manifests}
         return len(models) == 1 and len(tools) == 1
     return True
 

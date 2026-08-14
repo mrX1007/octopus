@@ -14,10 +14,10 @@ from core.secrets import get_redactor
 @dataclass
 class AuditEntry:
     timestamp: float
-    actor: str          # operator name or "system"
-    action: str         # "tool.execute", "credential.found", etc.
-    target: str         # IP, hostname, or resource
-    result: str         # "success", "failed", "timeout"
+    actor: str  # operator name or "system"
+    action: str  # "tool.execute", "credential.found", etc.
+    target: str  # IP, hostname, or resource
+    result: str  # "success", "failed", "timeout"
     details: dict[str, Any] = field(default_factory=dict)
     duration: float = 0.0
 
@@ -36,8 +36,7 @@ class AuditLog:
     def __init__(self, db_path: Optional[str] = None):
         self.redactor = get_redactor()
         if not db_path:
-            base = os.path.dirname(os.path.dirname(os.path.dirname(
-                os.path.abspath(__file__))))
+            base = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
             self.db_path = os.path.join(base, "data", "audit.db")
         else:
             self.db_path = db_path
@@ -47,7 +46,7 @@ class AuditLog:
     def _init_db(self):
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute('''
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS audit_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp REAL NOT NULL,
@@ -58,13 +57,11 @@ class AuditLog:
                     details TEXT NOT NULL DEFAULT '{}',
                     duration REAL NOT NULL DEFAULT 0.0
                 )
-            ''')
-            conn.execute('CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(timestamp)')
-            conn.execute('CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor)')
-            conn.execute('CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action)')
-            for row in conn.execute(
-                "SELECT id, actor, action, target, result, details FROM audit_log"
-            ).fetchall():
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(timestamp)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action)")
+            for row in conn.execute("SELECT id, actor, action, target, result, details FROM audit_log").fetchall():
                 details = self.redactor.redact_data(json.loads(row[5] or "{}"))
                 safe = (
                     self.redactor.redact_text(row[1], kind="audit_actor"),
@@ -80,36 +77,47 @@ class AuditLog:
                 )
             conn.commit()
 
-    def log_action(self, actor: str, action: str, target: str = "",
-                   result: str = "success", details: Optional[dict] = None,
-                   duration: float = 0.0):
+    def log_action(
+        self,
+        actor: str,
+        action: str,
+        target: str = "",
+        result: str = "success",
+        details: Optional[dict] = None,
+        duration: float = 0.0,
+    ):
         """Log a generic action."""
         with closing(sqlite3.connect(self.db_path)) as conn:
-            conn.execute('''
+            conn.execute(
+                """
                 INSERT INTO audit_log (timestamp, actor, action, target, result, details, duration)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                time.time(),
-                self.redactor.redact_text(actor, kind="audit_actor"),
-                self.redactor.redact_text(action, kind="audit_action"),
-                self.redactor.redact_text(target, kind="audit_target"),
-                self.redactor.redact_text(result, kind="audit_result"),
-                json.dumps(self.redactor.redact_data(details or {}), sort_keys=True),
-                duration,
-            ))
+            """,
+                (
+                    time.time(),
+                    self.redactor.redact_text(actor, kind="audit_actor"),
+                    self.redactor.redact_text(action, kind="audit_action"),
+                    self.redactor.redact_text(target, kind="audit_target"),
+                    self.redactor.redact_text(result, kind="audit_result"),
+                    json.dumps(self.redactor.redact_data(details or {}), sort_keys=True),
+                    duration,
+                ),
+            )
             conn.commit()
 
-    def log_tool_execution(self, tool: str, target: str,
-                           duration: float, exit_code: int,
-                           actor: str = "system"):
+    def log_tool_execution(self, tool: str, target: str, duration: float, exit_code: int, actor: str = "system"):
         """Log a tool execution."""
         result = "success" if exit_code == 0 else "failed"
-        self.log_action(actor, f"tool.{tool}", target, result,
-                        {"exit_code": exit_code}, duration)
+        self.log_action(actor, f"tool.{tool}", target, result, {"exit_code": exit_code}, duration)
 
-    def query(self, actor: Optional[str] = None, action: Optional[str] = None,
-              target: Optional[str] = None, since: float = 0,
-              limit: int = 100) -> list[AuditEntry]:
+    def query(
+        self,
+        actor: Optional[str] = None,
+        action: Optional[str] = None,
+        target: Optional[str] = None,
+        since: float = 0,
+        limit: int = 100,
+    ) -> list[AuditEntry]:
         """Query audit log with filters."""
         with closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
@@ -131,10 +139,15 @@ class AuditLog:
             params.append(limit)
 
             rows = conn.execute(sql, params).fetchall()
-        return [AuditEntry(
-            timestamp=r["timestamp"], actor=r["actor"],
-            action=r["action"], target=r["target"],
-            result=r["result"],
-            details=self.redactor.redact_data(json.loads(r["details"])),
-            duration=r["duration"],
-        ) for r in rows]
+        return [
+            AuditEntry(
+                timestamp=r["timestamp"],
+                actor=r["actor"],
+                action=r["action"],
+                target=r["target"],
+                result=r["result"],
+                details=self.redactor.redact_data(json.loads(r["details"])),
+                duration=r["duration"],
+            )
+            for r in rows
+        ]

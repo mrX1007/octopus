@@ -44,9 +44,7 @@ def _principal(
     )
 
 
-def _agent(
-    agent_ref: str = "agent:one", mission_id: str = "mission:one"
-) -> AgentSummaryV1:
+def _agent(agent_ref: str = "agent:one", mission_id: str = "mission:one") -> AgentSummaryV1:
     return AgentSummaryV1(
         agent_ref=agent_ref,
         mission_id=mission_id,
@@ -105,16 +103,10 @@ def test_agent_listing_requires_explicit_resource_acl() -> None:
         owner_subject_id="subject:other",
         permitted_subject_ids=("subject:owner",),
     )
-    service.register_agent(
-        _agent("agent:private"), owner_subject_id="subject:other"
-    )
-    service.register_agent(
-        _agent("agent:legacy"), owner_subject_id=None
-    )
+    service.register_agent(_agent("agent:private"), owner_subject_id="subject:other")
+    service.register_agent(_agent("agent:legacy"), owner_subject_id=None)
 
-    page = service.list_agents(
-        _principal(), "mission:one", cursor=None, limit=10
-    )
+    page = service.list_agents(_principal(), "mission:one", cursor=None, limit=10)
     assert tuple(item.agent_ref for item in page.items) == (
         "agent:owned",
         "agent:shared",
@@ -168,9 +160,7 @@ def test_list_results_requires_agent_and_result_resource_acl() -> None:
         owner_subject_id="subject:other",
         permitted_subject_ids=("subject:reader",),
     )
-    service.store_result(
-        _result("result:private"), owner_subject_id="subject:other"
-    )
+    service.store_result(_result("result:private"), owner_subject_id="subject:other")
     service.store_result(
         _result("result:shared"),
         owner_subject_id="subject:other",
@@ -178,9 +168,7 @@ def test_list_results_requires_agent_and_result_resource_acl() -> None:
     )
     reader = _principal(subject_id="subject:reader", role=OperatorRole.READONLY)
 
-    page = service.list_results(
-        reader, "mission:one", "agent:one", cursor=None, limit=10
-    )
+    page = service.list_results(reader, "mission:one", "agent:one", cursor=None, limit=10)
     assert tuple(item.result_ref for item in page.items) == ("result:shared",)
 
 
@@ -191,12 +179,8 @@ def test_list_results_does_not_delete_or_mutate() -> None:
     service.store_result(original, owner_subject_id="subject:owner")
     principal = _principal(role=OperatorRole.READONLY)
 
-    first = service.list_results(
-        principal, "mission:one", "agent:one", cursor=None, limit=10
-    )
-    second = service.list_results(
-        principal, "mission:one", "agent:one", cursor=None, limit=10
-    )
+    first = service.list_results(principal, "mission:one", "agent:one", cursor=None, limit=10)
+    second = service.list_results(principal, "mission:one", "agent:one", cursor=None, limit=10)
     assert first == second
     assert first.items == (original,)
 
@@ -210,9 +194,7 @@ def test_ack_results_is_explicit_mutation_and_retains_result_row() -> None:
     request = ResultAckRequestV1(
         mission_id="mission:one",
         agent_ref="agent:one",
-        selections=(
-            ResultAckSelectionV1(result_ref="result:one", expected_revision=1),
-        ),
+        selections=(ResultAckSelectionV1(result_ref="result:one", expected_revision=1),),
     )
 
     batch = service.ack_results(principal, request)
@@ -220,9 +202,7 @@ def test_ack_results_is_explicit_mutation_and_retains_result_row() -> None:
     assert batch.rejected_refs == ()
     assert batch.acknowledgements[0].acknowledged_by_subject_id == "subject:owner"
 
-    page = service.list_results(
-        principal, "mission:one", "agent:one", cursor=None, limit=10
-    )
+    page = service.list_results(principal, "mission:one", "agent:one", cursor=None, limit=10)
     assert page.items == (replace(original, acknowledged=True),)
 
     replay = service.ack_results(principal, request)
@@ -249,11 +229,7 @@ def test_ack_results_rejects_delivery_ack_payload_and_revision_mismatch() -> Non
         ResultAckRequestV1(
             mission_id="mission:one",
             agent_ref="agent:one",
-            selections=(
-                ResultAckSelectionV1(
-                    result_ref="result:one", expected_revision=2
-                ),
-            ),
+            selections=(ResultAckSelectionV1(result_ref="result:one", expected_revision=2),),
         ),
     )
     assert rejected.acknowledgements == ()
@@ -267,17 +243,13 @@ def test_ack_results_denies_readonly_and_expired_principals() -> None:
     request = ResultAckRequestV1(
         mission_id="mission:one",
         agent_ref="agent:one",
-        selections=(
-            ResultAckSelectionV1(result_ref="result:one", expected_revision=1),
-        ),
+        selections=(ResultAckSelectionV1(result_ref="result:one", expected_revision=1),),
     )
 
     with pytest.raises(PermissionError, match="not_authorized"):
         service.ack_results(_principal(role=OperatorRole.READONLY), request)
     with pytest.raises(PermissionError, match="not_authorized"):
-        service.ack_results(
-            _principal(role=OperatorRole.ADMIN, expires_at=NOW), request
-        )
+        service.ack_results(_principal(role=OperatorRole.ADMIN, expires_at=NOW), request)
 
 
 def test_purge_results_bounded_admin_only() -> None:
@@ -292,8 +264,7 @@ def test_purge_results_bounded_admin_only() -> None:
         mission_id="mission:one",
         agent_ref="agent:one",
         selections=tuple(
-            ResultAckSelectionV1(result_ref=f"result:{index}", expected_revision=1)
-            for index in range(1, 4)
+            ResultAckSelectionV1(result_ref=f"result:{index}", expected_revision=1) for index in range(1, 4)
         ),
     )
     admin = _principal()
@@ -307,22 +278,16 @@ def test_purge_results_bounded_admin_only() -> None:
             limit=1,
         )
 
-    first = service.purge_results(
-        admin, "mission:one", before=500.0, limit=1
-    )
+    first = service.purge_results(admin, "mission:one", before=500.0, limit=1)
     assert first.purged_count == 1
     assert first.next_cursor == "result:2"
-    remaining = service.list_results(
-        admin, "mission:one", "agent:one", cursor=None, limit=10
-    )
+    remaining = service.list_results(admin, "mission:one", "agent:one", cursor=None, limit=10)
     assert tuple(item.result_ref for item in remaining.items) == (
         "result:2",
         "result:3",
     )
 
-    second = service.purge_results(
-        admin, "mission:one", before=500.0, limit=100
-    )
+    second = service.purge_results(admin, "mission:one", before=500.0, limit=100)
     assert second.purged_count == 2
     assert second.next_cursor is None
 
@@ -344,15 +309,9 @@ def test_unacknowledged_and_legacy_unassigned_rows_are_not_purged_or_visible() -
     )
     admin = _principal()
 
-    page = service.list_results(
-        admin, "mission:one", "agent:one", cursor=None, limit=10
-    )
-    assert tuple(item.result_ref for item in page.items) == (
-        "result:unacknowledged",
-    )
-    purged = service.purge_results(
-        admin, "mission:one", before=500.0, limit=100
-    )
+    page = service.list_results(admin, "mission:one", "agent:one", cursor=None, limit=10)
+    assert tuple(item.result_ref for item in page.items) == ("result:unacknowledged",)
+    purged = service.purge_results(admin, "mission:one", before=500.0, limit=100)
     assert purged.purged_count == 0
 
 
@@ -361,6 +320,4 @@ def test_page_and_purge_limits_are_strictly_bounded() -> None:
     with pytest.raises(ValueError, match="between 1 and 100"):
         service.list_agents(_principal(), "mission:one", cursor=None, limit=101)
     with pytest.raises(ValueError, match="between 1 and 100"):
-        service.purge_results(
-            _principal(), "mission:one", before=NOW, limit=0
-        )
+        service.purge_results(_principal(), "mission:one", before=NOW, limit=0)

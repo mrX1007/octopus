@@ -77,9 +77,7 @@ class AgentPageV1:
     next_cursor: str | None
 
     def __post_init__(self) -> None:
-        if type(self.items) is not tuple or any(
-            type(item) is not AgentSummaryV1 for item in self.items
-        ):
+        if type(self.items) is not tuple or any(type(item) is not AgentSummaryV1 for item in self.items):
             raise ValueError("items must contain only AgentSummaryV1 values")
         if self.next_cursor is not None:
             _require_reference(self.next_cursor, "next_cursor")
@@ -117,9 +115,7 @@ class ResultPageV1:
     next_cursor: str | None
 
     def __post_init__(self) -> None:
-        if type(self.items) is not tuple or any(
-            type(item) is not ResultSummaryV1 for item in self.items
-        ):
+        if type(self.items) is not tuple or any(type(item) is not ResultSummaryV1 for item in self.items):
             raise ValueError("items must contain only ResultSummaryV1 values")
         if self.next_cursor is not None:
             _require_reference(self.next_cursor, "next_cursor")
@@ -145,8 +141,7 @@ class ResultAckRequestV1:
         _require_reference(self.mission_id, "mission_id")
         _require_reference(self.agent_ref, "agent_ref")
         if type(self.selections) is not tuple or any(
-            type(selection) is not ResultAckSelectionV1
-            for selection in self.selections
+            type(selection) is not ResultAckSelectionV1 for selection in self.selections
         ):
             raise ValueError("selections must contain only ResultAckSelectionV1 values")
         if len(self.selections) > _MAX_ACK_SELECTIONS:
@@ -164,13 +159,9 @@ class ResultAcknowledgementRecordV1:
     def __post_init__(self) -> None:
         _require_reference(self.result_ref, "result_ref")
         _require_positive_revision(self.result_revision, "result_revision")
-        _require_reference(
-            self.acknowledged_by_subject_id, "acknowledged_by_subject_id"
-        )
+        _require_reference(self.acknowledged_by_subject_id, "acknowledged_by_subject_id")
         _require_finite_timestamp(self.acknowledged_at, "acknowledged_at")
-        _require_positive_revision(
-            self.acknowledgement_revision, "acknowledgement_revision"
-        )
+        _require_positive_revision(self.acknowledgement_revision, "acknowledgement_revision")
 
 
 @dataclass(frozen=True)
@@ -180,12 +171,9 @@ class ResultAckBatchV1:
 
     def __post_init__(self) -> None:
         if type(self.acknowledgements) is not tuple or any(
-            type(record) is not ResultAcknowledgementRecordV1
-            for record in self.acknowledgements
+            type(record) is not ResultAcknowledgementRecordV1 for record in self.acknowledgements
         ):
-            raise ValueError(
-                "acknowledgements must contain only ResultAcknowledgementRecordV1 values"
-            )
+            raise ValueError("acknowledgements must contain only ResultAcknowledgementRecordV1 values")
         if type(self.rejected_refs) is not tuple:
             raise ValueError("rejected_refs must be a tuple")
         for result_ref in self.rejected_refs:

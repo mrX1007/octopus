@@ -1,11 +1,20 @@
 """Tests for ProviderCallBoundary execution."""
+
 import pytest
-from core.actions.provider_call_boundary import ProviderCallBoundary, BoundProviderInvocationContext
+
+from core.actions.provider_call_boundary import BoundProviderInvocationContext, ProviderCallBoundary
+
 
 class DummyProvider:
-    def check_bound(self, ctx): return True
-    def execute_bound(self, ctx): return {"status": "ok"}
-    def verify_bound(self, ctx, res): return True
+    def check_bound(self, ctx):
+        return True
+
+    def execute_bound(self, ctx):
+        return {"status": "ok"}
+
+    def verify_bound(self, ctx, res):
+        return True
+
 
 @pytest.mark.unit
 def test_call_boundary_execution():

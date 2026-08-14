@@ -86,9 +86,7 @@ def generate_mount_manifest(
 def _validate_generated_manifest(manifest: MountManifest) -> None:
     entries = manifest["entries"]
     expected_action_ids = {binding.action_id for binding in get_all_v2_schema_bindings()}
-    action_ids = {
-        entry["spec"]["action_id"] for entry in entries
-    }
+    action_ids = {entry["spec"]["action_id"] for entry in entries}
     if len(entries) != 20 or action_ids != expected_action_ids:
         raise ValueError("provider_mount_manifest_must_match_exact_20_v2_identities")
     if any("available" in entry["spec"] for entry in entries):

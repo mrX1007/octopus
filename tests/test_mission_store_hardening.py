@@ -59,14 +59,8 @@ def test_recovery_is_explicit_and_fences_the_stale_owner(tmp_path):
         recover=True,
     )
     recovered_snapshot = replacement.snapshot(recovered.mission_id)
-    recovered_task = next(
-        item for item in recovered_snapshot.tasks if item.task_id == task.task_id
-    )
-    recovered_attempt = next(
-        item
-        for item in recovered_snapshot.attempts
-        if item.attempt_id == abandoned.attempt_id
-    )
+    recovered_task = next(item for item in recovered_snapshot.tasks if item.task_id == task.task_id)
+    recovered_attempt = next(item for item in recovered_snapshot.attempts if item.attempt_id == abandoned.attempt_id)
 
     assert recovered.run_count == 2
     assert recovered_task.status == "interrupted"
@@ -118,9 +112,7 @@ def test_complete_mission_rejects_pending_and_interrupted_tasks(tmp_path):
     store.open_mission("scan-unfinished", "10.0.0.5")
 
     interrupted = store.snapshot(mission.mission_id)
-    interrupted_task = next(
-        item for item in interrupted.tasks if item.task_id == task.task_id
-    )
+    interrupted_task = next(item for item in interrupted.tasks if item.task_id == task.task_id)
     assert interrupted_task.status == "interrupted"
     with pytest.raises(MissionStoreError, match=r"unfinished task .*:interrupted"):
         store.complete_mission(mission.mission_id, "goal_reached")
@@ -155,9 +147,7 @@ def test_redactor_learning_task_and_status_does_not_mutate_control_fields(tmp_pa
     )
     hydrated = store.snapshot(mission.mission_id)
     hydrated_task = next(item for item in hydrated.tasks if item.task_id == task.task_id)
-    hydrated_attempt = next(
-        item for item in hydrated.attempts if item.attempt_id == attempt.attempt_id
-    )
+    hydrated_attempt = next(item for item in hydrated.attempts if item.attempt_id == attempt.attempt_id)
 
     assert completed.status == "completed"
     assert completed.outcome is not None
@@ -220,12 +210,7 @@ def test_concurrent_first_time_schema_initialization_is_serialized(tmp_path):
 
     assert all(results)
     with sqlite3.connect(db_path) as conn:
-        tables = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            ).fetchall()
-        }
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
         version = conn.execute(
             """
             SELECT version FROM mission_lifecycle_schema
@@ -308,9 +293,7 @@ def test_v12_migration_adds_backward_compatible_state_replan_state(tmp_path):
     assert exhausted.requested is False
     assert exhausted.reason == "budget_exhausted"
     assert exhausted.count == 1
-    reopened = MissionStore(str(db_path), owner_id="observer").snapshot(
-        "mis-v12"
-    ).mission
+    reopened = MissionStore(str(db_path), owner_id="observer").snapshot("mis-v12").mission
 
     with sqlite3.connect(db_path) as conn:
         version = conn.execute(
@@ -319,9 +302,7 @@ def test_v12_migration_adds_backward_compatible_state_replan_state(tmp_path):
             WHERE component = 'mission_store'
             """
         ).fetchone()
-        columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(missions)")
-        }
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(missions)")}
 
     assert version == (MISSION_LIFECYCLE_SCHEMA_VERSION,)
     assert {
@@ -359,12 +340,7 @@ def test_unsupported_schema_version_does_not_create_v1_tables(tmp_path):
         MissionStore(str(db_path))
 
     with sqlite3.connect(db_path) as conn:
-        tables = {
-            row[0]
-            for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table'"
-            ).fetchall()
-        }
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()}
         version = conn.execute(
             """
             SELECT version FROM mission_lifecycle_schema

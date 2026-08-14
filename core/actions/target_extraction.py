@@ -107,7 +107,9 @@ class ActionTargetExtractorRegistry:
         return targets
 
     def bindings(self) -> tuple[tuple[str, str, type[object]], ...]:
-        return tuple((action_id, schema_id, slot.input_type) for (action_id, schema_id), slot in self._extractors.items())
+        return tuple(
+            (action_id, schema_id, slot.input_type) for (action_id, schema_id), slot in self._extractors.items()
+        )
 
 
 def _canonical(
@@ -143,7 +145,12 @@ def _remote_protocol(service: RemoteExecService | None) -> NetworkProtocol | Non
 def _build_default_registry() -> ActionTargetExtractorRegistry:
     registry = ActionTargetExtractorRegistry()
 
-    def add(action_id: str, schema_id: str, input_type: type[TDecodedV2Input], callback: Callable[[TDecodedV2Input], tuple[ExtractedActionTarget, ...]]) -> None:
+    def add(
+        action_id: str,
+        schema_id: str,
+        input_type: type[TDecodedV2Input],
+        callback: Callable[[TDecodedV2Input], tuple[ExtractedActionTarget, ...]],
+    ) -> None:
         registry.register(
             action_id=action_id,
             input_schema_id=schema_id,
@@ -155,8 +162,10 @@ def _build_default_registry() -> ActionTargetExtractorRegistry:
         "plugin:payload_keying",
         "octopus:input:payload_keying:2.0",
         PayloadKeyingInputV2,
-        lambda value: (_resource(value.payload_ref),)
-        + ((_resource(value.target_metadata_ref),) if value.target_metadata_ref is not None else ()),
+        lambda value: (
+            (_resource(value.payload_ref),)
+            + ((_resource(value.target_metadata_ref),) if value.target_metadata_ref is not None else ())
+        ),
     )
     add(
         "killchain:kerberos_extract_tickets",
@@ -239,11 +248,13 @@ def _build_default_registry() -> ActionTargetExtractorRegistry:
         "killchain:pivot_proxy_scan",
         "octopus:input:pivot_proxy_scan:2.0",
         PivotProxyScanInputV2,
-        lambda value: tuple(
-            _canonical(value.target, TargetRole.PRIMARY, port=port, protocol=NetworkProtocol.TCP)
-            for port in value.ports
-        )
-        + (_resource(value.route_ref),),
+        lambda value: (
+            *tuple(
+                _canonical(value.target, TargetRole.PRIMARY, port=port, protocol=NetworkProtocol.TCP)
+                for port in value.ports
+            ),
+            _resource(value.route_ref),
+        ),
     )
 
     def dns_targets(value: DNSC2ChannelInputV2) -> tuple[ExtractedActionTarget, ...]:
@@ -285,8 +296,10 @@ def _build_default_registry() -> ActionTargetExtractorRegistry:
         "c2:c2_task",
         "octopus:input:c2_task:2.0",
         C2TaskInputV2,
-        lambda value: ((_canonical(value.target, TargetRole.PRIMARY),) if value.target is not None else ())
-        + (_resource(value.agent_ref),),
+        lambda value: (
+            ((_canonical(value.target, TargetRole.PRIMARY),) if value.target is not None else ())
+            + (_resource(value.agent_ref),)
+        ),
     )
     add(
         "c2:c2_cleanup",

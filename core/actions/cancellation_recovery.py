@@ -6,26 +6,29 @@ import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
+from core.actions.cancellation import ExecutorCancellationController
 from core.actions.execution_recovery_types import (
     CancellationCompletionReceiptV2,
     CancellationControllerBindingV2,
     CancellationRecoveryRecordV2,
     CancellationRecoveryRefV2,
 )
-from core.actions.cancellation import ExecutorCancellationController
+
 
 class ExecutionCancellationReasonV2(str, Enum):
     USER_REQUESTED = "user_requested"
     MISSION_REVOKED = "mission_revoked"
     ADMIN_CONTAINMENT = "admin_containment"
 
+
 @dataclass(frozen=True)
 class CancelExecutionRequestV2:
     request_id: str
     execution_id: str
     reason: ExecutionCancellationReasonV2
+
 
 @dataclass(frozen=True)
 class ExecutionCancellationReceiptV2:
@@ -42,6 +45,7 @@ class ExecutionCancellationReceiptV2:
     receipt_ref: str
     receipt_digest: str
 
+
 def canonical_execution_cancellation_receipt_digest(receipt: ExecutionCancellationReceiptV2) -> str:
     payload = {
         "request_id": receipt.request_id,
@@ -52,6 +56,7 @@ def canonical_execution_cancellation_receipt_digest(receipt: ExecutionCancellati
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
+
 
 @runtime_checkable
 class CancellationRecoveryStoreV2(Protocol):
@@ -103,6 +108,7 @@ class CancellationRecoveryStoreV2(Protocol):
         reference: CancellationRecoveryRefV2,
     ) -> CancellationCompletionReceiptV2: ...
 
+
 class DefaultCancellationRecoveryStoreV2:
     """In-memory production implementation of CancellationRecoveryStoreV2."""
 
@@ -127,7 +133,11 @@ class DefaultCancellationRecoveryStoreV2:
     ) -> CancellationRecoveryRecordV2:
         for rec in self._records.values():
             ref = rec.cancellation_ref
-            if ref.root_execution_id == root_execution_id and ref.execution_graph_id == execution_graph_id and ref.token_id == token_id:
+            if (
+                ref.root_execution_id == root_execution_id
+                and ref.execution_graph_id == execution_graph_id
+                and ref.token_id == token_id
+            ):
                 return rec
         raise KeyError(f"Cancellation record for graph '{execution_graph_id}' not found")
 

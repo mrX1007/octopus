@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from core.actions.models import CheckPolicyV2, VerifyPolicyV2
 from core.actions.semantic_bindings import (
     get_all_v2_semantic_bindings,
     get_v2_semantic_binding,
     resolve_action_id_alias,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def test_v2_semantic_binding_matrix_has_exact_20_rows() -> None:

@@ -66,14 +66,17 @@ class ADSmbexecAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.ad_lateral import ADSmbexecAdapter as RealAdapter
+
         return RealAdapter().check_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.ad_lateral import ADSmbexecAdapter as RealAdapter
+
         return RealAdapter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.ad_lateral import ADSmbexecAdapter as RealAdapter
+
         return RealAdapter().verify_bound(context)
 
 
@@ -126,14 +129,17 @@ class ADWinrmExecAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.ad_lateral import ADWinRMExecAdapter as RealAdapter
+
         return RealAdapter().check_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.ad_lateral import ADWinRMExecAdapter as RealAdapter
+
         return RealAdapter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.ad_lateral import ADWinRMExecAdapter as RealAdapter
+
         return RealAdapter().verify_bound(context)
 
 
@@ -186,14 +192,17 @@ class ADDcomExecAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.ad_lateral import ADDComExecAdapter as RealAdapter
+
         return RealAdapter().check_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.ad_lateral import ADDComExecAdapter as RealAdapter
+
         return RealAdapter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.ad_lateral import ADDComExecAdapter as RealAdapter
+
         return RealAdapter().verify_bound(context)
 
 
@@ -246,18 +255,22 @@ class ADRemoteExecutionCapabilityAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.ad_lateral import ADRemoteExecutionRouter
+
         return ADRemoteExecutionRouter().check_bound(context)
 
     def route_bound(self, context: Any) -> Any:
         from core.providers.ad_lateral import ADRemoteExecutionRouter
+
         return ADRemoteExecutionRouter().route_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.ad_lateral import ADRemoteExecutionRouter
+
         return ADRemoteExecutionRouter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.ad_lateral import ADRemoteExecutionRouter
+
         return ADRemoteExecutionRouter().verify_bound(context)
 
 

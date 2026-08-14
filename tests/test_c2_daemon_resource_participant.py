@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from core.c2.control_commands import (
     C2ControlActionV1,
     ParticipantControlAuthorizationV1,

@@ -1,13 +1,17 @@
 """C2 cleanup effect models."""
+
 from __future__ import annotations
-from enum import Enum
+
 from dataclasses import dataclass
+from enum import Enum
 from typing import Literal
+
 
 class C2CleanupEffectOutcomeV1(str, Enum):
     CLEANED = "cleaned"
     FAILED_NO_EFFECT = "failed_no_effect"
     UNKNOWN = "unknown"
+
 
 class C2CleanupAttemptStateV1(str, Enum):
     RESERVED = "reserved"
@@ -17,7 +21,9 @@ class C2CleanupAttemptStateV1(str, Enum):
     UNKNOWN = "unknown"
     RECONCILING = "reconciling"
 
+
 C2CleanupResourceKindV1 = Literal["c2_channel", "c2_enrollment", "c2_task", "deployment"]
+
 
 @dataclass(frozen=True)
 class C2CleanupPlanV1:
@@ -36,6 +42,7 @@ class C2CleanupPlanV1:
     request_digest: str
     idempotency_digest: str
 
+
 @dataclass(frozen=True)
 class C2CleanupAttemptRecordV1:
     transaction_id: str
@@ -46,6 +53,7 @@ class C2CleanupAttemptRecordV1:
     state: C2CleanupAttemptStateV1
     backend_probe_token: str | None
     revision: int
+
 
 @dataclass(frozen=True)
 class C2CleanupEffectReceiptV1:
@@ -60,6 +68,7 @@ class C2CleanupEffectReceiptV1:
     remote_effect_ref: str | None
     receipt_digest: str
 
+
 @dataclass(frozen=True)
 class C2CleanupEffectProbeV1:
     transaction_id: str
@@ -71,6 +80,7 @@ class C2CleanupEffectProbeV1:
     observed_revision: int | None
     backend_probe_token: str | None
     probe_digest: str
+
 
 @dataclass(frozen=True)
 class C2CleanupBackendRequestV1:

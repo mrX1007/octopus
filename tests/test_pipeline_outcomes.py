@@ -70,9 +70,7 @@ def test_has_blocked_stage_fact_matches_legacy_suffix_rule(command_results, expe
         ([_command(failed=True)], 1, "completed"),
     ],
 )
-def test_classify_task_result_preserves_exact_status_truth_table(
-    commands, parsed_facts, expected
-):
+def test_classify_task_result_preserves_exact_status_truth_table(commands, parsed_facts, expected):
     task_result = {
         "commands": commands,
         "parsed_facts": parsed_facts,
@@ -116,9 +114,7 @@ def test_classify_task_result_preserves_exact_status_truth_table(
         ([_command()], 3, 2, "2_new_facts"),
     ],
 )
-def test_command_result_reason_preserves_exact_reason_strings(
-    commands, parsed_facts, new_facts, expected
-):
+def test_command_result_reason_preserves_exact_reason_strings(commands, parsed_facts, new_facts, expected):
     assert command_result_reason(commands, parsed_facts, new_facts) == expected
 
 

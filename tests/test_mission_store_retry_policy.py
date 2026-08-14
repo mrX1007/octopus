@@ -57,10 +57,14 @@ def test_task_metadata_and_retry_policy_survive_reopen(tmp_path):
         "DiscoveryAgent",
         "service_discovery",
     )
-    hydrated = MissionStore(
-        str(db_path),
-        owner_id="observer",
-    ).snapshot(mission.mission_id).tasks[0]
+    hydrated = (
+        MissionStore(
+            str(db_path),
+            owner_id="observer",
+        )
+        .snapshot(mission.mission_id)
+        .tasks[0]
+    )
 
     assert repeated_without_optional_metadata.task_id == registered.task_id
     assert hydrated.scope == "target:10.0.0.5"
@@ -255,9 +259,7 @@ def test_v1_schema_is_migrated_additively_before_use(tmp_path):
             WHERE component = 'mission_store'
             """
         ).fetchone()
-        columns = {
-            row[1] for row in conn.execute("PRAGMA table_info(mission_tasks)")
-        }
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(mission_tasks)")}
 
     assert version == (MISSION_LIFECYCLE_SCHEMA_VERSION,)
     assert {

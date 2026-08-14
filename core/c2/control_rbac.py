@@ -89,9 +89,7 @@ class ControlRBACPolicy:
         if not self._valid_principal(principal, float(checked_at)):
             return False
 
-        if mission_id is not None and (
-            not _bounded_identity(mission_id) or mission_id != principal.mission_id
-        ):
+        if mission_id is not None and (not _bounded_identity(mission_id) or mission_id != principal.mission_id):
             return False
         if resource_ref is not None and not _bounded_identity(resource_ref):
             return False
@@ -125,9 +123,7 @@ class ControlRBACPolicy:
             raise PermissionError("not_authorized")
 
     @staticmethod
-    def _valid_principal(
-        principal: AuthenticatedControlPrincipal, checked_at: float
-    ) -> bool:
+    def _valid_principal(principal: AuthenticatedControlPrincipal, checked_at: float) -> bool:
         peer = principal.peer
         if type(peer) is not PeerPrincipal:
             return False
@@ -153,9 +149,7 @@ class ControlRBACPolicy:
             return False
         if any(type(value) is not int or value < 0 for value in (peer.pid, peer.uid, peer.gid)):
             return False
-        if type(principal.authenticated_at) not in (int, float) or type(
-            principal.expires_at
-        ) not in (int, float):
+        if type(principal.authenticated_at) not in (int, float) or type(principal.expires_at) not in (int, float):
             return False
         authenticated_at = float(principal.authenticated_at)
         expires_at = float(principal.expires_at)

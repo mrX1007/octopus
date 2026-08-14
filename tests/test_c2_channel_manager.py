@@ -1,7 +1,9 @@
 """Tests for ChannelManager."""
+
 from __future__ import annotations
 
 import pytest
+
 from core.c2.channel_manager import ChannelManager
 from core.c2.channel_models import (
     ChannelConfigV1,

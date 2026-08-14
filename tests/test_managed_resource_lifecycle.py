@@ -1,6 +1,9 @@
 """Tests for ManagedResourceManagerV2."""
+
 import pytest
-from core.actions.managed_resources import ManagedResourceManagerV2, ManagedResourceStageRequestV2, ManagedResourceKind
+
+from core.actions.managed_resources import ManagedResourceKind, ManagedResourceManagerV2, ManagedResourceStageRequestV2
+
 
 @pytest.mark.unit
 def test_managed_resource_lifecycle():

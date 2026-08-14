@@ -1,8 +1,10 @@
 """Deployment orchestration."""
+
 from __future__ import annotations
 
 import time
-from typing import Dict, Any, Optional
+from typing import Any
+
 from core.c2.deployment_backends import (
     C2DeploymentBackend,
     LocalProcessDeploymentBackend,
@@ -14,11 +16,11 @@ class C2DeploymentService:
     """Orchestrates agent deployments using backend drivers."""
 
     def __init__(self) -> None:
-        self._backends: Dict[str, C2DeploymentBackend] = {
+        self._backends: dict[str, C2DeploymentBackend] = {
             "local": LocalProcessDeploymentBackend(),
             "ssh": SSHDeploymentBackend(),
         }
-        self._active_deployments: Dict[str, Dict[str, Any]] = {}
+        self._active_deployments: dict[str, dict[str, Any]] = {}
 
     def register_backend(self, name: str, backend: C2DeploymentBackend) -> None:
         """Register a new deployment backend."""
@@ -37,8 +39,8 @@ class C2DeploymentService:
         backend_name: str,
         binary_path: str,
         target_dir: str,
-        config: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+        config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Deploy agent using specified backend."""
         backend = self.get_backend(backend_name)
         cfg = config or {}
@@ -74,4 +76,3 @@ class C2DeploymentService:
         if success:
             del self._active_deployments[attempt_id]
         return success
-

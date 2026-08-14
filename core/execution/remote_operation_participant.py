@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-import hashlib
-import json
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol, runtime_checkable, Literal, Any, Dict, Optional
+from typing import Literal, Protocol, runtime_checkable
 
 from core.actions.checkout_models import CheckoutRecoveryRefV2
+from core.actions.execution_recovery_types import ExecutionFinalizationFenceV2
 from core.execution.remote_operation_models import (
     RemoteOperationBackendRequestV1,
-    RemoteOperationEffectReceiptV1,
-    RemoteOperationEffectProbeV1,
-    RemoteOperationPlanV1,
     RemoteOperationEffectDispositionV1,
-    RemoteOperationServiceV1,
-    RemoteOperationOutputReservationRefV1,
+    RemoteOperationEffectProbeV1,
+    RemoteOperationEffectReceiptV1,
+    RemoteOperationPlanV1,
 )
+
 
 @dataclass(frozen=True)
 class ParticipantRetryPolicyV2:
@@ -23,13 +21,13 @@ class ParticipantRetryPolicyV2:
     initial_backoff_ms: int = 100
     max_backoff_ms: int = 1000
 
+
 @dataclass(frozen=True)
 class ParticipantOperationContextV2:
     operation_attempt_id: str = ""
     absolute_deadline_monotonic: float = 0.0
-    retry_policy: Optional[ParticipantRetryPolicyV2] = None
+    retry_policy: ParticipantRetryPolicyV2 | None = None
 
-from core.actions.execution_recovery_types import ExecutionFinalizationFenceV2
 
 @dataclass
 class ParticipantPrepareRequestV2:
@@ -37,12 +35,14 @@ class ParticipantPrepareRequestV2:
     participant_id: str
     operation: ParticipantOperationContextV2
 
+
 @dataclass
 class ParticipantPrepareOutcomeV2:
     participant_id: str
     is_ready: bool
-    prepare_receipt: Optional[ParticipantPrepareReceiptV2] = None
-    error: Optional[str] = None
+    prepare_receipt: ParticipantPrepareReceiptV2 | None = None
+    error: str | None = None
+
 
 @dataclass
 class ParticipantCommitRequestV2:
@@ -51,43 +51,52 @@ class ParticipantCommitRequestV2:
     prepare_receipt: ParticipantPrepareReceiptV2
     operation: ParticipantOperationContextV2
 
+
 @dataclass
 class ParticipantCommitReceiptV2:
     participant_id: str
     success: bool
-    effect_receipt: Optional[RemoteOperationEffectReceiptV1] = None
-    error: Optional[str] = None
+    effect_receipt: RemoteOperationEffectReceiptV1 | None = None
+    error: str | None = None
+
 
 @dataclass
 class ParticipantPrepareReceiptV2:
     participant_id: str
     plan_digest: str
 
+
 @dataclass
 class ParticipantFinalizeReceiptV2:
     participant_id: str
     finalized: bool
+
 
 @dataclass
 class ParticipantRollbackReceiptV2:
     participant_id: str
     rolled_back: bool
 
+
 @dataclass
 class ParticipantReconcileResultV2:
     participant_id: str
     reconciled: bool
+
 
 @runtime_checkable
 class ExecutionCommitParticipant(Protocol):
     participant_id: str
     transaction_id: str
 
+
 class ParticipantKindV2(str, Enum):
     EXTERNAL_EFFECT = "external_effect"
 
+
 class ExternalEffectKindV2(str, Enum):
     REMOTE_OPERATION = "remote_operation"
+
 
 @runtime_checkable
 class RemoteOperationBackendV1(Protocol):
@@ -95,7 +104,7 @@ class RemoteOperationBackendV1(Protocol):
         self,
         request: RemoteOperationBackendRequestV1,
     ) -> RemoteOperationEffectReceiptV1: ...
-    
+
     def probe(
         self,
         request: RemoteOperationBackendRequestV1,
@@ -106,13 +115,13 @@ class RemoteOperationBackendV1(Protocol):
 class RemoteOperationCredentialLeaseV1(Protocol):
     @property
     def lease_id(self) -> str: ...
-    
+
     def transfer_to_protected_worker_channel(
         self,
         *,
         backend_request_digest: str,
     ) -> str: ...
-    
+
     def close_and_zeroize(self) -> None: ...
 
 
@@ -189,7 +198,7 @@ class RemoteOperationExternalEffectParticipant(ExecutionCommitParticipant):
         transaction_id: str,
         backend: RemoteOperationBackendV1,
         plan: RemoteOperationPlanV1,
-        credential_resolver: Optional[RemoteOperationCredentialResolverV1] = None,
+        credential_resolver: RemoteOperationCredentialResolverV1 | None = None,
     ):
         self.participant_id = participant_id
         self.transaction_id = transaction_id
@@ -204,67 +213,53 @@ class RemoteOperationExternalEffectParticipant(ExecutionCommitParticipant):
             return ParticipantPrepareOutcomeV2(
                 participant_id=self.participant_id,
                 is_ready=False,
-                error=f"Transaction ID mismatch: expected {self.transaction_id}, got {request.transaction_id}"
+                error=f"Transaction ID mismatch: expected {self.transaction_id}, got {request.transaction_id}",
             )
         if request.participant_id != self.participant_id:
             return ParticipantPrepareOutcomeV2(
                 participant_id=self.participant_id,
                 is_ready=False,
-                error=f"Participant ID mismatch: expected {self.participant_id}, got {request.participant_id}"
+                error=f"Participant ID mismatch: expected {self.participant_id}, got {request.participant_id}",
             )
-        
-        receipt = ParticipantPrepareReceiptV2(
-            participant_id=self.participant_id,
-            plan_digest=self.plan.plan_digest
-        )
-        return ParticipantPrepareOutcomeV2(
-            participant_id=self.participant_id,
-            is_ready=True,
-            prepare_receipt=receipt
-        )
+
+        receipt = ParticipantPrepareReceiptV2(participant_id=self.participant_id, plan_digest=self.plan.plan_digest)
+        return ParticipantPrepareOutcomeV2(participant_id=self.participant_id, is_ready=True, prepare_receipt=receipt)
 
     def commit(self, request: ParticipantCommitRequestV2) -> ParticipantCommitReceiptV2:
         if request.transaction_id != self.transaction_id:
             return ParticipantCommitReceiptV2(
                 participant_id=self.participant_id,
                 success=False,
-                error=f"Transaction ID mismatch: expected {self.transaction_id}, got {request.transaction_id}"
+                error=f"Transaction ID mismatch: expected {self.transaction_id}, got {request.transaction_id}",
             )
         if request.participant_id != self.participant_id:
             return ParticipantCommitReceiptV2(
                 participant_id=self.participant_id,
                 success=False,
-                error=f"Participant ID mismatch: expected {self.participant_id}, got {request.participant_id}"
+                error=f"Participant ID mismatch: expected {self.participant_id}, got {request.participant_id}",
             )
         if request.prepare_receipt.plan_digest != self.plan.plan_digest:
             return ParticipantCommitReceiptV2(
-                participant_id=self.participant_id,
-                success=False,
-                error="Plan digest mismatch"
+                participant_id=self.participant_id, success=False, error="Plan digest mismatch"
             )
 
         import time
+
         backend_request = RemoteOperationBackendRequestV1(
             attempt_id=self.plan.attempt_id,
             idempotency_key=self.plan.idempotency_key,
             plan_ref=self.plan.operation_payload_ref,
             plan_digest=self.plan.plan_digest,
-            absolute_deadline_monotonic=time.monotonic() + 30.0
+            absolute_deadline_monotonic=time.monotonic() + 30.0,
         )
 
         try:
             effect_receipt = self.backend.dispatch(backend_request)
             return ParticipantCommitReceiptV2(
-                participant_id=self.participant_id,
-                success=True,
-                effect_receipt=effect_receipt
+                participant_id=self.participant_id, success=True, effect_receipt=effect_receipt
             )
         except Exception as e:
-            return ParticipantCommitReceiptV2(
-                participant_id=self.participant_id,
-                success=False,
-                error=str(e)
-            )
+            return ParticipantCommitReceiptV2(participant_id=self.participant_id, success=False, error=str(e))
 
     def finalize_visibility(
         self,
@@ -294,11 +289,11 @@ class RemoteOperationExternalEffectParticipant(ExecutionCommitParticipant):
             idempotency_key=self.plan.idempotency_key,
             plan_ref=self.plan.operation_payload_ref,
             plan_digest=self.plan.plan_digest,
-            absolute_deadline_monotonic=0.0
+            absolute_deadline_monotonic=0.0,
         )
         try:
             probe = self.backend.probe(backend_request)
-            reconciled = (probe.disposition != RemoteOperationEffectDispositionV1.UNKNOWN)
+            reconciled = probe.disposition != RemoteOperationEffectDispositionV1.UNKNOWN
             return ParticipantReconcileResultV2(participant_id=self.participant_id, reconciled=reconciled)
         except Exception:
             return ParticipantReconcileResultV2(participant_id=self.participant_id, reconciled=False)

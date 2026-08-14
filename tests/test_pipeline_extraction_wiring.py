@@ -107,9 +107,7 @@ def test_telemetry_facades_call_extracted_helpers(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         "core.ai.pipeline_observability.append_goal_trace",
-        lambda trace, loop, context, decision: calls.append(
-            ("goal", trace, loop, context, decision)
-        ),
+        lambda trace, loop, context, decision: calls.append(("goal", trace, loop, context, decision)),
     )
     monkeypatch.setattr(
         "core.ai.pipeline_observability.persist_llm_health",
@@ -119,15 +117,11 @@ def test_telemetry_facades_call_extracted_helpers(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "core.ai.pipeline_observability.append_command_trace",
-        lambda trace, decision, result: calls.append(
-            ("command", trace, decision, result)
-        ),
+        lambda trace, decision, result: calls.append(("command", trace, decision, result)),
     )
     monkeypatch.setattr(
         "core.ai.pipeline_observability.print_efficiency_report",
-        lambda scan_id, target, elapsed, **kwargs: calls.append(
-            ("efficiency", scan_id, target, elapsed, kwargs)
-        ),
+        lambda scan_id, target, elapsed, **kwargs: calls.append(("efficiency", scan_id, target, elapsed, kwargs)),
     )
 
     context = {"state": "initial_recon"}

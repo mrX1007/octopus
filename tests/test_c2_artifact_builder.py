@@ -1,11 +1,13 @@
 """Tests for artifact builder."""
+
 from __future__ import annotations
 
 import pytest
+
 from core.c2.artifact_builder import (
     C2ArtifactBuilderV1,
-    C2ArtifactBuildSpecV1,
     C2ArtifactBuildResultV1,
+    C2ArtifactBuildSpecV1,
 )
 
 pytestmark = pytest.mark.unit

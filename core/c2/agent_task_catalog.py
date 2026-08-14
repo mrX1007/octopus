@@ -83,11 +83,7 @@ class AgentTaskCatalogV12:
     @staticmethod
     def get_spec(operation_id: C2TaskOperationId | str) -> TaskOperationSpecV12 | None:
         try:
-            canonical = (
-                C2TaskOperationId(operation_id)
-                if type(operation_id) is str
-                else operation_id
-            )
+            canonical = C2TaskOperationId(operation_id) if type(operation_id) is str else operation_id
         except ValueError:
             return None
         if type(canonical) is not C2TaskOperationId:

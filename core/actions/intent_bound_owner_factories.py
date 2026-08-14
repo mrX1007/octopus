@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Optional
 
 from core.actions.execution_recovery_types import ApprovalGraphRecoveryRefV2
 
@@ -53,7 +52,9 @@ class IntentBoundOwnerFactory:
     """Factory creating intent-bound resource owners."""
 
     def create_checkout_spec(self, request: ExecutorCheckoutRequestBundle) -> CheckoutOwnerCreationSpecV2:
-        raw = json.dumps({"execution_id": request.execution_id, "action_id": request.action_id}, sort_keys=True).encode()
+        raw = json.dumps(
+            {"execution_id": request.execution_id, "action_id": request.action_id}, sort_keys=True
+        ).encode()
         digest = f"sha256:{hashlib.sha256(raw).hexdigest()}"
         return CheckoutOwnerCreationSpecV2(request=request, request_digest=digest)
 

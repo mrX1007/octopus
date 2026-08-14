@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from core.c2.control_server_identity import (
     generate_server_identity_keypair,
     sign_server_challenge,
@@ -53,24 +54,30 @@ def test_server_challenge_rejects_tampered_metadata():
     )
 
     # Inode mismatch
-    assert verify_server_challenge(
-        public_key_bytes=pub,
-        signature_b64u=sig,
-        daemon_instance_id="inst-1",
-        server_nonce="nonce-abc",
-        listener_st_dev=12345,
-        listener_st_ino=99999,  # Mismatched inode
-        boot_id="boot-uuid-1",
-    ) is False
+    assert (
+        verify_server_challenge(
+            public_key_bytes=pub,
+            signature_b64u=sig,
+            daemon_instance_id="inst-1",
+            server_nonce="nonce-abc",
+            listener_st_dev=12345,
+            listener_st_ino=99999,  # Mismatched inode
+            boot_id="boot-uuid-1",
+        )
+        is False
+    )
 
     # Wrong public key
     _, other_pub = generate_server_identity_keypair()
-    assert verify_server_challenge(
-        public_key_bytes=other_pub,
-        signature_b64u=sig,
-        daemon_instance_id="inst-1",
-        server_nonce="nonce-abc",
-        listener_st_dev=12345,
-        listener_st_ino=67890,
-        boot_id="boot-uuid-1",
-    ) is False
+    assert (
+        verify_server_challenge(
+            public_key_bytes=other_pub,
+            signature_b64u=sig,
+            daemon_instance_id="inst-1",
+            server_nonce="nonce-abc",
+            listener_st_dev=12345,
+            listener_st_ino=67890,
+            boot_id="boot-uuid-1",
+        )
+        is False
+    )

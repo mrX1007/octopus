@@ -117,9 +117,7 @@ def test_bootstrap_missing_key_material_enters_recovery_required(
     with pytest.raises(OSError):
         _bootstrap(tmp_path)
     with sqlite3.connect(tmp_path / "c2.db") as connection:
-        temp_name = connection.execute(
-            "SELECT temp_name FROM bootstrap_admin_transactions"
-        ).fetchone()[0]
+        temp_name = connection.execute("SELECT temp_name FROM bootstrap_admin_transactions").fetchone()[0]
     (tmp_path / "keys" / temp_name).unlink()
     monkeypatch.setattr(bootstrap_module.os, "replace", actual_replace)
     with pytest.raises(BootstrapRecoveryRequired):

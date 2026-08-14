@@ -207,9 +207,7 @@ def test_resume_drains_interrupted_and_pending_tasks_before_director_concludes(
     assert [
         (attempt.attempt_number, attempt.status)
         for attempt in snapshot.attempts
-        if attempt.task_id == next(
-            task.task_id for task in snapshot.tasks if task.task == "first"
-        )
+        if attempt.task_id == next(task.task_id for task in snapshot.tasks if task.task == "first")
     ] == [(1, "interrupted"), (2, "no_new_facts")]
 
 
@@ -288,17 +286,10 @@ def test_scoped_same_name_dependencies_resolve_and_execute_by_typed_scope(tmp_pa
     )
 
     snapshot = harness.pipeline.mission_store.snapshot(harness.pipeline.mission_id)
-    tasks = {
-        (task.task, task.task_scope): task
-        for task in snapshot.tasks
-    }
+    tasks = {(task.task, task.task_scope): task for task in snapshot.tasks}
     assert harness.executed_tasks == ["parent", "parent", "child", "child"]
-    assert tasks[("child", asset_scope)].depends_on == (
-        tasks[("parent", asset_scope)].task_id,
-    )
-    assert tasks[("child", service_scope)].depends_on == (
-        tasks[("parent", service_scope)].task_id,
-    )
+    assert tasks[("child", asset_scope)].depends_on == (tasks[("parent", asset_scope)].task_id,)
+    assert tasks[("child", service_scope)].depends_on == (tasks[("parent", service_scope)].task_id,)
     assert {task.status for task in snapshot.tasks} == {"no_new_facts"}
     assert snapshot.mission.status == "completed"
 
@@ -339,16 +330,11 @@ def test_invalid_scoped_parent_does_not_poison_valid_sibling_dependency(tmp_path
     )
 
     snapshot = pipeline.mission_store.snapshot(pipeline.mission_id)
-    tasks = {
-        (task.task, task.task_scope): task
-        for task in snapshot.tasks
-    }
+    tasks = {(task.task, task.task_scope): task for task in snapshot.tasks}
     assert tasks[("parent", asset_scope)].status == "blocked"
     assert tasks[("parent", service_scope)].status == "pending"
     assert tasks[("child", service_scope)].status == "pending"
-    assert tasks[("child", service_scope)].depends_on == (
-        tasks[("parent", service_scope)].task_id,
-    )
+    assert tasks[("child", service_scope)].depends_on == (tasks[("parent", service_scope)].task_id,)
 
 
 @pytest.mark.parametrize("parent_status", ["blocked", "failed"])
@@ -393,10 +379,7 @@ def test_terminally_unsatisfied_parent_durably_blocks_child_without_scan_crash(
 
     snapshot = resumed.pipeline.mission_store.snapshot(resumed.pipeline.mission_id)
     tasks = {task.task: task for task in snapshot.tasks}
-    child_attempts = [
-        attempt for attempt in snapshot.attempts
-        if attempt.task_id == tasks["child"].task_id
-    ]
+    child_attempts = [attempt for attempt in snapshot.attempts if attempt.task_id == tasks["child"].task_id]
     assert resumed.executed_tasks == []
     assert tasks["parent"].status == parent_status
     assert tasks["child"].status == "blocked"
@@ -582,9 +565,7 @@ def test_same_task_name_with_typed_scopes_keeps_ids_through_scan_loop(tmp_path):
         service_scope,
     }
     assert len({task.task_id for task in snapshot.tasks}) == 2
-    assert [attempt.task_id for attempt in snapshot.attempts] == [
-        task.task_id for task in snapshot.tasks
-    ]
+    assert [attempt.task_id for attempt in snapshot.attempts] == [task.task_id for task in snapshot.tasks]
     assert {task.status for task in snapshot.tasks} == {"no_new_facts"}
 
 

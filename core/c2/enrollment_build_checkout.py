@@ -1,10 +1,11 @@
 """Enrollment build checkout."""
+
 from __future__ import annotations
 
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Dict, Optional, Any
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,7 @@ class EnrollmentBuildCheckoutServiceV1:
     """Service managing build reservations and build material checkouts."""
 
     def __init__(self) -> None:
-        self._reservations: Dict[str, EnrollmentBuildReservationV1] = {}
+        self._reservations: dict[str, EnrollmentBuildReservationV1] = {}
 
     def reserve_build(
         self,
@@ -46,7 +47,7 @@ class EnrollmentBuildCheckoutServiceV1:
         self._reservations[res_id] = reservation
         return reservation
 
-    def checkout_build_material(self, reservation_id: str) -> Dict[str, Any]:
+    def checkout_build_material(self, reservation_id: str) -> dict[str, Any]:
         """Checkout build materials for a valid reservation."""
         res = self._reservations.get(reservation_id)
         if res is None:
@@ -86,7 +87,6 @@ class EnrollmentBuildCheckoutServiceV1:
         del self._reservations[reservation_id]
         return True
 
-    def query_reservation(self, reservation_id: str) -> Optional[EnrollmentBuildReservationV1]:
+    def query_reservation(self, reservation_id: str) -> EnrollmentBuildReservationV1 | None:
         """Query reservation details."""
         return self._reservations.get(reservation_id)
-

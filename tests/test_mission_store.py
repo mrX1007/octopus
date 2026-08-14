@@ -186,9 +186,7 @@ def test_reopen_recovers_running_work_and_next_attempt_number_is_monotonic(tmp_p
     )
     recovered = recovery_store.snapshot(reopened.mission_id)
     recovered_task = next(item for item in recovered.tasks if item.task_id == task.task_id)
-    recovered_attempt = next(
-        item for item in recovered.attempts if item.attempt_id == abandoned.attempt_id
-    )
+    recovered_attempt = next(item for item in recovered.attempts if item.attempt_id == abandoned.attempt_id)
 
     assert reopened.mission_id == mission.mission_id
     assert reopened.status == "running"
@@ -209,9 +207,7 @@ def test_reopen_recovers_running_work_and_next_attempt_number_is_monotonic(tmp_p
     assert retry.attempt_number == 2
     assert retry.status == "running"
     retried_snapshot = recovery_store.snapshot(mission.mission_id)
-    assert next(
-        item for item in retried_snapshot.tasks if item.task_id == task.task_id
-    ).status == "running"
+    assert next(item for item in retried_snapshot.tasks if item.task_id == task.task_id).status == "running"
 
 
 def test_attempt_completion_is_exactly_once_and_hydrates_outcome_and_provenance(tmp_path):
@@ -302,9 +298,10 @@ def test_explicit_interrupt_resume_and_terminal_mission_transitions(tmp_path):
     assert interrupted.mission.status == "interrupted"
     assert interrupted.mission.reason == "operator_requested"
     assert next(item for item in interrupted.tasks if item.task_id == task.task_id).status == "interrupted"
-    assert next(
-        item for item in interrupted.attempts if item.attempt_id == first_attempt.attempt_id
-    ).status == "interrupted"
+    assert (
+        next(item for item in interrupted.attempts if item.attempt_id == first_attempt.attempt_id).status
+        == "interrupted"
+    )
 
     resumed = store.open_mission("scan-transitions", "10.0.0.5")
     retry = store.begin_attempt(
@@ -368,11 +365,7 @@ def test_attempt_payload_is_redacted_before_sqlite_persistence(tmp_path):
     assert token in outcome.commands[0]["command"]
     assert password in outcome.reason
 
-    persisted_bytes = b"".join(
-        path.read_bytes()
-        for path in tmp_path.glob("missions.db*")
-        if path.is_file()
-    )
+    persisted_bytes = b"".join(path.read_bytes() for path in tmp_path.glob("missions.db*") if path.is_file())
     assert token.encode() not in persisted_bytes
     assert password.encode() not in persisted_bytes
     assert target_password.encode() not in persisted_bytes

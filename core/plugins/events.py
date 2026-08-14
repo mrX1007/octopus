@@ -21,9 +21,10 @@ from typing import Any, Callable, Optional
 @dataclass
 class PluginEvent:
     """A single event emitted by a plugin."""
+
     event_type: str
     data: dict[str, Any]
-    source: str            # plugin name that emitted it
+    source: str  # plugin name that emitted it
     timestamp: float = field(default_factory=time.time)
 
 
@@ -42,7 +43,7 @@ class PluginEventBus:
     def __init__(self, event_store=None):
         self._handlers: dict[str, list[Callable]] = {}
         self._history: list[PluginEvent] = []
-        self._event_store = event_store   # core.c2.event_store.EventStore or None
+        self._event_store = event_store  # core.c2.event_store.EventStore or None
 
     def on(self, pattern: str, handler: Callable):
         """Subscribe a handler to an event pattern."""
@@ -68,10 +69,7 @@ class PluginEventBus:
         if self._event_store:
             try:
                 self._event_store.append(
-                    event_type=f"plugin.{event_type}",
-                    aggregate_type="plugin",
-                    aggregate_id=source,
-                    payload=data
+                    event_type=f"plugin.{event_type}", aggregate_type="plugin", aggregate_id=source, payload=data
                 )
             except Exception as e:
                 logging.debug(f"EventBus: failed to persist event: {e}")
@@ -103,8 +101,9 @@ class PluginEventBus:
         """Return event history for the current session."""
         return list(self._history)
 
-    def get_events(self, event_type: Optional[str] = None, source: Optional[str] = None,
-                   since: float = 0) -> list[PluginEvent]:
+    def get_events(
+        self, event_type: Optional[str] = None, source: Optional[str] = None, since: float = 0
+    ) -> list[PluginEvent]:
         """Query event history with optional filters."""
         results = self._history
         if event_type:

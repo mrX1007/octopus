@@ -31,20 +31,14 @@ _TEST_TAXONOMY = {
 def pytest_collection_modifyitems(items):
     """Reject tests that do not declare an explicit taxonomy marker."""
 
-    unclassified = [
-        item.nodeid
-        for item in items
-        if not any(item.get_closest_marker(name) for name in _TEST_TAXONOMY)
-    ]
+    unclassified = [item.nodeid for item in items if not any(item.get_closest_marker(name) for name in _TEST_TAXONOMY)]
     if unclassified:
         rendered = "\n  - ".join(unclassified)
-        raise pytest.UsageError(
-            "unclassified tests must declare an explicit pytest marker:\n"
-            f"  - {rendered}"
-        )
+        raise pytest.UsageError(f"unclassified tests must declare an explicit pytest marker:\n  - {rendered}")
 
 
 # ─── Sample Data Fixtures ───────────────────────────────
+
 
 @pytest.fixture
 def sample_nmap_output():
@@ -100,12 +94,34 @@ def sample_session_data():
     return {
         "history": (1, "192.168.1.100", "2026-06-15 10:00:00", "complete"),
         "vulns": [
-            (1, 1, "CVE-2021-41773", "HIGH", "80", "http",
-             "Path Traversal in Apache 2.4.49", "CONFIRMED", "nmap",
-             "HTTP 200 with /etc/passwd", "curl --path-as-is ...", 8.1),
-            (2, 1, "Weak SSH Config", "MEDIUM", "22", "ssh",
-             "SSH allows password authentication", "UNCONFIRMED", "nmap",
-             "password auth advertised", "ssh -o PreferredAuthentications=password", None),
+            (
+                1,
+                1,
+                "CVE-2021-41773",
+                "HIGH",
+                "80",
+                "http",
+                "Path Traversal in Apache 2.4.49",
+                "CONFIRMED",
+                "nmap",
+                "HTTP 200 with /etc/passwd",
+                "curl --path-as-is ...",
+                8.1,
+            ),
+            (
+                2,
+                1,
+                "Weak SSH Config",
+                "MEDIUM",
+                "22",
+                "ssh",
+                "SSH allows password authentication",
+                "UNCONFIRMED",
+                "nmap",
+                "password auth advertised",
+                "ssh -o PreferredAuthentications=password",
+                None,
+            ),
         ],
         "fixes": [
             (1, 1, 1, "Upgrade Apache to >= 2.4.51", "ai"),
@@ -180,7 +196,8 @@ def canonical_execution_result_factory():
             request_id=request_id,
             duration=duration,
             partial=partial,
-            executed=canonical_status not in {
+            executed=canonical_status
+            not in {
                 ExecutionStatus.BLOCKED,
                 ExecutionStatus.UNAVAILABLE,
             },

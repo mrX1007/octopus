@@ -652,10 +652,14 @@ Saved raw outputs can be replayed without rerunning external tools:
 from core.ai.pipeline import AIPipeline
 
 pipeline = AIPipeline("data/facts.db")
-result = pipeline.replay_outputs("scan-replay", "10.0.0.5", [
-    {"tool": "nmap", "output": raw_nmap_text},
-    {"tool": "nuclei_safe http://10.0.0.5", "output": raw_nuclei_text},
-])
+result = pipeline.replay_outputs(
+    "scan-replay",
+    "10.0.0.5",
+    [
+        {"tool": "nmap", "output": raw_nmap_text},
+        {"tool": "nuclei_safe http://10.0.0.5", "output": raw_nuclei_text},
+    ],
+)
 
 print(result["context"]["target_model"])
 print(result["snapshot_actions"])
@@ -666,9 +670,7 @@ Replay snapshots can assert facts, next actions and surface states:
 ```python
 from core.ai.replay_snapshot import ReplaySnapshot
 
-ReplaySnapshot("/tmp/octopus_snapshot.db").assert_file_ok(
-    "tests/fixtures/replay_snapshot_web_api.json"
-)
+ReplaySnapshot("/tmp/octopus_snapshot.db").assert_file_ok("tests/fixtures/replay_snapshot_web_api.json")
 ```
 
 ## Hermetic Benchmarks
@@ -1107,8 +1109,7 @@ Static and dependency checks:
 
 ```bash
 ./venv/bin/python -m ruff check .
-./venv/bin/python -m mypy
-./venv/bin/python -m mypy --config-file quality/mypy-import-aware.ini
+./venv/bin/python scripts/quality/mypy_gate.py check
 ./venv/bin/python -m pip check
 ```
 
@@ -1187,12 +1188,12 @@ network connections or launching scanners. CI also prints a separate
 non-blocking per-module killchain coverage table so aggregate coverage cannot
 hide the remaining low modules.
 
-The configured mypy breadth ratchet now checks 214 of 254 discovered
-first-party Python files, up from 90. It still uses `follow_imports = "skip"`.
-A second required configuration checks nine clean leaf modules with normal
-import traversal and no missing-import suppression. This is an incremental
-typing boundary, not a whole-tree type-safety claim: strict repo-wide transitive
-typing is not complete. The remaining transitive inventory is recorded in
+CI now routes Python typing through the single fail-closed
+`python scripts/quality/mypy_gate.py check` entrypoint. The gate owns consumer
+inventory and rejects stale or parallel mypy command paths. This migration
+boundary is not, by itself, a whole-tree type-safety claim: strict repo-wide
+transitive typing is not complete. The remaining transitive inventory is
+recorded in
 [`docs/quality/static-analysis-baseline.md`](docs/quality/static-analysis-baseline.md).
 
 Before the dedicated live lane was added, only 13 collected tests carried the

@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
+from typing import Any, Union
 
-# We use typing.TypeAlias as well, but standard union syntax is allowed with future imports.
 from typing_extensions import TypeAlias
 
 
@@ -23,12 +22,6 @@ class RemoteOperationAttemptStateV1(str, Enum):
     RECONCILING = "reconciling"
 
 
-# Assuming these types will be provided by other modules or imported.
-# For the purpose of isolated creation, we define placeholders if needed,
-# but the plan mentions RemoteExecOperationId, ParticipantPayloadDraftRefV2.
-# We will define them as aliases to str for this file to be self-contained
-# and syntactically valid if they are not defined elsewhere, or use Any.
-from typing import Any
 RemoteExecOperationId: TypeAlias = str
 ParticipantPayloadDraftRefV2: TypeAlias = Any
 
@@ -100,7 +93,6 @@ class ServiceRemoteOperationOutputV1:
     services: tuple[ServiceStatusOutputV1, ...]
 
 
-from typing import Union
 RemoteOperationOutputV1: TypeAlias = Union[
     IdentityRemoteOperationOutputV1,
     HostRemoteOperationOutputV1,

@@ -101,7 +101,7 @@ def test_require_mismatch_raises() -> None:
     store = DefaultExecutionNoReturnAdmissionStoreV2()
     cancellation = _make_cancellation_record()
 
-    receipt = store.admit(
+    store.admit(
         cancellation=cancellation,
         transaction_id="tx_300",
         decision_identity_digest="sha256:dec_digest_300",

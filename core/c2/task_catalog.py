@@ -112,9 +112,7 @@ class TaskOperationCatalog:
     def validate(self, operation_id: C2TaskOperationId, payload: object) -> None:
         expected = self.require_payload_type(operation_id)
         if type(payload) is not expected:
-            raise ValueError(
-                f"payload variant mismatch for {operation_id.value}: expected {expected.__name__}"
-            )
+            raise ValueError(f"payload variant mismatch for {operation_id.value}: expected {expected.__name__}")
 
 
 def operation_for_payload(payload: C2TaskPayload) -> C2TaskOperationId:

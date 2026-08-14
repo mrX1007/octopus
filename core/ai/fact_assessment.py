@@ -16,7 +16,7 @@ import re
 import sqlite3
 import time
 from collections.abc import Iterable, Iterator, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, ClassVar
@@ -239,10 +239,8 @@ class FactAssessment:
 
 def _begin(conn: sqlite3.Connection, immediate: bool = False) -> None:
     if not conn.in_transaction:
-        try:
+        with suppress(sqlite3.OperationalError):
             conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
-        except sqlite3.OperationalError:
-            pass
 
 
 class FactAssessmentStore:
@@ -305,7 +303,11 @@ class FactAssessmentStore:
         try:
             conn = sqlite3.connect(self.db_path, timeout=10.0)
         except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
-            if "unable to open" in str(exc).lower() or "authorization denied" in str(exc).lower() or "readonly" in str(exc).lower():
+            if (
+                "unable to open" in str(exc).lower()
+                or "authorization denied" in str(exc).lower()
+                or "readonly" in str(exc).lower()
+            ):
                 self._memory_conn = sqlite3.connect(":memory:")
                 self._memory_conn.execute("PRAGMA foreign_keys=ON")
                 self._memory_conn.execute("PRAGMA busy_timeout=10000")

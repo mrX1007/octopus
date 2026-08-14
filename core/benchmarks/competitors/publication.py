@@ -95,9 +95,7 @@ def publish_campaign_bundle(
     if output.exists() or output.is_symlink():
         raise FileExistsError(f"publication_destination_exists:{output}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    temporary = Path(
-        tempfile.mkdtemp(prefix=f".{output.name}.tmp-", dir=str(output.parent))
-    )
+    temporary = Path(tempfile.mkdtemp(prefix=f".{output.name}.tmp-", dir=str(output.parent)))
     try:
         comparison = matrix.to_dict()
         _write_json(temporary / "comparison.json", comparison)
@@ -116,10 +114,7 @@ def publish_campaign_bundle(
         for system_id, aggregates in sorted(matrix.aggregates.items()):
             for scenario_id, aggregate in sorted(aggregates.items()):
                 _write_json(
-                    temporary
-                    / "aggregates"
-                    / _safe_component(system_id)
-                    / f"{_safe_component(scenario_id)}.json",
+                    temporary / "aggregates" / _safe_component(system_id) / f"{_safe_component(scenario_id)}.json",
                     aggregate.to_dict(),
                 )
 
@@ -140,10 +135,7 @@ def publish_campaign_bundle(
         for scenario in scenarios:
             public_scenarios[scenario.scenario_id] = scenario.to_dict()
             _write_json(
-                temporary
-                / "inputs"
-                / "scenarios"
-                / f"{scenario.scenario_id}.json",
+                temporary / "inputs" / "scenarios" / f"{scenario.scenario_id}.json",
                 public_scenarios[scenario.scenario_id],
             )
         _write_json(temporary / "preflight.json", dict(preflight))
@@ -184,10 +176,7 @@ def publish_campaign_bundle(
 
         _scan_secret_canaries(temporary, secret_canaries)
         checksum_paths = sorted(path for path in temporary.rglob("*") if path.is_file())
-        lines = [
-            f"{_sha256_file(path)}  {path.relative_to(temporary).as_posix()}"
-            for path in checksum_paths
-        ]
+        lines = [f"{_sha256_file(path)}  {path.relative_to(temporary).as_posix()}" for path in checksum_paths]
         (temporary / "SHA256SUMS").write_text(
             "\n".join(lines) + "\n",
             encoding="utf-8",
@@ -207,12 +196,7 @@ def verify_campaign_bundle(directory: str | Path) -> dict[str, Any]:
 
     root = Path(directory)
     checksum_file = root / "SHA256SUMS"
-    if (
-        not root.is_dir()
-        or root.is_symlink()
-        or not checksum_file.is_file()
-        or checksum_file.is_symlink()
-    ):
+    if not root.is_dir() or root.is_symlink() or not checksum_file.is_file() or checksum_file.is_symlink():
         raise CampaignPublicationError("publication_checksum_file_missing")
     expected: dict[str, str] = {}
     try:
@@ -335,8 +319,7 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
             or combination not in expected_combinations
             or combination in schedule_by_combination
             or run_key in schedule_by_key
-            or run_key
-            != schedule_run_key(system_id, scenario_id, repetition, seed)
+            or run_key != schedule_run_key(system_id, scenario_id, repetition, seed)
         ):
             raise CampaignPublicationError("publication_semantic_invalid")
         normalized = {
@@ -351,21 +334,14 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
     if set(schedule_by_combination) != expected_combinations:
         raise CampaignPublicationError("publication_semantic_incomplete")
 
-    expected_system_inputs = {
-        f"inputs/systems/{_safe_component(system_id)}.json" for system_id in systems
-    }
-    expected_scenario_inputs = {
-        f"inputs/scenarios/{_safe_component(scenario_id)}.json"
-        for scenario_id in scenarios
-    }
+    expected_system_inputs = {f"inputs/systems/{_safe_component(system_id)}.json" for system_id in systems}
+    expected_scenario_inputs = {f"inputs/scenarios/{_safe_component(scenario_id)}.json" for scenario_id in scenarios}
     expected_aggregates = {
         f"aggregates/{_safe_component(system_id)}/{_safe_component(scenario_id)}.json"
         for system_id in systems
         for scenario_id in scenarios
     }
-    expected_attestations = {
-        f"attestations/{run_key}.json" for run_key in schedule_by_key
-    }
+    expected_attestations = {f"attestations/{run_key}.json" for run_key in schedule_by_key}
     for prefix, expected_paths in (
         ("inputs/systems/", expected_system_inputs),
         ("inputs/scenarios/", expected_scenario_inputs),
@@ -377,23 +353,15 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
             raise CampaignPublicationError("publication_semantic_incomplete")
 
     system_inputs = {
-        system_id: _read_json_mapping(
-            root / "inputs" / "systems" / f"{_safe_component(system_id)}.json"
-        )
+        system_id: _read_json_mapping(root / "inputs" / "systems" / f"{_safe_component(system_id)}.json")
         for system_id in systems
     }
     scenario_inputs = {
-        scenario_id: _read_json_mapping(
-            root / "inputs" / "scenarios" / f"{_safe_component(scenario_id)}.json"
-        )
+        scenario_id: _read_json_mapping(root / "inputs" / "scenarios" / f"{_safe_component(scenario_id)}.json")
         for scenario_id in scenarios
     }
-    if any(
-        payload.get("system_id") != system_id
-        for system_id, payload in system_inputs.items()
-    ) or any(
-        payload.get("scenario_id") != scenario_id
-        for scenario_id, payload in scenario_inputs.items()
+    if any(payload.get("system_id") != system_id for system_id, payload in system_inputs.items()) or any(
+        payload.get("scenario_id") != scenario_id for scenario_id, payload in scenario_inputs.items()
     ):
         raise CampaignPublicationError("publication_semantic_invalid")
 
@@ -405,19 +373,12 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
     )
     expected_scenarios = tuple(
         sorted(
-            (
-                _comparison_scenario_metadata(payload)
-                for payload in scenario_inputs.values()
-            ),
+            (_comparison_scenario_metadata(payload) for payload in scenario_inputs.values()),
             key=lambda item: str(item["scenario_id"]),
         )
     )
     legacy_expected_scenarios = tuple(
-        {
-            key: value
-            for key, value in item.items()
-            if key not in {"tags", "evaluation_profile"}
-        }
+        {key: value for key, value in item.items() if key not in {"tags", "evaluation_profile"}}
         for item in expected_scenarios
     )
     enriched_scenario_metadata = _json_equal(
@@ -432,9 +393,7 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
             legacy_expected_scenarios,
         )
     )
-    scenario_metadata_valid = (
-        enriched_scenario_metadata or legacy_scenario_metadata
-    )
+    scenario_metadata_valid = enriched_scenario_metadata or legacy_scenario_metadata
     if not _json_equal(comparison_systems, expected_systems) or not scenario_metadata_valid:
         raise CampaignPublicationError("publication_semantic_invalid")
     if not _json_equal(
@@ -452,22 +411,14 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
     observed_statuses: Counter[str] = Counter()
     policy_violations = 0
     expected_summaries: list[dict[str, Any]] = []
-    expected_metric_statistics_by_pair: dict[
-        tuple[str, str], dict[str, dict[str, float]]
-    ] = {}
+    expected_metric_statistics_by_pair: dict[tuple[str, str], dict[str, dict[str, float]]] = {}
     aggregate_ids: dict[str, dict[str, str]] = {}
-    system_identities = {
-        system_id: _system_identity(payload)
-        for system_id, payload in system_inputs.items()
-    }
+    system_identities = {system_id: _system_identity(payload) for system_id, payload in system_inputs.items()}
     for system_id in systems:
         aggregate_ids[system_id] = {}
         for scenario_id in scenarios:
             aggregate = _read_json_mapping(
-                root
-                / "aggregates"
-                / _safe_component(system_id)
-                / f"{_safe_component(scenario_id)}.json"
+                root / "aggregates" / _safe_component(system_id) / f"{_safe_component(scenario_id)}.json"
             )
             scenario_payload = aggregate.get("scenario")
             if not _json_equal(scenario_payload, scenario_inputs[scenario_id]):
@@ -479,15 +430,9 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
             durations: list[float] = []
             aggregate_statuses: Counter[str] = Counter()
             aggregate_policy_violations = 0
-            allowed_actions = set(
-                _string_sequence(scenario_inputs[scenario_id].get("allowed_actions"))
-            )
-            ground_truth = _required_mapping(
-                scenario_inputs[scenario_id].get("ground_truth")
-            )
-            expected_findings = set(
-                _string_sequence(ground_truth.get("expected_findings"))
-            )
+            allowed_actions = set(_string_sequence(scenario_inputs[scenario_id].get("allowed_actions")))
+            ground_truth = _required_mapping(scenario_inputs[scenario_id].get("ground_truth"))
+            expected_findings = set(_string_sequence(ground_truth.get("expected_findings")))
             for run in runs:
                 repetition = _positive_integer(run.get("repetition"))
                 seed = _nonnegative_integer(run.get("seed"))
@@ -496,9 +441,7 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
                 status = str(run.get("status") or "")
                 actions = _string_sequence(run.get("actions"))
                 violations = _string_sequence(run.get("policy_violations"))
-                expected_violations = tuple(
-                    sorted({action for action in actions if action not in allowed_actions})
-                )
+                expected_violations = tuple(sorted({action for action in actions if action not in allowed_actions}))
                 metrics = _metrics_mapping(run.get("metrics"))
                 duration = _nonnegative_number(run.get("duration_seconds"))
                 started_at = _nonnegative_number(run.get("started_at"))
@@ -507,12 +450,8 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
                 result_summary = run.get("result_summary")
                 if not isinstance(result_summary, Mapping):
                     raise CampaignPublicationError("publication_semantic_invalid")
-                reported_findings = set(
-                    _string_sequence(result_summary.get("reported_findings"))
-                )
-                coverage_gaps = set(
-                    _string_sequence(result_summary.get("coverage_gaps"))
-                )
+                reported_findings = set(_string_sequence(result_summary.get("reported_findings")))
+                coverage_gaps = set(_string_sequence(result_summary.get("coverage_gaps")))
                 if (
                     status not in _RUN_STATUSES
                     or run.get("scenario_id") != scenario_id
@@ -521,17 +460,11 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
                     or repetition in seen_repetitions
                     or violations != expected_violations
                     or finished_at < started_at
-                    or duration
-                    > finished_at - started_at + _RUN_TIMING_TOLERANCE_SECONDS
+                    or duration > finished_at - started_at + _RUN_TIMING_TOLERANCE_SECONDS
                     or not isinstance(error_class, str)
-                    or (
-                        bool(error_class)
-                        and not _ERROR_CLASS.fullmatch(error_class)
-                    )
+                    or (bool(error_class) and not _ERROR_CLASS.fullmatch(error_class))
                     or result_summary.get("status") != status
-                    or not expected_findings.difference(reported_findings).issubset(
-                        coverage_gaps
-                    )
+                    or not expected_findings.difference(reported_findings).issubset(coverage_gaps)
                 ):
                     raise CampaignPublicationError("publication_semantic_invalid")
                 expected_run_id = _stable_id(
@@ -581,9 +514,7 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
                 raise CampaignPublicationError("publication_semantic_invalid")
 
             aggregate_ids[system_id][scenario_id] = expected_aggregate_id
-            expected_metric_statistics_by_pair[(system_id, scenario_id)] = (
-                expected_metric_statistics
-            )
+            expected_metric_statistics_by_pair[(system_id, scenario_id)] = expected_metric_statistics
             observed_statuses.update(aggregate_statuses)
             policy_violations += aggregate_policy_violations
             expected_summaries.append(
@@ -597,20 +528,15 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
                         6,
                     ),
                     "metric_medians": {
-                        name: values["median"]
-                        for name, values in sorted(expected_metric_statistics.items())
+                        name: values["median"] for name, values in sorted(expected_metric_statistics.items())
                     },
                     "metric_counts": {
-                        name: int(values["count"])
-                        for name, values in sorted(expected_metric_statistics.items())
+                        name: int(values["count"]) for name, values in sorted(expected_metric_statistics.items())
                     },
                     "policy_violations": aggregate_policy_violations,
                     "timeout_runs": aggregate_statuses.get("timeout", 0),
                     "partial_runs": aggregate_statuses.get("partial", 0),
-                    "error_runs": sum(
-                        aggregate_statuses.get(status, 0)
-                        for status in _STRICT_RUN_STATUSES
-                    ),
+                    "error_runs": sum(aggregate_statuses.get(status, 0) for status in _STRICT_RUN_STATUSES),
                 }
             )
 
@@ -618,8 +544,7 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
     published_summaries = expected_summaries
     if not current_comparison:
         published_summaries = [
-            {key: value for key, value in item.items() if key != "metric_counts"}
-            for item in expected_summaries
+            {key: value for key, value in item.items() if key != "metric_counts"} for item in expected_summaries
         ]
     if not _json_equal(comparison.get("summaries"), published_summaries):
         raise CampaignPublicationError("publication_semantic_invalid")
@@ -630,8 +555,7 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
             "schema_version": comparison_schema,
             "systems": [system_identities[system_id] for system_id in sorted(systems)],
             "aggregate_ids": {
-                system_id: dict(sorted(aggregate_ids[system_id].items()))
-                for system_id in sorted(aggregate_ids)
+                system_id: dict(sorted(aggregate_ids[system_id].items())) for system_id in sorted(aggregate_ids)
             },
         },
     )
@@ -690,23 +614,16 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
     expected_status_counts = dict(sorted(observed_statuses.items()))
     if (
         not _json_equal(campaign_status.get("status_counts"), expected_status_counts)
-        or _nonnegative_integer(campaign_status.get("policy_violations"))
-        != policy_violations
+        or _nonnegative_integer(campaign_status.get("policy_violations")) != policy_violations
         or _nonnegative_integer(campaign_status.get("executed_runs"))
         + _nonnegative_integer(campaign_status.get("resumed_runs"))
         != len(expected_combinations)
     ):
         raise CampaignPublicationError("publication_semantic_invalid")
     strict_statuses = set(_string_sequence(campaign.get("strict_statuses")))
-    run_failure = policy_violations > 0 or any(
-        observed_statuses.get(status, 0) > 0 for status in strict_statuses
-    )
+    run_failure = policy_violations > 0 or any(observed_statuses.get(status, 0) > 0 for status in strict_statuses)
     expected_campaign_status = (
-        "partial"
-        if cleanup_status == "failed"
-        else "completed_with_failures"
-        if run_failure
-        else "succeeded"
+        "partial" if cleanup_status == "failed" else "completed_with_failures" if run_failure else "succeeded"
     )
     if campaign_status.get("status") != expected_campaign_status:
         raise CampaignPublicationError("publication_semantic_invalid")
@@ -724,9 +641,7 @@ def _verify_semantic_completeness(root: Path, observed: Mapping[str, Path]) -> N
         "timeout_runs": observed_statuses.get("timeout", 0),
         "partial_runs": observed_statuses.get("partial", 0),
         "policy_violations": policy_violations,
-        "error_runs": sum(
-            observed_statuses.get(status, 0) for status in _STRICT_RUN_STATUSES
-        ),
+        "error_runs": sum(observed_statuses.get(status, 0) for status in _STRICT_RUN_STATUSES),
     }
     if not _json_equal(comparison.get("publication"), expected_publication):
         raise CampaignPublicationError("publication_semantic_invalid")
@@ -811,10 +726,7 @@ def _string_sequence(value: Any) -> tuple[str, ...]:
 def _metrics_mapping(value: Any) -> dict[str, float]:
     if not isinstance(value, Mapping):
         raise CampaignPublicationError("publication_semantic_invalid")
-    return {
-        str(name): _nonnegative_number(metric)
-        for name, metric in value.items()
-    }
+    return {str(name): _nonnegative_number(metric) for name, metric in value.items()}
 
 
 def _aggregate_metric_statistics(
@@ -823,11 +735,7 @@ def _aggregate_metric_statistics(
     names = sorted({name for _status, metrics in runs for name in metrics})
     result: dict[str, dict[str, float]] = {}
     for name in names:
-        values = [
-            float(metrics[name])
-            for status, metrics in runs
-            if status == "succeeded" and name in metrics
-        ]
+        values = [float(metrics[name]) for status, metrics in runs if status == "succeeded" and name in metrics]
         if not values:
             continue
         result[name] = {
@@ -870,11 +778,7 @@ def _comparison_scenario_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
         "budgets": dict(_required_mapping(payload.get("budgets"))),
         "seed": _nonnegative_integer(payload.get("seed")),
         "tags": list(_string_sequence(payload.get("tags") or [])),
-        "evaluation_profile": (
-            dict(evaluation_profile)
-            if isinstance(evaluation_profile, Mapping)
-            else {}
-        ),
+        "evaluation_profile": (dict(evaluation_profile) if isinstance(evaluation_profile, Mapping) else {}),
     }
 
 
@@ -914,9 +818,7 @@ def _system_identity(payload: Mapping[str, Any]) -> str:
 
 def _execution_mode(payload: Mapping[str, Any]) -> str:
     metadata = payload.get("metadata")
-    metadata_mode = (
-        metadata.get("execution_mode") if isinstance(metadata, Mapping) else None
-    )
+    metadata_mode = metadata.get("execution_mode") if isinstance(metadata, Mapping) else None
     mode = str(
         payload.get("execution_mode")
         or payload.get("mode")
@@ -969,10 +871,7 @@ def _sanitize_public_metadata(value: Any, *, depth: int = 0) -> Any:
             if str(key).lower() not in _PRIVATE_METADATA_KEYS
         }
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return [
-            _sanitize_public_metadata(item, depth=depth + 1)
-            for item in value[:256]
-        ]
+        return [_sanitize_public_metadata(item, depth=depth + 1) for item in value[:256]]
     if value is None or isinstance(value, (str, bool, int, float)):
         return value
     return str(value)
@@ -1003,14 +902,8 @@ def _published_provenance(
     }
     payload["input_sha256"] = {
         "campaign": _canonical_digest(campaign),
-        "systems": {
-            system_id: _canonical_digest(value)
-            for system_id, value in sorted(systems.items())
-        },
-        "scenarios": {
-            scenario_id: _canonical_digest(value)
-            for scenario_id, value in sorted(scenarios.items())
-        },
+        "systems": {system_id: _canonical_digest(value) for system_id, value in sorted(systems.items())},
+        "scenarios": {scenario_id: _canonical_digest(value) for scenario_id, value in sorted(scenarios.items())},
     }
     return payload
 
@@ -1029,14 +922,8 @@ def _verify_provenance_inputs(
         raise CampaignPublicationError("publication_semantic_invalid")
     observed_systems = _required_mapping(inputs.get("systems"))
     observed_scenarios = _required_mapping(inputs.get("scenarios"))
-    expected_systems = {
-        system_id: _canonical_digest(value)
-        for system_id, value in sorted(systems.items())
-    }
-    expected_scenarios = {
-        scenario_id: _canonical_digest(value)
-        for scenario_id, value in sorted(scenarios.items())
-    }
+    expected_systems = {system_id: _canonical_digest(value) for system_id, value in sorted(systems.items())}
+    expected_scenarios = {scenario_id: _canonical_digest(value) for scenario_id, value in sorted(scenarios.items())}
     if (
         inputs.get("campaign") != _canonical_digest(campaign)
         or not _json_equal(observed_systems, expected_systems)
@@ -1062,13 +949,7 @@ def _json_equal(left: Any, right: Any) -> bool:
 
 
 def _scan_secret_canaries(root: Path, canaries: Sequence[str]) -> None:
-    encoded = tuple(
-        dict.fromkeys(
-            str(value).encode("utf-8")
-            for value in canaries
-            if str(value)
-        )
-    )
+    encoded = tuple(dict.fromkeys(str(value).encode("utf-8") for value in canaries if str(value)))
     if not encoded:
         return
     for path in root.rglob("*"):
@@ -1097,11 +978,7 @@ def _sha256_file(path: Path) -> str:
 
 def _safe_component(value: str) -> str:
     candidate = str(value)
-    if (
-        not candidate
-        or candidate in {".", ".."}
-        or any(character in candidate for character in ("/", "\\", "\x00"))
-    ):
+    if not candidate or candidate in {".", ".."} or any(character in candidate for character in ("/", "\\", "\x00")):
         raise CampaignPublicationError("unsafe_publication_path")
     return candidate
 

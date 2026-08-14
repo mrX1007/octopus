@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
+
 
 @dataclass(frozen=True)
 class ExecutionCreationRefV2:
@@ -15,6 +16,7 @@ class ExecutionCreationRefV2:
     transaction_id: str
     creation_digest: str
 
+
 @dataclass(frozen=True)
 class ExecutionCreationReceiptV2:
     creation_ref: ExecutionCreationRefV2
@@ -23,7 +25,10 @@ class ExecutionCreationReceiptV2:
     transaction_id: str
     idempotency_key: str
 
-def canonical_execution_creation_digest(execution_id: str, action_id: str, transaction_id: str, idempotency_key: str) -> str:
+
+def canonical_execution_creation_digest(
+    execution_id: str, action_id: str, transaction_id: str, idempotency_key: str
+) -> str:
     payload = {
         "execution_id": execution_id,
         "action_id": action_id,
@@ -32,6 +37,7 @@ def canonical_execution_creation_digest(execution_id: str, action_id: str, trans
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
+
 
 @runtime_checkable
 class ExecutionCreationStoreV2(Protocol):
@@ -57,6 +63,7 @@ class ExecutionCreationStoreV2(Protocol):
         self,
         reference: ExecutionCreationRefV2,
     ) -> ExecutionCreationReceiptV2: ...
+
 
 class DefaultExecutionCreationStoreV2:
     """In-memory production implementation of ExecutionCreationStoreV2."""

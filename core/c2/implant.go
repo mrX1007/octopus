@@ -62,18 +62,18 @@ type TaskResult struct {
 // this as a struct (rather than a string map) ensures legacy open-ended fields
 // are rejected by the strict response decoder before dispatch.
 type AgentTaskV12 struct {
-	SchemaVersion                       string          `json:"schema_version"`
-	TaskID                              string          `json:"task_id"`
-	OperationID                         string          `json:"operation_id"`
-	PayloadSchemaVersion                string          `json:"payload_schema_version"`
-	ResultSchemaVersion                 string          `json:"result_schema_version"`
-	ExpectedAgentCapabilitiesRevision   int             `json:"expected_agent_capabilities_revision"`
-	ExpectedAgentCapabilitiesDigest     string          `json:"expected_agent_capabilities_digest"`
-	ExpectedAgentArtifactBindingDigest  string          `json:"expected_agent_artifact_binding_digest"`
-	Payload                             json.RawMessage `json:"payload"`
-	IssuedAt                            float64         `json:"issued_at"`
-	ExpiresAt                           float64         `json:"expires_at"`
-	DeliveryAttempt                     int             `json:"delivery_attempt"`
+	SchemaVersion                      string          `json:"schema_version"`
+	TaskID                             string          `json:"task_id"`
+	OperationID                        string          `json:"operation_id"`
+	PayloadSchemaVersion               string          `json:"payload_schema_version"`
+	ResultSchemaVersion                string          `json:"result_schema_version"`
+	ExpectedAgentCapabilitiesRevision  int             `json:"expected_agent_capabilities_revision"`
+	ExpectedAgentCapabilitiesDigest    string          `json:"expected_agent_capabilities_digest"`
+	ExpectedAgentArtifactBindingDigest string          `json:"expected_agent_artifact_binding_digest"`
+	Payload                            json.RawMessage `json:"payload"`
+	IssuedAt                           float64         `json:"issued_at"`
+	ExpiresAt                          float64         `json:"expires_at"`
+	DeliveryAttempt                    int             `json:"delivery_attempt"`
 }
 
 const (

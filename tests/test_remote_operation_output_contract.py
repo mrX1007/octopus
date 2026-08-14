@@ -3,13 +3,13 @@ from __future__ import annotations
 import pytest
 
 from core.execution.remote_operation_models import (
-    IdentityRemoteOperationOutputV1,
     HostRemoteOperationOutputV1,
-    NetworkRemoteOperationOutputV1,
+    IdentityRemoteOperationOutputV1,
     NetworkInterfaceOutputV1,
+    NetworkRemoteOperationOutputV1,
+    RemoteOperationOutputReservationRefV1,
     ServiceRemoteOperationOutputV1,
     ServiceStatusOutputV1,
-    RemoteOperationOutputReservationRefV1,
 )
 from core.execution.remote_operation_store import DefaultRemoteOperationStoreV1
 

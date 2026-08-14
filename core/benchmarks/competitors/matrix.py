@@ -131,9 +131,7 @@ def run_competitor_matrix(
 
     repetition_count = int(repetitions)
     if repetition_count < MIN_BENCHMARK_REPETITIONS:
-        raise CompetitorSchemaError(
-            f"repetitions_below_minimum:{MIN_BENCHMARK_REPETITIONS}"
-        )
+        raise CompetitorSchemaError(f"repetitions_below_minimum:{MIN_BENCHMARK_REPETITIONS}")
     manifest_items = tuple(manifests)
     scenario_items = tuple(scenarios)
     if len(manifest_items) < 2:
@@ -157,9 +155,7 @@ def run_competitor_matrix(
     _validate_declared_model_fairness(manifest_payloads, fairness_profile)
     _validate_declared_tool_fairness(manifest_payloads, fairness_profile)
 
-    public_systems_in_run_order = tuple(
-        _public_system_metadata(payload) for payload in manifest_payloads
-    )
+    public_systems_in_run_order = tuple(_public_system_metadata(payload) for payload in manifest_payloads)
     aggregates: dict[str, dict[str, BenchmarkAggregate]] = {}
     summaries: list[dict[str, Any]] = []
     for manifest, payload, public_metadata, system_id in zip(
@@ -188,10 +184,7 @@ def run_competitor_matrix(
         expected=len(manifest_items) * len(scenario_items),
     )
     aggregate_ids = {
-        system_id: {
-            scenario_id: aggregate.aggregate_id
-            for scenario_id, aggregate in sorted(system_aggregates.items())
-        }
+        system_id: {scenario_id: aggregate.aggregate_id for scenario_id, aggregate in sorted(system_aggregates.items())}
         for system_id, system_aggregates in sorted(aggregates.items())
     }
     matrix_id = _stable_id(
@@ -276,21 +269,14 @@ def publish_competitor_matrix(
                     / f"{_safe_path_component(scenario_id)}.json",
                     aggregate.to_dict(),
                 )
-        checksum_paths = sorted(
-            path for path in temporary.rglob("*") if path.is_file()
-        )
-        checksum_lines = [
-            f"{_sha256_file(path)}  {path.relative_to(temporary).as_posix()}"
-            for path in checksum_paths
-        ]
+        checksum_paths = sorted(path for path in temporary.rglob("*") if path.is_file())
+        checksum_lines = [f"{_sha256_file(path)}  {path.relative_to(temporary).as_posix()}" for path in checksum_paths]
         (temporary / "SHA256SUMS").write_text(
             "\n".join(checksum_lines) + "\n",
             encoding="utf-8",
         )
         if destination.exists():
-            raise FileExistsError(
-                f"publication_destination_exists:{destination}"
-            )
+            raise FileExistsError(f"publication_destination_exists:{destination}")
         temporary.rename(destination)
     except Exception:
         shutil.rmtree(temporary, ignore_errors=True)
@@ -349,10 +335,7 @@ def render_comparison_markdown_payload(comparison: Mapping[str, Any]) -> str:
         "",
         str(fairness.get("notes") or "No additional fairness-profile note."),
         "",
-        (
-            f"This matrix contains only `{mode}` executions; live and replay results are "
-            "never mixed in one matrix."
-        ),
+        (f"This matrix contains only `{mode}` executions; live and replay results are never mixed in one matrix."),
         "",
         (
             "The report publishes measurements and does not select, rank, or declare "
@@ -408,9 +391,7 @@ def render_comparison_markdown_payload(comparison: Mapping[str, Any]) -> str:
         lines.append(
             "| {} | {} | {} | {} | {} | {} | {} |".format(
                 _markdown_cell(scenario["scenario_id"]),
-                _markdown_cell(
-                    _compact_json(scenario.get("evaluation_profile") or {})
-                ),
+                _markdown_cell(_compact_json(scenario.get("evaluation_profile") or {})),
                 _markdown_cell(_compact_json(scenario.get("tags") or [])),
                 _markdown_cell(scenario["lab_version"]),
                 _markdown_cell(scenario["target_version"]),
@@ -419,11 +400,7 @@ def render_comparison_markdown_payload(comparison: Mapping[str, Any]) -> str:
             )
         )
     metric_headers = " | ".join(label for _name, label in _METRIC_COLUMNS)
-    duration_header = (
-        "Duration median, all outcomes (s)"
-        if current_rendering
-        else "Duration median (s)"
-    )
+    duration_header = "Duration median, all outcomes (s)" if current_rendering else "Duration median (s)"
     quality_header = " | Quality n" if current_rendering else ""
     separator = "|---|---|---|---:|"
     if current_rendering:
@@ -445,10 +422,7 @@ def render_comparison_markdown_payload(comparison: Mapping[str, Any]) -> str:
     )
     for summary in summaries:
         medians = summary["metric_medians"]
-        cells = [
-            _format_metric(medians.get(metric_name))
-            for metric_name, _label in _METRIC_COLUMNS
-        ]
+        cells = [_format_metric(medians.get(metric_name)) for metric_name, _label in _METRIC_COLUMNS]
         row = [
             _markdown_cell(summary["scenario_id"]),
             _markdown_cell(summary["system_id"]),
@@ -456,9 +430,7 @@ def render_comparison_markdown_payload(comparison: Mapping[str, Any]) -> str:
             _format_metric(summary.get("duration_median_seconds")),
         ]
         if current_rendering:
-            row.append(
-                _markdown_cell(_compact_json(summary.get("metric_counts") or {}))
-            )
+            row.append(_markdown_cell(_compact_json(summary.get("metric_counts") or {})))
         row.append(" | ".join(cells))
         lines.append("| " + " | ".join(row) + " |")
     lines.extend(
@@ -533,9 +505,7 @@ def _common_json_value(
 
 def _execution_mode(payload: Mapping[str, Any]) -> str:
     metadata = payload.get("metadata")
-    metadata_mode = (
-        metadata.get("execution_mode") if isinstance(metadata, Mapping) else None
-    )
+    metadata_mode = metadata.get("execution_mode") if isinstance(metadata, Mapping) else None
     return str(
         payload.get("execution_mode")
         or payload.get("mode")
@@ -574,13 +544,9 @@ def _validate_declared_tool_fairness(
         return
     if not bool(fairness_profile.get("same_tool_versions")):
         return
-    versions = {
-        _canonical_json(payload.get("tool_versions") or {}) for payload in payloads
-    }
+    versions = {_canonical_json(payload.get("tool_versions") or {}) for payload in payloads}
     if len(versions) != 1:
-        raise CompetitorSchemaError(
-            "fairness_profile_requires_equal_tool_versions"
-        )
+        raise CompetitorSchemaError("fairness_profile_requires_equal_tool_versions")
 
 
 def _validate_declared_model_fairness(
@@ -593,13 +559,9 @@ def _validate_declared_model_fairness(
         return
     models = {_canonical_json(_model_metadata(payload)) for payload in payloads}
     if "{}" in models or "null" in models:
-        raise CompetitorSchemaError(
-            "fairness_profile_requires_model_metadata"
-        )
+        raise CompetitorSchemaError("fairness_profile_requires_model_metadata")
     if len(models) != 1:
-        raise CompetitorSchemaError(
-            "fairness_profile_requires_equal_model_metadata"
-        )
+        raise CompetitorSchemaError("fairness_profile_requires_equal_model_metadata")
 
 
 def _public_system_metadata(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -629,10 +591,7 @@ def _sanitize_public_metadata(value: Any, *, depth: int = 0) -> Any:
             if str(key).lower() not in _PRIVATE_METADATA_KEYS
         }
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return [
-            _sanitize_public_metadata(item, depth=depth + 1)
-            for item in value[:256]
-        ]
+        return [_sanitize_public_metadata(item, depth=depth + 1) for item in value[:256]]
     if value is None or isinstance(value, (str, bool, int, float)):
         return value
     return str(value)
@@ -651,11 +610,7 @@ def _scenario_metadata(scenario: BenchmarkScenario) -> dict[str, Any]:
         "budgets": dict(scenario.budgets),
         "seed": scenario.seed,
         "tags": list(scenario.tags),
-        "evaluation_profile": (
-            dict(evaluation_profile)
-            if isinstance(evaluation_profile, Mapping)
-            else {}
-        ),
+        "evaluation_profile": (dict(evaluation_profile) if isinstance(evaluation_profile, Mapping) else {}),
     }
 
 
@@ -667,21 +622,15 @@ def _aggregate_summary(
     policy_violations = sum(len(run.policy_violations) for run in aggregate.runs)
     timeout_runs = sum(1 for run in aggregate.runs if run.status == "timeout")
     partial_runs = sum(1 for run in aggregate.runs if run.status == "partial")
-    error_runs = sum(
-        1 for run in aggregate.runs if run.status in _STRICT_RUN_STATUSES
-    )
+    error_runs = sum(1 for run in aggregate.runs if run.status in _STRICT_RUN_STATUSES)
     return {
         "system_id": system_id,
         "scenario_id": aggregate.scenario.scenario_id,
         "aggregate_id": aggregate.aggregate_id,
         "status_counts": dict(aggregate.status_counts),
-        "duration_median_seconds": (
-            round(float(statistics.median(durations)), 6) if durations else None
-        ),
+        "duration_median_seconds": (round(float(statistics.median(durations)), 6) if durations else None),
         "metric_medians": {
-            name: values["median"]
-            for name, values in sorted(aggregate.metric_statistics.items())
-            if "median" in values
+            name: values["median"] for name, values in sorted(aggregate.metric_statistics.items()) if "median" in values
         },
         "metric_counts": {
             name: int(values["count"])
@@ -701,9 +650,7 @@ def _publication_counts(
     expected: int,
 ) -> dict[str, Any]:
     aggregate_items = [
-        aggregate
-        for system_aggregates in aggregates.values()
-        for aggregate in system_aggregates.values()
+        aggregate for system_aggregates in aggregates.values() for aggregate in system_aggregates.values()
     ]
     runs = [run for aggregate in aggregate_items for run in aggregate.runs]
     written = len(aggregate_items)

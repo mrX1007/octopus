@@ -150,10 +150,7 @@ def cmd_inventory(args: argparse.Namespace, root_dir: Path) -> int:
     del args
     inventory = inventory_repository(root_dir)
     for reference in inventory.references:
-        print(
-            f"{reference.path}:{reference.line}: "
-            f"{reference.kind.value} ({reference.classification.value})"
-        )
+        print(f"{reference.path}:{reference.line}: {reference.kind.value} ({reference.classification.value})")
     if not inventory.ok:
         _print_inventory_violations(inventory)
         return 1

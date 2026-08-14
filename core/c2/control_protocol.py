@@ -1,19 +1,21 @@
 """Control protocol."""
+
 from __future__ import annotations
 
 import json
 import struct
 from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
+
 from core.c2.control_commands import (
+    BoundedControlErrorV1,
     C2ControlActionV1,
     C2ControlErrorCodeV1,
     ParticipantControlAuthorizationV1,
-    ParticipantControlRequestV1,
-    ParticipantControlReceiptV1,
-    ParticipantControlQuerySnapshotV1,
     ParticipantControlPhaseV1,
-    BoundedControlErrorV1,
+    ParticipantControlQuerySnapshotV1,
+    ParticipantControlReceiptV1,
+    ParticipantControlRequestV1,
 )
 
 FRAME_MAGIC = b"CTRL1"
@@ -41,9 +43,7 @@ class MemoryFrameReaderV1:
 
     def read_exact_into(self, destination: bytearray, *, byte_count: int) -> None:
         if byte_count > self.remaining_bytes:
-            raise ValueError(
-                f"Requested {byte_count} bytes, but only {self.remaining_bytes} remaining"
-            )
+            raise ValueError(f"Requested {byte_count} bytes, but only {self.remaining_bytes} remaining")
         chunk = self._data[self._offset : self._offset + byte_count]
         self._offset += byte_count
         destination.extend(chunk)
@@ -85,14 +85,9 @@ class ControlProtocolCodec:
         header = FRAME_MAGIC + struct.pack(">I", len(payload_bytes))
         return header + payload_bytes
 
-    def decode_request(
-        self, reader_or_data: BoundedFrameReaderV1 | bytes
-    ) -> ParticipantControlRequestV1:
+    def decode_request(self, reader_or_data: BoundedFrameReaderV1 | bytes) -> ParticipantControlRequestV1:
         """Decode request from reader or bytes."""
-        if isinstance(reader_or_data, bytes):
-            reader = MemoryFrameReaderV1(reader_or_data)
-        else:
-            reader = reader_or_data
+        reader = MemoryFrameReaderV1(reader_or_data) if isinstance(reader_or_data, bytes) else reader_or_data
 
         buf = bytearray()
         reader.read_exact_into(buf, byte_count=len(FRAME_MAGIC) + 4)
@@ -135,9 +130,7 @@ class ControlProtocolCodec:
 
     def encode_response(
         self,
-        response: ParticipantControlReceiptV1
-        | ParticipantControlQuerySnapshotV1
-        | BoundedControlErrorV1,
+        response: ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1,
     ) -> bytes:
         """Encode response into framed bytes."""
         if isinstance(response, ParticipantControlReceiptV1):
@@ -173,7 +166,9 @@ class ControlProtocolCodec:
         elif isinstance(response, BoundedControlErrorV1):
             res_dict = {
                 "type": "error",
-                "reason_code": response.reason_code.value if hasattr(response.reason_code, "value") else str(response.reason_code),
+                "reason_code": response.reason_code.value
+                if hasattr(response.reason_code, "value")
+                else str(response.reason_code),
                 "retryable": response.retryable,
                 "detail_ref": response.detail_ref,
             }
@@ -188,10 +183,7 @@ class ControlProtocolCodec:
         self, reader_or_data: BoundedFrameReaderV1 | bytes
     ) -> ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1:
         """Decode response from reader or bytes."""
-        if isinstance(reader_or_data, bytes):
-            reader = MemoryFrameReaderV1(reader_or_data)
-        else:
-            reader = reader_or_data
+        reader = MemoryFrameReaderV1(reader_or_data) if isinstance(reader_or_data, bytes) else reader_or_data
 
         buf = bytearray()
         reader.read_exact_into(buf, byte_count=len(FRAME_MAGIC) + 4)
@@ -243,4 +235,3 @@ class ControlProtocolCodec:
             )
         else:
             raise ValueError(f"Unknown message type in frame: {msg_type}")
-

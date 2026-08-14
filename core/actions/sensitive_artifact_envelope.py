@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import Any
 
 from core.actions.sensitive_integrity_runtime import SensitiveIntegrityTagV2
 

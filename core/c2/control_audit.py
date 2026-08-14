@@ -5,13 +5,15 @@ from __future__ import annotations
 import re
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from threading import RLock
-from typing import Any, Dict, List, Optional, Sequence
-
+from typing import Any
 
 SENSITIVE_PATTERNS = [
-    re.compile(r"(?i)(api[-_]?key|secret[-_]?key|password|token|ticket|hash)\s*[:=]\s*['\"]?([A-Za-z0-9+/=._-]+)['\"]?"),
+    re.compile(
+        r"(?i)(api[-_]?key|secret[-_]?key|password|token|ticket|hash)\s*[:=]\s*['\"]?([A-Za-z0-9+/=._-]+)['\"]?"
+    ),
     re.compile(r"(?i)(bearer\s+)([A-Za-z0-9._-]+)"),
 ]
 
@@ -56,9 +58,9 @@ def redact_sensitive_text(text: str) -> str:
     return redacted
 
 
-def redact_sensitive_dict(data: Dict[str, Any]) -> Dict[str, Any]:
+def redact_sensitive_dict(data: dict[str, Any]) -> dict[str, Any]:
     """Return a shallow/deep copy with forbidden secret fields replaced with [REDACTED]."""
-    clean: Dict[str, Any] = {}
+    clean: dict[str, Any] = {}
     for k, v in data.items():
         k_lower = k.lower()
         if any(f in k_lower for f in FORBIDDEN_FIELDS):
@@ -77,7 +79,7 @@ class ControlAuditLoggerV1:
 
     def __init__(self) -> None:
         self._lock = RLock()
-        self._events: List[ControlAuditEventV1] = []
+        self._events: list[ControlAuditEventV1] = []
 
     def record_event(
         self,
@@ -94,7 +96,7 @@ class ControlAuditLoggerV1:
         result_code: str,
         duration_ms: float,
         is_replay: bool = False,
-        now: Optional[float] = None,
+        now: float | None = None,
     ) -> ControlAuditEventV1:
         ts = time.time() if now is None else now
         ev = ControlAuditEventV1(
@@ -120,8 +122,8 @@ class ControlAuditLoggerV1:
     def list_events(
         self,
         *,
-        mission_id: Optional[str] = None,
-        operator_id: Optional[str] = None,
+        mission_id: str | None = None,
+        operator_id: str | None = None,
         limit: int = 100,
     ) -> Sequence[ControlAuditEventV1]:
         with self._lock:

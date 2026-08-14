@@ -51,12 +51,8 @@ def compute_capabilities_digest(
 
     canonical = {
         "supported_operation_ids": sorted(item.value for item in supported_operation_ids),
-        "supported_payload_schema_versions": sorted(
-            item.value for item in supported_payload_schema_versions
-        ),
-        "supported_result_schema_versions": sorted(
-            item.value for item in supported_result_schema_versions
-        ),
+        "supported_payload_schema_versions": sorted(item.value for item in supported_payload_schema_versions),
+        "supported_result_schema_versions": sorted(item.value for item in supported_result_schema_versions),
     }
     return hashlib.sha256(_canonical_json(canonical)).hexdigest()
 

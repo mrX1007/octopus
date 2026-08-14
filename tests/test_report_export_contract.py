@@ -494,7 +494,8 @@ def test_every_user_facing_version_comes_from_the_single_owner(tmp_path):
         if (
             source_path == root / "core" / "version.py"
             or "benchmarks" in source_path.parts
-            or source_path.name in {
+            or source_path.name
+            in {
                 "schema_bindings.py",
                 "operation_catalog.py",
                 "typed_input_decoders.py",
@@ -506,9 +507,7 @@ def test_every_user_facing_version_comes_from_the_single_owner(tmp_path):
         assert not any(
             stale_banner.search(node.value)
             for node in ast.walk(tree)
-            if isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and not node.value.startswith("octopus:")
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and not node.value.startswith("octopus:")
         ), source_path
 
     import core

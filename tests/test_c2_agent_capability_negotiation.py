@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from core.c2.agent_capabilities import AgentCapabilityNegotiatorV12, AgentCapabilitySetV12
 from core.c2.task_catalog import C2TaskOperationId
 

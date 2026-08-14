@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 
 class ManagedResourceKind(str, Enum):
@@ -48,7 +48,7 @@ class ManagedResourceManagerV2:
         self._resources[handle.resource_ref] = handle
         return handle
 
-    def get(self, resource_ref: str) -> Optional[ManagedResourceHandleV2]:
+    def get(self, resource_ref: str) -> ManagedResourceHandleV2 | None:
         return self._resources.get(resource_ref)
 
 

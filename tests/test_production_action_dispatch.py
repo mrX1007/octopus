@@ -225,9 +225,7 @@ def test_production_dispatch_uses_safe_provider_fallback_after_partial_ingestion
         f"tool:{primary}",
         f"tool:{secondary}",
     ]
-    assert result.metadata["provider_fallback_attempt_action_ids"] == [
-        f"tool:{secondary}"
-    ]
+    assert result.metadata["provider_fallback_attempt_action_ids"] == [f"tool:{secondary}"]
     assert result.metadata["provider_status"] == "succeeded"
 
 

@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
-from typing import Any, Protocol, final, runtime_checkable
+from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
+
 
 @dataclass(frozen=True)
 class ParticipantRetryPolicyV2:
     max_attempts: int = 3
     initial_backoff_ms: int = 100
     max_backoff_ms: int = 1000
+
 
 @dataclass(frozen=True)
 class CleanupRecoverySubjectV2:
@@ -21,6 +23,7 @@ class CleanupRecoverySubjectV2:
     idempotency_key: str
     subject_digest: str
 
+
 @dataclass(frozen=True)
 class CleanupRecoveryPolicyV2:
     policy_id: str
@@ -28,6 +31,7 @@ class CleanupRecoveryPolicyV2:
     total_budget_ms: int
     per_attempt_deadline_ms: int
     policy_digest: str
+
 
 @dataclass(frozen=True, repr=False)
 class CleanupOperationContextV2:
@@ -39,6 +43,7 @@ class CleanupOperationContextV2:
     retry_policy: ParticipantRetryPolicyV2
     authority_digest: str
 
+
 def canonical_cleanup_subject_digest(subject: CleanupRecoverySubjectV2) -> str:
     payload = {
         "owner_kind": subject.owner_kind,
@@ -48,6 +53,7 @@ def canonical_cleanup_subject_digest(subject: CleanupRecoverySubjectV2) -> str:
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
+
 
 @runtime_checkable
 class CleanupOperationAuthorityV2(Protocol):
@@ -71,6 +77,7 @@ class CleanupOperationAuthorityV2(Protocol):
         *,
         subject: CleanupRecoverySubjectV2,
     ) -> None: ...
+
 
 class DefaultCleanupOperationAuthorityV2:
     """Production authority issuing and validating CleanupOperationContextV2 instances."""

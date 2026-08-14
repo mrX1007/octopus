@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from scripts.quality.c2_raw_task_inventory import inventory_v12_raw_tasks
 
 pytestmark = pytest.mark.unit

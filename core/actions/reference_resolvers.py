@@ -62,8 +62,7 @@ class _MetadataSnapshotStore(Generic[SnapshotT]):
                     raise ValueError("reference_authorization_revision_rollback")
                 if (
                     snapshot.revision == current.revision
-                    and snapshot.authorization.authorization_revision
-                    == current.authorization.authorization_revision
+                    and snapshot.authorization.authorization_revision == current.authorization.authorization_revision
                     and snapshot != current
                 ):
                     raise ValueError("reference_metadata_revision_conflict")
@@ -243,9 +242,7 @@ class ReferenceResolverRegistry:
             pass
         with self._lock:
             matches = tuple(
-                resolver
-                for prefix, resolver in self._resolvers.items()
-                if normalized_reference.startswith(prefix)
+                resolver for prefix, resolver in self._resolvers.items() if normalized_reference.startswith(prefix)
             )
         if len(matches) != 1:
             raise KeyError("reference_not_found" if not matches else "reference_resolver_ambiguous")

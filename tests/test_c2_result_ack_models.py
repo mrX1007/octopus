@@ -72,10 +72,7 @@ def test_ack_results_requires_result_ref_revision() -> None:
 
 
 def test_ack_batch_size_is_bounded() -> None:
-    selections = tuple(
-        ResultAckSelectionV1(result_ref=f"result:{index}", expected_revision=1)
-        for index in range(101)
-    )
+    selections = tuple(ResultAckSelectionV1(result_ref=f"result:{index}", expected_revision=1) for index in range(101))
     with pytest.raises(ValueError, match="bounded batch"):
         ResultAckRequestV1(
             mission_id="mission:1",

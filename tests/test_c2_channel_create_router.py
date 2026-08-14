@@ -1,9 +1,11 @@
 """Tests for ChannelCreateRouter."""
+
 from __future__ import annotations
 
 import pytest
-from core.c2.channel_manager import ChannelManager, ChannelCreateRouter
-from core.c2.channel_models import ChannelConfigV1, ChannelTypeV1, ChannelStateV1, ChannelRecordV1
+
+from core.c2.channel_manager import ChannelCreateRouter, ChannelManager
+from core.c2.channel_models import ChannelConfigV1, ChannelRecordV1, ChannelStateV1, ChannelTypeV1
 
 pytestmark = pytest.mark.unit
 

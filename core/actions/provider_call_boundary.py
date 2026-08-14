@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from core.actions.cancellation import CancellationToken
 from core.actions.provider_call_types import (
@@ -59,8 +59,8 @@ class BoundProviderInvocationContext:
     input_dto: Any
     materials: tuple[Any, ...] = ()
     scope: ProviderInvocationScopeV2 = field(default_factory=DefaultProviderInvocationScopeV2)
-    cancellation_token: Optional[CancellationToken] = None
-    staging: Optional[ProviderParticipantRegistrationFacade] = None
+    cancellation_token: CancellationToken | None = None
+    staging: ProviderParticipantRegistrationFacade | None = None
     deadline_monotonic: float = field(default_factory=lambda: time.monotonic() + 300.0)
 
 

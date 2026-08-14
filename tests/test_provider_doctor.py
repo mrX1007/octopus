@@ -34,9 +34,7 @@ def test_doctor_does_not_print_authorized_without_request() -> None:
 def test_doctor_never_derives_mount_state_from_readiness() -> None:
     report = run_action_doctor()
     mounted_action_ids = {
-        state.static.mount.spec.action_id
-        for state in report.action_states
-        if state.static.mount.spec.mounted
+        state.static.mount.spec.action_id for state in report.action_states if state.static.mount.spec.mounted
     }
     for row in report.provider_rows:
         assert row.mounted is (row.action_id in mounted_action_ids)

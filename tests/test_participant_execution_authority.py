@@ -1,9 +1,12 @@
 """Tests for participant execution authority."""
+
 import pytest
+
 from core.actions.participant_authority import (
     ParticipantExecutionAuthorityBindingV2,
     canonical_participant_authority_digest,
 )
+
 
 @pytest.mark.unit
 def test_participant_authority():

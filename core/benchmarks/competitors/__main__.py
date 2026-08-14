@@ -113,9 +113,7 @@ def _repetitions(value: str) -> int:
     except ValueError as exc:
         raise argparse.ArgumentTypeError("repetitions must be an integer") from exc
     if parsed < MIN_BENCHMARK_REPETITIONS:
-        raise argparse.ArgumentTypeError(
-            f"repetitions must be at least {MIN_BENCHMARK_REPETITIONS}"
-        )
+        raise argparse.ArgumentTypeError(f"repetitions must be at least {MIN_BENCHMARK_REPETITIONS}")
     return parsed
 
 

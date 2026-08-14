@@ -122,9 +122,7 @@ class IngressSessionStore:
         _require_nonblank(session.principal.principal_id, "principal_ref")
         _require_revision(session.principal.revision, "principal revision")
         self._validate_binding_shape(session.channel_binding)
-        if expires_at is not None and (
-            not math.isfinite(expires_at) or expires_at <= self._clock()
-        ):
+        if expires_at is not None and (not math.isfinite(expires_at) or expires_at <= self._clock()):
             raise ValueError("session expires_at must be a future finite timestamp")
 
         with self._lock:
@@ -387,9 +385,7 @@ class IngressSessionStore:
                 )
             )
             if isinstance(lease, IngressInvocationLease):
-                expected_nonce_owner = self._nonce_owners.get(
-                    lease.invocation_nonce_digest
-                )
+                expected_nonce_owner = self._nonce_owners.get(lease.invocation_nonce_digest)
                 valid = (
                     valid
                     and hmac.compare_digest(lease.bound_request_id, request_id)
@@ -424,8 +420,7 @@ class IngressSessionStore:
                     )
                     and child_depth == lease.child_depth
                     and parent_record is not None
-                    and parent_record.canonical_claims
-                    == _claims(parent_record.lease)
+                    and parent_record.canonical_claims == _claims(parent_record.lease)
                 )
             if not valid:
                 raise IngressLeaseInvalidError("Ingress invocation lease is invalid")
@@ -444,9 +439,7 @@ class IngressSessionStore:
         with self._lock:
             record = self._require_canonical_lease_record(lease)
             if record.state is _LeaseState.CONSUMED:
-                raise IngressLeaseConsumedError(
-                    "Ingress invocation lease has already been consumed"
-                )
+                raise IngressLeaseConsumedError("Ingress invocation lease has already been consumed")
             if record.state is not _LeaseState.RESOLVED:
                 raise IngressLeaseInvalidError("Ingress invocation lease was not resolved")
             record.state = _LeaseState.CONSUMED
@@ -467,11 +460,7 @@ class IngressSessionStore:
 
     def _require_active_session(self, session_id: str, now: float) -> _SessionRecord:
         record = self._sessions.get(session_id)
-        if (
-            record is None
-            or record.session.revoked
-            or (record.expires_at is not None and now >= record.expires_at)
-        ):
+        if record is None or record.session.revoked or (record.expires_at is not None and now >= record.expires_at):
             raise IngressLeaseInvalidError("Ingress invocation lease is invalid")
         return record
 

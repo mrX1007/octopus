@@ -19,21 +19,29 @@ from typing import Callable, Optional
 
 class Event:
     """Immutable event record."""
+
     __slots__ = (
-        'aggregate_id',
-        'aggregate_type',
-        'causation_id',
-        'correlation_id',
-        'event_id',
-        'event_type',
-        'payload',
-        'timestamp',
+        "aggregate_id",
+        "aggregate_type",
+        "causation_id",
+        "correlation_id",
+        "event_id",
+        "event_type",
+        "payload",
+        "timestamp",
     )
 
-    def __init__(self, event_id: int, timestamp: float, aggregate_type: str,
-                 aggregate_id: str, event_type: str, payload: dict,
-                 causation_id: Optional[int] = None,
-                 correlation_id: Optional[str] = None):
+    def __init__(
+        self,
+        event_id: int,
+        timestamp: float,
+        aggregate_type: str,
+        aggregate_id: str,
+        event_type: str,
+        payload: dict,
+        causation_id: Optional[int] = None,
+        correlation_id: Optional[str] = None,
+    ):
         self.event_id = event_id
         self.timestamp = timestamp
         self.aggregate_type = aggregate_type
@@ -45,14 +53,14 @@ class Event:
 
     def to_dict(self) -> dict:
         return {
-            'event_id': self.event_id,
-            'timestamp': self.timestamp,
-            'aggregate_type': self.aggregate_type,
-            'aggregate_id': self.aggregate_id,
-            'event_type': self.event_type,
-            'payload': self.payload,
-            'causation_id': self.causation_id,
-            'correlation_id': self.correlation_id,
+            "event_id": self.event_id,
+            "timestamp": self.timestamp,
+            "aggregate_type": self.aggregate_type,
+            "aggregate_id": self.aggregate_id,
+            "event_type": self.event_type,
+            "payload": self.payload,
+            "causation_id": self.causation_id,
+            "correlation_id": self.correlation_id,
         }
 
 
@@ -118,42 +126,55 @@ class EventStore:
             """)
             conn.commit()
 
-    def append(self, aggregate_type: str, aggregate_id: str,
-               event_type: str, payload: dict,
-               causation_id: Optional[int] = None,
-               correlation_id: Optional[str] = None) -> Event:
+    def append(
+        self,
+        aggregate_type: str,
+        aggregate_id: str,
+        event_type: str,
+        payload: dict,
+        causation_id: Optional[int] = None,
+        correlation_id: Optional[str] = None,
+    ) -> Event:
         """Append an immutable event. Returns the created Event."""
         ts = time.time()
         payload_json = json.dumps(payload)
 
         with self._lock, self._get_conn() as conn:
-            cur = conn.execute("""
+            cur = conn.execute(
+                """
                     INSERT INTO events
                         (timestamp, aggregate_type, aggregate_id,
                          event_type, payload, causation_id, correlation_id)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (ts, aggregate_type, aggregate_id,
-                  event_type, payload_json,
-                  causation_id, correlation_id))
+                """,
+                (ts, aggregate_type, aggregate_id, event_type, payload_json, causation_id, correlation_id),
+            )
             conn.commit()
             event_id = cur.lastrowid
 
         event = Event(
-            event_id=event_id, timestamp=ts,
-            aggregate_type=aggregate_type, aggregate_id=aggregate_id,
-            event_type=event_type, payload=payload,
-            causation_id=causation_id, correlation_id=correlation_id
+            event_id=event_id,
+            timestamp=ts,
+            aggregate_type=aggregate_type,
+            aggregate_id=aggregate_id,
+            event_type=event_type,
+            payload=payload,
+            causation_id=causation_id,
+            correlation_id=correlation_id,
         )
 
         # Notify in-process subscribers
         self._dispatch(event)
         return event
 
-    def read_stream(self, aggregate_type: Optional[str] = None,
-                    aggregate_id: Optional[str] = None,
-                    event_type: Optional[str] = None,
-                    after_id: int = 0,
-                    limit: int = 1000) -> list[Event]:
+    def read_stream(
+        self,
+        aggregate_type: Optional[str] = None,
+        aggregate_id: Optional[str] = None,
+        event_type: Optional[str] = None,
+        after_id: int = 0,
+        limit: int = 1000,
+    ) -> list[Event]:
         """Read events from the stream with optional filters."""
         query = "SELECT * FROM events WHERE event_id > ?"
         params: list = [after_id]
@@ -180,19 +201,21 @@ class EventStore:
         """Get the last processed event_id for a subscriber."""
         with self._get_conn() as conn:
             row = conn.execute(
-                "SELECT last_event_id FROM subscriber_offsets WHERE subscriber_name = ?",
-                (subscriber_name,)
+                "SELECT last_event_id FROM subscriber_offsets WHERE subscriber_name = ?", (subscriber_name,)
             ).fetchone()
         return row["last_event_id"] if row else 0
 
     def update_subscriber_offset(self, subscriber_name: str, last_event_id: int):
         """Update the subscriber's offset after processing."""
         with self._get_conn() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO subscriber_offsets (subscriber_name, last_event_id)
                 VALUES (?, ?)
                 ON CONFLICT(subscriber_name) DO UPDATE SET last_event_id = excluded.last_event_id
-            """, (subscriber_name, last_event_id))
+            """,
+                (subscriber_name, last_event_id),
+            )
             conn.commit()
 
     def subscribe(self, event_type: str, handler: Callable[[Event], None]):
@@ -201,8 +224,7 @@ class EventStore:
             self._subscribers[event_type] = []
         self._subscribers[event_type].append(handler)
 
-    def replay(self, subscriber_name: str, handler: Callable[[Event], None],
-               event_type: Optional[str] = None):
+    def replay(self, subscriber_name: str, handler: Callable[[Event], None], event_type: Optional[str] = None):
         """Replay all events from subscriber's last offset. Used for state recovery."""
         offset = self.get_subscriber_offset(subscriber_name)
         events = self.read_stream(event_type=event_type, after_id=offset)

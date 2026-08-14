@@ -76,15 +76,11 @@ def test_admin_ack_purge_use_application_service() -> None:
     request = ResultAckRequestV1(
         mission_id="mission:1",
         agent_ref="agent:1",
-        selections=(
-            ResultAckSelectionV1(result_ref="result:1", expected_revision=1),
-        ),
+        selections=(ResultAckSelectionV1(result_ref="result:1", expected_revision=1),),
     )
 
     batch = application.ack_results(principal, request)
-    assert tuple(record.result_ref for record in batch.acknowledgements) == (
-        "result:1",
-    )
+    assert tuple(record.result_ref for record in batch.acknowledgements) == ("result:1",)
     purged = application.purge_results(
         principal,
         "mission:1",
@@ -98,9 +94,7 @@ def test_application_service_reads_are_mission_scoped() -> None:
     application = _application()
     readonly = _principal(OperatorRole.READONLY)
 
-    agents = application.list_agents(
-        readonly, "mission:1", cursor=None, limit=10
-    )
+    agents = application.list_agents(readonly, "mission:1", cursor=None, limit=10)
     results = application.list_results(
         readonly,
         "mission:1",
@@ -151,14 +145,10 @@ def test_readonly_cannot_use_application_ack_or_purge() -> None:
     request = ResultAckRequestV1(
         mission_id="mission:1",
         agent_ref="agent:1",
-        selections=(
-            ResultAckSelectionV1(result_ref="result:1", expected_revision=1),
-        ),
+        selections=(ResultAckSelectionV1(result_ref="result:1", expected_revision=1),),
     )
 
     with pytest.raises(PermissionError, match="not_authorized"):
         application.ack_results(readonly, request)
     with pytest.raises(PermissionError, match="not_authorized"):
-        application.purge_results(
-            readonly, "mission:1", before=NOW, limit=1
-        )
+        application.purge_results(readonly, "mission:1", before=NOW, limit=1)

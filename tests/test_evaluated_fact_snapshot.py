@@ -160,9 +160,7 @@ def test_context_build_reads_one_fact_snapshot(tmp_path: Path) -> None:
     context = ContextBuilder(store, StateResolver(store)).build_context("scan", "host")
 
     assert store.reads == 1
-    assert context["evaluated_fact_snapshot"]["snapshot_ref"].startswith(
-        "evaluated-facts://sha256/"
-    )
+    assert context["evaluated_fact_snapshot"]["snapshot_ref"].startswith("evaluated-facts://sha256/")
 
 
 @pytest.mark.parametrize("reader", ["scan", "ids"])
@@ -182,10 +180,7 @@ def test_fact_batch_uses_one_freshness_evaluation_time(
         assessment_policy=FreshnessPolicy(default_max_age_seconds=1.0),
         assessment_clock=stepping_clock,
     )
-    fact_ids = [
-        store.add_fact("scan", "host", "observation", value, "probe")
-        for value in ("first", "second")
-    ]
+    fact_ids = [store.add_fact("scan", "host", "observation", value, "probe") for value in ("first", "second")]
     with store._get_conn() as conn:
         conn.executemany(
             "UPDATE facts SET timestamp = 99.5 WHERE id = ?",
@@ -196,11 +191,7 @@ def test_fact_batch_uses_one_freshness_evaluation_time(
             ((fact_id,) for fact_id in fact_ids),
         )
 
-    facts = (
-        store.get_facts("scan", "host")
-        if reader == "scan"
-        else store.get_facts_by_ids(fact_ids)
-    )
+    facts = store.get_facts("scan", "host") if reader == "scan" else store.get_facts_by_ids(fact_ids)
 
     assert clock_calls == [100.0]
     assert {fact["freshness"]["evaluated_at"] for fact in facts} == {100.0}
@@ -251,11 +242,7 @@ def test_fact_read_does_not_mix_concurrent_assessment_and_outcome(
     monkeypatch.setattr(store, "_get_observations_for_facts", pause_after_observations)
 
     def read_facts():
-        return (
-            store.get_facts("scan", "host")
-            if reader == "scan"
-            else store.get_facts_by_ids((fact_id,))
-        )
+        return store.get_facts("scan", "host") if reader == "scan" else store.get_facts_by_ids((fact_id,))
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(read_facts)
@@ -286,9 +273,7 @@ def test_fact_read_does_not_mix_concurrent_assessment_and_outcome(
 
     assert len(facts) == 1
     fact = facts[0]
-    assert [item["source_identity"] for item in fact["observations"]] == [
-        "scanner-a"
-    ]
+    assert [item["source_identity"] for item in fact["observations"]] == ["scanner-a"]
     assert fact["assessment"]["source_execution_ids"] == ["exec-a"]
     assert fact["freshness_status"] == "fresh"
     assert fact["coverage_status"] == "complete"

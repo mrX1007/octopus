@@ -79,9 +79,7 @@ def render_comparison_svg(
     scenarios = _identity_items(comparison.get("scenarios"), "scenario_id")
     summaries = _summary_items(comparison.get("summaries"))
     expected_pairs = {
-        (system_id, scenario_id)
-        for scenario_id, _scenario in scenarios
-        for system_id, _system in systems
+        (system_id, scenario_id) for scenario_id, _scenario in scenarios for system_id, _system in systems
     }
     if set(summaries) != expected_pairs or set(metric_statistics) != expected_pairs:
         raise ComparisonVisualizationError("incomplete_comparison_rows")
@@ -101,9 +99,9 @@ def render_comparison_svg(
             f'height="{height}" viewBox="0 0 {_WIDTH} {height}" role="img" '
             'aria-labelledby="chart-title chart-desc">'
         ),
-        "  <title id=\"chart-title\">Competitor benchmark terminal outcomes and success-only quality</title>",
+        '  <title id="chart-title">Competitor benchmark terminal outcomes and success-only quality</title>',
         (
-            "  <desc id=\"chart-desc\">Terminal outcomes include every scheduled "
+            '  <desc id="chart-desc">Terminal outcomes include every scheduled '
             "run. Quality statistics include successful runs only, with a separate "
             "sample count for each metric. Missing telemetry is not zero. No overall "
             "score or winner is declared.</desc>"
@@ -122,42 +120,32 @@ def render_comparison_svg(
             )
         )
         + "</metadata>",
-        "  <rect width=\"1200\" height=\"100%\" fill=\"#ffffff\"/>",
+        '  <rect width="1200" height="100%" fill="#ffffff"/>',
         "  <style>text{font-family:Arial,Helvetica,sans-serif;fill:#17202a}.title{font-size:24px;font-weight:700}.subtitle{font-size:12px;fill:#44515c}.section{font-size:16px;font-weight:700}.label{font-size:12px;font-weight:700}.small{font-size:10px;fill:#44515c}.value{font-size:10px}.grid{stroke:#d7dde2;stroke-width:1}.axis{stroke:#69757f;stroke-width:1.2}.range{stroke:#17202a;stroke-width:3;stroke-linecap:round}</style>",
-        "  <text class=\"title\" x=\"36\" y=\"42\">Competitor benchmark comparison</text>",
-        f"  <text class=\"subtitle\" x=\"36\" y=\"66\">Matrix: {_xml(matrix_id)}</text>",
+        '  <text class="title" x="36" y="42">Competitor benchmark comparison</text>',
+        f'  <text class="subtitle" x="36" y="66">Matrix: {_xml(matrix_id)}</text>',
         (
-            "  <text class=\"subtitle\" x=\"36\" y=\"88\">"
+            '  <text class="subtitle" x="36" y="88">'
             + _xml(_methodology_line(methodology, fairness, repetitions))
             + "</text>"
         ),
-        (
-            "  <text class=\"subtitle\" x=\"36\" y=\"108\">"
-            + _xml(_fairness_line(fairness))
-            + "</text>"
-        ),
-        "  <text class=\"subtitle\" x=\"36\" y=\"132\">Terminal outcomes include all scheduled runs. Quality uses successful runs only; n is per metric.</text>",
-        "  <text class=\"subtitle\" x=\"36\" y=\"152\">Missing telemetry is N/A, never zero. Medians and ranges are descriptive; no combined score or winner is declared.</text>",
-        "  <line x1=\"36\" y1=\"171\" x2=\"1164\" y2=\"171\" class=\"grid\"/>",
+        ('  <text class="subtitle" x="36" y="108">' + _xml(_fairness_line(fairness)) + "</text>"),
+        '  <text class="subtitle" x="36" y="132">Terminal outcomes include all scheduled runs. Quality uses successful runs only; n is per metric.</text>',
+        '  <text class="subtitle" x="36" y="152">Missing telemetry is N/A, never zero. Medians and ranges are descriptive; no combined score or winner is declared.</text>',
+        '  <line x1="36" y1="171" x2="1164" y2="171" class="grid"/>',
     ]
 
     y = 200
     for scenario_id, _scenario in scenarios:
-        lines.append(
-            f"  <text class=\"section\" x=\"36\" y=\"{y}\">Scenario: {_xml(scenario_id)}</text>"
-        )
+        lines.append(f'  <text class="section" x="36" y="{y}">Scenario: {_xml(scenario_id)}</text>')
         y += 28
-        lines.append(
-            f"  <text class=\"label\" x=\"36\" y=\"{y}\">Terminal outcomes (N={repetitions} per system)</text>"
-        )
+        lines.append(f'  <text class="label" x="36" y="{y}">Terminal outcomes (N={repetitions} per system)</text>')
         y += 22
         for system_id, _system in systems:
             summary = summaries[(system_id, scenario_id)]
             counts = _status_counts(summary.get("status_counts"), repetitions)
             bar_y = y - 14
-            lines.append(
-                f"  <text class=\"label\" x=\"36\" y=\"{y}\">{_xml(system_id)}</text>"
-            )
+            lines.append(f'  <text class="label" x="36" y="{y}">{_xml(system_id)}</text>')
             cursor = float(_OUTCOME_X)
             for status, _label, color in _STATUS_ORDER:
                 count = counts[status]
@@ -176,44 +164,30 @@ def render_comparison_svg(
             lines.append(
                 f'  <rect x="{_OUTCOME_X}" y="{bar_y}" width="{_OUTCOME_WIDTH}" height="18" fill="none" stroke="#69757f"/>'
             )
-            lines.append(
-                f"  <text class=\"small\" x=\"734\" y=\"{y}\">{_xml(_outcome_text(counts))}</text>"
-            )
+            lines.append(f'  <text class="small" x="734" y="{y}">{_xml(_outcome_text(counts))}</text>')
             y += 34
 
         legend_x = _OUTCOME_X
         for _status, label, color in (*_STATUS_ORDER, ("other", "Other", "#9aa1a6")):
-            lines.append(
-                f'  <rect x="{legend_x}" y="{y - 11}" width="12" height="12" fill="{color}"/>'
-            )
-            lines.append(
-                f"  <text class=\"small\" x=\"{legend_x + 17}\" y=\"{y}\">{_xml(label)}</text>"
-            )
+            lines.append(f'  <rect x="{legend_x}" y="{y - 11}" width="12" height="12" fill="{color}"/>')
+            lines.append(f'  <text class="small" x="{legend_x + 17}" y="{y}">{_xml(label)}</text>')
             legend_x += 92
         y += 30
 
         lines.append(
-            f"  <text class=\"label\" x=\"36\" y=\"{y}\">Success-only quality: median, min-max range, and per-metric sample count</text>"
+            f'  <text class="label" x="36" y="{y}">Success-only quality: median, min-max range, and per-metric sample count</text>'
         )
         y += 34
         for index, (_metric, label) in enumerate(_QUALITY_METRICS):
             x = _QUALITY_X + index * _QUALITY_COLUMN_WIDTH
-            lines.append(
-                f"  <text class=\"small\" x=\"{x}\" y=\"{y}\">{_xml(label)}</text>"
-            )
+            lines.append(f'  <text class="small" x="{x}" y="{y}">{_xml(label)}</text>')
         y += 22
 
         for system_id, _system in systems:
             summary = summaries[(system_id, scenario_id)]
-            succeeded = _status_counts(
-                summary.get("status_counts"), repetitions
-            )["succeeded"]
-            lines.append(
-                f"  <text class=\"label\" x=\"36\" y=\"{y + 22}\">{_xml(system_id)}</text>"
-            )
-            lines.append(
-                f"  <text class=\"small\" x=\"36\" y=\"{y + 38}\">success {succeeded}/{repetitions}</text>"
-            )
+            succeeded = _status_counts(summary.get("status_counts"), repetitions)["succeeded"]
+            lines.append(f'  <text class="label" x="36" y="{y + 22}">{_xml(system_id)}</text>')
+            lines.append(f'  <text class="small" x="36" y="{y + 38}">success {succeeded}/{repetitions}</text>')
             statistics = metric_statistics[(system_id, scenario_id)]
             for index, (metric_name, _label) in enumerate(_QUALITY_METRICS):
                 x = _QUALITY_X + index * _QUALITY_COLUMN_WIDTH
@@ -226,14 +200,12 @@ def render_comparison_svg(
                 )
             y += 68
         y += 24
-        lines.append(
-            f"  <line x1=\"36\" y1=\"{y - 8}\" x2=\"1164\" y2=\"{y - 8}\" class=\"grid\"/>"
-        )
+        lines.append(f'  <line x1="36" y1="{y - 8}" x2="1164" y2="{y - 8}" class="grid"/>')
 
     lines.extend(
         [
-            f"  <text class=\"small\" x=\"36\" y=\"{height - 46}\">Outcome bars use the common repetition denominator. Quality excludes failed, timeout, partial, and invalid runs rather than scoring them as zero.</text>",
-            f"  <text class=\"small\" x=\"36\" y=\"{height - 27}\">The JSON comparison and full aggregates are normative; this deterministic SVG is a derived presentation.</text>",
+            f'  <text class="small" x="36" y="{height - 46}">Outcome bars use the common repetition denominator. Quality excludes failed, timeout, partial, and invalid runs rather than scoring them as zero.</text>',
+            f'  <text class="small" x="36" y="{height - 27}">The JSON comparison and full aggregates are normative; this deterministic SVG is a derived presentation.</text>',
             "</svg>",
             "",
         ]
@@ -253,9 +225,7 @@ def _render_quality_cell(
     succeeded: int,
 ) -> None:
     axis_y = y + 24
-    lines.append(
-        f'  <line x1="{x}" y1="{axis_y}" x2="{x + _QUALITY_AXIS_WIDTH}" y2="{axis_y}" class="axis"/>'
-    )
+    lines.append(f'  <line x1="{x}" y1="{axis_y}" x2="{x + _QUALITY_AXIS_WIDTH}" y2="{axis_y}" class="axis"/>')
     for fraction, label in ((0.0, "0"), (0.5, ".5"), (1.0, "1")):
         tick_x = x + _QUALITY_AXIS_WIDTH * fraction
         lines.append(
@@ -266,9 +236,7 @@ def _render_quality_cell(
         )
     parsed = _quality_statistic(statistic, succeeded=succeeded)
     if parsed is None:
-        lines.append(
-            f'  <text class="value" x="{x}" y="{y + 50}">N/A, n=0</text>'
-        )
+        lines.append(f'  <text class="value" x="{x}" y="{y + 50}">N/A, n=0</text>')
         return
     minimum, median, maximum, count = parsed
     if not (0.0 <= minimum <= median <= maximum <= 1.0):
@@ -405,8 +373,7 @@ def _fairness_line(fairness: Mapping[str, Any]) -> str:
         ("budgets", fairness.get("same_budgets")),
     )
     return "Fairness controls: " + ", ".join(
-        f"same {name}: {'yes' if value is True else 'no' if value is False else 'unspecified'}"
-        for name, value in flags
+        f"same {name}: {'yes' if value is True else 'no' if value is False else 'unspecified'}" for name, value in flags
     )
 
 

@@ -44,9 +44,10 @@ def test_endpoint_identity_normalizes_default_port_dot_segments_and_percent_enco
     assert first.component("effective_port") == "443"
     assert first.component("url") == "https://example.com/b?name=~user"
     assert normalize_endpoint_url("http://[2001:db8::1]:80/")[0] == "http://[2001:db8::1]/"
-    assert canonical_endpoint("https://example.com/?a=1&b=2").entity_id != canonical_endpoint(
-        "https://example.com/?b=2&a=1"
-    ).entity_id
+    assert (
+        canonical_endpoint("https://example.com/?a=1&b=2").entity_id
+        != canonical_endpoint("https://example.com/?b=2&a=1").entity_id
+    )
     with pytest.raises(ValueError, match="userinfo"):
         canonical_endpoint("https://user:password@example.com/")
 

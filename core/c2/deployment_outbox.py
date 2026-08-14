@@ -6,7 +6,6 @@ import time
 import uuid
 from dataclasses import dataclass
 from threading import RLock
-from typing import Dict, List, Optional
 
 
 @dataclass(frozen=True)
@@ -24,14 +23,14 @@ class DeploymentOutboxStore:
 
     def __init__(self) -> None:
         self._lock = RLock()
-        self._messages: Dict[str, DeploymentOutboxMessage] = {}
+        self._messages: dict[str, DeploymentOutboxMessage] = {}
 
     def enqueue(
         self,
         deployment_ref: str,
         action: str,
         payload_digest: str,
-        now: Optional[float] = None,
+        now: float | None = None,
     ) -> DeploymentOutboxMessage:
         ts = time.time() if now is None else now
         msg = DeploymentOutboxMessage(
@@ -46,7 +45,7 @@ class DeploymentOutboxStore:
             self._messages[msg.message_id] = msg
         return msg
 
-    def list_pending(self) -> List[DeploymentOutboxMessage]:
+    def list_pending(self) -> list[DeploymentOutboxMessage]:
         with self._lock:
             return [m for m in self._messages.values() if m.status == "pending"]
 

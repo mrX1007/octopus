@@ -1,7 +1,9 @@
 """Tests for C2 deploy provider."""
+
 from __future__ import annotations
 
 import pytest
+
 from core.providers.c2_deploy import C2DeployProvider
 
 pytestmark = pytest.mark.unit
@@ -20,12 +22,14 @@ def test_deploy_provider_readiness():
 
 def test_deploy_provider_execute():
     provider = C2DeployProvider()
-    res = provider.execute({
-        "target_os": "linux",
-        "backend_name": "local",
-        "binary_path": "/tmp/agent_bin",
-        "target_dir": "/tmp/agent_dir",
-    })
+    res = provider.execute(
+        {
+            "target_os": "linux",
+            "backend_name": "local",
+            "binary_path": "/tmp/agent_bin",
+            "target_dir": "/tmp/agent_dir",
+        }
+    )
     assert res["status"] == "deployed"
     assert res["attempt_id"].startswith("att_")
     assert res["deployment_result"]["backend"] == "local"

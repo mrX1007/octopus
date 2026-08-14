@@ -1,8 +1,11 @@
 """Control commands."""
+
 from __future__ import annotations
-from enum import Enum
+
 from dataclasses import dataclass, field
-from typing import Literal, Union, Protocol, runtime_checkable
+from enum import Enum
+from typing import Literal, Protocol, Union, runtime_checkable
+
 
 class C2ControlActionV1(str, Enum):
     PING = "ping"
@@ -39,6 +42,7 @@ class C2ControlActionV1(str, Enum):
     CLEANUP_DAEMON_RESOURCE = "cleanup_daemon_resource"
     REGISTER_DEPLOYMENT_MIRROR = "register_deployment_mirror"
 
+
 @dataclass(frozen=True)
 class ParticipantControlAuthorizationV1:
     key_id: str
@@ -53,9 +57,11 @@ class ParticipantControlAuthorizationV1:
     nonce: str
     signature: str
 
+
 @dataclass(frozen=True)
 class ExecutionControlAuthorizationV1:
     """Pre-participant executor authority for enrollment build checkout only."""
+
     key_id: str
     transaction_id: str
     request_id: str
@@ -68,6 +74,7 @@ class ExecutionControlAuthorizationV1:
     nonce: str
     signature: str
 
+
 @dataclass(frozen=True)
 class ParticipantControlRequestV1:
     action: C2ControlActionV1
@@ -78,6 +85,7 @@ class ParticipantControlRequestV1:
     prior_receipt_ref: str | None = None
     prior_receipt_digest: str | None = None
     expected_resource_revision: int | None = None
+
 
 @dataclass(frozen=True)
 class ParticipantControlReceiptV1:
@@ -93,12 +101,14 @@ class ParticipantControlReceiptV1:
     result_payload_digest: str | None
     result_payload_b64u: str | None = field(repr=False, compare=False)
 
+
 class ParticipantControlPhaseV1(str, Enum):
     PENDING = "pending"
     COMMITTED_HIDDEN = "committed_hidden"
     FINALIZED_VISIBLE = "finalized_visible"
     ABORTED = "aborted"
     FAILED = "failed"
+
 
 @dataclass(frozen=True)
 class ParticipantControlQuerySnapshotV1:
@@ -114,6 +124,7 @@ class ParticipantControlQuerySnapshotV1:
     result_payload_digest: str | None
     result_payload_b64u: str | None = field(repr=False, compare=False)
 
+
 class C2ControlErrorCodeV1(str, Enum):
     MALFORMED = "malformed"
     NOT_AUTHORIZED = "not_authorized"
@@ -123,20 +134,42 @@ class C2ControlErrorCodeV1(str, Enum):
     UNAVAILABLE = "unavailable"
     INTERNAL_FAILURE = "internal_failure"
 
+
 @dataclass(frozen=True)
 class BoundedControlErrorV1:
     reason_code: C2ControlErrorCodeV1
     retryable: bool
     detail_ref: str | None
 
-ParticipantControlResponseV1 = Union[ParticipantControlReceiptV1, ParticipantControlQuerySnapshotV1, BoundedControlErrorV1]
+
+ParticipantControlResponseV1 = Union[
+    ParticipantControlReceiptV1, ParticipantControlQuerySnapshotV1, BoundedControlErrorV1
+]
+
 
 @runtime_checkable
 class ParticipantControlSignerV1(Protocol):
-    def sign_participant_request(self, unsigned_request: ParticipantControlRequestV1) -> ParticipantControlRequestV1: ...
-    def sign_execution_request(self, *, action: C2ControlActionV1, authorization: ExecutionControlAuthorizationV1, payload_schema_id: str, payload_digest: str) -> ExecutionControlAuthorizationV1: ...
+    def sign_participant_request(
+        self, unsigned_request: ParticipantControlRequestV1
+    ) -> ParticipantControlRequestV1: ...
+    def sign_execution_request(
+        self,
+        *,
+        action: C2ControlActionV1,
+        authorization: ExecutionControlAuthorizationV1,
+        payload_schema_id: str,
+        payload_digest: str,
+    ) -> ExecutionControlAuthorizationV1: ...
+
 
 @runtime_checkable
 class ParticipantControlVerifierV1(Protocol):
     def verify_participant_request(self, request: ParticipantControlRequestV1) -> None: ...
-    def verify_execution_request(self, *, action: C2ControlActionV1, authorization: ExecutionControlAuthorizationV1, payload_schema_id: str, payload_digest: str) -> None: ...
+    def verify_execution_request(
+        self,
+        *,
+        action: C2ControlActionV1,
+        authorization: ExecutionControlAuthorizationV1,
+        payload_schema_id: str,
+        payload_digest: str,
+    ) -> None: ...

@@ -1,14 +1,15 @@
 """Channel reconciliation."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Any, Optional
+from typing import Any
+
 from core.c2.channel_manager import ChannelManager
 from core.c2.channel_models import (
     ChannelConfigV1,
     ChannelRecordV1,
     ChannelStateV1,
-    calculate_channel_config_digest,
 )
 
 
@@ -27,7 +28,7 @@ class ChannelReconciler:
     def __init__(
         self,
         manager: ChannelManager,
-        probe_fn: Optional[Any] = None,
+        probe_fn: Any | None = None,
     ) -> None:
         self.manager = manager
         self._probe_fn = probe_fn or self._default_probe
@@ -37,18 +38,18 @@ class ChannelReconciler:
         return record.state in (ChannelStateV1.ACTIVE, ChannelStateV1.CREATED)
 
     def reconcile_channels(
-        self, desired_configs: List[ChannelConfigV1] | tuple[ChannelConfigV1, ...]
+        self, desired_configs: list[ChannelConfigV1] | tuple[ChannelConfigV1, ...]
     ) -> ReconciliationReportV1:
         """Reconcile desired channel configurations with manager state."""
         desired_map = {cfg.channel_id: cfg for cfg in desired_configs}
         current_channels = self.manager.list_channels()
         current_map = {rec.channel_id: rec for rec in current_channels}
 
-        created: List[str] = []
-        closed: List[str] = []
-        degraded: List[str] = []
-        recovered: List[str] = []
-        unchanged: List[str] = []
+        created: list[str] = []
+        closed: list[str] = []
+        degraded: list[str] = []
+        recovered: list[str] = []
+        unchanged: list[str] = []
 
         # Create missing desired channels
         for c_id, cfg in desired_map.items():
@@ -98,4 +99,3 @@ class ChannelReconciler:
             self.manager.update_channel_state(channel_id, ChannelStateV1.ACTIVE)
             return True
         return False
-

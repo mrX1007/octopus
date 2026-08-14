@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from scripts.quality.provider_legacy_field_inventory import audit_repository
+
+pytestmark = pytest.mark.unit
 
 
 def test_provider_legacy_field_inventory_matches_reviewed_v1_allowlist() -> None:

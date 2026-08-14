@@ -84,6 +84,7 @@ class ExecutionCommitParticipant(Protocol):
 
 class ExecutionResultStoreParticipant(ExecutionCommitParticipant):
     """Participant that stages and commits ExecutionResultV2 into the ExecutionResultStore."""
+
     def __init__(self, result_store: Any, exec_res: Any, transaction_id: str):
         self._result_store = result_store
         self._exec_res = exec_res

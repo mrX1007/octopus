@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
-from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from core.actions.cancellation_recovery import (
     CancelExecutionRequestV2,
@@ -13,12 +10,14 @@ from core.actions.cancellation_recovery import (
     canonical_execution_cancellation_receipt_digest,
 )
 
+
 @runtime_checkable
 class ExecutionCancellationServiceV2(Protocol):
     def request_cancel(
         self,
         request: CancelExecutionRequestV2,
     ) -> ExecutionCancellationReceiptV2: ...
+
 
 class DefaultExecutionCancellationServiceV2:
     """In-memory production implementation of ExecutionCancellationServiceV2."""

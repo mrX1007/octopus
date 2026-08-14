@@ -67,12 +67,8 @@ class CommandSystemRunner:
         self.manifest = manifest
         self.timeout_seconds = _positive_optional_number(timeout_seconds)
         self.max_output_bytes = _positive_optional_integer(max_output_bytes)
-        self.temporary_directory = (
-            Path(temporary_directory) if temporary_directory is not None else None
-        )
-        self.private_log_path = (
-            Path(private_log_path) if private_log_path is not None else None
-        )
+        self.temporary_directory = Path(temporary_directory) if temporary_directory is not None else None
+        self.private_log_path = Path(private_log_path) if private_log_path is not None else None
 
     def __call__(
         self,
@@ -95,9 +91,7 @@ class CommandSystemRunner:
                 scenario_path = root / "scenario.json"
                 output_path = root / "result.json"
                 _write_scenario(scenario, scenario_path)
-                blinded_v3 = (
-                    str(scenario.lab.get("version") or "") == _V3_LAB_VERSION
-                )
+                blinded_v3 = str(scenario.lab.get("version") or "") == _V3_LAB_VERSION
                 argv = self._argv(
                     scenario_path=scenario_path,
                     output_path=output_path,
@@ -218,11 +212,7 @@ class CommandSystemRunner:
         return min(candidates)
 
     def _working_directory(self) -> Path:
-        base = (
-            self.manifest.source_path.parent
-            if self.manifest.source_path is not None
-            else Path.cwd()
-        ).resolve()
+        base = (self.manifest.source_path.parent if self.manifest.source_path is not None else Path.cwd()).resolve()
         candidate = (base / self.manifest.adapter.cwd).resolve()
         try:
             candidate.relative_to(base)
@@ -267,11 +257,7 @@ class CommandSystemRunner:
         repetition: int,
         seed: int,
     ) -> dict[str, str]:
-        environment = {
-            name: os.environ[name]
-            for name in self.manifest.adapter.env_passthrough
-            if name in os.environ
-        }
+        environment = {name: os.environ[name] for name in self.manifest.adapter.env_passthrough if name in os.environ}
         environment.update(
             {
                 "OCTOPUS_BENCHMARK_SCHEMA_VERSION": "1.0",
@@ -415,10 +401,7 @@ def _open_private_log(path: Path | None) -> BinaryIO | None:
     try:
         parent_descriptor = os.open(candidate.parent, parent_flags)
         parent_metadata = os.fstat(parent_descriptor)
-        if (
-            not stat.S_ISDIR(parent_metadata.st_mode)
-            or stat.S_IMODE(parent_metadata.st_mode) & 0o077
-        ):
+        if not stat.S_ISDIR(parent_metadata.st_mode) or stat.S_IMODE(parent_metadata.st_mode) & 0o077:
             raise SystemUnavailableError()
         descriptor = os.open(
             candidate.name,
@@ -524,12 +507,8 @@ def _normalize_result(
         "status": status,
         "actions": actions,
         "reported_claims": _text_list(result.get("reported_claims") or []),
-        "reported_findings": _identifier_list(
-            result.get("reported_findings") or []
-        ),
-        "verified_findings": _identifier_list(
-            result.get("verified_findings") or []
-        ),
+        "reported_findings": _identifier_list(result.get("reported_findings") or []),
+        "verified_findings": _identifier_list(result.get("verified_findings") or []),
         "coverage_gaps": _identifier_list(result.get("coverage_gaps") or []),
         "metrics": metrics,
         "artifact_refs": _text_list(result.get("artifact_refs") or []),
@@ -565,11 +544,7 @@ def _text_list(value: Any) -> list[str]:
     result: list[str] = []
     for item in values:
         candidate = str(item or "").strip()
-        if (
-            not candidate
-            or "\x00" in candidate
-            or len(candidate.encode("utf-8", "replace")) > _MAX_RESULT_TEXT_BYTES
-        ):
+        if not candidate or "\x00" in candidate or len(candidate.encode("utf-8", "replace")) > _MAX_RESULT_TEXT_BYTES:
             raise SystemProtocolError()
         result.append(candidate)
     return result

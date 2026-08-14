@@ -46,7 +46,9 @@ class ReplaySnapshot:
             if not any(str(action or "").startswith(command) for action in actions):
                 failures.append(f"missing_action:{command}")
 
-        surface_states = (context.get("target_model") or {}).get("surface_states") or context.get("surface_states") or {}
+        surface_states = (
+            (context.get("target_model") or {}).get("surface_states") or context.get("surface_states") or {}
+        )
         for surface, expected_state in (spec.get("expected_surface_states") or {}).items():
             actual = surface_states.get(surface)
             if actual != expected_state:

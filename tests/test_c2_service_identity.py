@@ -1,7 +1,9 @@
 """Tests for C2 service identity."""
+
 from __future__ import annotations
 
 import pytest
+
 from core.c2.service_identity import (
     C2ServiceIdentity,
     create_service_identity,

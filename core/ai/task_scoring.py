@@ -70,9 +70,7 @@ class TaskScoringWeights:
                 error=TaskScoringConfigError,
             )
             if not 0.0 <= value <= 1_000.0:
-                raise TaskScoringConfigError(
-                    f"task scoring weight {item.name} must be between 0 and 1000"
-                )
+                raise TaskScoringConfigError(f"task scoring weight {item.name} must be between 0 and 1000")
             object.__setattr__(self, item.name, value)
 
     @classmethod
@@ -89,41 +87,28 @@ class TaskScoringWeights:
         for key in cls.CONFIG_PATH:
             traversed.append(key)
             if not isinstance(current, Mapping) or key not in current:
-                raise TaskScoringConfigError(
-                    f"missing task scoring config: {'.'.join(traversed)}"
-                )
+                raise TaskScoringConfigError(f"missing task scoring config: {'.'.join(traversed)}")
             current = current[key]
         if not isinstance(current, Mapping):
-            raise TaskScoringConfigError(
-                f"{'.'.join(cls.CONFIG_PATH)} must be a mapping"
-            )
+            raise TaskScoringConfigError(f"{'.'.join(cls.CONFIG_PATH)} must be a mapping")
 
         schema_version = current.get("schema_version")
         if schema_version != TASK_SCORING_SCHEMA_VERSION:
             raise TaskScoringConfigError(
-                "unsupported task scoring schema version: "
-                f"{schema_version!r}; expected {TASK_SCORING_SCHEMA_VERSION!r}"
+                f"unsupported task scoring schema version: {schema_version!r}; expected {TASK_SCORING_SCHEMA_VERSION!r}"
             )
         if "weights" not in current:
-            raise TaskScoringConfigError(
-                f"missing task scoring config: {'.'.join(cls.CONFIG_PATH)}.weights"
-            )
+            raise TaskScoringConfigError(f"missing task scoring config: {'.'.join(cls.CONFIG_PATH)}.weights")
         current = current["weights"]
         if not isinstance(current, Mapping):
-            raise TaskScoringConfigError(
-                f"{'.'.join(cls.CONFIG_PATH)}.weights must be a mapping"
-            )
+            raise TaskScoringConfigError(f"{'.'.join(cls.CONFIG_PATH)}.weights must be a mapping")
 
         missing = [name for name in _FACTOR_ORDER if name not in current]
         if missing:
-            raise TaskScoringConfigError(
-                "missing task scoring weights: " + ", ".join(missing)
-            )
+            raise TaskScoringConfigError("missing task scoring weights: " + ", ".join(missing))
         unknown = sorted(str(name) for name in current if name not in _FACTOR_ORDER)
         if unknown:
-            raise TaskScoringConfigError(
-                "unknown task scoring weights: " + ", ".join(unknown)
-            )
+            raise TaskScoringConfigError("unknown task scoring weights: " + ", ".join(unknown))
         return cls(**{name: current[name] for name in _FACTOR_ORDER})
 
     def to_dict(self) -> dict[str, float]:
@@ -151,9 +136,7 @@ class TaskScoringSignals:
                 error=TaskScoringSignalError,
             )
             if not 0.0 <= value <= 1.0:
-                raise TaskScoringSignalError(
-                    f"task scoring signal {item.name} must be between 0 and 1"
-                )
+                raise TaskScoringSignalError(f"task scoring signal {item.name} must be between 0 and 1")
             object.__setattr__(self, item.name, value)
 
     def to_dict(self) -> dict[str, float]:
@@ -236,10 +219,7 @@ class TaskScorer:
         explanation = ";".join(
             [f"task_score:{TASK_SCORING_SCHEMA_VERSION}", f"total={total:.6f}"]
             + [
-                (
-                    f"{item.name}={item.kind}({item.signal:.6f}*"
-                    f"{item.weight:.6f})={item.contribution:+.6f}"
-                )
+                (f"{item.name}={item.kind}({item.signal:.6f}*{item.weight:.6f})={item.contribution:+.6f}")
                 for item in components
             ]
         )
@@ -261,9 +241,7 @@ class TaskScorer:
         for task_id, signals in candidates:
             score = self.score(task_id, signals)
             if score.task_id in seen:
-                raise TaskScoringSignalError(
-                    f"duplicate task_id in scoring batch: {score.task_id}"
-                )
+                raise TaskScoringSignalError(f"duplicate task_id in scoring batch: {score.task_id}")
             seen.add(score.task_id)
             scored.append(score)
         return tuple(sorted(scored, key=lambda item: (-item.score, item.task_id)))

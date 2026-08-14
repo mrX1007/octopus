@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from core.actions.execution_commit import CommitStateV2, ExecutionCommitCoordinator
 from core.actions.execution_commit_participants import (
-    ParticipantKindV2,
-    ParticipantPrepareResultV2,
     ParticipantCommitReceiptV2,
     ParticipantFinalizeReceiptV2,
+    ParticipantKindV2,
+    ParticipantPrepareResultV2,
     ParticipantRollbackReceiptV2,
     ParticipantStateV2,
     ParticipantVisibilityModeV2,
 )
+
+pytestmark = pytest.mark.unit
 
 
 class DummyParticipant:
@@ -30,11 +30,7 @@ class DummyParticipant:
 
     def prepare(self, tx_id: str) -> ParticipantPrepareResultV2:
         self.prepared = self.prepare_success
-        state = (
-            ParticipantStateV2.PREPARED
-            if self.prepare_success
-            else ParticipantStateV2.ABORTED_UNPREPARED
-        )
+        state = ParticipantStateV2.PREPARED if self.prepare_success else ParticipantStateV2.ABORTED_UNPREPARED
         return ParticipantPrepareResultV2(
             participant_id=self.participant_id,
             state=state,

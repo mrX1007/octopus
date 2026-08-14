@@ -1,22 +1,23 @@
 """Tests for C2 control protocol codec and frame reader."""
+
 from __future__ import annotations
 
 import time
+
 import pytest
-from core.c2.control_protocol import (
-    ControlProtocolCodec,
-    MemoryFrameReaderV1,
-    FRAME_MAGIC,
-)
+
 from core.c2.control_commands import (
+    BoundedControlErrorV1,
     C2ControlActionV1,
     C2ControlErrorCodeV1,
     ParticipantControlAuthorizationV1,
-    ParticipantControlRequestV1,
     ParticipantControlReceiptV1,
-    ParticipantControlQuerySnapshotV1,
-    ParticipantControlPhaseV1,
-    BoundedControlErrorV1,
+    ParticipantControlRequestV1,
+)
+from core.c2.control_protocol import (
+    FRAME_MAGIC,
+    ControlProtocolCodec,
+    MemoryFrameReaderV1,
 )
 
 pytestmark = pytest.mark.unit

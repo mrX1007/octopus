@@ -50,9 +50,7 @@ def _require_optional_string(name: str, value: object) -> None:
 
 def _require_expiry(value: object) -> None:
     if value is not None and (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(value)
+        isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
     ):
         raise ValueError("reference_expiry_invalid")
 

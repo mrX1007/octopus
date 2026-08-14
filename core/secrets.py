@@ -51,6 +51,7 @@ _SENSITIVE_FIELD_RE = re.compile(
     r")(?:$|[_-])"
 )
 
+
 class SecretValueState(str, Enum):
     AVAILABLE = "available"
     LEASED = "leased"
@@ -191,11 +192,7 @@ class OpaqueSecretValueV2:
             if self._state is not SecretValueState.LEASED:
                 raise SecretStoreError("secret_value_lease_not_active")
             lease._buffer_lease.close_and_zeroize()
-            self._state = (
-                SecretValueState.CLEARED
-                if self._clear_requested
-                else SecretValueState.CONSUMED
-            )
+            self._state = SecretValueState.CLEARED if self._clear_requested else SecretValueState.CONSUMED
 
     def __reduce__(self) -> str | tuple[Any, ...]:
         raise TypeError("secret_value_is_not_serializable")
@@ -423,10 +420,8 @@ class SecretStore:
             os.write(fd, base64.urlsafe_b64encode(generated))
         finally:
             os.close(fd)
-        try:
+        with suppress(SecretStoreError):
             self._assert_private_file(expanded)
-        except SecretStoreError:
-            pass
         return generated
 
     @staticmethod
@@ -458,7 +453,11 @@ class SecretStore:
             try:
                 conn = sqlite3.connect(self.db_path, timeout=30)
             except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
-                if "unable to open" in str(exc).lower() or "readonly" in str(exc).lower() or "authorization denied" in str(exc).lower():
+                if (
+                    "unable to open" in str(exc).lower()
+                    or "readonly" in str(exc).lower()
+                    or "authorization denied" in str(exc).lower()
+                ):
                     self._memory_conn = sqlite3.connect(":memory:")
                     return self._memory_conn
                 raise
@@ -470,7 +469,12 @@ class SecretStore:
             except (sqlite3.OperationalError, sqlite3.DatabaseError) as exc:
                 conn.close()
                 if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
-                    if "unable to open" in str(exc).lower() or "disk i/o" in str(exc).lower() or "readonly" in str(exc).lower() or "authorization denied" in str(exc).lower():
+                    if (
+                        "unable to open" in str(exc).lower()
+                        or "disk i/o" in str(exc).lower()
+                        or "readonly" in str(exc).lower()
+                        or "authorization denied" in str(exc).lower()
+                    ):
                         self._memory_conn = sqlite3.connect(":memory:")
                         return self._memory_conn
                     raise
@@ -503,14 +507,13 @@ class SecretStore:
                 conn.commit()
             finally:
                 self._close(conn)
-        if self.db_path != ":memory:" and self._memory_conn is None:
-            if os.path.exists(self.db_path):
-                try:
-                    st = os.stat(self.db_path)
-                    if (st.st_mode & 0o777) != 0o600:
-                        os.chmod(self.db_path, 0o600)
-                except OSError as exc:
-                    raise SecretStoreError(f"cannot protect secret store database: {exc}") from exc
+        if self.db_path != ":memory:" and self._memory_conn is None and os.path.exists(self.db_path):
+            try:
+                st = os.stat(self.db_path)
+                if (st.st_mode & 0o777) != 0o600:
+                    os.chmod(self.db_path, 0o600)
+            except OSError as exc:
+                raise SecretStoreError(f"cannot protect secret store database: {exc}") from exc
 
     def store(
         self,
@@ -604,11 +607,7 @@ class SecretStore:
                     if not row:
                         raise KeyError(secret_ref)
                     kind, nonce, ciphertext = row
-                    if (
-                        type(kind) is not str
-                        or type(nonce) is not bytes
-                        or type(ciphertext) is not bytes
-                    ):
+                    if type(kind) is not str or type(nonce) is not bytes or type(ciphertext) is not bytes:
                         raise SecretStoreError("secret_record_corrupt")
                     if len(ciphertext) <= 16:
                         raise SecretStoreError("secret_ciphertext_invalid")

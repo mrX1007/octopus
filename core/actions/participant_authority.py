@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
+
 
 @dataclass(frozen=True)
 class ParticipantExecutionAuthorityBindingV2:
@@ -16,6 +17,7 @@ class ParticipantExecutionAuthorityBindingV2:
     checkout_ref: str
     coordinator_ref: str
     authority_digest: str
+
 
 def canonical_participant_authority_digest(binding: ParticipantExecutionAuthorityBindingV2) -> str:
     payload = {
@@ -29,6 +31,7 @@ def canonical_participant_authority_digest(binding: ParticipantExecutionAuthorit
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
 
+
 @runtime_checkable
 class ParticipantExecutionAuthorityFactoryV2(Protocol):
     def issue(
@@ -40,6 +43,7 @@ class ParticipantExecutionAuthorityFactoryV2(Protocol):
         checkout_ref: str,
         coordinator_ref: str,
     ) -> ParticipantExecutionAuthorityBindingV2: ...
+
 
 class DefaultParticipantExecutionAuthorityFactoryV2:
     """Concrete production factory issuing ParticipantExecutionAuthorityBindingV2 instances."""

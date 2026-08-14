@@ -127,9 +127,7 @@ def print_efficiency_report(
     fact_total = len(get_facts(scan_id, target))
     failed = [outcome for outcome in task_outcomes if outcome["status"] == "failed"]
     blocked = [outcome for outcome in task_outcomes if outcome["status"] == "blocked"]
-    no_fact = [
-        outcome for outcome in task_outcomes if outcome["status"] == "no_new_facts"
-    ]
+    no_fact = [outcome for outcome in task_outcomes if outcome["status"] == "no_new_facts"]
 
     emit(
         f"[*] Efficiency report: tasks={len(task_outcomes)}, "
@@ -139,9 +137,7 @@ def print_efficiency_report(
     )
 
     if blocked:
-        preview = ", ".join(
-            f"{outcome['task']}({outcome['reason']})" for outcome in blocked[:5]
-        )
+        preview = ", ".join(f"{outcome['task']}({outcome['reason']})" for outcome in blocked[:5])
         emit(f"    Blocked tasks: {preview}")
     if failed:
         preview = ", ".join(outcome["task"] for outcome in failed[:5])
@@ -151,16 +147,10 @@ def print_efficiency_report(
         emit(f"    No-fact tasks: {preview}")
     if goal_trace:
         last = goal_trace[-1]
-        emit(
-            f"    Last goal trace: goal={last['goal']} state={last['state']} "
-            f"next={last['next_required_capability']}"
-        )
+        emit(f"    Last goal trace: goal={last['goal']} state={last['state']} next={last['next_required_capability']}")
     if command_trace:
         skipped = [item for item in command_trace if item.get("action") == "skip"]
-        emit(
-            f"    Command trace: decisions={len(command_trace)}, "
-            f"skipped={len(skipped)}"
-        )
+        emit(f"    Command trace: decisions={len(command_trace)}, skipped={len(skipped)}")
 
 
 __all__ = [

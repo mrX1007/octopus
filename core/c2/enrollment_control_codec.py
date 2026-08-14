@@ -6,10 +6,10 @@ import base64
 import hashlib
 import json
 from dataclasses import asdict
+
 from core.c2.enrollment_control_models import (
     ENROLLMENT_PAYLOAD_SCHEMA_V1,
     EnrollmentControlPayloadV1,
-    EnrollmentControlReceiptV1,
 )
 
 

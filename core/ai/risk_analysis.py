@@ -21,14 +21,37 @@ class RiskAnalyzer:
         ad = self.model.get("active_directory") or {}
         paths = []
         for item in ad.get("attack_paths", []):
-            paths.append({"severity": "high", "kind": "attack_path", "value": item.get("value", ""), "reason": "BloodHound/domain-admin path observed"})
+            paths.append(
+                {
+                    "severity": "high",
+                    "kind": "attack_path",
+                    "value": item.get("value", ""),
+                    "reason": "BloodHound/domain-admin path observed",
+                }
+            )
         for item in ad.get("adcs_issues", []):
             sev = "critical" if str(item.get("value", "")).startswith(("ESC1", "ESC2", "ESC8")) else "high"
-            paths.append({"severity": sev, "kind": "adcs", "value": item.get("value", ""), "reason": "ADCS issue can enable privilege escalation"})
+            paths.append(
+                {
+                    "severity": sev,
+                    "kind": "adcs",
+                    "value": item.get("value", ""),
+                    "reason": "ADCS issue can enable privilege escalation",
+                }
+            )
         for item in ad.get("delegation", []):
-            paths.append({"severity": "high", "kind": "delegation", "value": item.get("value", ""), "reason": "delegation requires path review"})
+            paths.append(
+                {
+                    "severity": "high",
+                    "kind": "delegation",
+                    "value": item.get("value", ""),
+                    "reason": "delegation requires path review",
+                }
+            )
         for item in ad.get("acl_issues", []):
-            paths.append({"severity": "high", "kind": "acl", "value": item.get("value", ""), "reason": "dangerous ACL observed"})
+            paths.append(
+                {"severity": "high", "kind": "acl", "value": item.get("value", ""), "reason": "dangerous ACL observed"}
+            )
         return paths
 
     def cloud_posture(self) -> dict[str, list[dict[str, Any]]]:
@@ -41,14 +64,16 @@ class RiskAnalyzer:
     def secret_rotation(self) -> list[dict[str, Any]]:
         actions = []
         for secret in (self.model.get("security_findings") or {}).get("secrets", []):
-            actions.append({
-                "secret_type": secret.get("secret_type", "unknown"),
-                "location": secret.get("location", ""),
-                "validated_or_not": secret.get("validated_or_not", "unknown"),
-                "rotation_required": secret.get("rotation_required", "unknown"),
-                "exposure_scope": secret.get("exposure_scope", "unknown"),
-                "priority": "urgent" if secret.get("validated_or_not") == "validated" else "review",
-            })
+            actions.append(
+                {
+                    "secret_type": secret.get("secret_type", "unknown"),
+                    "location": secret.get("location", ""),
+                    "validated_or_not": secret.get("validated_or_not", "unknown"),
+                    "rotation_required": secret.get("rotation_required", "unknown"),
+                    "exposure_scope": secret.get("exposure_scope", "unknown"),
+                    "priority": "urgent" if secret.get("validated_or_not") == "validated" else "review",
+                }
+            )
         return actions
 
     def code_reachability(self) -> list[dict[str, Any]]:
@@ -57,10 +82,14 @@ class RiskAnalyzer:
         exposed = bool(endpoints or services)
         correlated = []
         for finding in (self.model.get("security_findings") or {}).get("code", []):
-            correlated.append({
-                "finding": finding.get("value", ""),
-                "location": finding.get("location", ""),
-                "exposed_surface_present": exposed,
-                "priority": "higher" if exposed and finding.get("severity", "").lower() in {"high", "critical"} else "normal",
-            })
+            correlated.append(
+                {
+                    "finding": finding.get("value", ""),
+                    "location": finding.get("location", ""),
+                    "exposed_surface_present": exposed,
+                    "priority": "higher"
+                    if exposed and finding.get("severity", "").lower() in {"high", "critical"}
+                    else "normal",
+                }
+            )
         return correlated

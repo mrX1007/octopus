@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 import base64
-import os
-from dataclasses import dataclass
-from typing import Optional, Tuple
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
-from cryptography.hazmat.primitives import serialization
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 DOMAIN_SEPARATOR = "OCTOPUS-C2-SERVER-CHALLENGE-V1"
 
@@ -21,14 +18,11 @@ def compute_server_challenge_transcript(
     boot_id: str,
 ) -> bytes:
     """Compute domain-separated transcript for server challenge signing."""
-    transcript = (
-        f"{DOMAIN_SEPARATOR}:{daemon_instance_id}:{server_nonce}:"
-        f"{listener_st_dev}:{listener_st_ino}:{boot_id}"
-    )
+    transcript = f"{DOMAIN_SEPARATOR}:{daemon_instance_id}:{server_nonce}:{listener_st_dev}:{listener_st_ino}:{boot_id}"
     return transcript.encode("utf-8")
 
 
-def generate_server_identity_keypair() -> Tuple[bytes, bytes]:
+def generate_server_identity_keypair() -> tuple[bytes, bytes]:
     """Generate a new Ed25519 server identity keypair (private_raw, public_raw)."""
     priv = Ed25519PrivateKey.generate()
     pub = priv.public_key()

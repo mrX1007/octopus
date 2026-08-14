@@ -115,9 +115,7 @@ class C2ResultServiceV1:
         self._lock = RLock()
         self._agents: dict[str, _AgentRow] = {}
         self._results: dict[str, _ResultRow] = {}
-        self._acknowledgements: dict[
-            tuple[str, str], ResultAcknowledgementRecordV1
-        ] = {}
+        self._acknowledgements: dict[tuple[str, str], ResultAcknowledgementRecordV1] = {}
         self._acknowledgement_revisions: dict[str, int] = {}
 
     def register_agent(
@@ -193,8 +191,7 @@ class C2ResultServiceV1:
                 (
                     row.summary
                     for row in self._agents.values()
-                    if row.summary.mission_id == mission_id
-                    and self._can_access(row.access, principal.subject_id)
+                    if row.summary.mission_id == mission_id and self._can_access(row.access, principal.subject_id)
                 ),
                 key=lambda item: item.agent_ref,
             )
@@ -277,9 +274,7 @@ class C2ResultServiceV1:
         seen_refs: set[str] = set()
         with self._lock:
             agent = self._agents.get(request.agent_ref)
-            agent_accessible = self._agent_accessible(
-                agent, principal.subject_id, request.mission_id
-            )
+            agent_accessible = self._agent_accessible(agent, principal.subject_id, request.mission_id)
             for selection in request.selections:
                 if selection.result_ref in seen_refs:
                     rejected_refs.append(selection.result_ref)
@@ -303,9 +298,7 @@ class C2ResultServiceV1:
                     acknowledgements.append(existing)
                     continue
 
-                acknowledgement_revision = (
-                    self._acknowledgement_revisions.get(selection.result_ref, 0) + 1
-                )
+                acknowledgement_revision = self._acknowledgement_revisions.get(selection.result_ref, 0) + 1
                 record = ResultAcknowledgementRecordV1(
                     result_ref=selection.result_ref,
                     result_revision=row.summary.revision,
@@ -314,9 +307,7 @@ class C2ResultServiceV1:
                     acknowledgement_revision=acknowledgement_revision,
                 )
                 self._acknowledgements[key] = record
-                self._acknowledgement_revisions[
-                    selection.result_ref
-                ] = acknowledgement_revision
+                self._acknowledgement_revisions[selection.result_ref] = acknowledgement_revision
                 acknowledgements.append(record)
 
         return ResultAckBatchV1(
@@ -369,11 +360,7 @@ class C2ResultServiceV1:
                 for key in tuple(self._acknowledgements):
                     if key[0] == result_ref:
                         del self._acknowledgements[key]
-            next_cursor = (
-                candidates[limit].summary.result_ref
-                if len(candidates) > limit
-                else None
-            )
+            next_cursor = candidates[limit].summary.result_ref if len(candidates) > limit else None
             return PurgeResultV1(
                 purged_count=len(selected),
                 next_cursor=next_cursor,
@@ -386,13 +373,9 @@ class C2ResultServiceV1:
         return float(now)
 
     @staticmethod
-    def _make_access(
-        owner_subject_id: str | None, permitted_subject_ids: tuple[str, ...]
-    ) -> _ResourceAccess:
+    def _make_access(owner_subject_id: str | None, permitted_subject_ids: tuple[str, ...]) -> _ResourceAccess:
         if owner_subject_id is not None:
-            C2ResultServiceV1._validate_reference(
-                owner_subject_id, "owner_subject_id"
-            )
+            C2ResultServiceV1._validate_reference(owner_subject_id, "owner_subject_id")
         if type(permitted_subject_ids) is not tuple:
             raise TypeError("permitted_subject_ids must be a tuple")
         if len(permitted_subject_ids) > _MAX_ACL_SUBJECTS:
@@ -409,8 +392,7 @@ class C2ResultServiceV1:
     @staticmethod
     def _can_access(access: _ResourceAccess, subject_id: str) -> bool:
         return access.owner_subject_id is not None and (
-            subject_id == access.owner_subject_id
-            or subject_id in access.permitted_subject_ids
+            subject_id == access.owner_subject_id or subject_id in access.permitted_subject_ids
         )
 
     @classmethod
@@ -420,11 +402,7 @@ class C2ResultServiceV1:
         subject_id: str,
         mission_id: str,
     ) -> bool:
-        return (
-            row is not None
-            and row.summary.mission_id == mission_id
-            and cls._can_access(row.access, subject_id)
-        )
+        return row is not None and row.summary.mission_id == mission_id and cls._can_access(row.access, subject_id)
 
     @classmethod
     def _ack_target_accessible(
@@ -474,11 +452,7 @@ class C2ResultServiceV1:
         references = [reference(value) for value in values]
         start = 0 if cursor is None else bisect_right(references, cursor)
         selected = values[start : start + limit]
-        next_cursor = (
-            reference(selected[-1])
-            if selected and start + len(selected) < len(values)
-            else None
-        )
+        next_cursor = reference(selected[-1]) if selected and start + len(selected) < len(values) else None
         return tuple(selected), next_cursor
 
 

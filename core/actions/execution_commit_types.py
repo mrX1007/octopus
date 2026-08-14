@@ -6,7 +6,6 @@ import hashlib
 import json
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Literal
 
 
 class ExecutionCommitStateV2(str, Enum):
@@ -53,9 +52,7 @@ class ExecutionCommitDecisionBindingV2:
     binding_digest: str
 
     def __post_init__(self) -> None:
-        if (self.external_effect_participant_id is None) != (
-            self.external_effect_registration_digest is None
-        ):
+        if (self.external_effect_participant_id is None) != (self.external_effect_registration_digest is None):
             raise ValueError("commit_effect_binding_fields_all_or_none")
         if self.binding_digest != canonical_execution_commit_decision_binding_digest(self):
             raise ValueError("commit_decision_binding_digest_mismatch")

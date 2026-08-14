@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 
 try:
-    from cryptography.hazmat.primitives.asymmetric import ed25519
     from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ed25519
 except ImportError:
     ed25519 = None  # type: ignore
 

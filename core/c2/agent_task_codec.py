@@ -267,11 +267,15 @@ class AgentTaskCodecV12:
             service is None for service in registration_services
         ):
             raise TypeError("registration codec services must be supplied as one complete set")
-        if secret_authenticator is not None and type(secret_authenticator) is not OwnedHmacSensitiveIntegrityAuthenticatorV2:
+        if (
+            secret_authenticator is not None
+            and type(secret_authenticator) is not OwnedHmacSensitiveIntegrityAuthenticatorV2
+        ):
             raise TypeError("registration codec requires the canonical sensitive authenticator")
-        if zeroizable_buffer_factory is not None and type(
-            zeroizable_buffer_factory
-        ) is not OwnedZeroizableSensitiveBufferFactoryV2:
+        if (
+            zeroizable_buffer_factory is not None
+            and type(zeroizable_buffer_factory) is not OwnedZeroizableSensitiveBufferFactoryV2
+        ):
             raise TypeError("registration codec requires the canonical zeroizable buffer factory")
         if secret_value_factory is not None and type(secret_value_factory) is not OpaqueSecretValueFactoryV2:
             raise TypeError("registration codec requires the canonical secret value factory")
@@ -527,8 +531,7 @@ class AgentTaskResultDecoderV12:
         _require_result_fields(body)
         if (
             _as_text(body["task_id"], "task_id") != expected_envelope.task_id
-            or _as_text(body["operation_id"], "operation_id")
-            != expected_envelope.operation_id.value
+            or _as_text(body["operation_id"], "operation_id") != expected_envelope.operation_id.value
             or _as_text(body["result_schema_version"], "result_schema_version")
             != expected_envelope.result_schema_version.value
         ):
@@ -943,14 +946,10 @@ def _registration_from_wire(
         owned_buffer = None
         try:
             return AgentRegistrationV12(
-                protocol_version=_require_literal(
-                    value["protocol_version"], C2_AGENT_PROTOCOL_V12, "protocol_version"
-                ),
+                protocol_version=_require_literal(value["protocol_version"], C2_AGENT_PROTOCOL_V12, "protocol_version"),
                 capabilities=capabilities,
                 deployment_ref=_as_text(value["deployment_ref"], "deployment_ref"),
-                artifact_binding_digest=_as_text(
-                    value["artifact_binding_digest"], "artifact_binding_digest"
-                ),
+                artifact_binding_digest=_as_text(value["artifact_binding_digest"], "artifact_binding_digest"),
                 enrollment_token=enrollment_token,
                 hostname=_as_text(value["hostname"], "hostname"),
                 os=C2TargetOS(_as_text(value["os"], "os")),
@@ -1348,9 +1347,7 @@ def _result_from_wire(
 ) -> AgentTaskResultV12:
     _require_result_fields(value)
     operation_id = C2TaskOperationId(_as_text(value["operation_id"], "operation_id"))
-    result_schema_version = AgentResultSchemaIdV12(
-        _as_text(value["result_schema_version"], "result_schema_version")
-    )
+    result_schema_version = AgentResultSchemaIdV12(_as_text(value["result_schema_version"], "result_schema_version"))
     if AgentTaskCatalogV12.require_spec(operation_id).result_schema_version is not result_schema_version:
         raise ValueError("operation/result schema mapping is not canonical")
     raw_output = value["output"]

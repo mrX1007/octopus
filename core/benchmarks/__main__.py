@@ -26,9 +26,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--comparison-output",
         type=Path,
-        default=Path.cwd()
-        / "octobench-results"
-        / "noop-repeat-comparison-v1.json",
+        default=Path.cwd() / "octobench-results" / "noop-repeat-comparison-v1.json",
     )
     parser.add_argument(
         "--comparison-only",

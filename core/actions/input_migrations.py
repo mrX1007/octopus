@@ -63,10 +63,7 @@ class V1ToV2InputMigrator:
         action_id: str,
         v1_payloads: Sequence[Mapping[str, object]],
     ) -> tuple[LegacyInputMigrationRequiredV2, ...]:
-        return tuple(
-            self.migrate(action_id=action_id, v1_payload=payload)
-            for payload in v1_payloads
-        )
+        return tuple(self.migrate(action_id=action_id, v1_payload=payload) for payload in v1_payloads)
 
 
 def migrate_v1_to_v2(

@@ -1,15 +1,18 @@
 """Tests for C2 control signing and verifier."""
+
 from __future__ import annotations
 
 import time
+
 import pytest
-from core.c2.control_signing import ControlSignerV1, ControlVerifierV1
+
 from core.c2.control_commands import (
     C2ControlActionV1,
+    ExecutionControlAuthorizationV1,
     ParticipantControlAuthorizationV1,
     ParticipantControlRequestV1,
-    ExecutionControlAuthorizationV1,
 )
+from core.c2.control_signing import ControlSignerV1, ControlVerifierV1
 
 pytestmark = pytest.mark.unit
 

@@ -26,12 +26,7 @@ from core.benchmarks.schema import load_scenario
 
 pytestmark = pytest.mark.benchmark
 
-SCENARIO_PATH = (
-    Path(__file__).parents[2]
-    / "benchmarks"
-    / "scenarios"
-    / "01-service-discovery-verification.json"
-)
+SCENARIO_PATH = Path(__file__).parents[2] / "benchmarks" / "scenarios" / "01-service-discovery-verification.json"
 
 
 def _manifest(
@@ -170,9 +165,7 @@ def test_publication_is_atomic_checksummed_and_refuses_overwrite(tmp_path):
         f"aggregates/beta/{scenario.scenario_id}.json",
     }
     assert {
-        path.relative_to(destination).as_posix()
-        for path in destination.rglob("*")
-        if path.is_file()
+        path.relative_to(destination).as_posix() for path in destination.rglob("*") if path.is_file()
     } == expected_files
 
     checksum_lines = (destination / "SHA256SUMS").read_text().splitlines()
@@ -268,6 +261,7 @@ def test_failures_are_publishable_but_trigger_strict_result():
 
     def factory(manifest):
         if manifest.system_id == "beta":
+
             def fail(*_args):
                 raise RuntimeError("adapter failure")
 
@@ -306,11 +300,7 @@ def test_svg_keeps_terminal_failures_out_of_success_quality_statistics():
                 "actions": [],
                 "reported_findings": [],
                 "verified_findings": [],
-                "metrics": {
-                    "evidence_completeness": (
-                        0.75 if repetition == 1 else 0.99
-                    )
-                },
+                "metrics": {"evidence_completeness": (0.75 if repetition == 1 else 0.99)},
                 "duration_seconds": float(repetition),
             }
 
@@ -323,19 +313,14 @@ def test_svg_keeps_terminal_failures_out_of_success_quality_statistics():
         runner_factory=factory,
         clock=lambda: 100.0,
     )
-    beta_summary = next(
-        item for item in result.summaries if item["system_id"] == "beta"
-    )
+    beta_summary = next(item for item in result.summaries if item["system_id"] == "beta")
     svg = render_comparison_svg(
         result.to_dict(),
         metric_statistics_by_pair(result.aggregates),
     )
 
     assert beta_summary["metric_counts"]["evidence_completeness"] == 1
-    assert (
-        "succeeded 1 | failed 1 | timeout 1 | partial 1 | invalid 1"
-        in svg
-    )
+    assert "succeeded 1 | failed 1 | timeout 1 | partial 1 | invalid 1" in svg
     assert "success 1/5" in svg
     assert "0.750 [0.750-0.750], n=1" in svg
     assert "0.990 [0.990-0.990]" not in svg
@@ -375,28 +360,17 @@ def test_svg_renders_missing_success_metric_as_na_not_zero():
 def test_checked_in_v1_github_svg_is_canonical_derivative():
     repository_root = Path(__file__).parents[2]
     bundle = (
-        repository_root
-        / "benchmarks"
-        / "competitors"
-        / "results"
-        / "linux-blackbox-small-model-v1-20260721t134205z"
+        repository_root / "benchmarks" / "competitors" / "results" / "linux-blackbox-small-model-v1-20260721t134205z"
     )
-    comparison = json.loads(
-        (bundle / "comparison.json").read_text(encoding="utf-8")
-    )
+    comparison = json.loads((bundle / "comparison.json").read_text(encoding="utf-8"))
     statistics = {}
     for aggregate_path in sorted((bundle / "aggregates").glob("*/*.json")):
         aggregate = json.loads(aggregate_path.read_text(encoding="utf-8"))
-        statistics[(aggregate_path.parent.name, aggregate_path.stem)] = aggregate[
-            "metric_statistics"
-        ]
+        statistics[(aggregate_path.parent.name, aggregate_path.stem)] = aggregate["metric_statistics"]
 
     expected = render_comparison_svg(comparison, statistics)
     observed = (
-        repository_root
-        / "docs"
-        / "benchmarks"
-        / "linux-blackbox-small-model-v1-20260721t134205z.svg"
+        repository_root / "docs" / "benchmarks" / "linux-blackbox-small-model-v1-20260721t134205z.svg"
     ).read_text(encoding="utf-8")
 
     assert observed == expected
@@ -425,12 +399,8 @@ def test_timeout_and_partial_runs_are_published_as_strict_errors(status):
     assert result.completeness["partial_runs"] == expected_partial
     assert result.completeness["error_runs"] == 10
     assert result.has_strict_failures is True
-    assert {summary["timeout_runs"] for summary in result.summaries} == {
-        expected_timeout // 2
-    }
-    assert {summary["partial_runs"] for summary in result.summaries} == {
-        expected_partial // 2
-    }
+    assert {summary["timeout_runs"] for summary in result.summaries} == {expected_timeout // 2}
+    assert {summary["partial_runs"] for summary in result.summaries} == {expected_partial // 2}
     assert {summary["error_runs"] for summary in result.summaries} == {5}
 
 
@@ -494,9 +464,7 @@ json.dump(result, open(sys.argv[2], "w", encoding="utf-8"))
         ]
     )
 
-    comparison = json.loads(
-        (destination / "comparison.json").read_text(encoding="utf-8")
-    )
+    comparison = json.loads((destination / "comparison.json").read_text(encoding="utf-8"))
     assert exit_code == 0
     assert comparison["methodology"]["execution_mode"] == "replay"
     assert comparison["publication"]["succeeded_runs"] == 10

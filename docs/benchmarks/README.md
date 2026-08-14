@@ -47,6 +47,7 @@ from core.benchmarks import BenchmarkHarness, load_scenario
 
 scenario = load_scenario("benchmarks/scenarios/06-clean-negative.json")
 
+
 def replay_runner(scenario, repetition, seed):
     return {
         "status": "succeeded",
@@ -54,6 +55,7 @@ def replay_runner(scenario, repetition, seed):
         "reported_findings": [],
         "metrics": {"evidence_completeness": 1.0},
     }
+
 
 harness = BenchmarkHarness(replay_runner)
 aggregate = harness.run(scenario)

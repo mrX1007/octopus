@@ -75,21 +75,15 @@ class EnrollmentAuthority:
             "jti": secrets.token_urlsafe(24),
             "v": self.VERSION,
         }
-        encoded = _b64encode(
-            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
-        )
-        signature = _b64encode(
-            hmac.new(self._key, encoded.encode("ascii"), hashlib.sha256).digest()
-        )
+        encoded = _b64encode(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+        signature = _b64encode(hmac.new(self._key, encoded.encode("ascii"), hashlib.sha256).digest())
         return f"{encoded}.{signature}"
 
     def consume(self, token: str, database, now: float | None = None) -> bool:
         """Validate ``token`` and atomically mark it used in ``database``."""
         try:
             encoded, supplied_signature = token.split(".", 1)
-            expected_signature = _b64encode(
-                hmac.new(self._key, encoded.encode("ascii"), hashlib.sha256).digest()
-            )
+            expected_signature = _b64encode(hmac.new(self._key, encoded.encode("ascii"), hashlib.sha256).digest())
             if not hmac.compare_digest(supplied_signature, expected_signature):
                 return False
             payload = json.loads(_b64decode(encoded))
@@ -108,4 +102,3 @@ class EnrollmentAuthority:
 
         fingerprint = hashlib.sha256(token_id.encode("utf-8")).hexdigest()
         return bool(database.consume_enrollment_token(fingerprint, expires_at, current))
-

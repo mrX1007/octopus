@@ -7,7 +7,6 @@ import secrets
 import time
 from dataclasses import dataclass
 from threading import RLock
-from typing import Dict, List, Optional
 
 
 class EnrollmentStateV1:
@@ -41,7 +40,7 @@ class EnrollmentService:
 
     def __init__(self) -> None:
         self._lock = RLock()
-        self._records: Dict[str, EnrollmentRecordV1] = {}
+        self._records: dict[str, EnrollmentRecordV1] = {}
 
     def issue(
         self,
@@ -51,7 +50,7 @@ class EnrollmentService:
         target_id: str,
         max_uses: int = 1,
         expires_in_seconds: float = 3600.0,
-        now: Optional[float] = None,
+        now: float | None = None,
     ) -> EnrollmentRecordV1:
         ts = time.time() if now is None else now
         tok = secrets.token_urlsafe(32)
@@ -76,7 +75,7 @@ class EnrollmentService:
             self._records[ref] = rec
         return rec
 
-    def get(self, enrollment_ref: str) -> Optional[EnrollmentRecordV1]:
+    def get(self, enrollment_ref: str) -> EnrollmentRecordV1 | None:
         with self._lock:
             return self._records.get(enrollment_ref)
 
@@ -146,11 +145,7 @@ class EnrollmentService:
                 raise ValueError("Enrollment maximum uses exceeded")
 
             new_count = existing.used_count + 1
-            new_state = (
-                EnrollmentStateV1.CONSUMED_BY_AGENT
-                if new_count >= existing.max_uses
-                else existing.state
-            )
+            new_state = EnrollmentStateV1.CONSUMED_BY_AGENT if new_count >= existing.max_uses else existing.state
             updated = EnrollmentRecordV1(
                 enrollment_ref=existing.enrollment_ref,
                 token=existing.token,

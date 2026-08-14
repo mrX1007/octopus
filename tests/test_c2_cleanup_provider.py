@@ -1,7 +1,9 @@
 """Tests for C2 cleanup provider."""
+
 from __future__ import annotations
 
 import pytest
+
 from core.providers.c2_cleanup import C2CleanupProvider
 
 pytestmark = pytest.mark.unit

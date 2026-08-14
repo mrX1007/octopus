@@ -2,23 +2,17 @@
 
 from __future__ import annotations
 
-import time
+import contextlib
 import uuid
-from typing import List, Optional
 
 from core.actions.execution_commit_participants import (
     ExecutionCommitParticipant,
     ParticipantCommitReceiptV2,
     ParticipantFinalizeReceiptV2,
-    ParticipantKindV2,
     ParticipantPrepareResultV2,
-    ParticipantRollbackReceiptV2,
     ParticipantStateV2,
-    ParticipantVisibilityModeV2,
 )
 from core.actions.execution_commit_types import (
-    ExecutionCommitDecisionBindingV2,
-    ExecutionCommitRecordV2,
     ExecutionCommitStateV2,
 )
 
@@ -40,7 +34,7 @@ class ExecutionCommitCoordinator:
         self.transaction_id = transaction_id or f"tx-{uuid.uuid4().hex[:12]}"
         self.revision = 1
         self.state = ExecutionCommitStateV2.OPEN
-        self._participants: List[ExecutionCommitParticipant] = []
+        self._participants: list[ExecutionCommitParticipant] = []
         self._prepare_receipts: dict[str, ParticipantPrepareResultV2] = {}
         self._commit_receipts: dict[str, ParticipantCommitReceiptV2] = {}
         self._finalize_receipts: dict[str, ParticipantFinalizeReceiptV2] = {}
@@ -93,7 +87,9 @@ class ExecutionCommitCoordinator:
                 self._finalize_receipts[p.participant_id] = receipt
             except Exception as exc:
                 self.state = ExecutionCommitStateV2.FAILED_RECONCILIATION
-                raise CommitFinalizationFailedError(f"Participant '{p.participant_id}' failed visibility finalization: {exc}") from exc
+                raise CommitFinalizationFailedError(
+                    f"Participant '{p.participant_id}' failed visibility finalization: {exc}"
+                ) from exc
 
         self.state = ExecutionCommitStateV2.COMMITTED
         return True
@@ -109,10 +105,8 @@ class ExecutionCommitCoordinator:
     def rollback_all(self) -> None:
         self.state = ExecutionCommitStateV2.ROLLING_BACK
         for p in self._participants:
-            try:
+            with contextlib.suppress(Exception):
                 p.rollback(self.transaction_id)
-            except Exception:
-                pass
         self.state = ExecutionCommitStateV2.ROLLED_BACK
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, Optional
+from typing import Literal
 
 
 class DeploymentAttemptState(str, Enum):
@@ -31,7 +31,7 @@ class DeploymentAttemptRecord:
     deployment_ref: str
     request_digest: str
     state: DeploymentAttemptState
-    backend_probe_token: Optional[str]
+    backend_probe_token: str | None
     revision: int
 
 
@@ -53,6 +53,6 @@ class DeploymentAttemptProbe:
     deployment_attempt_id: str
     deployment_ref: str
     outcome: DeploymentProbeOutcome
-    backend_probe_token: Optional[str]
-    remote_effect_ref: Optional[str]
+    backend_probe_token: str | None
+    remote_effect_ref: str | None
     observed_at: float

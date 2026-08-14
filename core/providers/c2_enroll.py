@@ -1,9 +1,10 @@
 """C2 enrollment provider adapter."""
+
 from __future__ import annotations
 
 import time
 import uuid
-from typing import Dict, Any
+from typing import Any
 
 
 class C2EnrollProvider:
@@ -12,7 +13,7 @@ class C2EnrollProvider:
     def __init__(self, authenticator: Any = None) -> None:
         self.authenticator = authenticator
 
-    def validate_input(self, params: Dict[str, Any]) -> bool:
+    def validate_input(self, params: dict[str, Any]) -> bool:
         """Validate enrollment request input parameters."""
         if not isinstance(params, dict):
             return False
@@ -22,7 +23,7 @@ class C2EnrollProvider:
         """Check if provider is ready to enroll agents."""
         return True
 
-    def execute(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def execute(self, params: dict[str, Any]) -> dict[str, Any]:
         """Execute agent enrollment."""
         if not self.validate_input(params):
             raise ValueError("Invalid enrollment parameters: mission_id and agent_ref required")
@@ -35,4 +36,3 @@ class C2EnrollProvider:
             "agent_ref": params["agent_ref"],
             "enrolled_at": time.time(),
         }
-

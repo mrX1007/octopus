@@ -228,10 +228,7 @@ class ExecutorCheckoutRequestBundle:
         if self.approval is not None:
             if self.approval.execution_graph_id != self.attempt_group.execution_graph_id:
                 raise ValueError("checkout_approval_execution_graph_mismatch")
-            if any(
-                item.required_action_id != self.approval.concrete_action_id
-                for item in self.references
-            ):
+            if any(item.required_action_id != self.approval.concrete_action_id for item in self.references):
                 raise ValueError("checkout_reference_concrete_action_mismatch")
 
 
@@ -265,8 +262,7 @@ class ReferenceCheckout:
         if (
             token.reference != self.metadata.reference
             or token.metadata_revision != self.metadata.revision
-            or token.authorization_revision
-            != self.metadata.authorization.authorization_revision
+            or token.authorization_revision != self.metadata.authorization.authorization_revision
         ):
             raise ValueError("checkout_reference_lease_identity_mismatch")
 
@@ -342,8 +338,7 @@ class ExecutorCheckoutBundle:
         if type(references) is not tuple or any(type(item) is not ReferenceCheckout for item in references):
             raise ValueError("checkout_reference_receipts_invalid")
         if any(
-            item.lease_token.checkout_id != checkout_id
-            or item.lease_token.fence_generation != fence_generation
+            item.lease_token.checkout_id != checkout_id or item.lease_token.fence_generation != fence_generation
             for item in references
         ):
             raise ValueError("checkout_reference_bundle_fence_mismatch")

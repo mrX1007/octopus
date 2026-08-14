@@ -103,9 +103,7 @@ def _legacy_kek_candidates(passphrase: str, salt: bytes) -> Iterator[bytes]:
     """Yield each KEK that the historical environment-dependent code could use."""
     with suppress(UnsupportedAlgorithm):
         yield _derive_kek(passphrase, salt)
-    yield hashlib.pbkdf2_hmac(
-        "sha256", passphrase.encode("utf-8"), salt, 600000, dklen=32
-    )
+    yield hashlib.pbkdf2_hmac("sha256", passphrase.encode("utf-8"), salt, 600000, dklen=32)
     with suppress(UnsupportedAlgorithm):
         yield _derive_legacy_argon2id_kek(passphrase, salt)
 
@@ -160,10 +158,7 @@ class KeyStore:
                     self._ed25519_public = serialization.load_pem_public_key(f.read())
             else:
                 return b""
-        return self._ed25519_public.public_bytes(
-            serialization.Encoding.Raw,
-            serialization.PublicFormat.Raw
-        )
+        return self._ed25519_public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
 
     def exists(self) -> bool:
         """Check if an identity key has been generated."""
@@ -197,13 +192,11 @@ class KeyStore:
         return decoded
 
     @classmethod
-    def _parse_identity_envelope(
-        cls, blob: bytes
-    ) -> tuple[bytes, bytes, bytes, bytes]:
+    def _parse_identity_envelope(cls, blob: bytes) -> tuple[bytes, bytes, bytes, bytes]:
         if not blob.startswith(_KEY_ENVELOPE_MAGIC):
             raise ValueError("invalid key envelope magic")
         try:
-            envelope = json.loads(blob[len(_KEY_ENVELOPE_MAGIC):].decode("utf-8"))
+            envelope = json.loads(blob[len(_KEY_ENVELOPE_MAGIC) :].decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
             raise ValueError("invalid key envelope encoding") from exc
         if not isinstance(envelope, dict) or set(envelope) != {
@@ -212,10 +205,7 @@ class KeyStore:
             "version",
         }:
             raise ValueError("invalid key envelope schema")
-        if (
-            type(envelope["version"]) is not int
-            or envelope["version"] != _KEY_ENVELOPE_VERSION
-        ):
+        if type(envelope["version"]) is not int or envelope["version"] != _KEY_ENVELOPE_VERSION:
             raise ValueError("unsupported key envelope version")
 
         kdf = envelope["kdf"]
@@ -243,17 +233,13 @@ class KeyStore:
 
         salt = cls._decode_envelope_bytes(kdf["salt"], "salt", 32)
         nonce = cls._decode_envelope_bytes(cipher["nonce"], "nonce", 12)
-        ciphertext = cls._decode_envelope_bytes(
-            cipher["ciphertext"], "ciphertext", 48
-        )
+        ciphertext = cls._decode_envelope_bytes(cipher["ciphertext"], "ciphertext", 48)
         header = cls._envelope_header(salt, nonce)
         aad = _KEY_ENVELOPE_AAD_PREFIX + _canonical_json(header)
         return salt, nonce, ciphertext, aad
 
     @classmethod
-    def _encrypt_identity_envelope(
-        cls, passphrase: str, salt: bytes, private_bytes: bytes
-    ) -> bytes:
+    def _encrypt_identity_envelope(cls, passphrase: str, salt: bytes, private_bytes: bytes) -> bytes:
         nonce = secrets.token_bytes(12)
         header = cls._envelope_header(salt, nonce)
         aad = _KEY_ENVELOPE_AAD_PREFIX + _canonical_json(header)
@@ -273,9 +259,7 @@ class KeyStore:
         return _KEY_ENVELOPE_MAGIC + _canonical_json(envelope)
 
     @classmethod
-    def _decrypt_identity_envelope(
-        cls, passphrase: str, blob: bytes
-    ) -> Optional[bytes]:
+    def _decrypt_identity_envelope(cls, passphrase: str, blob: bytes) -> Optional[bytes]:
         salt, nonce, ciphertext, aad = cls._parse_identity_envelope(blob)
         kek = _derive_scrypt_kek(passphrase, salt, _KEY_ENVELOPE_KDF_PARAMS)
         try:
@@ -287,9 +271,7 @@ class KeyStore:
             _wipe_bytes(kek_mut)
 
     @staticmethod
-    def _decrypt_legacy_identity(
-        passphrase: str, salt: bytes, blob: bytes
-    ) -> Optional[bytes]:
+    def _decrypt_legacy_identity(passphrase: str, salt: bytes, blob: bytes) -> Optional[bytes]:
         if len(salt) != 32 or len(blob) != 60:
             return None
         nonce = blob[:12]
@@ -317,9 +299,7 @@ class KeyStore:
         )
         try:
             salt = secrets.token_bytes(32)
-            envelope = self._encrypt_identity_envelope(
-                passphrase, salt, priv_bytes
-            )
+            envelope = self._encrypt_identity_envelope(passphrase, salt, priv_bytes)
             self._atomic_write(self._identity_path, envelope, 0o600)
             # Retain the historical sidecar for filesystem compatibility. The
             # v1 envelope is self-contained and never reads this copy.
@@ -367,9 +347,7 @@ class KeyStore:
         try:
             private_key = ed25519.Ed25519PrivateKey.from_private_bytes(priv_bytes)
             if legacy:
-                migrated = self._encrypt_identity_envelope(
-                    passphrase, salt, priv_bytes
-                )
+                migrated = self._encrypt_identity_envelope(passphrase, salt, priv_bytes)
                 self._atomic_write(self._identity_path, migrated, 0o600)
             self._ed25519_private = private_key
             self._ed25519_public = private_key.public_key()
@@ -448,9 +426,7 @@ class KeyStore:
             serialization.PublicFormat.SubjectPublicKeyInfo,
         )
 
-    def _repair_x25519_public_key(
-        self, private_key: x25519.X25519PrivateKey
-    ) -> None:
+    def _repair_x25519_public_key(self, private_key: x25519.X25519PrivateKey) -> None:
         expected = self._x25519_public_pem(private_key)
         try:
             with open(self._x25519_pub_path, "rb") as handle:
@@ -460,15 +436,11 @@ class KeyStore:
         if current != expected:
             self._atomic_write(self._x25519_pub_path, expected, 0o644)
 
-    def _remove_matching_legacy_x25519_key(
-        self, private_key: x25519.X25519PrivateKey
-    ) -> None:
+    def _remove_matching_legacy_x25519_key(self, private_key: x25519.X25519PrivateKey) -> None:
         if not os.path.exists(self._legacy_x25519_path):
             return
         with open(self._legacy_x25519_path, "rb") as handle:
-            legacy = serialization.load_pem_private_key(
-                handle.read(), password=None
-            )
+            legacy = serialization.load_pem_private_key(handle.read(), password=None)
         if not isinstance(legacy, x25519.X25519PrivateKey):
             raise ValueError("legacy C2 private key is not X25519")
         expected_public = private_key.public_key().public_bytes(
@@ -480,9 +452,7 @@ class KeyStore:
             serialization.PublicFormat.Raw,
         )
         if not secrets.compare_digest(expected_public, legacy_public):
-            raise ValueError(
-                "legacy C2 private key does not match encrypted key"
-            )
+            raise ValueError("legacy C2 private key does not match encrypted key")
         self._durable_remove(self._legacy_x25519_path)
 
     def get_or_create_x25519_private_key(self) -> x25519.X25519PrivateKey:
@@ -513,9 +483,7 @@ class KeyStore:
 
         if os.path.exists(self._legacy_x25519_path):
             with open(self._legacy_x25519_path, "rb") as handle:
-                loaded = serialization.load_pem_private_key(
-                    handle.read(), password=None
-                )
+                loaded = serialization.load_pem_private_key(handle.read(), password=None)
             if not isinstance(loaded, x25519.X25519PrivateKey):
                 raise ValueError("legacy C2 private key is not X25519")
             private_key = loaded
@@ -529,9 +497,7 @@ class KeyStore:
         )
         try:
             sealed = self.seal_bytes(raw_private, aad=b"x25519-static-v1")
-            self._atomic_write(
-                self._x25519_path, sealed.encode("ascii"), 0o600
-            )
+            self._atomic_write(self._x25519_path, sealed.encode("ascii"), 0o600)
             self._repair_x25519_public_key(private_key)
             self._remove_matching_legacy_x25519_key(private_key)
             return private_key
@@ -633,10 +599,7 @@ class KeyStore:
             info=C2_SESSION_KDF_CONTEXT,
         ).derive(raw_shared)
 
-        eph_pub_bytes = eph_public.public_bytes(
-            serialization.Encoding.Raw,
-            serialization.PublicFormat.Raw
-        )
+        eph_pub_bytes = eph_public.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
 
         # Wipe the raw shared key
         raw_mut = bytearray(raw_shared)

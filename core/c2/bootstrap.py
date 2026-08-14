@@ -285,9 +285,7 @@ def bootstrap_admin_operator(
     _ensure_root_key_directory(final_path.parent)
 
     with _exclusive_bootstrap_connection(database_path) as connection:
-        journals = connection.execute(
-            "SELECT * FROM bootstrap_admin_transactions ORDER BY created_at"
-        ).fetchall()
+        journals = connection.execute("SELECT * FROM bootstrap_admin_transactions ORDER BY created_at").fetchall()
         if len(journals) > 1:
             raise BootstrapRecoveryRequired("multiple bootstrap journals exist")
         if journals:

@@ -6,8 +6,6 @@ from typing import Any
 
 from core.actions.base import ManualGatedActionAdapter
 from core.actions.input_contracts import (
-    CredentialDumpInput,
-    CredentialInput,
     LateralAuthInput,
     SessionInput,
     TicketInput,
@@ -72,14 +70,17 @@ class ADPassTheTicketAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.ad_credentials import ADPassTheTicketAdapter as RealAdapter
+
         return RealAdapter().check_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.ad_credentials import ADPassTheTicketAdapter as RealAdapter
+
         return RealAdapter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.ad_credentials import ADPassTheTicketAdapter as RealAdapter
+
         return RealAdapter().verify_bound(context, result)
 
 
@@ -133,14 +134,17 @@ class PassTheHashAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.ad_credentials import PassTheHashAdapter as RealAdapter
+
         return RealAdapter().check_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.ad_credentials import PassTheHashAdapter as RealAdapter
+
         return RealAdapter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.ad_credentials import PassTheHashAdapter as RealAdapter
+
         return RealAdapter().verify_bound(context, result)
 
 
@@ -193,14 +197,17 @@ class ADDumpLsassAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.ad_credentials import ADDumpLsassAdapter as RealAdapter
+
         return RealAdapter().check_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.ad_credentials import ADDumpLsassAdapter as RealAdapter
+
         return RealAdapter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.ad_credentials import ADDumpLsassAdapter as RealAdapter
+
         return RealAdapter().verify_bound(context, result)
 
 
@@ -253,14 +260,17 @@ class ADSamDumpAdapter(ManualGatedActionAdapter):
 
     def check_bound(self, context: Any) -> bool:
         from core.providers.ad_credentials import ADSamDumpAdapter as RealAdapter
+
         return RealAdapter().check_bound(context)
 
     def execute_bound(self, context: Any) -> Any:
         from core.providers.ad_credentials import ADSamDumpAdapter as RealAdapter
+
         return RealAdapter().execute_bound(context)
 
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.ad_credentials import ADSamDumpAdapter as RealAdapter
+
         return RealAdapter().verify_bound(context, result)
 
 

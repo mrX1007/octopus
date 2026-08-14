@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from core.c2.control_audit import (
     ControlAuditLoggerV1,
     redact_sensitive_dict,
@@ -58,7 +59,7 @@ def test_audit_logger_records_and_filters():
         result_code="ok",
         duration_ms=5.2,
     )
-    ev2 = logger.record_event(
+    logger.record_event(
         operator_id="op-2",
         subject_id="sub-2",
         peer_pid=1002,

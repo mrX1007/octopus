@@ -58,8 +58,7 @@ class BenchmarkHarness:
         self.clock = clock
         self.run_namespace = str(run_namespace or "")[:256]
         self.runner_metadata = {
-            str(key)[:128]: _bounded_metadata(value)
-            for key, value in (runner_metadata or {}).items()
+            str(key)[:128]: _bounded_metadata(value) for key, value in (runner_metadata or {}).items()
         }
 
     def run(
@@ -70,13 +69,10 @@ class BenchmarkHarness:
     ) -> BenchmarkAggregate:
         count = scenario.repetitions if repetitions is None else int(repetitions)
         if count < MIN_BENCHMARK_REPETITIONS:
-            raise BenchmarkSchemaError(
-                f"repetitions_below_minimum:{MIN_BENCHMARK_REPETITIONS}"
-            )
+            raise BenchmarkSchemaError(f"repetitions_below_minimum:{MIN_BENCHMARK_REPETITIONS}")
         self._validate_ablations(scenario)
         runs = tuple(
-            self._run_once(scenario, repetition=index + 1, seed=scenario.seed + index)
-            for index in range(count)
+            self._run_once(scenario, repetition=index + 1, seed=scenario.seed + index) for index in range(count)
         )
         metric_statistics = self._aggregate_metrics(runs)
         status_counts = dict(sorted(Counter(item.status for item in runs).items()))
@@ -128,9 +124,7 @@ class BenchmarkHarness:
                 raise TypeError("benchmark runner must return a mapping")
             result = dict(raw)
             status = str(result.get("status") or "succeeded").lower()
-            reported_error_class = _optional_error_class(
-                result.get("error_class")
-            )
+            reported_error_class = _optional_error_class(result.get("error_class"))
             if status != "succeeded" and reported_error_class:
                 error_class = reported_error_class
         except Exception as exc:
@@ -153,31 +147,25 @@ class BenchmarkHarness:
         )
         actions = _string_tuple(result.get("actions") or [])
         allowed = set(scenario.allowed_actions)
-        violations = tuple(
-            sorted({action for action in actions if action not in allowed})
-        )
+        violations = tuple(sorted({action for action in actions if action not in allowed}))
         if violations:
             status = "invalid"
-        metrics = {
-            str(key): _nonnegative_number(value)
-            for key, value in (result.get("metrics") or {}).items()
-            if _is_number(value)
-        } if isinstance(result.get("metrics") or {}, Mapping) else {}
+        metrics = (
+            {
+                str(key): _nonnegative_number(value)
+                for key, value in (result.get("metrics") or {}).items()
+                if _is_number(value)
+            }
+            if isinstance(result.get("metrics") or {}, Mapping)
+            else {}
+        )
         metrics.update(self._ground_truth_metrics(scenario, result))
         reported_findings = _string_tuple(result.get("reported_findings") or [])
-        expected_findings = _string_tuple(
-            scenario.ground_truth.get("expected_findings") or []
-        )
+        expected_findings = _string_tuple(scenario.ground_truth.get("expected_findings") or [])
         reported_finding_set = set(reported_findings)
-        derived_coverage_gaps = tuple(
-            finding
-            for finding in expected_findings
-            if finding not in reported_finding_set
-        )
+        derived_coverage_gaps = tuple(finding for finding in expected_findings if finding not in reported_finding_set)
         runner_coverage_gaps = _string_tuple(result.get("coverage_gaps") or [])
-        coverage_gaps = tuple(
-            dict.fromkeys((*derived_coverage_gaps, *runner_coverage_gaps))
-        )
+        coverage_gaps = tuple(dict.fromkeys((*derived_coverage_gaps, *runner_coverage_gaps)))
         result_summary = {
             "status": status,
             "reported_findings": list(reported_findings),
@@ -235,9 +223,7 @@ class BenchmarkHarness:
             }
         )
         if unstable:
-            raise BenchmarkSchemaError(
-                "unstable_ablation_toggle:" + ",".join(unstable)
-            )
+            raise BenchmarkSchemaError("unstable_ablation_toggle:" + ",".join(unstable))
 
     @staticmethod
     def _ground_truth_metrics(
@@ -263,11 +249,7 @@ class BenchmarkHarness:
         names = sorted({name for run in runs for name in run.metrics})
         statistics_by_name: dict[str, dict[str, float]] = {}
         for name in names:
-            values = [
-                float(run.metrics[name])
-                for run in runs
-                if run.status == "succeeded" and name in run.metrics
-            ]
+            values = [float(run.metrics[name]) for run in runs if run.status == "succeeded" and name in run.metrics]
             if not values:
                 continue
             statistics_by_name[name] = {
@@ -281,9 +263,7 @@ class BenchmarkHarness:
 
 
 def _stable_id(namespace: str, payload: Any) -> str:
-    encoded = json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), default=str
-    ).encode("utf-8", "replace")
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8", "replace")
     return f"{namespace}://sha256/{hashlib.sha256(encoded).hexdigest()}"
 
 
@@ -303,24 +283,14 @@ def _bounded_metadata(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, float):
         return value if math.isfinite(value) else None
     if isinstance(value, Mapping):
-        return {
-            str(key)[:128]: _bounded_metadata(item, depth=depth + 1)
-            for key, item in list(value.items())[:64]
-        }
+        return {str(key)[:128]: _bounded_metadata(item, depth=depth + 1) for key, item in list(value.items())[:64]}
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return [
-            _bounded_metadata(item, depth=depth + 1)
-            for item in value[:64]
-        ]
+        return [_bounded_metadata(item, depth=depth + 1) for item in value[:64]]
     return str(value)[:4_096]
 
 
 def _is_number(value: Any) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
 def _optional_timestamp(value: Any) -> float | None:

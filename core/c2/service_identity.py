@@ -1,4 +1,5 @@
 """Service identity."""
+
 from __future__ import annotations
 
 import hashlib
@@ -42,4 +43,3 @@ def verify_service_identity(identity: C2ServiceIdentity) -> bool:
     if not identity.service_id or not identity.domain or not identity.socket_path:
         return False
     return len(identity.fingerprint) == 64
-

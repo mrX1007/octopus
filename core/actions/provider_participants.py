@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
 
 from core.actions.execution_commit_participants import ExecutionCommitParticipant, ParticipantKindV2
 

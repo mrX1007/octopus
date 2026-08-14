@@ -185,9 +185,7 @@ class ProviderOutcomeNormalizerV2:
                 reason_codes=reason_codes,
             )
             commit_eligible = partial_disposition is PartialCommitDispositionV2.ACCEPT
-            execution_status = (
-                ExecutionStatusV2.PARTIAL if commit_eligible else ExecutionStatusV2.FAILED
-            )
+            execution_status = ExecutionStatusV2.PARTIAL if commit_eligible else ExecutionStatusV2.FAILED
         elif outcome is ProviderOutcomeV2.FAILED:
             execution_status = ExecutionStatusV2.FAILED
             commit_eligible = False

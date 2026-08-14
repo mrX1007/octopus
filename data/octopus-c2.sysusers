@@ -1,0 +1,2 @@
+u octopus-c2 - "Octopus C2 Daemon" /var/lib/octopus /usr/sbin/nologin
+g octopus-c2-clients -

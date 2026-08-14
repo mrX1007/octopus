@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from core.c2.enrollment_control_codec import EnrollmentControlCodec
 from core.c2.enrollment_control_models import EnrollmentControlPayloadV1
 

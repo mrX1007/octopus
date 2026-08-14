@@ -212,11 +212,7 @@ def test_full_rbac_matrix(
 ) -> None:
     db_path = tmp_path / role.value / "c2.db"
     auth, principal = _role_principal(db_path, role)
-    actual = {
-        action.value
-        for action in C2ControlActionV1
-        if auth.check_permission(principal, action)
-    }
+    actual = {action.value for action in C2ControlActionV1 if auth.check_permission(principal, action)}
     assert actual == allowed
 
 

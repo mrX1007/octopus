@@ -1,11 +1,15 @@
 [Unit]
 Description=OCTOPUS C2 daemon
+Requires=octopus-c2.socket
+After=octopus-c2.socket network-online.target
 Wants=network-online.target
-After=network-online.target
 
 [Service]
 Type=simple
 DynamicUser=yes
+User=octopus-c2
+Group=octopus-c2
+SupplementaryGroups=octopus-c2-clients
 StateDirectory=octopus
 RuntimeDirectory=octopus
 ConfigurationDirectory=octopus

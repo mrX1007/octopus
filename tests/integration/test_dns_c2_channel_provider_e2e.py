@@ -1,11 +1,12 @@
 """E2E tests for DNS C2 channel provider."""
+
 from __future__ import annotations
 
-import time
 import pytest
-from core.c2.channels.dns import DNSChannel, _b32_encode_safe, _b32_decode_safe
+
 from core.c2.channel_manager import ChannelManager
-from core.c2.channel_models import ChannelConfigV1, ChannelTypeV1, ChannelStateV1
+from core.c2.channel_models import ChannelConfigV1, ChannelStateV1, ChannelTypeV1
+from core.c2.channels.dns import DNSChannel
 
 pytestmark = pytest.mark.unit
 

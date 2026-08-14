@@ -4,19 +4,19 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
 
 
 @dataclass(frozen=True)
 class SigningKeyMetadata:
     """Metadata describing a control signing key and its lifecycle."""
+
     key_id: str
     secret_key: bytes
     valid_from: float
     valid_until: float
-    predecessor_id: Optional[str] = None
+    predecessor_id: str | None = None
 
-    def is_valid(self, now: Optional[float] = None) -> bool:
+    def is_valid(self, now: float | None = None) -> bool:
         ts = time.time() if now is None else now
         return self.valid_from <= ts < self.valid_until
 
@@ -25,8 +25,8 @@ class ControlSigningKeyring:
     """Keyring managing root-pinned and operational control signing keys."""
 
     def __init__(self) -> None:
-        self._keys: Dict[str, SigningKeyMetadata] = {}
-        self._active_key_id: Optional[str] = None
+        self._keys: dict[str, SigningKeyMetadata] = {}
+        self._active_key_id: str | None = None
 
     def register_key(
         self,
@@ -34,7 +34,7 @@ class ControlSigningKeyring:
         secret_key: bytes,
         valid_from: float = 0.0,
         valid_until: float = float("inf"),
-        predecessor_id: Optional[str] = None,
+        predecessor_id: str | None = None,
         make_active: bool = False,
     ) -> None:
         if not key_id:
@@ -55,7 +55,7 @@ class ControlSigningKeyring:
         if make_active or self._active_key_id is None:
             self._active_key_id = key_id
 
-    def get_key(self, key_id: str, now: Optional[float] = None) -> Optional[bytes]:
+    def get_key(self, key_id: str, now: float | None = None) -> bytes | None:
         meta = self._keys.get(key_id)
         if meta is None:
             return None
@@ -63,7 +63,7 @@ class ControlSigningKeyring:
             return None
         return meta.secret_key
 
-    def get_active_key(self, now: Optional[float] = None) -> Tuple[str, bytes]:
+    def get_active_key(self, now: float | None = None) -> tuple[str, bytes]:
         if self._active_key_id is None:
             raise ValueError("No active signing key registered in keyring")
         meta = self._keys.get(self._active_key_id)
@@ -76,7 +76,7 @@ class ControlSigningKeyring:
         new_key_id: str,
         new_secret_key: bytes,
         *,
-        now: Optional[float] = None,
+        now: float | None = None,
         transition_seconds: float = 3600.0,
         new_valid_until: float = float("inf"),
     ) -> None:
@@ -104,11 +104,11 @@ class ControlSigningKeyring:
             make_active=True,
         )
 
-    def list_keys(self) -> List[SigningKeyMetadata]:
+    def list_keys(self) -> list[SigningKeyMetadata]:
         return list(self._keys.values())
 
-    def validate_keyring(self, now: Optional[float] = None) -> List[str]:
-        errors: List[str] = []
+    def validate_keyring(self, now: float | None = None) -> list[str]:
+        errors: list[str] = []
         if not self._keys:
             errors.append("Keyring is empty")
             return errors

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from core.actions.schema_bindings import get_all_v2_schema_bindings, get_v2_schema_binding
+
+pytestmark = pytest.mark.unit
 
 
 def test_v2_schema_binding_matrix_has_exact_20_rows() -> None:

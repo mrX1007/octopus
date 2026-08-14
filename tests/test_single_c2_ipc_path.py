@@ -21,9 +21,7 @@ def test_ast_single_outbound_unix_socket_path() -> None:
     outbound_owners: set[Path] = set()
     for path in _python_sources():
         tree = ast.parse(path.read_text(encoding="utf-8"))
-        has_unix_socket = any(
-            isinstance(node, ast.Attribute) and node.attr == "AF_UNIX" for node in ast.walk(tree)
-        )
+        has_unix_socket = any(isinstance(node, ast.Attribute) and node.attr == "AF_UNIX" for node in ast.walk(tree))
         if not has_unix_socket:
             continue
         for node in ast.walk(tree):

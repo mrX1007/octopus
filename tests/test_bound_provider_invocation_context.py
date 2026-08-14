@@ -1,7 +1,10 @@
 """Tests for BoundProviderInvocationContext."""
+
 import pytest
-from core.actions.provider_call_boundary import BoundProviderInvocationContext
+
 from core.actions.cancellation import ExecutorCancellationController
+from core.actions.provider_call_boundary import BoundProviderInvocationContext
+
 
 @pytest.mark.unit
 def test_invocation_context_creation():

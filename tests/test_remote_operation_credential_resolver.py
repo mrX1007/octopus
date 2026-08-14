@@ -3,16 +3,16 @@ from __future__ import annotations
 import pytest
 
 from core.execution.remote_operation_models import (
+    RemoteOperationOutputReservationRefV1,
     RemoteOperationPlanV1,
     RemoteOperationServiceV1,
-    RemoteOperationOutputReservationRefV1,
 )
 from core.execution.remote_operation_participant import (
-    DefaultRemoteOperationCredentialResolverV1,
-    DefaultRemoteOperationCredentialLeaseV1,
     CheckoutRecoveryRefV2,
-    ParticipantOperationContextV2,
+    DefaultRemoteOperationCredentialLeaseV1,
+    DefaultRemoteOperationCredentialResolverV1,
     ExecutionFinalizationFenceV2,
+    ParticipantOperationContextV2,
 )
 
 pytestmark = pytest.mark.unit
@@ -83,18 +83,14 @@ def test_credential_lease_transfer_and_zeroize() -> None:
     lease = DefaultRemoteOperationCredentialLeaseV1(_lease_id="lease-test-123")
     assert lease.is_closed is False
 
-    channel_token = lease.transfer_to_protected_worker_channel(
-        backend_request_digest="digest-backend-req-456"
-    )
+    channel_token = lease.transfer_to_protected_worker_channel(backend_request_digest="digest-backend-req-456")
     assert channel_token == "protected-channel-lease-test-123-digest-backend-req-456"
 
     lease.close_and_zeroize()
     assert lease.is_closed is True
 
     with pytest.raises(RuntimeError, match="Lease is closed"):
-        lease.transfer_to_protected_worker_channel(
-            backend_request_digest="digest-backend-req-456"
-        )
+        lease.transfer_to_protected_worker_channel(backend_request_digest="digest-backend-req-456")
 
 
 def test_credential_resolver_empty_credential_ref() -> None:

@@ -64,36 +64,28 @@ class CommandAdapterConfig:
             raise CompetitorSchemaError("invalid:adapter.argv")
         if not raw_argv or len(raw_argv) > _MAX_ARGUMENTS:
             raise CompetitorSchemaError("invalid_length:adapter.argv")
-        argv = tuple(
-            _command_argument(value, f"adapter.argv[{index}]")
-            for index, value in enumerate(raw_argv)
-        )
+        argv = tuple(_command_argument(value, f"adapter.argv[{index}]") for index, value in enumerate(raw_argv))
         placeholders = set().union(*(_placeholders(item) for item in argv))
         missing = sorted(REQUIRED_COMMAND_PLACEHOLDERS - placeholders)
         if missing:
-            raise CompetitorSchemaError(
-                "missing_adapter_placeholders:" + ",".join(missing)
-            )
+            raise CompetitorSchemaError("missing_adapter_placeholders:" + ",".join(missing))
 
-        if (
-            "working_directory" in payload
-            and "cwd" in payload
-            and payload["working_directory"] != payload["cwd"]
-        ):
+        if "working_directory" in payload and "cwd" in payload and payload["working_directory"] != payload["cwd"]:
             raise CompetitorSchemaError("conflicting:adapter.working_directory")
-        cwd = _working_directory(
-            payload.get("working_directory", payload.get("cwd", "."))
-        )
+        cwd = _working_directory(payload.get("working_directory", payload.get("cwd", ".")))
         if (
             "environment_passthrough" in payload
             and "env_passthrough" in payload
             and payload["environment_passthrough"] != payload["env_passthrough"]
         ):
             raise CompetitorSchemaError("conflicting:adapter.environment_passthrough")
-        raw_environment = payload.get(
-            "environment_passthrough",
-            payload.get("env_passthrough"),
-        ) or []
+        raw_environment = (
+            payload.get(
+                "environment_passthrough",
+                payload.get("env_passthrough"),
+            )
+            or []
+        )
         if not _is_sequence(raw_environment):
             raise CompetitorSchemaError("invalid:adapter.env_passthrough")
         if len(raw_environment) > _MAX_ENVIRONMENT_NAMES:
@@ -102,9 +94,7 @@ class CommandAdapterConfig:
         for value in raw_environment:
             name = str(value or "").strip()
             if not _ENVIRONMENT_NAME.fullmatch(name):
-                raise CompetitorSchemaError(
-                    "invalid_environment_name:adapter.env_passthrough"
-                )
+                raise CompetitorSchemaError("invalid_environment_name:adapter.env_passthrough")
             if name.startswith("OCTOPUS_BENCHMARK_"):
                 raise CompetitorSchemaError("reserved_environment_name")
             if name not in environment:
@@ -217,9 +207,7 @@ class SystemManifest:
     ) -> SystemManifest:
         schema_version = str(payload.get("schema_version") or "")
         if schema_version != SYSTEM_MANIFEST_SCHEMA_VERSION:
-            raise CompetitorSchemaError(
-                f"unsupported_schema_version:{schema_version or 'missing'}"
-            )
+            raise CompetitorSchemaError(f"unsupported_schema_version:{schema_version or 'missing'}")
 
         system_id = _identifier(payload.get("system_id"), "system_id")
         name = _text(payload.get("name"), "name")
@@ -328,9 +316,7 @@ def load_system_manifest(path: str | Path) -> SystemManifest:
     try:
         payload = json.loads(source.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
-        raise CompetitorSchemaError(
-            f"manifest_load_failed:{type(exc).__name__}"
-        ) from None
+        raise CompetitorSchemaError(f"manifest_load_failed:{type(exc).__name__}") from None
     if not isinstance(payload, Mapping):
         raise CompetitorSchemaError("manifest_not_mapping")
     return SystemManifest.from_dict(payload, source_path=source)
@@ -338,9 +324,7 @@ def load_system_manifest(path: str | Path) -> SystemManifest:
 
 def load_system_manifests(directory: str | Path) -> tuple[SystemManifest, ...]:
     root = Path(directory)
-    manifests = tuple(
-        load_system_manifest(path) for path in sorted(root.glob("*.json"))
-    )
+    manifests = tuple(load_system_manifest(path) for path in sorted(root.glob("*.json")))
     identifiers = [item.system_id for item in manifests]
     if len(identifiers) != len(set(identifiers)):
         raise CompetitorSchemaError("duplicate_system_id")
@@ -384,10 +368,7 @@ def _mapping(
         raise CompetitorSchemaError(f"invalid:{name}")
     if len(value) > _MAX_MAPPING_ITEMS:
         raise CompetitorSchemaError(f"too_many_items:{name}")
-    result = {
-        _text(key, f"{name}.key"): _bounded_json(item, depth=1)
-        for key, item in value.items()
-    }
+    result = {_text(key, f"{name}.key"): _bounded_json(item, depth=1) for key, item in value.items()}
     if reject_secret_keys:
         _reject_secret_bearing_keys(result)
     return result
@@ -407,10 +388,7 @@ def _bounded_json(value: Any, *, depth: int) -> Any:
     if isinstance(value, Mapping):
         if len(value) > _MAX_MAPPING_ITEMS:
             raise CompetitorSchemaError("too_many_json_items")
-        return {
-            _text(key, "json.key"): _bounded_json(item, depth=depth + 1)
-            for key, item in value.items()
-        }
+        return {_text(key, "json.key"): _bounded_json(item, depth=depth + 1) for key, item in value.items()}
     if _is_sequence(value):
         if len(value) > _MAX_MAPPING_ITEMS:
             raise CompetitorSchemaError("too_many_json_items")
@@ -449,11 +427,7 @@ def _placeholders(argument: str) -> set[str]:
         for _literal, field_name, format_spec, conversion in parsed:
             if field_name is None:
                 continue
-            if (
-                field_name not in ALLOWED_COMMAND_PLACEHOLDERS
-                or format_spec
-                or conversion
-            ):
+            if field_name not in ALLOWED_COMMAND_PLACEHOLDERS or format_spec or conversion:
                 raise CompetitorSchemaError("invalid_adapter_placeholder")
             fields.add(field_name)
     except ValueError:

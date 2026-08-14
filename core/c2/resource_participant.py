@@ -1,16 +1,17 @@
 """Resource participant."""
+
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any
+
 from core.c2.control_commands import (
-    C2ControlActionV1,
-    C2ControlErrorCodeV1,
-    ParticipantControlRequestV1,
-    ParticipantControlReceiptV1,
-    ParticipantControlQuerySnapshotV1,
-    ParticipantControlPhaseV1,
     BoundedControlErrorV1,
+    C2ControlErrorCodeV1,
+    ParticipantControlPhaseV1,
+    ParticipantControlQuerySnapshotV1,
+    ParticipantControlReceiptV1,
+    ParticipantControlRequestV1,
 )
 from core.c2.control_models import calculate_receipt_digest, calculate_snapshot_digest
 
@@ -26,23 +27,18 @@ class C2DaemonResourceParticipant:
         self.participant_id = participant_id
         self.daemon_instance_id = daemon_instance_id
         self.participant_kind = "cross_process_resource"
-        self._pending_transactions: Dict[str, Dict[str, Any]] = {}
-        self._committed_resources: Dict[str, Dict[str, Any]] = {}
-        self._revisions: Dict[str, int] = {}
+        self._pending_transactions: dict[str, dict[str, Any]] = {}
+        self._committed_resources: dict[str, dict[str, Any]] = {}
+        self._revisions: dict[str, int] = {}
 
-    def prepare(
-        self, request: ParticipantControlRequestV1
-    ) -> ParticipantControlReceiptV1 | BoundedControlErrorV1:
+    def prepare(self, request: ParticipantControlRequestV1) -> ParticipantControlReceiptV1 | BoundedControlErrorV1:
         """Prepare phase of 2PC transaction."""
         tx_id = request.authorization.transaction_id
         res_ref = f"resource:{request.authorization.participant_id}"
 
         # Check expected revision if specified
         current_rev = self._revisions.get(res_ref, 0)
-        if (
-            request.expected_resource_revision is not None
-            and request.expected_resource_revision != current_rev
-        ):
+        if request.expected_resource_revision is not None and request.expected_resource_revision != current_rev:
             return BoundedControlErrorV1(
                 reason_code=C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT,
                 retryable=True,
@@ -79,9 +75,7 @@ class C2DaemonResourceParticipant:
             result_payload_b64u=request.canonical_payload_b64u,
         )
 
-    def commit(
-        self, request: ParticipantControlRequestV1
-    ) -> ParticipantControlReceiptV1 | BoundedControlErrorV1:
+    def commit(self, request: ParticipantControlRequestV1) -> ParticipantControlReceiptV1 | BoundedControlErrorV1:
         """Commit phase of 2PC transaction."""
         tx_id = request.authorization.transaction_id
         if tx_id in self._committed_resources:
@@ -143,9 +137,7 @@ class C2DaemonResourceParticipant:
 
         return commit_receipt
 
-    def rollback(
-        self, receipt: ParticipantControlReceiptV1, operation: Any = None
-    ) -> ParticipantControlReceiptV1:
+    def rollback(self, receipt: ParticipantControlReceiptV1, operation: Any = None) -> ParticipantControlReceiptV1:
         """Abort/rollback a transaction."""
         tx_id = receipt.transaction_id
         self._pending_transactions.pop(tx_id, None)
@@ -175,9 +167,7 @@ class C2DaemonResourceParticipant:
             result_payload_b64u=receipt.result_payload_b64u,
         )
 
-    def reconcile(
-        self, operation: Any = None, finalization_fence: Any = None
-    ) -> ParticipantControlQuerySnapshotV1:
+    def reconcile(self, operation: Any = None, finalization_fence: Any = None) -> ParticipantControlQuerySnapshotV1:
         """Query current state snapshot of the resource participant."""
         tx_id = getattr(operation, "transaction_id", "tx_reconcile")
         res_ref = f"resource:{self.participant_id}"
@@ -203,4 +193,3 @@ class C2DaemonResourceParticipant:
             result_payload_digest=None,
             result_payload_b64u=None,
         )
-

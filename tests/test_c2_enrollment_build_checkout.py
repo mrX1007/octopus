@@ -1,10 +1,11 @@
 """Tests for enrollment build checkout service."""
+
 from __future__ import annotations
 
 import pytest
+
 from core.c2.enrollment_build_checkout import (
     EnrollmentBuildCheckoutServiceV1,
-    EnrollmentBuildReservationV1,
 )
 
 pytestmark = pytest.mark.unit

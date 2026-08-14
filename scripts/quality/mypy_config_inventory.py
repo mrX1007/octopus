@@ -214,9 +214,7 @@ def inventory_repository(root_dir: Path = PROJECT_ROOT) -> MypyConfigInventory:
         if reference.kind is ReferenceKind.LEGACY_CONFIG:
             violations.append(f"stale legacy mypy config consumer: {reference.path}:{reference.line}")
         elif reference.kind is ReferenceKind.DIRECT_MYPY:
-            violations.append(
-                f"direct mypy consumer bypasses the repository gate: {reference.path}:{reference.line}"
-            )
+            violations.append(f"direct mypy consumer bypasses the repository gate: {reference.path}:{reference.line}")
 
     workflow_path = root_dir / CI_WORKFLOW_PATH
     if not workflow_path.is_file():
@@ -230,15 +228,10 @@ def inventory_repository(root_dir: Path = PROJECT_ROOT) -> MypyConfigInventory:
             gate_commands = [match.group(1) for match in _GATE_COMMAND_RE.finditer(workflow)]
             check_count = gate_commands.count("check")
             if check_count != 1:
-                violations.append(
-                    "CI must invoke exactly one mypy gate check entrypoint; "
-                    f"found {check_count}"
-                )
+                violations.append(f"CI must invoke exactly one mypy gate check entrypoint; found {check_count}")
             unexpected_commands = sorted(command for command in gate_commands if command != "check")
             if unexpected_commands:
-                violations.append(
-                    "CI invokes non-check mypy gate commands: " + ", ".join(unexpected_commands)
-                )
+                violations.append("CI invokes non-check mypy gate commands: " + ", ".join(unexpected_commands))
 
     return MypyConfigInventory(
         references=tuple(sorted(references)),
@@ -271,10 +264,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stdout.write(render_inventory(inventory))
     else:
         for reference in inventory.references:
-            print(
-                f"{reference.path}:{reference.line}: "
-                f"{reference.kind.value} ({reference.classification.value})"
-            )
+            print(f"{reference.path}:{reference.line}: {reference.kind.value} ({reference.classification.value})")
         for violation in inventory.violations:
             print(f"ERROR: {violation}", file=sys.stderr)
         if inventory.ok:

@@ -206,16 +206,12 @@ class ProviderTelemetryStore:
                 """
             )
             versions = {
-                str(row[0])
-                for row in conn.execute(
-                    "SELECT schema_version FROM provider_telemetry_schema"
-                ).fetchall()
+                str(row[0]) for row in conn.execute("SELECT schema_version FROM provider_telemetry_schema").fetchall()
             }
             unsupported = versions - {PROVIDER_TELEMETRY_SCHEMA_VERSION}
             if unsupported:
                 raise RuntimeError(
-                    "Unsupported provider-telemetry schema version(s): "
-                    + ", ".join(sorted(unsupported))
+                    "Unsupported provider-telemetry schema version(s): " + ", ".join(sorted(unsupported))
                 )
             conn.execute(
                 """
@@ -357,9 +353,7 @@ class ProviderTelemetryStore:
             capability=capability,
             target_class=target_kind,
             samples=samples,
-            dependency_availability_rate=(
-                sum(int(row["dependency_available"]) for row in rows) / samples
-            ),
+            dependency_availability_rate=(sum(int(row["dependency_available"]) for row in rows) / samples),
             average_duration=sum(float(row["duration"]) for row in rows) / samples,
             timeout_rate=statuses.count("timeout") / samples,
             failure_rate=statuses.count("failed") / samples,
@@ -367,14 +361,8 @@ class ProviderTelemetryStore:
             success_rate=statuses.count("succeeded") / samples,
             useful_fact_yield=useful / samples,
             duplicate_yield_rate=(duplicate / (useful + duplicate) if useful + duplicate else 0.0),
-            parser_quality=(
-                max(0.0, (parser_items - parser_errors) / parser_items)
-                if parser_items
-                else 0.0
-            ),
-            scope_compatibility_rate=(
-                sum(int(row["scope_compatible"]) for row in rows) / samples
-            ),
+            parser_quality=(max(0.0, (parser_items - parser_errors) / parser_items) if parser_items else 0.0),
+            scope_compatibility_rate=(sum(int(row["scope_compatible"]) for row in rows) / samples),
             active_risk=sum(float(row["active_risk"]) for row in rows) / samples,
         )
 

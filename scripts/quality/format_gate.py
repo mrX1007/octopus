@@ -45,10 +45,7 @@ def changed_python_files(root: Path, base: str) -> tuple[Path, ...]:
     result: list[Path] = []
     for relative in completed.stdout.splitlines():
         normalized = relative.strip().replace("\\", "/")
-        if not normalized or any(
-            normalized == part or normalized.startswith(f"{part}/")
-            for part in _EXCLUDED_PARTS
-        ):
+        if not normalized or any(normalized == part or normalized.startswith(f"{part}/") for part in _EXCLUDED_PARTS):
             continue
         candidate = (root / normalized).resolve()
         try:

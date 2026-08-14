@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from scripts.quality.c2_builder_enrollment_inventory import inventory_builder_call_sites
 
 pytestmark = pytest.mark.unit

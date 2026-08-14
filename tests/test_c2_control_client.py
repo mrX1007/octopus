@@ -1,14 +1,15 @@
 """Tests for C2 control client."""
+
 from __future__ import annotations
 
 import pytest
-from core.c2.client import DefaultC2ControlClient, C2ControlClient
-from core.c2.control_signing import ControlSignerV1, ControlVerifierV1
+
+from core.c2.client import C2ControlClient, DefaultC2ControlClient
 from core.c2.control_commands import (
     C2ControlActionV1,
     ParticipantControlReceiptV1,
-    ParticipantControlRequestV1,
 )
+from core.c2.control_signing import ControlSignerV1
 
 pytestmark = pytest.mark.unit
 

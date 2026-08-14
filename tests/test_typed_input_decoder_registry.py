@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = pytest.mark.unit
-
 from core.actions.typed_input_decoders import (
     TypedInputDecoderNotRegistered,
     get_typed_input_decoder_registry,
 )
+
+pytestmark = pytest.mark.unit
 
 
 def test_typed_input_decoder_registry_unknown_action_denied() -> None:
