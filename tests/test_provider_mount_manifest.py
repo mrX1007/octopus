@@ -86,4 +86,3 @@ def test_manifest_snapshot_matches_runtime_registry() -> None:
     assert checked_in["entry_count"] == 20
     assert not any(entry["spec"]["mounted"] for entry in checked_in["entries"])
     assert not any("available" in entry["spec"] for entry in checked_in["entries"])
-

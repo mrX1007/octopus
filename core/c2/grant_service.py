@@ -568,6 +568,72 @@ class GrantService:
             self._advance_authorization_revision(connection, operator_id)
             return new_revision
 
+    def set_peer_binding(
+        self,
+        operator_id: str,
+        *,
+        uid: int,
+        gid: int,
+        active: bool = True,
+    ) -> None:
+        """Convenience method to set or update a peer binding directly."""
+        timestamp = time.time()
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO operator_peer_bindings (operator_id, peer_uid, peer_gid, active, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(operator_id, peer_uid, peer_gid) DO UPDATE SET
+                    active = excluded.active, updated_at = excluded.updated_at
+                """,
+                (operator_id, uid, gid, 1 if active else 0, timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO operator_peer_binding_revisions (operator_id, revision)
+                VALUES (?, 1)
+                ON CONFLICT(operator_id) DO UPDATE SET revision = revision + 1
+                """,
+                (operator_id,),
+            )
+
+    def set_mission_grant(
+        self,
+        operator_id: str,
+        *,
+        subject_id: str,
+        mission_id: str,
+        active: bool = True,
+    ) -> None:
+        """Convenience method to set or update a mission grant directly."""
+        timestamp = time.time()
+        with self._connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO control_missions (mission_id, mission_kind, active, created_at)
+                VALUES (?, 'operation', 1, ?)
+                ON CONFLICT(mission_id) DO NOTHING
+                """,
+                (mission_id, timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO operator_mission_grants (operator_id, subject_id, mission_id, active, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(operator_id, mission_id) DO UPDATE SET
+                    active = excluded.active, updated_at = excluded.updated_at, subject_id = excluded.subject_id
+                """,
+                (operator_id, subject_id, mission_id, 1 if active else 0, timestamp),
+            )
+            connection.execute(
+                """
+                INSERT INTO operator_mission_grant_revisions (operator_id, revision)
+                VALUES (?, 1)
+                ON CONFLICT(operator_id) DO UPDATE SET revision = revision + 1
+                """,
+                (operator_id,),
+            )
+
 
 __all__ = [
     "SYSTEM_CONTROL_MISSION_ID",

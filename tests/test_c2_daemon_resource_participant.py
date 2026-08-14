@@ -25,16 +25,16 @@ def _make_req(action: C2ControlActionV1, tx_id: str, part_id: str = "part-1") ->
         subject_id="sub-1",
         action_id="c2:c2_enroll",
         coordinator_revision=1,
-        request_digest="sha256:req",
+        request_digest="0" * 64,
         expires_at=9999999999.0,
-        nonce="nonce-1",
-        signature="sig-ok",
+        nonce="nonce-1-1234567890",
+        signature="0" * 64,
     )
     return ParticipantControlRequestV1(
         action=action,
         authorization=auth,
         payload_schema_id="schema:enrollment",
-        payload_digest="sha256:payload",
+        payload_digest="0" * 64,
         canonical_payload_b64u="ey...",
     )
 

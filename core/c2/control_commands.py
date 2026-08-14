@@ -8,8 +8,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Literal, Protocol, Union, runtime_checkable
 
-_NONCE_RE = re.compile(r"^[0-9a-zA-Z_\-]+$")
-_HEX_64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+_NONCE_RE = re.compile(r"^[0-9a-zA-Z_\-]{16,128}$")
+_HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
+_HEX_128_RE = re.compile(r"^[0-9a-f]{128}$")
+_B64URL_RE = re.compile(r"^[0-9a-zA-Z_\-]+$")
 
 
 def _require_bounded_str(value: object, name: str, min_len: int = 1, max_len: int = 256) -> str:
@@ -21,7 +23,7 @@ def _require_bounded_str(value: object, name: str, min_len: int = 1, max_len: in
 
 
 def _require_positive_int(value: object, name: str) -> int:
-    if type(value) is not int:
+    if type(value) is not int or isinstance(value, bool):
         raise ValueError(f"{name} must be an int")
     if value <= 0:
         raise ValueError(f"{name} must be positive")
@@ -29,7 +31,7 @@ def _require_positive_int(value: object, name: str) -> int:
 
 
 def _require_finite_number(value: object, name: str) -> float:
-    if type(value) not in (int, float):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a finite number")
     val = float(value)
     if not math.isfinite(val) or val <= 0:
@@ -37,14 +39,34 @@ def _require_finite_number(value: object, name: str) -> float:
     return val
 
 
-def _require_hex_64_or_empty(value: object, name: str, allow_empty: bool = False) -> str:
+def _require_hex_64(value: object, name: str) -> str:
     if type(value) is not str:
         raise ValueError(f"{name} must be a str")
-    if allow_empty and not value:
-        return value
-    if not _HEX_64_RE.match(value):
-        raise ValueError(f"{name} must be a 64-character hex string")
+    if not _HEX_64_RE.match(value.lower()):
+        raise ValueError(f"{name} must be a 64-character lowercase hex string")
+    return value.lower()
+
+
+def _require_nonce(value: object, name: str = "nonce") -> str:
+    if type(value) is not str:
+        raise ValueError(f"{name} must be a str")
+    if not _NONCE_RE.match(value):
+        raise ValueError(f"{name} must be 16-128 URL-safe characters")
     return value
+
+
+def _require_signature_format(value: object, name: str = "signature") -> str:
+    if type(value) is not str:
+        raise ValueError(f"{name} must be a str")
+    if not value:
+        return value
+    if (
+        _HEX_64_RE.match(value.lower())
+        or _HEX_128_RE.match(value.lower())
+        or (_B64URL_RE.match(value) and 64 <= len(value) <= 128)
+    ):
+        return value
+    raise ValueError(f"{name} must be valid HMAC hex (64), Ed25519 hex (128), or Ed25519 base64url")
 
 
 class C2ControlActionV1(str, Enum):
@@ -105,12 +127,10 @@ class ParticipantControlAuthorizationV1:
         _require_bounded_str(self.subject_id, "subject_id", 1, 256)
         _require_bounded_str(self.action_id, "action_id", 1, 256)
         _require_positive_int(self.coordinator_revision, "coordinator_revision")
-        if not isinstance(self.request_digest, str) or not self.request_digest:
-            raise ValueError("request_digest must be a non-empty string")
+        _require_bounded_str(self.request_digest, "request_digest", 1, 256)
         _require_finite_number(self.expires_at, "expires_at")
-        _require_bounded_str(self.nonce, "nonce", 1, 256)
-        if type(self.signature) is not str:
-            raise ValueError("signature must be a str")
+        _require_nonce(self.nonce, "nonce")
+        _require_signature_format(self.signature, "signature")
 
 
 @dataclass(frozen=True)
@@ -137,10 +157,8 @@ class ExecutionControlAuthorizationV1:
         _require_bounded_str(self.subject_id, "subject_id", 1, 256)
         _require_positive_int(self.coordinator_revision, "coordinator_revision")
         _require_finite_number(self.expires_at, "expires_at")
-        _require_bounded_str(self.nonce, "nonce", 1, 256)
-        if type(self.signature) is not str:
-            raise ValueError("signature must be a str")
-
+        _require_nonce(self.nonce, "nonce")
+        _require_signature_format(self.signature, "signature")
 
 
 @dataclass(frozen=True)
@@ -166,13 +184,19 @@ class ParticipantControlRequestV1:
         if not isinstance(self.authorization, ParticipantControlAuthorizationV1):
             raise ValueError("authorization must be ParticipantControlAuthorizationV1")
         _require_bounded_str(self.payload_schema_id, "payload_schema_id", 1, 256)
-        if not isinstance(self.payload_digest, str) or not self.payload_digest:
-            raise ValueError("payload_digest must be a non-empty string")
+        _require_hex_64(self.payload_digest, "payload_digest")
         if type(self.canonical_payload_b64u) is not str:
             raise ValueError("canonical_payload_b64u must be a str")
-        if self.expected_resource_revision is not None:
-            if type(self.expected_resource_revision) is not int or self.expected_resource_revision < 0:
-                raise ValueError("expected_resource_revision must be a non-negative int")
+        if self.expected_resource_revision is not None and (
+            type(self.expected_resource_revision) is not int
+            or isinstance(self.expected_resource_revision, bool)
+            or self.expected_resource_revision < 0
+        ):
+            raise ValueError("expected_resource_revision must be a non-negative int")
+        if (self.prior_receipt_ref is None) != (self.prior_receipt_digest is None):
+            raise ValueError("prior_receipt_ref and prior_receipt_digest must both be present or both None")
+        if self.prior_receipt_digest is not None:
+            _require_hex_64(self.prior_receipt_digest, "prior_receipt_digest")
 
 
 @dataclass(frozen=True)
@@ -194,11 +218,15 @@ class ParticipantControlReceiptV1:
         _require_bounded_str(self.participant_id, "participant_id", 1, 256)
         _require_bounded_str(self.receipt_ref, "receipt_ref", 1, 256)
         _require_bounded_str(self.daemon_instance_id, "daemon_instance_id", 1, 256)
-        if not isinstance(self.receipt_digest, str) or not self.receipt_digest:
-            raise ValueError("receipt_digest must be a non-empty string")
-        if self.resource_revision is not None:
-            if type(self.resource_revision) is not int or self.resource_revision < 0:
-                raise ValueError("resource_revision must be a non-negative int")
+        _require_hex_64(self.receipt_digest, "receipt_digest")
+        if self.resource_revision is not None and (
+            type(self.resource_revision) is not int
+            or isinstance(self.resource_revision, bool)
+            or self.resource_revision < 0
+        ):
+            raise ValueError("resource_revision must be a non-negative int")
+        if self.result_payload_digest is not None:
+            _require_hex_64(self.result_payload_digest, "result_payload_digest")
 
 
 class ParticipantControlPhaseV1(str, Enum):
@@ -231,11 +259,17 @@ class ParticipantControlQuerySnapshotV1:
                 object.__setattr__(self, "phase", ParticipantControlPhaseV1(self.phase))
             else:
                 raise ValueError("phase must be ParticipantControlPhaseV1")
-        if not isinstance(self.snapshot_digest, str) or not self.snapshot_digest:
-            raise ValueError("snapshot_digest must be a non-empty string")
-        if self.resource_revision is not None:
-            if type(self.resource_revision) is not int or self.resource_revision < 0:
-                raise ValueError("resource_revision must be a non-negative int")
+        _require_hex_64(self.snapshot_digest, "snapshot_digest")
+        if self.resource_revision is not None and (
+            type(self.resource_revision) is not int
+            or isinstance(self.resource_revision, bool)
+            or self.resource_revision < 0
+        ):
+            raise ValueError("resource_revision must be a non-negative int")
+        if self.receipt_digest is not None:
+            _require_hex_64(self.receipt_digest, "receipt_digest")
+        if self.result_payload_digest is not None:
+            _require_hex_64(self.result_payload_digest, "result_payload_digest")
 
 
 class C2ControlErrorCodeV1(str, Enum):
@@ -271,29 +305,32 @@ class SignedControlResponseV1:
     daemon_generation: str
     request_digest: str
     request_nonce: str
-    response_type: str  # "receipt", "snapshot", "error"
+    response_type: Literal["receipt", "snapshot", "error"] | str
     response_payload_b64u: str
     response_digest: str
     issued_at_ms: int
     key_id: str
     signature: str
+    service_id: str = ""
+    boot_instance_id: str = ""
 
     def __post_init__(self) -> None:
         _require_bounded_str(self.protocol_version, "protocol_version", 1, 32)
         _require_bounded_str(self.daemon_instance_id, "daemon_instance_id", 1, 256)
         _require_bounded_str(self.daemon_generation, "daemon_generation", 1, 256)
-        _require_bounded_str(self.request_digest, "request_digest", 1, 256)
-        _require_bounded_str(self.request_nonce, "request_nonce", 8, 128)
-        _require_bounded_str(self.response_type, "response_type", 1, 64)
+        _require_hex_64(self.request_digest, "request_digest")
+        _require_nonce(self.request_nonce, "request_nonce")
+        if self.response_type not in ("receipt", "snapshot", "error"):
+            raise ValueError(f"invalid response_type: {self.response_type}")
         if type(self.response_payload_b64u) is not str:
             raise ValueError("response_payload_b64u must be a str")
-        if not isinstance(self.response_digest, str) or not self.response_digest:
-            raise ValueError("response_digest must be a non-empty string")
+        _require_hex_64(self.response_digest, "response_digest")
         _require_positive_int(self.issued_at_ms, "issued_at_ms")
         _require_bounded_str(self.key_id, "key_id", 1, 256)
-        if type(self.signature) is not str:
-            raise ValueError("signature must be a str")
+        _require_signature_format(self.signature, "signature")
 
+
+SignedControlResponseV2 = SignedControlResponseV1
 
 ParticipantControlResponseV1 = Union[
     ParticipantControlReceiptV1,
@@ -330,3 +367,20 @@ class ParticipantControlVerifierV1(Protocol):
         payload_digest: str,
     ) -> None: ...
 
+
+__all__ = [
+    "BoundedControlErrorV1",
+    "C2ControlActionV1",
+    "C2ControlErrorCodeV1",
+    "ExecutionControlAuthorizationV1",
+    "ParticipantControlAuthorizationV1",
+    "ParticipantControlPhaseV1",
+    "ParticipantControlQuerySnapshotV1",
+    "ParticipantControlReceiptV1",
+    "ParticipantControlRequestV1",
+    "ParticipantControlResponseV1",
+    "ParticipantControlSignerV1",
+    "ParticipantControlVerifierV1",
+    "SignedControlResponseV1",
+    "SignedControlResponseV2",
+]

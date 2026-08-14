@@ -72,7 +72,6 @@ def test_importing_legacy_entrypoint_has_no_runtime_side_effects(tmp_path: Path)
     env["PYTHONPATH"] = f"{os.fspath(ROOT)}:{existing_pythonpath}" if existing_pythonpath else os.fspath(ROOT)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
 
-
     completed = subprocess.run(
         [sys.executable, "-c", probe],
         cwd=tmp_path,

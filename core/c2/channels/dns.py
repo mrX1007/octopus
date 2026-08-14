@@ -571,7 +571,7 @@ def _dns_query_a(name: str) -> Optional[str]:
     try:
         result = socket.getaddrinfo(name, None, socket.AF_INET)
         if result:
-            return result[0][4][0]
+            return str(result[0][4][0])
     except socket.gaierror:
         pass
     return None

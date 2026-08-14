@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import os
 import sqlite3
@@ -156,10 +158,30 @@ class C2Database:
                     return row["crypto_state"]
             return None
 
-    def update_agent_seen(self, agent_id, hostname, os_name, user, ip, crypto_state):
+    def update_agent_seen(
+        self,
+        agent_id: str,
+        hostname: str | None = None,
+        os_name: str | None = None,
+        user: str | None = None,
+        ip: str | None = None,
+        crypto_state: str | dict | None = None,
+    ) -> bool:
         """Update an authenticated agent without creating or changing identity."""
         with self._get_conn() as conn:
-            stored_state = crypto_state if isinstance(crypto_state, str) else json.dumps(crypto_state or {})
+            cur = conn.execute(
+                "SELECT hostname, os, user, ip, crypto_state FROM agents WHERE agent_id=?",
+                (agent_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+            h = hostname if hostname is not None else row["hostname"]
+            o = os_name if os_name is not None else row["os"]
+            u = user if user is not None else row["user"]
+            i = ip if ip is not None else row["ip"]
+            c = crypto_state if crypto_state is not None else row["crypto_state"]
+            stored_state = c if isinstance(c, str) else json.dumps(c or {})
             cursor = conn.execute(
                 """
                 UPDATE agents
@@ -167,10 +189,10 @@ class C2Database:
                 WHERE agent_id=?
             """,
                 (
-                    hostname,
-                    os_name,
-                    user,
-                    ip,
+                    h,
+                    o,
+                    u,
+                    i,
                     datetime.now().isoformat(),
                     stored_state,
                     agent_id,

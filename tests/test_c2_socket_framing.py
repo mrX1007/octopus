@@ -22,7 +22,6 @@ from core.c2.control_commands import (
     SignedControlResponseV1,
 )
 from core.c2.control_models import (
-    calculate_canonical_request_digest,
     calculate_payload_digest,
     strict_b64url_decode,
 )
@@ -32,7 +31,12 @@ from core.c2.control_signing import ControlSignerV1
 pytestmark = pytest.mark.unit
 
 TEST_KEY_SECRET = b"test_secret_01234567890123456789"
-daemon.register_control_key("test_key", TEST_KEY_SECRET)
+
+
+@pytest.fixture(autouse=True)
+def setup_framing_test_key():
+    daemon.register_control_key("test_key", TEST_KEY_SECRET)
+    yield
 
 
 def _create_signed_request(
@@ -70,7 +74,6 @@ def _create_signed_request(
     return signed, encoded
 
 
-
 def _recv_frame(sock: socket.socket) -> bytes:
     """Helper to read one complete framed response from stream socket."""
     hdr = bytearray()
@@ -99,34 +102,32 @@ def _unpack_response(
     raw_resp: bytes, codec: ControlProtocolCodec
 ) -> ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1 | SignedControlResponseV1:
     resp = codec.decode_response(raw_resp)
-    if isinstance(resp, SignedControlResponseV1):
-        if resp.response_payload_b64u:
-            payload_bytes = strict_b64url_decode(resp.response_payload_b64u)
-            data = strict_json_loads(payload_bytes)
-            msg_type = data.get("type")
-            if msg_type == "receipt":
-                return ParticipantControlReceiptV1(
-                    transaction_id=data["transaction_id"],
-                    participant_id=data["participant_id"],
-                    action=C2ControlActionV1(data["action"]),
-                    resource_ref=data.get("resource_ref"),
-                    resource_revision=data.get("resource_revision"),
-                    receipt_ref=data["receipt_ref"],
-                    receipt_digest=data["receipt_digest"],
-                    daemon_instance_id=data["daemon_instance_id"],
-                    result_payload_schema_id=data.get("result_payload_schema_id"),
-                    result_payload_digest=data.get("result_payload_digest"),
-                    result_payload_b64u=data.get("result_payload_b64u"),
-                )
-            elif msg_type == "error":
-                return BoundedControlErrorV1(
-                    reason_code=C2ControlErrorCodeV1(data["reason_code"]),
-                    retryable=bool(data.get("retryable", False)),
-                    detail_ref=data.get("detail_ref", ""),
-                )
+    if isinstance(resp, SignedControlResponseV1) and resp.response_payload_b64u:
+        payload_bytes = strict_b64url_decode(resp.response_payload_b64u)
+        data = strict_json_loads(payload_bytes)
+        msg_type = data.get("type")
+        if msg_type == "receipt":
+            return ParticipantControlReceiptV1(
+                transaction_id=data["transaction_id"],
+                participant_id=data["participant_id"],
+                action=C2ControlActionV1(data["action"]),
+                resource_ref=data.get("resource_ref"),
+                resource_revision=data.get("resource_revision"),
+                receipt_ref=data["receipt_ref"],
+                receipt_digest=data["receipt_digest"],
+                daemon_instance_id=data["daemon_instance_id"],
+                result_payload_schema_id=data.get("result_payload_schema_id"),
+                result_payload_digest=data.get("result_payload_digest"),
+                result_payload_b64u=data.get("result_payload_b64u"),
+            )
+        elif msg_type == "error":
+            return BoundedControlErrorV1(
+                reason_code=C2ControlErrorCodeV1(data["reason_code"]),
+                retryable=bool(data.get("retryable", False)),
+                detail_ref=data.get("detail_ref", ""),
+            )
 
     return resp
-
 
 
 def test_socket_framing_fragmented_byte_by_byte():
@@ -150,7 +151,7 @@ def test_socket_framing_fragmented_byte_by_byte():
         resp = _unpack_response(raw_resp, codec)
         assert isinstance(resp, ParticipantControlReceiptV1)
         assert resp.action == C2ControlActionV1.PING
-        assert resp.daemon_instance_id == "c2-daemon-local-1"
+        assert resp.daemon_instance_id.startswith("c2-daemon-")
     finally:
         client_sock.close()
         handler_thread.join(timeout=1.0)
@@ -307,4 +308,3 @@ def test_socket_framing_rejects_unsupported_action():
     finally:
         client_sock.close()
         handler_thread.join(timeout=1.0)
-

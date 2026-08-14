@@ -25,16 +25,16 @@ def _make_req(action: C2ControlActionV1, tx_id: str) -> ParticipantControlReques
         subject_id="sub-vis",
         action_id="c2:dns_c2_channel",
         coordinator_revision=1,
-        request_digest="sha256:req",
+        request_digest="0" * 64,
         expires_at=9999999999.0,
-        nonce="nonce-vis",
-        signature="sig-vis",
+        nonce="nonce_vis_12345678",
+        signature="0" * 64,
     )
     return ParticipantControlRequestV1(
         action=action,
         authorization=auth,
         payload_schema_id="schema:dns_channel",
-        payload_digest="sha256:dns_payload",
+        payload_digest="0" * 64,
         canonical_payload_b64u="ey...",
     )
 

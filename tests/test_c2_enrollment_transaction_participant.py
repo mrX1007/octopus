@@ -65,16 +65,16 @@ def test_enrollment_transaction_participant_2pc():
         subject_id="s1",
         action_id="prepare_enrollment_deployment",
         coordinator_revision=1,
-        request_digest="rdig",
+        request_digest="0" * 64,
         expires_at=time.time() + 300,
-        nonce="n1",
-        signature="sig",
+        nonce="nonce_enr_12345678",
+        signature="0" * 64,
     )
     req = ParticipantControlRequestV1(
         action=C2ControlActionV1.PREPARE_ENROLLMENT_DEPLOYMENT,
         authorization=auth,
         payload_schema_id="s1",
-        payload_digest="pdig",
+        payload_digest="0" * 64,
         canonical_payload_b64u="e30",
     )
 

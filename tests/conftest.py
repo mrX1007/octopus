@@ -224,3 +224,25 @@ def canonical_partial_result(canonical_execution_result_factory):
         stderr="provider stopped early",
         partial=True,
     )
+
+
+@pytest.fixture(autouse=True)
+def auto_isolate_c2_test_environment(tmp_path, monkeypatch):
+    """Ensure every test runs with an isolated temporary C2 database and allowed ephemeral state."""
+    test_db = str(tmp_path / "c2_test.db")
+    monkeypatch.setenv("OCTOPUS_C2_ALLOW_EPHEMERAL_CONTROL_STATE", "1")
+    if "OCTOPUS_C2_DB_PATH" not in os.environ:
+        monkeypatch.setenv("OCTOPUS_C2_DB_PATH", test_db)
+    try:
+        from core.c2.daemon import reset_control_daemon_state
+
+        reset_control_daemon_state()
+    except Exception:
+        pass
+    yield
+    try:
+        from core.c2.daemon import reset_control_daemon_state
+
+        reset_control_daemon_state()
+    except Exception:
+        pass

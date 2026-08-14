@@ -505,6 +505,8 @@ def test_beacon_rejects_identity_state_acknowledgement_and_result_failures(
 
 class IPCConnection:
     def __init__(self, requests: list[Any]) -> None:
+        import socket
+
         from core.c2.control_protocol import ControlProtocolCodec
 
         self.codec = ControlProtocolCodec()
@@ -512,6 +514,7 @@ class IPCConnection:
         self.responses: list[Any] = []
         self.closed = False
         self._buffer = bytearray()
+        self.family = socket.AF_UNIX
 
     def recv(self, size: int) -> bytes:
         if not self._buffer and self.requests:
@@ -544,8 +547,13 @@ class IPCConnection:
 def test_ipc_dispatches_auth_rbac_actions_management_and_audit(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
 ) -> None:
+    import os
     import time
+
+    from core.c2.control_auth import PeerPrincipal
+    from core.c2.control_boundary import ControlVerificationKeyStore
     from core.c2.control_commands import (
         C2ControlActionV1,
         ParticipantControlAuthorizationV1,
@@ -554,7 +562,38 @@ def test_ipc_dispatches_auth_rbac_actions_management_and_audit(
     )
     from core.c2.control_models import calculate_payload_digest
     from core.c2.control_signing import ControlSignerV1
+    from core.c2.grant_service import GrantService
+    from core.c2.operators import OperatorManager
 
+    db_path = str(tmp_path / "daemon_cov.db")
+    monkeypatch.setenv("OCTOPUS_C2_DB_PATH", db_path)
+    monkeypatch.setenv("OCTOPUS_C2_ALLOW_EPHEMERAL_CONTROL_STATE", "1")
+    monkeypatch.setattr(daemon, "_daemon_resource_participant_instance", None)
+    monkeypatch.setattr(daemon, "_replay_store_instance", None)
+    monkeypatch.setattr(daemon, "_key_store_instance", None)
+    monkeypatch.setattr(daemon, "_control_boundary_instance", None)
+
+    op_mgr = OperatorManager(db_path=db_path)
+    grant_svc = GrantService(db_path=db_path)
+    key_store = ControlVerificationKeyStore(db_path=db_path)
+
+    op_mgr.create_operator(
+        operator_id="op_admin",
+        subject_id="op-admin",
+        name="Admin Operator",
+        role="admin",
+        api_key="api_key_test_admin_12345",
+    )
+    key_store.register_key(
+        key_id="key_test",
+        operator_id="op_admin",
+        verification_key=b"secret_key_12345678901234567890",
+        algorithm="hmac-sha256",
+    )
+    current_uid = os.getuid()
+    current_gid = os.getgid()
+    grant_svc.set_peer_binding("op_admin", uid=current_uid, gid=current_gid, active=True)
+    grant_svc.set_mission_grant("op_admin", subject_id="op-admin", mission_id="m_test", active=True)
 
     signer = ControlSignerV1("key_test", b"secret_key_12345678901234567890")
 
@@ -569,7 +608,7 @@ def test_ipc_dispatches_auth_rbac_actions_management_and_audit(
             coordinator_revision=1,
             request_digest="init_digest",
             expires_at=time.time() + 100.0,
-            nonce=f"nonce_{tx_id}",
+            nonce=f"nonce_{tx_id}_1234567890",
             signature="",
         )
         req = ParticipantControlRequestV1(
@@ -589,7 +628,10 @@ def test_ipc_dispatches_auth_rbac_actions_management_and_audit(
     ]
     connection = IPCConnection(requests)
 
-    daemon.handle_client(connection)
+    def peer_mock(_conn: Any) -> PeerPrincipal:
+        return PeerPrincipal(pid=os.getpid(), uid=current_uid, gid=current_gid)
+
+    daemon.handle_client(connection, peer_resolver=peer_mock)
 
     assert connection.closed is True
     assert len(connection.responses) == 4
@@ -597,9 +639,8 @@ def test_ipc_dispatches_auth_rbac_actions_management_and_audit(
     assert all(isinstance(r, SignedControlResponseV1) for r in connection.responses)
 
     broken = IPCConnection([b"not-json-or-ctrl1"])
-    daemon.handle_client(broken)
+    daemon.handle_client(broken, peer_resolver=peer_mock)
     assert broken.closed is True
-
 
 
 class SocketStub:

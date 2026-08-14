@@ -7,14 +7,12 @@ import time
 import pytest
 
 from core.c2.control_commands import (
-    BoundedControlErrorV1,
     C2ControlActionV1,
     C2ControlErrorCodeV1,
     ParticipantControlAuthorizationV1,
     ParticipantControlReceiptV1,
     ParticipantControlRequestV1,
 )
-
 from core.c2.control_transactions import ControlTransactionCoordinator
 from core.c2.resource_participant import C2DaemonResourceParticipant
 
@@ -30,16 +28,16 @@ def _make_req(tx_id: str = "tx_1") -> ParticipantControlRequestV1:
         subject_id="s1",
         action_id="prepare_c2_resource",
         coordinator_revision=1,
-        request_digest="reqdig",
+        request_digest="a" * 64,
         expires_at=time.time() + 300,
-        nonce="n1",
-        signature="sig",
+        nonce="nonce_12345678901234",
+        signature="c" * 64,
     )
     return ParticipantControlRequestV1(
         action=C2ControlActionV1.PREPARE_C2_RESOURCE,
         authorization=auth,
         payload_schema_id="s1",
-        payload_digest="pdig",
+        payload_digest="d" * 64,
         canonical_payload_b64u="e30",
     )
 
@@ -80,4 +78,3 @@ def test_coordinator_multiple_transactions():
     assert isinstance(r2, ParticipantControlReceiptV1)
     assert r1.resource_revision == 1
     assert r2.resource_revision == 2
-

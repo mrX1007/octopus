@@ -186,7 +186,6 @@ def _spec(
     )
 
 
-
 _IN_PROCESS = ProviderTransport.IN_PROCESS
 _COOPERATIVE = ProviderExecutionModeV2.COOPERATIVE_IN_PROCESS
 _DAEMON = ProviderTransport.LOCAL_DAEMON_IPC

@@ -58,9 +58,9 @@ def test_verifier_with_rotated_keys():
         subject_id="sub-1",
         action_id="c2:c2_task",
         coordinator_revision=1,
-        request_digest="sha256:req",
+        request_digest="a" * 64,
         expires_at=550.0,
-        nonce="nonce-1",
+        nonce="nonce_12345678901234",
         signature="",
     )
     from core.c2.control_models import calculate_payload_digest
@@ -74,12 +74,15 @@ def test_verifier_with_rotated_keys():
     )
     signed_req = signer_old.sign_participant_request(req)
 
-
     # Keyring rotation
     keyring.rotate_key("key-new", b"new-secret" * 4, now=500.0, transition_seconds=100.0)
 
     verifier = ControlVerifierV1(
-        key_store={k.key_id: k.secret_key for k in keyring.list_keys() if k.is_valid(now=520.0)}
+        key_store={
+            k.key_id: keyring.get_key(k.key_id, now=520.0)  # type: ignore[dict-item]
+            for k in keyring.list_keys()
+            if keyring.get_key(k.key_id, now=520.0) is not None
+        }
     )
 
     # Verification succeeds during transition window
@@ -87,7 +90,11 @@ def test_verifier_with_rotated_keys():
 
     # Verification fails after old key expiry
     verifier_after = ControlVerifierV1(
-        key_store={k.key_id: k.secret_key for k in keyring.list_keys() if k.is_valid(now=650.0)}
+        key_store={
+            k.key_id: keyring.get_key(k.key_id, now=650.0)  # type: ignore[dict-item]
+            for k in keyring.list_keys()
+            if keyring.get_key(k.key_id, now=650.0) is not None
+        }
     )
     with pytest.raises(ValueError, match="Unknown key_id"):
         verifier_after.verify_participant_request(signed_req, now=520.0)

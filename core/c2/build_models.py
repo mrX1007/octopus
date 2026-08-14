@@ -78,7 +78,7 @@ _C2_ARTIFACT_BUILD_OUTPUT_TOKEN = _C2ArtifactBuildOutputConstructionTokenV1()
 @dataclass(frozen=True, repr=False, init=False)
 class C2ArtifactBuildOutput:
     transient_ref: PhaseBoundTransientRefV2 = field(repr=False, compare=False)
-    artifact_kind: Literal[ArtifactKind.C2_AGENT]
+    artifact_kind: ArtifactKind
     sealed_record_digest: str
     integrity_tag: SensitiveIntegrityTagV2
     size: int
@@ -94,7 +94,7 @@ class C2ArtifactBuildOutput:
         cls,
         *,
         transient_ref: PhaseBoundTransientRefV2,
-        artifact_kind: Literal[ArtifactKind.C2_AGENT],
+        artifact_kind: ArtifactKind,
         sealed_record_digest: str,
         integrity_tag: SensitiveIntegrityTagV2,
         size: int,
@@ -143,7 +143,7 @@ class C2SensitiveArtifactBuildSinkV1(Protocol):
     def finalize(
         self,
         *,
-        artifact_kind: Literal[ArtifactKind.C2_AGENT],
+        artifact_kind: ArtifactKind,
         media_type: str,
         source_binding_digest: str,
         metadata_digest: str,
@@ -206,7 +206,7 @@ class C2ArtifactBindingHasherV1:
 @dataclass(frozen=True)
 class C2ArtifactStageRequestV1:
     transient_id: str
-    artifact_kind: Literal[ArtifactKind.C2_AGENT]
+    artifact_kind: ArtifactKind
     sealed_record_digest: str
     integrity_tag: SensitiveIntegrityTagV2
     size: int

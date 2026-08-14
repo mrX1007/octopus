@@ -22,7 +22,6 @@ def test_doctor_reports_configured_mounted_available_separately() -> None:
     assert not any(row.raw for row in report.provider_rows)
 
 
-
 def test_doctor_does_not_print_authorized_without_request() -> None:
     rendered = render_provider_doctor(run_action_doctor())
     assert "Configured" in rendered

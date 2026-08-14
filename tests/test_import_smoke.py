@@ -18,7 +18,7 @@ def test_imports_from_read_only_working_directory(tmp_path: Path, profile: str) 
     read_only.chmod(0o555)
     env = dict(os.environ)
     existing_pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = f"{str(ROOT)}:{existing_pythonpath}" if existing_pythonpath else str(ROOT)
+    env["PYTHONPATH"] = f"{ROOT!s}:{existing_pythonpath}" if existing_pythonpath else str(ROOT)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
 
     # Point C2 persistence inside the read-only directory. A pure import must

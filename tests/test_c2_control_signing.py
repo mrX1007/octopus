@@ -6,6 +6,8 @@ import hashlib
 import time
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from core.c2.control_commands import (
     C2ControlActionV1,
@@ -27,10 +29,10 @@ def _valid_test_payload() -> tuple[str, str]:
 
 
 def test_signer_verifier_participant_request():
-    secret = b"supersecretkey123456789012345678"
-    signer = ControlSignerV1(key_id="k_test", secret_key=secret)
+    priv = ed25519.Ed25519PrivateKey.generate()
+    signer = ControlSignerV1(key_id="k_test", secret_key=priv)
     verifier = ControlVerifierV1()
-    verifier.register_key("k_test", secret)
+    verifier.register_key("k_test", signer.public_key_bytes)
 
     b64u, pdig = _valid_test_payload()
     unsigned_auth = ParticipantControlAuthorizationV1(
@@ -41,9 +43,9 @@ def test_signer_verifier_participant_request():
         subject_id="subj_1",
         action_id="ping",
         coordinator_revision=1,
-        request_digest="dig_req_1",
+        request_digest="a" * 64,
         expires_at=time.time() + 300,
-        nonce="nonce_abc",
+        nonce="nonce_12345678901234",
         signature="",
     )
     unsigned_req = ParticipantControlRequestV1(
@@ -63,10 +65,15 @@ def test_signer_verifier_participant_request():
 
 
 def test_verifier_invalid_signature_raises():
-    secret = b"supersecretkey123456789012345678"
-    signer = ControlSignerV1(key_id="k_test", secret_key=secret)
+    priv = ed25519.Ed25519PrivateKey.generate()
+    wrong_priv = ed25519.Ed25519PrivateKey.generate()
+    wrong_pub = wrong_priv.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    signer = ControlSignerV1(key_id="k_test", secret_key=priv)
     verifier = ControlVerifierV1()
-    verifier.register_key("k_test", b"wrongsecretkey123456789012345678")
+    verifier.register_key("k_test", wrong_pub)
 
     b64u, pdig = _valid_test_payload()
     unsigned_auth = ParticipantControlAuthorizationV1(
@@ -77,9 +84,9 @@ def test_verifier_invalid_signature_raises():
         subject_id="subj_1",
         action_id="ping",
         coordinator_revision=1,
-        request_digest="dig_req_1",
+        request_digest="a" * 64,
         expires_at=time.time() + 300,
-        nonce="nonce_abc",
+        nonce="nonce_12345678901234",
         signature="",
     )
     unsigned_req = ParticipantControlRequestV1(
@@ -96,10 +103,10 @@ def test_verifier_invalid_signature_raises():
 
 
 def test_verifier_expired_request_raises():
-    secret = b"supersecretkey123456789012345678"
-    signer = ControlSignerV1(key_id="k_test", secret_key=secret)
+    priv = ed25519.Ed25519PrivateKey.generate()
+    signer = ControlSignerV1(key_id="k_test", secret_key=priv)
     verifier = ControlVerifierV1()
-    verifier.register_key("k_test", secret)
+    verifier.register_key("k_test", signer.public_key_bytes)
 
     b64u, pdig = _valid_test_payload()
     expired_auth = ParticipantControlAuthorizationV1(
@@ -110,9 +117,9 @@ def test_verifier_expired_request_raises():
         subject_id="subj_1",
         action_id="ping",
         coordinator_revision=1,
-        request_digest="dig_req_1",
+        request_digest="a" * 64,
         expires_at=time.time() - 100,  # Expired
-        nonce="nonce_abc",
+        nonce="nonce_12345678901234",
         signature="",
     )
     unsigned_req = ParticipantControlRequestV1(
@@ -130,7 +137,7 @@ def test_verifier_expired_request_raises():
 
 def test_execution_request_signing_and_verification():
     secret = b"execsecretkey123456789012345678"
-    signer = ControlSignerV1(key_id="k_exec", secret_key=secret)
+    signer = ControlSignerV1(key_id="k_exec", secret_key=secret, algorithm="hmac-sha256")
     verifier = ControlVerifierV1({"k_exec": secret})
 
     exec_auth = ExecutionControlAuthorizationV1(
@@ -141,9 +148,9 @@ def test_execution_request_signing_and_verification():
         subject_id="sub1",
         action_id="c2:c2_deploy",
         coordinator_revision=1,
-        request_digest="reqdig",
+        request_digest="b" * 64,
         expires_at=time.time() + 300,
-        nonce="nonce_x_1234",
+        nonce="nonce_12345678901234",
         signature="",
     )
 
@@ -151,7 +158,7 @@ def test_execution_request_signing_and_verification():
         action="c2:c2_deploy",
         authorization=exec_auth,
         payload_schema_id="schema_exec",
-        payload_digest="pdig_exec",
+        payload_digest="c" * 64,
     )
     assert signed_exec.signature != ""
 
@@ -159,6 +166,5 @@ def test_execution_request_signing_and_verification():
         action="c2:c2_deploy",
         authorization=signed_exec,
         payload_schema_id="schema_exec",
-        payload_digest="pdig_exec",
+        payload_digest="c" * 64,
     )
-

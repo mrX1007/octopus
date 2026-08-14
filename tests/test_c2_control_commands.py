@@ -32,14 +32,14 @@ def test_participant_control_authorization_creation():
         subject_id="s1",
         action_id="ping",
         coordinator_revision=1,
-        request_digest="rdig",
+        request_digest="a" * 64,
         expires_at=100.0,
-        nonce="n1",
-        signature="sig",
+        nonce="nonce_12345678901234",
+        signature="c" * 64,
     )
     assert auth.key_id == "k1"
     assert auth.transaction_id == "tx1"
-    assert auth.signature == "sig"
+    assert auth.signature == "c" * 64
 
 
 def test_participant_control_receipt_and_error():
@@ -50,7 +50,7 @@ def test_participant_control_receipt_and_error():
         resource_ref="res1",
         resource_revision=1,
         receipt_ref="r1",
-        receipt_digest="rdig",
+        receipt_digest="b" * 64,
         daemon_instance_id="d1",
         result_payload_schema_id=None,
         result_payload_digest=None,

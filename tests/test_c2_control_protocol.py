@@ -62,16 +62,16 @@ def test_control_protocol_encode_decode_request():
         subject_id="s1",
         action_id="ping",
         coordinator_revision=1,
-        request_digest="req_dig_1",
+        request_digest="a" * 64,
         expires_at=time.time() + 100,
-        nonce="nonce1",
-        signature="sig1",
+        nonce="nonce_12345678901234",
+        signature="c" * 64,
     )
     req = ParticipantControlRequestV1(
         action=C2ControlActionV1.PING,
         authorization=auth,
         payload_schema_id="schema1",
-        payload_digest="pay_dig_1",
+        payload_digest="d" * 64,
         canonical_payload_b64u="eyJwaW5nIjp0cnVlfQ",
     )
 
@@ -82,7 +82,7 @@ def test_control_protocol_encode_decode_request():
     assert decoded.action == C2ControlActionV1.PING
     assert decoded.authorization.key_id == "k1"
     assert decoded.authorization.transaction_id == "tx1"
-    assert decoded.payload_digest == "pay_dig_1"
+    assert decoded.payload_digest == "d" * 64
 
 
 def test_control_protocol_encode_decode_responses():
@@ -95,7 +95,7 @@ def test_control_protocol_encode_decode_responses():
         resource_ref="res2",
         resource_revision=1,
         receipt_ref="rcpt2",
-        receipt_digest="rdig2",
+        receipt_digest="b" * 64,
         daemon_instance_id="d1",
         result_payload_schema_id=None,
         result_payload_digest=None,

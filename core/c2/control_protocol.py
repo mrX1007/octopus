@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import socket
 import struct
-
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
@@ -22,6 +21,30 @@ from core.c2.control_models import canonical_json_bytes
 
 FRAME_MAGIC = b"CTRL1"
 MAX_FRAME_SIZE = 16_777_216  # 16 MB limit
+
+
+def require_exact_int(value: object, name: str) -> int:
+    if type(value) is not int or isinstance(value, bool):
+        raise ValueError(f"{name}_must_be_int")
+    return value
+
+
+def require_exact_str(value: object, name: str) -> str:
+    if type(value) is not str:
+        raise ValueError(f"{name}_must_be_str")
+    return value
+
+
+def require_exact_bool(value: object, name: str) -> bool:
+    if type(value) is not bool:
+        raise ValueError(f"{name}_must_be_bool")
+    return value
+
+
+def require_exact_number(value: object, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{name}_must_be_number")
+    return float(value)
 
 
 def _raise_invalid_constant(value: str) -> None:
@@ -62,7 +85,7 @@ def receive_frame(sock: socket.socket, max_size: int = MAX_FRAME_SIZE) -> bytes:
     """Read a complete CTRL1 frame from socket."""
     header = recv_exact(sock, len(FRAME_MAGIC) + 4)
     if header[: len(FRAME_MAGIC)] != FRAME_MAGIC:
-        raise ValueError(f"invalid_control_magic: {header[:len(FRAME_MAGIC)]!r}")
+        raise ValueError(f"invalid_control_magic: {header[: len(FRAME_MAGIC)]!r}")
     payload_len = struct.unpack("!I", header[len(FRAME_MAGIC) :])[0]
     if payload_len > max_size:
         raise ValueError(f"control_frame_too_large: {payload_len} exceeds {max_size}")
@@ -134,8 +157,10 @@ class ControlProtocolCodec:
         return header + payload_bytes
 
     def decode_request(self, reader_or_data: BoundedFrameReaderV1 | bytes) -> ParticipantControlRequestV1:
-        """Decode request from reader or bytes."""
-        reader = MemoryFrameReaderV1(reader_or_data) if isinstance(reader_or_data, (bytes, bytearray)) else reader_or_data
+        """Decode request from reader or bytes with strict type checking."""
+        reader = (
+            MemoryFrameReaderV1(reader_or_data) if isinstance(reader_or_data, (bytes, bytearray)) else reader_or_data
+        )
 
         buf = bytearray()
         reader.read_exact_into(buf, byte_count=len(FRAME_MAGIC) + 4)
@@ -158,38 +183,46 @@ class ControlProtocolCodec:
         if not isinstance(auth_data, dict):
             raise ValueError("missing authorization object in control request")
 
+        exp_rev = data.get("expected_resource_revision")
+        if exp_rev is not None:
+            require_exact_int(exp_rev, "expected_resource_revision")
+
         auth = ParticipantControlAuthorizationV1(
-            key_id=auth_data["key_id"],
-            transaction_id=auth_data["transaction_id"],
-            participant_id=auth_data["participant_id"],
-            mission_id=auth_data["mission_id"],
-            subject_id=auth_data["subject_id"],
-            action_id=auth_data["action_id"],
-            coordinator_revision=int(auth_data["coordinator_revision"]),
-            request_digest=auth_data["request_digest"],
-            expires_at=float(auth_data["expires_at"]),
-            nonce=auth_data["nonce"],
-            signature=auth_data["signature"],
+            key_id=require_exact_str(auth_data.get("key_id"), "key_id"),
+            transaction_id=require_exact_str(auth_data.get("transaction_id"), "transaction_id"),
+            participant_id=require_exact_str(auth_data.get("participant_id"), "participant_id"),
+            mission_id=require_exact_str(auth_data.get("mission_id"), "mission_id"),
+            subject_id=require_exact_str(auth_data.get("subject_id"), "subject_id"),
+            action_id=require_exact_str(auth_data.get("action_id"), "action_id"),
+            coordinator_revision=require_exact_int(auth_data.get("coordinator_revision"), "coordinator_revision"),
+            request_digest=require_exact_str(auth_data.get("request_digest"), "request_digest"),
+            expires_at=require_exact_number(auth_data.get("expires_at"), "expires_at"),
+            nonce=require_exact_str(auth_data.get("nonce"), "nonce"),
+            signature=require_exact_str(auth_data.get("signature"), "signature"),
         )
 
         return ParticipantControlRequestV1(
-            action=C2ControlActionV1(data["action"]),
+            action=C2ControlActionV1(require_exact_str(data.get("action"), "action")),
             authorization=auth,
-            payload_schema_id=data["payload_schema_id"],
-            payload_digest=data["payload_digest"],
-            canonical_payload_b64u=data["canonical_payload_b64u"],
+            payload_schema_id=require_exact_str(data.get("payload_schema_id"), "payload_schema_id"),
+            payload_digest=require_exact_str(data.get("payload_digest"), "payload_digest"),
+            canonical_payload_b64u=require_exact_str(data.get("canonical_payload_b64u"), "canonical_payload_b64u"),
             prior_receipt_ref=data.get("prior_receipt_ref"),
             prior_receipt_digest=data.get("prior_receipt_digest"),
-            expected_resource_revision=data.get("expected_resource_revision"),
+            expected_resource_revision=exp_rev,
         )
 
     def encode_response(
         self,
-        response: ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1 | SignedControlResponseV1,
+        response: ParticipantControlReceiptV1
+        | ParticipantControlQuerySnapshotV1
+        | BoundedControlErrorV1
+        | SignedControlResponseV1,
     ) -> bytes:
         """Encode response into framed bytes."""
         if isinstance(response, SignedControlResponseV1):
             res_dict = {
+                "boot_instance_id": response.boot_instance_id,
                 "daemon_generation": response.daemon_generation,
                 "daemon_instance_id": response.daemon_instance_id,
                 "issued_at_ms": response.issued_at_ms,
@@ -200,6 +233,7 @@ class ControlProtocolCodec:
                 "response_digest": response.response_digest,
                 "response_payload_b64u": response.response_payload_b64u,
                 "response_type": response.response_type,
+                "service_id": response.service_id,
                 "signature": response.signature,
                 "type": "signed_envelope",
             }
@@ -251,9 +285,16 @@ class ControlProtocolCodec:
 
     def decode_response(
         self, reader_or_data: BoundedFrameReaderV1 | bytes
-    ) -> ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1 | SignedControlResponseV1:
-        """Decode response from reader or bytes."""
-        reader = MemoryFrameReaderV1(reader_or_data) if isinstance(reader_or_data, (bytes, bytearray)) else reader_or_data
+    ) -> (
+        ParticipantControlReceiptV1
+        | ParticipantControlQuerySnapshotV1
+        | BoundedControlErrorV1
+        | SignedControlResponseV1
+    ):
+        """Decode response from reader or bytes with strict type checking."""
+        reader = (
+            MemoryFrameReaderV1(reader_or_data) if isinstance(reader_or_data, (bytes, bytearray)) else reader_or_data
+        )
 
         buf = bytearray()
         reader.read_exact_into(buf, byte_count=len(FRAME_MAGIC) + 4)
@@ -275,52 +316,75 @@ class ControlProtocolCodec:
         msg_type = data.get("type")
         if msg_type == "signed_envelope":
             return SignedControlResponseV1(
-                protocol_version=data["protocol_version"],
-                daemon_instance_id=data["daemon_instance_id"],
-                daemon_generation=data["daemon_generation"],
-                request_digest=data["request_digest"],
-                request_nonce=data["request_nonce"],
-                response_type=data["response_type"],
-                response_payload_b64u=data["response_payload_b64u"],
-                response_digest=data["response_digest"],
-                issued_at_ms=int(data["issued_at_ms"]),
-                key_id=data["key_id"],
-                signature=data["signature"],
+                protocol_version=require_exact_str(data.get("protocol_version"), "protocol_version"),
+                daemon_instance_id=require_exact_str(data.get("daemon_instance_id"), "daemon_instance_id"),
+                daemon_generation=require_exact_str(data.get("daemon_generation"), "daemon_generation"),
+                service_id=str(data.get("service_id", "")),
+                boot_instance_id=str(data.get("boot_instance_id", "")),
+                request_digest=require_exact_str(data.get("request_digest"), "request_digest"),
+                request_nonce=require_exact_str(data.get("request_nonce"), "request_nonce"),
+                response_type=require_exact_str(data.get("response_type"), "response_type"),
+                response_payload_b64u=require_exact_str(data.get("response_payload_b64u"), "response_payload_b64u"),
+                response_digest=require_exact_str(data.get("response_digest"), "response_digest"),
+                issued_at_ms=require_exact_int(data.get("issued_at_ms"), "issued_at_ms"),
+                key_id=require_exact_str(data.get("key_id"), "key_id"),
+                signature=require_exact_str(data.get("signature"), "signature"),
             )
         elif msg_type == "receipt":
+            res_rev = data.get("resource_revision")
+            if res_rev is not None:
+                require_exact_int(res_rev, "resource_revision")
             return ParticipantControlReceiptV1(
-                transaction_id=data["transaction_id"],
-                participant_id=data["participant_id"],
-                action=C2ControlActionV1(data["action"]),
+                transaction_id=require_exact_str(data.get("transaction_id"), "transaction_id"),
+                participant_id=require_exact_str(data.get("participant_id"), "participant_id"),
+                action=C2ControlActionV1(require_exact_str(data.get("action"), "action")),
                 resource_ref=data.get("resource_ref"),
-                resource_revision=data.get("resource_revision"),
-                receipt_ref=data["receipt_ref"],
-                receipt_digest=data["receipt_digest"],
-                daemon_instance_id=data["daemon_instance_id"],
+                resource_revision=res_rev,
+                receipt_ref=require_exact_str(data.get("receipt_ref"), "receipt_ref"),
+                receipt_digest=require_exact_str(data.get("receipt_digest"), "receipt_digest"),
+                daemon_instance_id=require_exact_str(data.get("daemon_instance_id"), "daemon_instance_id"),
                 result_payload_schema_id=data.get("result_payload_schema_id"),
                 result_payload_digest=data.get("result_payload_digest"),
                 result_payload_b64u=data.get("result_payload_b64u"),
             )
         elif msg_type == "snapshot":
+            res_rev = data.get("resource_revision")
+            if res_rev is not None:
+                require_exact_int(res_rev, "resource_revision")
             return ParticipantControlQuerySnapshotV1(
-                transaction_id=data["transaction_id"],
-                participant_id=data["participant_id"],
+                transaction_id=require_exact_str(data.get("transaction_id"), "transaction_id"),
+                participant_id=require_exact_str(data.get("participant_id"), "participant_id"),
                 resource_ref=data.get("resource_ref"),
-                resource_revision=data.get("resource_revision"),
-                phase=ParticipantControlPhaseV1(data["phase"]),
+                resource_revision=res_rev,
+                phase=ParticipantControlPhaseV1(require_exact_str(data.get("phase"), "phase")),
                 receipt_ref=data.get("receipt_ref"),
                 receipt_digest=data.get("receipt_digest"),
-                snapshot_digest=data["snapshot_digest"],
+                snapshot_digest=require_exact_str(data.get("snapshot_digest"), "snapshot_digest"),
                 result_payload_schema_id=data.get("result_payload_schema_id"),
                 result_payload_digest=data.get("result_payload_digest"),
                 result_payload_b64u=data.get("result_payload_b64u"),
             )
         elif msg_type == "error":
             return BoundedControlErrorV1(
-                reason_code=C2ControlErrorCodeV1(data["reason_code"]),
-                retryable=bool(data["retryable"]),
+                reason_code=C2ControlErrorCodeV1(require_exact_str(data.get("reason_code"), "reason_code")),
+                retryable=require_exact_bool(data.get("retryable"), "retryable"),
                 detail_ref=data.get("detail_ref"),
             )
         else:
             raise ValueError(f"Unknown message type in frame: {msg_type}")
 
+
+__all__ = [
+    "FRAME_MAGIC",
+    "MAX_FRAME_SIZE",
+    "BoundedFrameReaderV1",
+    "ControlProtocolCodec",
+    "MemoryFrameReaderV1",
+    "receive_frame",
+    "recv_exact",
+    "require_exact_bool",
+    "require_exact_int",
+    "require_exact_number",
+    "require_exact_str",
+    "strict_json_loads",
+]

@@ -168,24 +168,26 @@ class OperatorManager:
         role: str,
         *,
         subject_id: str | None = None,
+        operator_id: str | None = None,
+        api_key: str | None = None,
     ) -> str:
         """Create one explicit operator and return its one-time API key."""
 
         if role not in OPERATOR_ROLES:
             raise ValueError(f"Invalid role: {role}. Must be one of {sorted(OPERATOR_ROLES)}")
-        operator_id = secrets.token_hex(16)
+        op_id = operator_id or secrets.token_hex(16)
         stable_subject_id = subject_id or f"operator:{secrets.token_hex(16)}"
-        api_key = f"octopus-c2-{secrets.token_urlsafe(32)}"
+        key_value = api_key or f"octopus-c2-{secrets.token_urlsafe(32)}"
         with self._get_conn() as connection:
             insert_operator_record(
                 connection,
-                operator_id=operator_id,
+                operator_id=op_id,
                 subject_id=stable_subject_id,
                 name=name,
                 role=role,
-                api_key=api_key,
+                api_key=key_value,
             )
-        return api_key
+        return key_value
 
     def authenticate(self, api_key: str | SecretValue) -> dict[str, Any] | None:
         """Verify an API key and return authoritative stored identity data."""

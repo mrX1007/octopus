@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import importlib
-import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 from cryptography.hazmat.primitives import hashes
@@ -179,6 +179,7 @@ def test_daemon_version_is_owned_by_protocol_constants(monkeypatch, capsys):
                     return None
 
             import time
+
             from core.c2.control_commands import (
                 C2ControlActionV1,
                 ParticipantControlAuthorizationV1,
@@ -189,9 +190,9 @@ def test_daemon_version_is_owned_by_protocol_constants(monkeypatch, capsys):
             from core.c2.control_signing import ControlSignerV1
 
             codec = ControlProtocolCodec()
-            signer = ControlSignerV1("key_test", b"secret_key_12345678901234567890")
+            signer = ControlSignerV1("readiness_probe", b"secret_key_12345678901234567890")
             auth = ParticipantControlAuthorizationV1(
-                key_id="key_test",
+                key_id="readiness_probe",
                 transaction_id="tx_prot_1",
                 participant_id="part_test",
                 mission_id="m_test",
@@ -200,7 +201,7 @@ def test_daemon_version_is_owned_by_protocol_constants(monkeypatch, capsys):
                 coordinator_revision=1,
                 request_digest="placeholder",
                 expires_at=time.time() + 60.0,
-                nonce="nonce_prot_1",
+                nonce="nonce_prot_1_1234567890",
                 signature="",
             )
             req = ParticipantControlRequestV1(
@@ -215,8 +216,11 @@ def test_daemon_version_is_owned_by_protocol_constants(monkeypatch, capsys):
 
             class ConnectionStub:
                 def __init__(self):
+                    import socket
+
                     self._requests = [framed_req_bytes]
                     self.responses: list[Any] = []
+                    self.family = socket.AF_UNIX
 
                 def recv(self, size):
                     if not self._requests:
@@ -248,9 +252,14 @@ def test_daemon_version_is_owned_by_protocol_constants(monkeypatch, capsys):
             patch.setattr(daemon.uvicorn, "run", lambda *_args, **_kwargs: None)
             patch.setenv("OCTOPUS_C2_HOST", "127.0.0.1")
             patch.setenv("OCTOPUS_C2_PORT", "8443")
+            patch.setenv("OCTOPUS_C2_ALLOW_EPHEMERAL_CONTROL_STATE", "1")
+
+            from core.c2.control_auth import PeerPrincipal
 
             connection = ConnectionStub()
-            daemon.handle_client(connection)
+            daemon.handle_client(
+                connection, peer_resolver=lambda _: PeerPrincipal(pid=os.getpid(), uid=os.getuid(), gid=os.getgid())
+            )
             assert len(connection.responses) == 1
             assert hasattr(connection.responses[0], "signature")
 
