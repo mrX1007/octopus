@@ -47,7 +47,10 @@ def test_c2_lifecycle_e2e_full_flow():
 
 def test_c2_lifecycle_client_integration():
     signer = ControlSignerV1("key_e2e", b"secret_e2e_key_1234567890123456")
-    client = DefaultC2ControlClient(signer=signer)
+    client = DefaultC2ControlClient(
+        signer=signer,
+        transport_handler=DefaultC2ControlClient.create_mock_loopback_transport(),
+    )
 
     ping_res = client.ping(mission_id="m_e2e", subject_id="sub_e2e")
     assert ping_res.action.value == "ping"

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from core.c2.client import C2ControlClient, DefaultC2ControlClient
+from core.c2.client import (
+    C2ControlClient,
+    C2DaemonUnavailable,
+    DefaultC2ControlClient,
+)
 from core.c2.control_commands import (
     C2ControlActionV1,
     ParticipantControlReceiptV1,
@@ -24,9 +28,12 @@ def test_control_client_init_and_context_manager():
     assert client._is_closed is True
 
 
-def test_control_client_ping():
+def test_control_client_ping_with_mock_transport():
     signer = ControlSignerV1("key_test", b"secret_key_12345678901234567890")
-    client = DefaultC2ControlClient(signer=signer)
+    client = DefaultC2ControlClient(
+        signer=signer,
+        transport_handler=DefaultC2ControlClient.create_mock_loopback_transport(),
+    )
 
     receipt = client.ping(mission_id="mission_alpha", subject_id="op_1")
     assert isinstance(receipt, ParticipantControlReceiptV1)
@@ -34,9 +41,12 @@ def test_control_client_ping():
     assert receipt.daemon_instance_id == "daemon_inst_0"
 
 
-def test_control_client_execute_action():
+def test_control_client_execute_action_with_mock_transport():
     signer = ControlSignerV1("key_test", b"secret_key_12345678901234567890")
-    client = DefaultC2ControlClient(signer=signer)
+    client = DefaultC2ControlClient(
+        signer=signer,
+        transport_handler=DefaultC2ControlClient.create_mock_loopback_transport(),
+    )
 
     res = client.execute_action(
         action=C2ControlActionV1.READINESS,
@@ -53,8 +63,20 @@ def test_control_client_execute_action():
 
 def test_control_client_closed_error():
     signer = ControlSignerV1("key_test", b"secret_key_12345678901234567890")
-    client = DefaultC2ControlClient(signer=signer)
+    client = DefaultC2ControlClient(
+        signer=signer,
+        transport_handler=DefaultC2ControlClient.create_mock_loopback_transport(),
+    )
     client.close()
 
     with pytest.raises(RuntimeError, match="Client is closed"):
+        client.ping(mission_id="m1", subject_id="s1")
+
+
+def test_control_client_fails_closed_when_socket_unavailable(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("OCTOPUS_C2_SOCKET", "/tmp/nonexistent_octopus_test.sock")
+    signer = ControlSignerV1("key_test", b"secret_key_12345678901234567890")
+    client = DefaultC2ControlClient(signer=signer)
+
+    with pytest.raises(C2DaemonUnavailable):
         client.ping(mission_id="m1", subject_id="s1")

@@ -8,7 +8,7 @@ import socket
 import struct
 import time
 import uuid
-from typing import Any
+from typing import Any, Callable
 
 from core.c2.control_commands import (
     BoundedControlErrorV1,
@@ -21,6 +21,26 @@ from core.c2.control_commands import (
 from core.c2.control_models import calculate_payload_digest, calculate_request_digest
 from core.c2.control_protocol import ControlProtocolCodec
 from core.c2.control_signing import ControlSignerV1, ControlVerifierV1
+
+
+class C2ControlError(Exception):
+    """Base exception for C2 control client errors."""
+
+
+class C2DaemonUnavailable(C2ControlError):
+    """Daemon socket is not reachable or connection was refused."""
+
+
+class C2ControlTimeout(C2ControlError):
+    """Socket communication timed out."""
+
+
+class C2ProtocolError(C2ControlError):
+    """Protocol error, framing violation, or decoding failure."""
+
+
+class C2ResponseVerificationError(C2ControlError):
+    """Response signature or identity verification failed."""
 
 
 class C2ControlClient:
@@ -44,7 +64,7 @@ class DefaultC2ControlClient(C2ControlClient):
         signer: ControlSignerV1,
         verifier: ControlVerifierV1 | None = None,
         codec: ControlProtocolCodec | None = None,
-        transport_handler: Any = None,
+        transport_handler: Callable[[bytes], bytes] | None = None,
     ) -> None:
         self.signer = signer
         self.verifier = verifier
@@ -60,7 +80,6 @@ class DefaultC2ControlClient(C2ControlClient):
             raise RuntimeError("Client is closed")
 
         signed_req = self.signer.sign_participant_request(request)
-
         encoded_frame = self.codec.encode_request(signed_req)
 
         if self.transport_handler is not None:
@@ -69,39 +88,52 @@ class DefaultC2ControlClient(C2ControlClient):
             sock_path = os.environ.get("OCTOPUS_C2_SOCKET", "/run/octopus/octopus-c2.sock")
             if not os.path.exists(sock_path) and os.path.exists("/tmp/octopus.sock"):
                 sock_path = "/tmp/octopus.sock"
-            if os.path.exists(sock_path):
-                try:
-                    resp_bytes = self._socket_transport(sock_path, encoded_frame)
-                except Exception:
-                    resp_bytes = self._simulated_loopback(signed_req)
-            else:
-                resp_bytes = self._simulated_loopback(signed_req)
+            if not os.path.exists(sock_path):
+                raise C2DaemonUnavailable(f"C2 daemon socket not found at {sock_path}")
+            resp_bytes = self._socket_transport(sock_path, encoded_frame)
 
-        response = self.codec.decode_response(resp_bytes)
+        try:
+            response = self.codec.decode_response(resp_bytes)
+        except Exception as exc:
+            raise C2ProtocolError(f"failed to decode daemon control response: {exc}") from exc
+
         return response
 
     def _socket_transport(self, sock_path: str, data: bytes) -> bytes:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-            s.settimeout(10.0)
-            s.connect(sock_path)
-            s.sendall(data)
-            chunks = []
-            while True:
-                chunk = s.recv(8192)
-                if not chunk:
-                    break
-                chunks.append(chunk)
-                total = b"".join(chunks)
-                if len(total) >= 9 and total.startswith(b"CTRL1"):
-                    payload_len = struct.unpack(">I", total[5:9])[0]
-                    if len(total) >= 9 + payload_len:
-                        return total
-            return b"".join(chunks)
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+                s.settimeout(10.0)
+                try:
+                    s.connect(sock_path)
+                except ConnectionRefusedError as exc:
+                    raise C2DaemonUnavailable(f"connection refused at {sock_path}") from exc
+                except FileNotFoundError as exc:
+                    raise C2DaemonUnavailable(f"socket not found at {sock_path}") from exc
+                except OSError as exc:
+                    raise C2DaemonUnavailable(f"socket connect error at {sock_path}: {exc}") from exc
+
+                s.sendall(data)
+                chunks = []
+                while True:
+                    chunk = s.recv(8192)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                    total = b"".join(chunks)
+                    if len(total) >= 9 and total.startswith(b"CTRL1"):
+                        payload_len = struct.unpack("!I", total[5:9])[0]
+                        if len(total) >= 9 + payload_len:
+                            return total[: 9 + payload_len]
+                if not chunks:
+                    raise C2DaemonUnavailable(f"daemon at {sock_path} closed connection without response")
+                return b"".join(chunks)
+        except socket.timeout as exc:
+            raise C2ControlTimeout(f"socket operation timed out for {sock_path}") from exc
 
     def execute_action(
         self,
         action: C2ControlActionV1 | str,
-        payload: dict | bytes | str,
+        payload: dict[str, Any] | bytes | str,
         mission_id: str,
         subject_id: str,
         transaction_id: str,
@@ -175,18 +207,37 @@ class DefaultC2ControlClient(C2ControlClient):
     def close(self) -> None:
         self._is_closed = True
 
-    def _simulated_loopback(self, request: ParticipantControlRequestV1) -> bytes:
-        receipt = ParticipantControlReceiptV1(
-            transaction_id=request.authorization.transaction_id,
-            participant_id=request.authorization.participant_id,
-            action=request.action,
-            resource_ref=f"ref:{request.authorization.participant_id}",
-            resource_revision=1,
-            receipt_ref=f"rcpt_{uuid.uuid4().hex[:8]}",
-            receipt_digest="digest_ok",
-            daemon_instance_id="daemon_inst_0",
-            result_payload_schema_id=request.payload_schema_id,
-            result_payload_digest=request.payload_digest,
-            result_payload_b64u=request.canonical_payload_b64u,
-        )
-        return self.codec.encode_response(receipt)
+    @staticmethod
+    def create_mock_loopback_transport(codec: ControlProtocolCodec | None = None) -> Callable[[bytes], bytes]:
+        """Test helper: create in-memory loopback transport function."""
+        resolved_codec = codec or ControlProtocolCodec()
+
+        def _loopback(data: bytes) -> bytes:
+            req = resolved_codec.decode_request(data)
+            receipt = ParticipantControlReceiptV1(
+                transaction_id=req.authorization.transaction_id,
+                participant_id=req.authorization.participant_id,
+                action=req.action,
+                resource_ref=f"ref:{req.authorization.participant_id}",
+                resource_revision=1,
+                receipt_ref=f"rcpt_{uuid.uuid4().hex[:8]}",
+                receipt_digest="digest_ok",
+                daemon_instance_id="daemon_inst_0",
+                result_payload_schema_id=req.payload_schema_id,
+                result_payload_digest=req.payload_digest,
+                result_payload_b64u=req.canonical_payload_b64u,
+            )
+            return resolved_codec.encode_response(receipt)
+
+        return _loopback
+
+
+__all__ = [
+    "C2ControlClient",
+    "C2ControlError",
+    "C2ControlTimeout",
+    "C2DaemonUnavailable",
+    "C2ProtocolError",
+    "C2ResponseVerificationError",
+    "DefaultC2ControlClient",
+]

@@ -14,6 +14,7 @@ import secrets
 import socket
 import struct
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager, suppress
 from typing import Any
@@ -402,14 +403,50 @@ async def beacon(request: Request):
 
 # ─── Operator IPC Control Plane ──────────────────────────
 
-
 _daemon_resource_participant = C2DaemonResourceParticipant(daemon_instance_id="c2-daemon-local-1")
 _control_codec = ControlProtocolCodec()
+_seen_nonces: dict[str, float] = {}
+_nonce_lock = threading.Lock()
+MAX_CONTROL_FRAME_SIZE = 16 * 1024 * 1024  # 16 MiB
 
 
 def _handle_framed_control_request(req: ParticipantControlRequestV1) -> Any:
     action = req.action
     tx_id = req.authorization.transaction_id
+    now = time.time()
+
+    # 1. Expiration check
+    if req.authorization.expires_at <= now:
+        return BoundedControlErrorV1(
+            reason_code=C2ControlErrorCodeV1.NOT_AUTHORIZED,
+            retryable=False,
+            detail_ref="authorization_expired",
+        )
+
+    # 2. Nonce replay protection
+    with _nonce_lock:
+        if req.authorization.nonce in _seen_nonces:
+            return BoundedControlErrorV1(
+                reason_code=C2ControlErrorCodeV1.REPLAY,
+                retryable=False,
+                detail_ref="nonce_replayed",
+            )
+        _seen_nonces[req.authorization.nonce] = req.authorization.expires_at
+        if len(_seen_nonces) > 10000:
+            for k in list(_seen_nonces.keys()):
+                if _seen_nonces[k] <= now:
+                    _seen_nonces.pop(k, None)
+
+    # 3. Action ID mismatch check
+    act_val = req.action.value if hasattr(req.action, "value") else str(req.action)
+    if req.authorization.action_id != act_val:
+        return BoundedControlErrorV1(
+            reason_code=C2ControlErrorCodeV1.NOT_AUTHORIZED,
+            retryable=False,
+            detail_ref="action_mismatch",
+        )
+
+    # 4. Dispatch supported actions
     if action == C2ControlActionV1.PING or (isinstance(action, str) and action == "ping"):
         rcpt_ref = f"rcpt_ping_{secrets.token_hex(4)}"
         return ParticipantControlReceiptV1(
@@ -465,69 +502,80 @@ def _handle_framed_control_request(req: ParticipantControlRequestV1) -> Any:
     if action == C2ControlActionV1.QUERY_C2_RESOURCE:
         return _daemon_resource_participant.reconcile()
 
-    # Fallback receipt for any other action
-    rcpt_ref = f"rcpt_act_{secrets.token_hex(4)}"
-    return ParticipantControlReceiptV1(
-        transaction_id=tx_id,
-        participant_id=req.authorization.participant_id or "c2_daemon",
-        action=req.action,
-        resource_ref="c2_daemon",
-        resource_revision=1,
-        receipt_ref=rcpt_ref,
-        receipt_digest=req.authorization.request_digest,
-        daemon_instance_id="c2-daemon-local-1",
-        result_payload_schema_id=req.payload_schema_id,
-        result_payload_digest=req.payload_digest,
-        result_payload_b64u=req.canonical_payload_b64u,
+    # Reject unsupported / unhandled actions with explicit error
+    return BoundedControlErrorV1(
+        reason_code=C2ControlErrorCodeV1.UNAVAILABLE,
+        retryable=False,
+        detail_ref="unsupported_control_action",
     )
-
-
-def _read_exact(sock: socket.socket, n: int) -> bytes:
-    buf = bytearray()
-    while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
-        if not chunk:
-            raise EOFError("unexpected EOF while reading framed stream")
-        buf.extend(chunk)
-    return bytes(buf)
 
 
 def handle_client(conn: socket.socket) -> None:
     """Handle IPC requests from octopus.py thin client or framed ControlProtocol clients."""
     try:
+        if hasattr(conn, "settimeout"):
+            conn.settimeout(15.0)
+        buffer = bytearray()
         while True:
-            data = conn.recv(8192)
-            if not data:
+            while len(buffer) < len(FRAME_MAGIC):
+                chunk = conn.recv(8192)
+                if not chunk:
+                    break
+                buffer.extend(chunk)
+
+            if not buffer:
                 break
 
-            if data.startswith(FRAME_MAGIC):
+            if buffer[: len(FRAME_MAGIC)] == FRAME_MAGIC:
+                while len(buffer) < len(FRAME_MAGIC) + 4:
+                    chunk = conn.recv(8192)
+                    if not chunk:
+                        break
+                    buffer.extend(chunk)
+
+                if len(buffer) < len(FRAME_MAGIC) + 4:
+                    break
+
+                payload_len = struct.unpack("!I", buffer[len(FRAME_MAGIC) : len(FRAME_MAGIC) + 4])[0]
+                if payload_len > MAX_CONTROL_FRAME_SIZE:
+                    err = BoundedControlErrorV1(
+                        reason_code=C2ControlErrorCodeV1.MALFORMED,
+                        retryable=False,
+                        detail_ref=f"frame size {payload_len} exceeds max {MAX_CONTROL_FRAME_SIZE}",
+                    )
+                    conn.sendall(_control_codec.encode_response(err))
+                    break
+
+                total_expected = len(FRAME_MAGIC) + 4 + payload_len
+                while len(buffer) < total_expected:
+                    chunk = conn.recv(min(65536, total_expected - len(buffer)))
+                    if not chunk:
+                        break
+                    buffer.extend(chunk)
+
+                if len(buffer) < total_expected:
+                    break
+
+                full_frame = bytes(buffer[:total_expected])
+                del buffer[:total_expected]
+
                 try:
-                    while len(data) < len(FRAME_MAGIC) + 4:
-                        chunk = conn.recv(len(FRAME_MAGIC) + 4 - len(data))
-                        if not chunk:
-                            break
-                        data += chunk
-                    if len(data) >= len(FRAME_MAGIC) + 4:
-                        payload_len = struct.unpack("!I", data[len(FRAME_MAGIC) : len(FRAME_MAGIC) + 4])[0]
-                        total_expected = len(FRAME_MAGIC) + 4 + payload_len
-                        while len(data) < total_expected:
-                            chunk = conn.recv(total_expected - len(data))
-                            if not chunk:
-                                break
-                            data += chunk
-                        full_frame = data[:total_expected]
-                        framed_req = _control_codec.decode_request(full_frame)
-                        framed_resp = _handle_framed_control_request(framed_req)
-                        resp_bytes = _control_codec.encode_response(framed_resp)
-                        conn.sendall(resp_bytes)
+                    framed_req = _control_codec.decode_request(full_frame)
+                    framed_resp = _handle_framed_control_request(framed_req)
+                    resp_bytes = _control_codec.encode_response(framed_resp)
+                    conn.sendall(resp_bytes)
                 except Exception as exc:
                     err = BoundedControlErrorV1(
-                        reason_code=C2ControlErrorCodeV1.INTERNAL_ERROR,
+                        reason_code=C2ControlErrorCodeV1.INTERNAL_FAILURE,
                         retryable=False,
                         detail_ref=str(exc),
                     )
                     conn.sendall(_control_codec.encode_response(err))
                 continue
+
+            # Legacy JSON path
+            data = bytes(buffer)
+            buffer.clear()
 
             req = json.loads(data.decode("utf-8"))
             action = req.get("action")
@@ -657,17 +705,20 @@ def run_socket_server() -> None:
     listen_fds_env = os.environ.get("LISTEN_FDS") if hasattr(os, "environ") else None
     listen_pid_env = os.environ.get("LISTEN_PID") if hasattr(os, "environ") else None
     server = None
-    if listen_fds_env and listen_pid_env and str(os.getpid()) == listen_pid_env:
-        try:
-            num_fds = int(listen_fds_env)
-            if num_fds == 1:
-                server = socket.fromfd(SD_LISTEN_FDS_START, socket.AF_UNIX, socket.SOCK_STREAM)
-                # Clean up environment to avoid propagation
-                del os.environ["LISTEN_FDS"]
-                del os.environ["LISTEN_PID"]
-                print(f"[*] Control Plane inherited socket from systemd (fd {SD_LISTEN_FDS_START})")
-        except Exception:
-            server = None
+    if listen_fds_env and listen_pid_env:
+        if str(os.getpid()) == listen_pid_env:
+            try:
+                num_fds = int(listen_fds_env)
+                if num_fds == 1:
+                    server = socket.socket(fileno=SD_LISTEN_FDS_START)
+                    del os.environ["LISTEN_FDS"]
+                    del os.environ["LISTEN_PID"]
+                    print(f"[*] Control Plane inherited socket from systemd (fd {SD_LISTEN_FDS_START})")
+            except Exception as exc:
+                print(f"[!] Systemd socket activation adoption failed: {exc}")
+                server = None
+        else:
+            print(f"[!] Systemd socket activation PID mismatch: expected {listen_pid_env}, got {os.getpid()}")
 
     if server is None:
         if os.path.exists(SOCK_FILE):
