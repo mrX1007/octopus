@@ -13,11 +13,11 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from core.c2.control_models import (
     calculate_health_signature_digest,
     canonical_json_bytes,
+    strict_decode_signature_v2,
 )
 from core.c2.control_protocol import (
     strict_json_loads,
 )
-from core.c2.control_signing import _decode_sig_bytes
 from core.c2.protocol import C2_CONTROL_PROTOCOL_VERSION
 
 
@@ -67,6 +67,13 @@ def query_health_status(
     timeout_seconds: float = 5.0,
 ) -> VerifiedHealthStatusV2:
     """Execute dedicated health probe over Unix domain socket with kernel peer credentials."""
+    if trusted_public_key is None:
+        raise ValueError("trusted_public_key is required for health verification")
+    if len(trusted_public_key) != 32:
+        raise ValueError(f"trusted_public_key must be exactly 32 bytes, got {len(trusted_public_key)}")
+    if not expected_service_id:
+        raise ValueError("expected_service_id must not be empty for health verification")
+
     if not os.path.exists(sock_path):
         return VerifiedHealthStatusV2(
             reachable=False,
@@ -87,7 +94,7 @@ def query_health_status(
         "type": "health_request_v2",
     }
     req_bytes = canonical_json_bytes(req_dict)
-    # Send frame
+
     try:
         from core.c2.client import send_c2_socket_frame
 
@@ -117,7 +124,7 @@ def query_health_status(
         key_id = str(resp_dict.get("key_id", ""))
         sig_str = str(resp_dict.get("signature", ""))
 
-        if expected_service_id and service_id != expected_service_id:
+        if service_id != expected_service_id:
             raise ValueError("service_id_mismatch")
         if probe_nonce != probe_req.nonce:
             raise ValueError("nonce_mismatch")
@@ -125,22 +132,21 @@ def query_health_status(
         if abs(now_ms - issued_ms) > 5000:
             raise ValueError("response_stale")
 
-        if trusted_public_key is not None and len(trusted_public_key) == 32:
-            body_dict = {
-                "boot_instance_id": boot_instance_id,
-                "daemon_generation": daemon_gen,
-                "database_ready": db_ready,
-                "issued_at_ms": issued_ms,
-                "key_id": key_id,
-                "key_store_ready": ks_ready,
-                "probe_nonce": probe_nonce,
-                "protocol_version": "2.0",
-                "service_id": service_id,
-            }
-            transcript = calculate_health_signature_digest(body_dict)
-            sig_bytes = _decode_sig_bytes(sig_str)
-            pub_key = ed25519.Ed25519PublicKey.from_public_bytes(trusted_public_key)
-            pub_key.verify(sig_bytes, transcript)
+        body_dict = {
+            "boot_instance_id": boot_instance_id,
+            "daemon_generation": daemon_gen,
+            "database_ready": db_ready,
+            "issued_at_ms": issued_ms,
+            "key_id": key_id,
+            "key_store_ready": ks_ready,
+            "probe_nonce": probe_nonce,
+            "protocol_version": "2.0",
+            "service_id": service_id,
+        }
+        transcript = calculate_health_signature_digest(body_dict)
+        sig_bytes = strict_decode_signature_v2(sig_str)
+        pub_key = ed25519.Ed25519PublicKey.from_public_bytes(trusted_public_key)
+        pub_key.verify(sig_bytes, transcript)
 
         return VerifiedHealthStatusV2(
             reachable=True,

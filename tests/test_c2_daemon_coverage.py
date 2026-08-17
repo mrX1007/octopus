@@ -552,17 +552,18 @@ def test_ipc_dispatches_auth_rbac_actions_management_and_audit(
     import os
     import time
 
+    import cryptography.hazmat.primitives.asymmetric.ed25519 as ed25519
+
     from core.c2.control_auth import PeerPrincipal
     from core.c2.control_boundary import ControlVerificationKeyStore
     from core.c2.control_commands import (
-        C2ControlActionV1,
-        ParticipantControlAuthorizationV1,
-        ParticipantControlRequestV1,
-        SignedControlResponseV1,
+        C2ControlAction,
         SignedControlResponseV2,
+        UnsignedParticipantControlAuthorizationV2,
+        UnsignedParticipantControlRequestV2,
     )
-    from core.c2.control_models import calculate_payload_digest
-    from core.c2.control_signing import ControlSignerV1
+    from core.c2.control_models import calculate_schema_bound_payload_digest
+    from core.c2.control_signing import ControlSignerV2
     from core.c2.grant_service import GrantService
     from core.c2.operators import OperatorManager
 
@@ -585,21 +586,26 @@ def test_ipc_dispatches_auth_rbac_actions_management_and_audit(
         role="admin",
         api_key="api_key_test_admin_12345",
     )
+    ed_priv = ed25519.Ed25519PrivateKey.generate()
+    ed_pub = ed_priv.public_key().public_bytes_raw()
     key_store.register_key(
         key_id="key_test",
         operator_id="op_admin",
-        verification_key=b"secret_key_12345678901234567890",
-        algorithm="hmac-sha256",
+        verification_key=ed_pub,
+        algorithm="ed25519",
     )
     current_uid = os.getuid()
     current_gid = os.getgid()
     grant_svc.set_peer_binding("op_admin", uid=current_uid, gid=current_gid, active=True)
     grant_svc.set_mission_grant("op_admin", subject_id="op-admin", mission_id="m_test", active=True)
 
-    signer = ControlSignerV1("key_test", b"secret_key_12345678901234567890")
+    signer = ControlSignerV2("key_test", ed_priv)
 
-    def _make_signed(action: C2ControlActionV1, tx_id: str, sub_id: str = "op-admin"):
-        auth = ParticipantControlAuthorizationV1(
+    def _make_signed(action: C2ControlAction, tx_id: str, sub_id: str = "op-admin"):
+        now_ms = int(time.time() * 1000)
+        p_dig = calculate_schema_bound_payload_digest("schema:test", b"{}")
+        auth = UnsignedParticipantControlAuthorizationV2(
+            protocol_version="2.0",
             key_id="key_test",
             transaction_id=tx_id,
             participant_id="part_test",
@@ -607,25 +613,24 @@ def test_ipc_dispatches_auth_rbac_actions_management_and_audit(
             subject_id=sub_id,
             action_id=action.value,
             coordinator_revision=1,
-            request_digest="init_digest",
-            expires_at=time.time() + 100.0,
+            issued_at_ms=now_ms,
+            expires_at_ms=now_ms + 100000,
             nonce=f"nonce_{tx_id}_1234567890",
-            signature="",
         )
-        req = ParticipantControlRequestV1(
+        req = UnsignedParticipantControlRequestV2(
             action=action,
             authorization=auth,
             payload_schema_id="schema:test",
-            payload_digest=calculate_payload_digest(b""),
-            canonical_payload_b64u="",
+            payload_digest=p_dig,
+            canonical_payload_b64u="e30",
         )
         return signer.sign_participant_request(req)
 
     requests = [
-        _make_signed(C2ControlActionV1.PING, "tx_1"),
-        _make_signed(C2ControlActionV1.READINESS, "tx_2"),
-        _make_signed(C2ControlActionV1.PREPARE_C2_RESOURCE, "tx_3"),
-        _make_signed(C2ControlActionV1.RESERVE_ENROLLMENT_FOR_BUILD, "tx_4"),
+        _make_signed(C2ControlAction.PING, "tx_1"),
+        _make_signed(C2ControlAction.READINESS, "tx_2"),
+        _make_signed(C2ControlAction.PREPARE_C2_RESOURCE, "tx_3"),
+        _make_signed(C2ControlAction.RESERVE_ENROLLMENT_FOR_BUILD, "tx_4"),
     ]
     connection = IPCConnection(requests)
 
@@ -636,8 +641,8 @@ def test_ipc_dispatches_auth_rbac_actions_management_and_audit(
 
     assert connection.closed is True
     assert len(connection.responses) == 4
-    # All responses are wrapped in SignedControlResponse
-    assert all(isinstance(r, (SignedControlResponseV1, SignedControlResponseV2)) for r in connection.responses)
+    # All responses are wrapped in SignedControlResponseV2
+    assert all(isinstance(r, SignedControlResponseV2) for r in connection.responses)
 
     broken = IPCConnection([b"not-json-or-ctrl1"])
     daemon.handle_client(broken, peer_resolver=peer_mock)

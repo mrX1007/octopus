@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from core.c2.control_commands import (
         ParticipantControlRequestV1,
         ParticipantControlRequestV2,
+        UnsignedParticipantControlRequestV2,
     )
 
 MAX_BASE64_PAYLOAD_LENGTH = 16 * 1024 * 1024
@@ -26,6 +27,7 @@ MAX_HEALTH_PAYLOAD_BYTES = 4 * 1024  # 4 KiB limit on health probe payloads
 
 _BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]*$")
 _HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
+_SIGNATURE_V2_RE = re.compile(r"^[A-Za-z0-9_-]{86}$")
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,26 @@ def canonical_json_bytes(value: object) -> bytes:
         ensure_ascii=False,
         allow_nan=False,
     ).encode("utf-8")
+
+
+def strict_decode_signature_v2(signature: str) -> bytes:
+    """Strictly decode an 86-char unpadded RFC 4648 Base64URL Ed25519 signature."""
+    if type(signature) is not str:
+        raise ValueError("signature must be an exact str")
+    if len(signature) != 86:
+        raise ValueError(f"signature must be exactly 86 characters, got {len(signature)}")
+    if any(c in signature for c in ("=", "+", "/")):
+        raise ValueError("invalid characters in signature")
+    if not _SIGNATURE_V2_RE.match(signature):
+        raise ValueError("signature must be unpadded base64url characters")
+    padding = "=="
+    try:
+        raw = base64.urlsafe_b64decode(signature + padding)
+    except Exception as exc:
+        raise ValueError("invalid base64url signature encoding") from exc
+    if len(raw) != 64:
+        raise ValueError(f"decoded signature length must be 64 bytes, got {len(raw)}")
+    return raw
 
 
 def strict_b64url_decode(value: str, max_len: int = MAX_CONTROL_PAYLOAD_BYTES) -> bytes:
@@ -126,10 +148,88 @@ def calculate_transaction_intent_digest(
     return hashlib.sha256(b"OCTOPUS-C2-INTENT-V2\x00" + body).hexdigest()
 
 
+# ─── V2 Canonicalization Helpers ───────────────────────────────
+
+
+def canonical_unsigned_request_v2(
+    request: ParticipantControlRequestV2 | UnsignedParticipantControlRequestV2,
+) -> dict[str, Any]:
+    """Extract canonical unsigned dictionary from V2 request."""
+    from core.c2.control_commands import (
+        ParticipantControlRequestV2,
+        UnsignedParticipantControlRequestV2,
+    )
+
+    if not isinstance(request, (ParticipantControlRequestV2, UnsignedParticipantControlRequestV2)):
+        raise TypeError(f"expected V2 request, got {type(request).__name__}")
+
+    auth = request.authorization
+    act_val = request.action.value if hasattr(request.action, "value") else str(request.action)
+    return {
+        "action": act_val,
+        "action_id": auth.action_id,
+        "coordinator_revision": int(auth.coordinator_revision),
+        "expected_resource_revision": request.expected_resource_revision
+        if request.expected_resource_revision is not None
+        else -1,
+        "expires_at_ms": int(auth.expires_at_ms),
+        "issued_at_ms": int(auth.issued_at_ms),
+        "key_id": auth.key_id,
+        "mission_id": auth.mission_id,
+        "nonce": auth.nonce,
+        "participant_id": auth.participant_id,
+        "payload_digest": request.payload_digest,
+        "payload_schema_id": request.payload_schema_id,
+        "prior_receipt_digest": request.prior_receipt_digest or "",
+        "prior_receipt_ref": request.prior_receipt_ref or "",
+        "protocol_version": "2.0",
+        "subject_id": auth.subject_id,
+        "transaction_id": auth.transaction_id,
+    }
+
+
+def calculate_request_digest_v2(
+    request: ParticipantControlRequestV2 | UnsignedParticipantControlRequestV2,
+) -> str:
+    """Compute canonical SHA-256 request digest for V2 request."""
+    body = canonical_json_bytes(canonical_unsigned_request_v2(request))
+    return hashlib.sha256(b"OCTOPUS-C2-REQUEST-V2\x00" + body).hexdigest()
+
+
+def canonical_signed_request_v2(
+    request: ParticipantControlRequestV2 | UnsignedParticipantControlRequestV2,
+    request_digest: str | None = None,
+) -> dict[str, Any]:
+    """Extract canonical signed request dictionary for V2 request (includes request_digest, excludes signature)."""
+    d = canonical_unsigned_request_v2(request)
+    d["request_digest"] = request_digest or calculate_request_digest_v2(request)
+    return d
+
+
+def calculate_auth_transcript_v2(
+    request: ParticipantControlRequestV2 | UnsignedParticipantControlRequestV2,
+    request_digest: str | None = None,
+) -> bytes:
+    """Compute canonical authentication transcript bytes for V2 request."""
+    signed_dict = canonical_signed_request_v2(request, request_digest)
+    return b"OCTOPUS-C2-AUTH-V2\x00" + canonical_json_bytes(signed_dict)
+
+
+# ─── Legacy / Compatibility Canonicalization ───────────────────
+
+
 def canonical_unsigned_request_dict(
-    request: ParticipantControlRequestV1 | ParticipantControlRequestV2,
+    request: ParticipantControlRequestV1 | ParticipantControlRequestV2 | UnsignedParticipantControlRequestV2,
 ) -> dict[str, Any]:
     """Extract canonical unsigned authority dictionary from request."""
+    from core.c2.control_commands import (
+        ParticipantControlRequestV2,
+        UnsignedParticipantControlRequestV2,
+    )
+
+    if isinstance(request, (ParticipantControlRequestV2, UnsignedParticipantControlRequestV2)):
+        return canonical_unsigned_request_v2(request)
+
     auth = request.authorization
     act_val = request.action.value if hasattr(request.action, "value") else str(request.action)
     expires_ms = int(getattr(auth, "expires_at_ms", int(getattr(auth, "expires_at", 0) * 1000)))
@@ -143,6 +243,7 @@ def canonical_unsigned_request_dict(
         else -1,
         "expires_at_ms": expires_ms,
         "issued_at_ms": issued_ms,
+        "key_id": auth.key_id,
         "mission_id": auth.mission_id,
         "nonce": auth.nonce,
         "participant_id": auth.participant_id,
@@ -150,7 +251,7 @@ def canonical_unsigned_request_dict(
         "payload_schema_id": request.payload_schema_id,
         "prior_receipt_digest": request.prior_receipt_digest or "",
         "prior_receipt_ref": request.prior_receipt_ref or "",
-        "protocol_version": C2_CONTROL_PROTOCOL_VERSION,
+        "protocol_version": getattr(auth, "protocol_version", C2_CONTROL_PROTOCOL_VERSION),
         "subject_id": auth.subject_id,
         "transaction_id": auth.transaction_id,
     }
@@ -159,14 +260,23 @@ def canonical_unsigned_request_dict(
 canonical_request_dict = canonical_unsigned_request_dict
 
 
-def calculate_canonical_request_digest(request: ParticipantControlRequestV1 | ParticipantControlRequestV2) -> str:
+def calculate_canonical_request_digest(
+    request: ParticipantControlRequestV1 | ParticipantControlRequestV2 | UnsignedParticipantControlRequestV2,
+) -> str:
     """Compute canonical SHA-256 request digest over unsigned canonical request dict."""
+    from core.c2.control_commands import (
+        ParticipantControlRequestV2,
+        UnsignedParticipantControlRequestV2,
+    )
+
+    if isinstance(request, (ParticipantControlRequestV2, UnsignedParticipantControlRequestV2)):
+        return calculate_request_digest_v2(request)
     body = canonical_json_bytes(canonical_unsigned_request_dict(request))
     return hashlib.sha256(b"OCTOPUS-C2-REQUEST-V2\x00" + body).hexdigest()
 
 
 def canonical_signed_request_dict(
-    request: ParticipantControlRequestV1 | ParticipantControlRequestV2,
+    request: ParticipantControlRequestV1 | ParticipantControlRequestV2 | UnsignedParticipantControlRequestV2,
     request_digest: str | None = None,
 ) -> dict[str, Any]:
     """Extract canonical signed request dictionary (including request_digest, excluding signature)."""
@@ -176,10 +286,17 @@ def canonical_signed_request_dict(
 
 
 def calculate_canonical_auth_transcript(
-    request: ParticipantControlRequestV1 | ParticipantControlRequestV2,
+    request: ParticipantControlRequestV1 | ParticipantControlRequestV2 | UnsignedParticipantControlRequestV2,
     request_digest: str | None = None,
 ) -> bytes:
     """Compute canonical transcript to sign for a participant control request."""
+    from core.c2.control_commands import (
+        ParticipantControlRequestV2,
+        UnsignedParticipantControlRequestV2,
+    )
+
+    if isinstance(request, (ParticipantControlRequestV2, UnsignedParticipantControlRequestV2)):
+        return calculate_auth_transcript_v2(request, request_digest)
     signed_dict = canonical_signed_request_dict(request, request_digest)
     return b"OCTOPUS-C2-AUTH-V2\x00" + canonical_json_bytes(signed_dict)
 
@@ -213,6 +330,7 @@ def calculate_request_digest(
             "expected_resource_revision": kwargs.get("expected_resource_revision", -1),
             "expires_at_ms": int(kwargs.get("expires_at_ms", 0)),
             "issued_at_ms": int(kwargs.get("issued_at_ms", 0)),
+            "key_id": kwargs.get("key_id", ""),
             "mission_id": mission_id,
             "nonce": nonce,
             "participant_id": kwargs.get("participant_id", ""),
@@ -220,7 +338,7 @@ def calculate_request_digest(
             "payload_schema_id": kwargs.get("payload_schema_id", "schema:c2_control_v1"),
             "prior_receipt_digest": kwargs.get("prior_receipt_digest", ""),
             "prior_receipt_ref": kwargs.get("prior_receipt_ref", ""),
-            "protocol_version": C2_CONTROL_PROTOCOL_VERSION,
+            "protocol_version": kwargs.get("protocol_version", C2_CONTROL_PROTOCOL_VERSION),
             "subject_id": subject_id,
             "transaction_id": kwargs.get("transaction_id", ""),
         }
@@ -339,12 +457,14 @@ __all__ = [
     "ControlRequestDigest",
     "ParticipantControlPhaseV1",
     "ParticipantControlPhaseV2",
+    "calculate_auth_transcript_v2",
     "calculate_canonical_auth_transcript",
     "calculate_canonical_request_digest",
     "calculate_health_signature_digest",
     "calculate_payload_digest",
     "calculate_receipt_digest",
     "calculate_request_digest",
+    "calculate_request_digest_v2",
     "calculate_response_signature_digest",
     "calculate_schema_bound_payload_digest",
     "calculate_snapshot_digest",
@@ -353,6 +473,9 @@ __all__ = [
     "canonical_request_dict",
     "canonical_response_envelope_dict",
     "canonical_signed_request_dict",
+    "canonical_signed_request_v2",
     "canonical_unsigned_request_dict",
+    "canonical_unsigned_request_v2",
     "strict_b64url_decode",
+    "strict_decode_signature_v2",
 ]

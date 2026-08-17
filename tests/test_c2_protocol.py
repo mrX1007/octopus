@@ -180,18 +180,24 @@ def test_daemon_version_is_owned_by_protocol_constants(monkeypatch, capsys):
 
             import time
 
+            import cryptography.hazmat.primitives.asymmetric.ed25519 as ed25519
+
             from core.c2.control_commands import (
-                C2ControlActionV1,
-                ParticipantControlAuthorizationV1,
-                ParticipantControlRequestV1,
+                C2ControlAction,
+                UnsignedParticipantControlAuthorizationV2,
+                UnsignedParticipantControlRequestV2,
             )
-            from core.c2.control_models import calculate_payload_digest
+            from core.c2.control_models import calculate_schema_bound_payload_digest
             from core.c2.control_protocol import ControlProtocolCodec
-            from core.c2.control_signing import ControlSignerV1
+            from core.c2.control_signing import ControlSignerV2
 
             codec = ControlProtocolCodec()
-            signer = ControlSignerV1("readiness_probe", b"secret_key_12345678901234567890")
-            auth = ParticipantControlAuthorizationV1(
+            priv = ed25519.Ed25519PrivateKey.generate()
+            signer = ControlSignerV2("readiness_probe", priv)
+            now_ms = int(time.time() * 1000)
+            pdig = calculate_schema_bound_payload_digest("schema:test", b"{}")
+            auth = UnsignedParticipantControlAuthorizationV2(
+                protocol_version="2.0",
                 key_id="readiness_probe",
                 transaction_id="tx_prot_1",
                 participant_id="part_test",
@@ -199,17 +205,16 @@ def test_daemon_version_is_owned_by_protocol_constants(monkeypatch, capsys):
                 subject_id="s_test",
                 action_id="ping",
                 coordinator_revision=1,
-                request_digest="placeholder",
-                expires_at=time.time() + 60.0,
+                issued_at_ms=now_ms,
+                expires_at_ms=now_ms + 60000,
                 nonce="nonce_prot_1_1234567890",
-                signature="",
             )
-            req = ParticipantControlRequestV1(
-                action=C2ControlActionV1.PING,
+            req = UnsignedParticipantControlRequestV2(
+                action=C2ControlAction.PING,
                 authorization=auth,
                 payload_schema_id="schema:test",
-                payload_digest=calculate_payload_digest(b""),
-                canonical_payload_b64u="",
+                payload_digest=pdig,
+                canonical_payload_b64u="e30",
             )
             signed_req = signer.sign_participant_request(req)
             framed_req_bytes = codec.encode_request(signed_req)

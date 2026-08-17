@@ -7,10 +7,10 @@ import time
 import pytest
 
 from core.c2.control_commands import (
-    C2ControlActionV1,
-    ParticipantControlAuthorizationV1,
-    ParticipantControlReceiptV1,
-    ParticipantControlRequestV1,
+    C2ControlAction,
+    ParticipantControlAuthorizationV2,
+    ParticipantControlReceiptV2,
+    ParticipantControlRequestV2,
 )
 from core.c2.enrollment import EnrollmentAuthority
 from core.c2.resource_participant import C2DaemonResourceParticipant
@@ -57,7 +57,9 @@ def test_enrollment_authority_invalid_signature(tmp_path):
 
 def test_enrollment_transaction_participant_2pc():
     participant = C2DaemonResourceParticipant("enrollment_participant")
-    auth = ParticipantControlAuthorizationV1(
+    now_ms = int(time.time() * 1000)
+    auth = ParticipantControlAuthorizationV2(
+        protocol_version="2.0",
         key_id="k1",
         transaction_id="tx_enr_1",
         participant_id="enrollment_participant",
@@ -66,12 +68,13 @@ def test_enrollment_transaction_participant_2pc():
         action_id="prepare_enrollment_deployment",
         coordinator_revision=1,
         request_digest="0" * 64,
-        expires_at=time.time() + 300,
+        issued_at_ms=now_ms,
+        expires_at_ms=now_ms + 100000,
         nonce="nonce_enr_12345678",
-        signature="0" * 64,
+        signature="0" * 86,
     )
-    req = ParticipantControlRequestV1(
-        action=C2ControlActionV1.PREPARE_ENROLLMENT_DEPLOYMENT,
+    req = ParticipantControlRequestV2(
+        action=C2ControlAction.PREPARE_ENROLLMENT_DEPLOYMENT,
         authorization=auth,
         payload_schema_id="s1",
         payload_digest="0" * 64,
@@ -79,6 +82,15 @@ def test_enrollment_transaction_participant_2pc():
     )
 
     prep = participant.prepare(req)
-    assert isinstance(prep, ParticipantControlReceiptV1)
-    commit = participant.commit(req)
-    assert isinstance(commit, ParticipantControlReceiptV1)
+    assert isinstance(prep, ParticipantControlReceiptV2)
+    commit_req = ParticipantControlRequestV2(
+        action=C2ControlAction.COMMIT_ENROLLMENT_DEPLOYMENT,
+        authorization=auth,
+        payload_schema_id="s1",
+        payload_digest="0" * 64,
+        canonical_payload_b64u="e30",
+        prior_receipt_ref=prep.receipt_ref,
+        prior_receipt_digest=prep.receipt_digest,
+    )
+    commit = participant.commit(commit_req)
+    assert isinstance(commit, ParticipantControlReceiptV2)

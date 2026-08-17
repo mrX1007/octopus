@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from core.c2.client import DefaultC2ControlClient
-from core.c2.control_signing import ControlSignerV1
+from core.c2.control_signing import ControlSignerV2
 from core.providers.c2_cleanup import C2CleanupProvider
 from core.providers.c2_deploy import C2DeployProvider
 from core.providers.c2_enroll import C2EnrollProvider
@@ -46,10 +47,14 @@ def test_c2_lifecycle_e2e_full_flow():
 
 
 def test_c2_lifecycle_client_integration():
-    signer = ControlSignerV1("key_e2e", b"secret_e2e_key_1234567890123456")
+    priv = ed25519.Ed25519PrivateKey.generate()
+    signer = ControlSignerV2("key_e2e", priv)
+    mock_transport = DefaultC2ControlClient.create_mock_loopback_transport()
     client = DefaultC2ControlClient(
         signer=signer,
-        transport_handler=DefaultC2ControlClient.create_mock_loopback_transport(),
+        transport_handler=mock_transport,
+        daemon_verifier=getattr(mock_transport, "_mock_verifier", None),
+        expected_service_id=getattr(mock_transport, "_mock_service_id", None),
     )
 
     ping_res = client.ping(mission_id="m_e2e", subject_id="sub_e2e")

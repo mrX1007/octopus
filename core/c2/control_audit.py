@@ -50,6 +50,9 @@ class ControlAuditEventV1:
     is_replay: bool
 
 
+ControlAuditEventV2 = ControlAuditEventV1
+
+
 def redact_sensitive_text(text: str) -> str:
     """Redact sensitive keys/tokens from plain text strings."""
     redacted = text
@@ -133,3 +136,17 @@ class ControlAuditLoggerV1:
             if operator_id is not None:
                 events = [e for e in events if e.operator_id == operator_id]
             return list(events[-limit:])
+
+
+ControlAuditLoggerV2 = ControlAuditLoggerV1
+
+__all__ = [
+    "FORBIDDEN_FIELDS",
+    "SENSITIVE_PATTERNS",
+    "ControlAuditEventV1",
+    "ControlAuditEventV2",
+    "ControlAuditLoggerV1",
+    "ControlAuditLoggerV2",
+    "redact_sensitive_dict",
+    "redact_sensitive_text",
+]

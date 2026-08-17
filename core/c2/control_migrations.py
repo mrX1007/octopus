@@ -270,17 +270,31 @@ def _compute_step_checksum(step: MigrationStep) -> str:
     return step.checksum
 
 
+def resolve_sqlite_uri(path: str) -> tuple[str, str, bool]:
+    """Classify and resolve SQLite target URI.
+
+    Returns (connect_target, physical_path_or_empty, is_memory).
+    """
+    if path == ":memory:":
+        return (":memory:", "", True)
+    if path.startswith("file:"):
+        if "mode=memory" in path:
+            return (path, "", True)
+        parsed_path = path[5:].split("?", 1)[0]
+        return (path, parsed_path, False)
+    return (os.path.abspath(path), os.path.abspath(path), False)
+
+
 def create_preflight_backup(db_path: str) -> str | None:
     """Create a backup of a file-backed SQLite database using the SQLite Backup API before migration."""
-    if db_path == ":memory:" or db_path.startswith("file:"):
-        return None
-    if not os.path.exists(db_path):
+    _connect_target, physical_path, is_memory = resolve_sqlite_uri(db_path)
+    if is_memory or not physical_path or not os.path.exists(physical_path):
         return None
 
-    parent_dir = os.path.dirname(os.path.abspath(db_path))
-    backup_path = f"{db_path}.bak.{int(time.time() * 1000)}"
+    parent_dir = os.path.dirname(physical_path)
+    backup_path = f"{physical_path}.bak.{int(time.time() * 1000)}"
 
-    src = sqlite3.connect(f"file:{os.path.abspath(db_path)}?mode=ro", uri=True)
+    src = sqlite3.connect(f"file:{physical_path}?mode=ro", uri=True)
     dst = sqlite3.connect(backup_path)
     try:
         src.backup(dst)
@@ -294,9 +308,10 @@ def create_preflight_backup(db_path: str) -> str | None:
         dst.close()
 
     try:
-        dir_fd = os.open(parent_dir, os.O_RDONLY)
-        os.fsync(dir_fd)
-        os.close(dir_fd)
+        if parent_dir:
+            dir_fd = os.open(parent_dir, os.O_RDONLY)
+            os.fsync(dir_fd)
+            os.close(dir_fd)
     except Exception:
         pass
 
@@ -366,11 +381,12 @@ def apply_control_migrations(conn: sqlite3.Connection) -> int:
 def migrate_control_database(db_path: str) -> MigrationResult:
     """Top-level path-aware runner: preflight backup -> integrity check -> BEGIN IMMEDIATE -> migrations -> commit."""
     backup_path = create_preflight_backup(db_path)
+    connect_target, _, is_memory = resolve_sqlite_uri(db_path)
 
-    if db_path.startswith("file:") or db_path == ":memory:":
-        conn = sqlite3.connect(db_path, uri=True, timeout=30.0)
+    if connect_target.startswith("file:") or is_memory:
+        conn = sqlite3.connect(connect_target, uri=True, timeout=30.0)
     else:
-        conn = sqlite3.connect(db_path, timeout=30.0)
+        conn = sqlite3.connect(connect_target, timeout=30.0)
 
     conn.isolation_level = None
     conn.execute("PRAGMA busy_timeout=30000")
@@ -405,5 +421,6 @@ __all__ = [
     "apply_control_migrations",
     "create_preflight_backup",
     "migrate_control_database",
+    "resolve_sqlite_uri",
     "verify_schema_ready",
 ]

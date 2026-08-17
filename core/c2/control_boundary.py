@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import socket
 import sqlite3
@@ -25,19 +24,18 @@ from core.c2.control_auth import (
     PeerPrincipal,
 )
 from core.c2.control_commands import (
-    ParticipantControlRequestV1,
     ParticipantControlRequestV2,
 )
 from core.c2.control_migrations import apply_control_migrations
 from core.c2.control_models import (
     MAX_CONTROL_PAYLOAD_BYTES,
-    calculate_canonical_auth_transcript,
-    calculate_canonical_request_digest,
+    calculate_auth_transcript_v2,
+    calculate_request_digest_v2,
     calculate_schema_bound_payload_digest,
     strict_b64url_decode,
+    strict_decode_signature_v2,
 )
 from core.c2.control_rbac import ControlRBACPolicy
-from core.c2.control_signing import _decode_sig_bytes
 
 MAX_REPLAY_ACTIVE_NONCES = 100_000
 
@@ -67,12 +65,16 @@ ForbiddenControlRequest = NotAuthorizedControlRequest
 class ResolvedControlKey:
     key_id: str
     operator_id: str
-    verification_key: bytes
+    verification_key: bytes  # strictly 32 bytes
     algorithm: str = "ed25519"
     key_revision: int = 1
     valid_from_ms: int = 0
     valid_until_ms: int = 253402300799000
     active: bool = True
+
+    def __post_init__(self) -> None:
+        if len(self.verification_key) != 32:
+            raise ValueError(f"verification_key must be exactly 32 bytes, got {len(self.verification_key)}")
 
     def is_valid(self, now_ms: int | None = None) -> bool:
         if not self.active:
@@ -85,7 +87,7 @@ class ResolvedControlKey:
 class VerifiedControlRequest:
     """Authority-bearing verified request passed to internal handlers."""
 
-    request: ParticipantControlRequestV1 | ParticipantControlRequestV2
+    request: ParticipantControlRequestV2
     peer: PeerPrincipal
     principal: AuthenticatedControlPrincipal
     payload_bytes: bytes
@@ -110,15 +112,20 @@ class StaticControlKeyResolver:
 
     def register_key(self, key_id: str, key_bytes: bytes | ResolvedControlKey) -> None:
         if isinstance(key_bytes, ResolvedControlKey):
+            if len(key_bytes.verification_key) != 32:
+                raise ValueError("verification_key must be exactly 32 bytes")
             self._keys[key_id] = key_bytes
-        else:
-            raw = key_bytes if len(key_bytes) == 32 else hashlib.sha256(key_bytes).digest()
+        elif isinstance(key_bytes, (bytes, bytearray)):
+            if len(key_bytes) != 32:
+                raise ValueError(f"verification_key must be exactly 32 bytes, got {len(key_bytes)}")
             self._keys[key_id] = ResolvedControlKey(
                 key_id=key_id,
                 operator_id=f"op_{key_id}",
-                verification_key=raw,
+                verification_key=bytes(key_bytes),
                 algorithm="ed25519",
             )
+        else:
+            raise TypeError("key_bytes must be bytes (32) or ResolvedControlKey")
 
     def require_key(self, key_id: str, *, now: float) -> ResolvedControlKey:
         key = self._keys.get(key_id)
@@ -128,7 +135,7 @@ class StaticControlKeyResolver:
 
 
 class ControlVerificationKeyStore:
-    """Persistent SQLite store for operator control verification keys."""
+    """Persistent SQLite store for operator control verification keys (strictly 32-byte Ed25519 keys)."""
 
     def __init__(self, db_path: str) -> None:
         self.db_path = db_path
@@ -182,7 +189,11 @@ class ControlVerificationKeyStore:
         valid_until_ms: int = 253402300799000,
         key_revision: int = 1,
     ) -> None:
-        key_raw = verification_key if len(verification_key) == 32 else hashlib.sha256(verification_key).digest()
+        if not isinstance(verification_key, (bytes, bytearray)) or len(verification_key) != 32:
+            raise ValueError(
+                f"verification_key must be exactly 32 bytes, got {len(verification_key) if isinstance(verification_key, (bytes, bytearray)) else type(verification_key)}"
+            )
+        raw_pub = bytes(verification_key)
         algo = "ed25519"
 
         with self._lock, self._connection() as conn:
@@ -204,7 +215,7 @@ class ControlVerificationKeyStore:
                 (
                     key_id,
                     operator_id,
-                    key_raw,
+                    raw_pub,
                     algo,
                     key_revision,
                     valid_from_ms,
@@ -387,9 +398,10 @@ def extract_peer_principal(
     sol_local = getattr(socket, "SOL_LOCAL", 0)
     local_peercred = 0x001
     try:
-        raw = conn.getsockopt(sol_local, local_peercred, 16)
-        if len(raw) >= 12:
-            _, cr_uid, _, cr_gid = struct.unpack("IIII", raw[:16])
+        raw = conn.getsockopt(sol_local, local_peercred, 128)
+        if len(raw) >= 16:
+            _, cr_uid = struct.unpack("II", raw[:8])
+            cr_gid = struct.unpack("I", raw[12:16])[0]
             return PeerPrincipal(pid=0, uid=cr_uid, gid=cr_gid)
     except (OSError, AttributeError):
         pass
@@ -530,7 +542,7 @@ class ControlReplayStore:
 
 
 class FramedControlBoundary:
-    """Unified server-side boundary enforcing strict Ed25519-only authorization."""
+    """Unified server-side boundary enforcing strict Ed25519-only authorization for V2 requests."""
 
     def __init__(
         self,
@@ -554,7 +566,7 @@ class FramedControlBoundary:
 
     def authorize(
         self,
-        request: ParticipantControlRequestV1 | ParticipantControlRequestV2,
+        request: ParticipantControlRequestV2,
         peer: PeerPrincipal,
     ) -> VerifiedControlRequest:
         """Execute strict authorization and return VerifiedControlRequest."""
@@ -562,12 +574,14 @@ class FramedControlBoundary:
         now_ms = int(now * 1000)
 
         # 1. Validate request shape and bounds
-        if not isinstance(request, (ParticipantControlRequestV1, ParticipantControlRequestV2)):
+        if not isinstance(request, ParticipantControlRequestV2):
             raise MalformedControlRequest("invalid_request_instance")
         auth = request.authorization
+        if auth.protocol_version != "2.0":
+            raise MalformedControlRequest("unsupported_protocol_version")
 
         # 2. Validate authorization window & TTL
-        expires_ms = getattr(auth, "expires_at_ms", int(getattr(auth, "expires_at", 0) * 1000))
+        expires_ms = auth.expires_at_ms
 
         if expires_ms <= 0:
             raise MalformedControlRequest("invalid_expires_at")
@@ -589,16 +603,10 @@ class FramedControlBoundary:
 
         actual_payload_digest = calculate_schema_bound_payload_digest(request.payload_schema_id, payload_bytes)
         if not hmac.compare_digest(actual_payload_digest, request.payload_digest):
-            raw_digest = hashlib.sha256(payload_bytes).hexdigest()
-            if isinstance(request, ParticipantControlRequestV1) and hmac.compare_digest(
-                raw_digest, request.payload_digest
-            ):
-                pass
-            else:
-                raise NotAuthorizedControlRequest("payload_digest_mismatch")
+            raise NotAuthorizedControlRequest("payload_digest_mismatch")
 
         # 5. Recalculate and verify request digest
-        actual_request_digest = calculate_canonical_request_digest(request)
+        actual_request_digest = calculate_request_digest_v2(request)
         if not hmac.compare_digest(actual_request_digest, auth.request_digest):
             raise NotAuthorizedControlRequest("request_digest_mismatch")
 
@@ -614,20 +622,17 @@ class FramedControlBoundary:
             raise NotAuthorizedControlRequest("invalid_key_algorithm")
 
         # 7. Strictly verify Ed25519 signature
-        sig_bytes = _decode_sig_bytes(auth.signature)
-        if len(sig_bytes) != 64:
-            raise NotAuthorizedControlRequest("invalid_request_signature")
+        try:
+            sig_bytes = strict_decode_signature_v2(auth.signature)
+        except Exception as exc:
+            raise NotAuthorizedControlRequest("invalid_request_signature") from exc
 
-        transcript = calculate_canonical_auth_transcript(request, actual_request_digest)
+        transcript = calculate_auth_transcript_v2(request, actual_request_digest)
         try:
             public_key = ed25519.Ed25519PublicKey.from_public_bytes(resolved_key.verification_key)
             public_key.verify(sig_bytes, transcript)
-        except Exception:
-            try:
-                priv = ed25519.Ed25519PrivateKey.from_private_bytes(resolved_key.verification_key)
-                priv.public_key().verify(sig_bytes, transcript)
-            except Exception as exc:
-                raise NotAuthorizedControlRequest("invalid_request_signature") from exc
+        except Exception as exc:
+            raise NotAuthorizedControlRequest("invalid_request_signature") from exc
 
         # 8. Resolve principal (read-only)
         try:

@@ -19,17 +19,17 @@ from core.c2 import daemon
 from core.c2.client import DefaultC2ControlClient
 from core.c2.control_boundary import ControlVerificationKeyStore
 from core.c2.control_commands import (
-    C2ControlActionV1,
-    ParticipantControlAuthorizationV1,
-    ParticipantControlPhaseV1,
-    ParticipantControlReceiptV1,
-    ParticipantControlRequestV1,
-    SignedControlResponseV1,
+    C2ControlAction,
+    ParticipantControlPhaseV2,
+    ParticipantControlReceiptV2,
+    SignedControlResponseV2,
+    UnsignedParticipantControlAuthorizationV2,
+    UnsignedParticipantControlRequestV2,
 )
-from core.c2.control_models import calculate_payload_digest, strict_b64url_decode
+from core.c2.control_models import calculate_schema_bound_payload_digest, strict_b64url_decode
 from core.c2.control_protocol import ControlProtocolCodec
 from core.c2.control_signing import (
-    ControlSignerV1,
+    ControlSignerV2,
     DaemonResponseVerifier,
 )
 from core.c2.grant_service import GrantService
@@ -38,7 +38,9 @@ from core.c2.operators import OperatorManager
 pytestmark = [pytest.mark.integration, pytest.mark.security]
 
 TEST_OPERATOR_KEY_ID = "op_key_e2e_1"
-TEST_OPERATOR_SECRET = b"secret_key_12345678901234567890"
+_ED_PRIV = ed25519.Ed25519PrivateKey.generate()
+TEST_OPERATOR_SECRET = _ED_PRIV.private_bytes_raw()
+TEST_OPERATOR_PUB = _ED_PRIV.public_key().public_bytes_raw()
 
 
 def _wait_for_socket(sock_path: str, timeout: float = 10.0) -> bool:
@@ -70,8 +72,8 @@ def _setup_operator_state(db_path: str) -> None:
     key_store.register_key(
         key_id=TEST_OPERATOR_KEY_ID,
         operator_id="op_e2e",
-        verification_key=TEST_OPERATOR_SECRET,
-        algorithm="hmac-sha256",
+        verification_key=TEST_OPERATOR_PUB,
+        algorithm="ed25519",
     )
 
     # 3. Bind current peer UID/GID
@@ -94,7 +96,7 @@ def test_c2_socketpair_lifecycle_and_restart_persistence(tmp_path, monkeypatch):
 
     _setup_operator_state(db_file)
 
-    signer = ControlSignerV1(TEST_OPERATOR_KEY_ID, TEST_OPERATOR_SECRET)
+    signer = ControlSignerV2(TEST_OPERATOR_KEY_ID, TEST_OPERATOR_SECRET)
     daemon_pub = daemon.get_daemon_response_public_key()
     verifier = DaemonResponseVerifier(trusted_keys={"daemon_resp_key_1": daemon_pub})
 
@@ -129,50 +131,55 @@ def test_c2_socketpair_lifecycle_and_restart_persistence(tmp_path, monkeypatch):
         signer=signer,
         transport_handler=_transport_handler,
         daemon_verifier=verifier,
+        expected_service_id=daemon.get_service_id(),
     )
 
     # 1. Ping
     ping_res = client1.ping(mission_id="m_1", subject_id="s_e2e")
-    assert isinstance(ping_res, ParticipantControlReceiptV1)
+    assert isinstance(ping_res, ParticipantControlReceiptV2)
 
     # 2. 2PC Lifecycle
     tx_id = f"tx_{uuid.uuid4().hex[:8]}"
     prep = client1.execute_action(
-        action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+        action=C2ControlAction.PREPARE_C2_RESOURCE,
         payload={"target": "alpha"},
         mission_id="m_1",
         subject_id="s_e2e",
         transaction_id=tx_id,
     )
-    assert isinstance(prep, ParticipantControlReceiptV1)
+    assert isinstance(prep, ParticipantControlReceiptV2)
 
     commit = client1.execute_action(
-        action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+        action=C2ControlAction.COMMIT_C2_RESOURCE,
         payload={"target": "alpha"},
         mission_id="m_1",
         subject_id="s_e2e",
         transaction_id=tx_id,
+        prior_receipt_ref=prep.receipt_ref,
+        prior_receipt_digest=prep.receipt_digest,
     )
-    assert isinstance(commit, ParticipantControlReceiptV1)
+    assert isinstance(commit, ParticipantControlReceiptV2)
 
     fin = client1.execute_action(
-        action=C2ControlActionV1.FINALIZE_C2_RESOURCE_VISIBILITY,
+        action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
         payload={"target": "alpha"},
         mission_id="m_1",
         subject_id="s_e2e",
         transaction_id=tx_id,
+        prior_receipt_ref=commit.receipt_ref,
+        prior_receipt_digest=commit.receipt_digest,
     )
-    assert isinstance(fin, ParticipantControlReceiptV1)
+    assert isinstance(fin, ParticipantControlReceiptV2)
 
     # Query snapshot
     snap1 = client1.execute_action(
-        action=C2ControlActionV1.QUERY_C2_RESOURCE,
+        action=C2ControlAction.QUERY_C2_RESOURCE,
         payload={},
         mission_id="m_1",
         subject_id="s_e2e",
         transaction_id=tx_id,
     )
-    assert snap1.phase == ParticipantControlPhaseV1.FINALIZED_VISIBLE
+    assert snap1.phase == ParticipantControlPhaseV2.FINALIZED_VISIBLE
     assert snap1.transaction_id == tx_id
 
     # Instance 2 (Simulating Restart): Reset daemon singletons pointing to same db_file
@@ -182,13 +189,13 @@ def test_c2_socketpair_lifecycle_and_restart_persistence(tmp_path, monkeypatch):
     monkeypatch.setattr(daemon, "_control_boundary_instance", None)
 
     snap2 = client1.execute_action(
-        action=C2ControlActionV1.QUERY_C2_RESOURCE,
+        action=C2ControlAction.QUERY_C2_RESOURCE,
         payload={},
         mission_id="m_1",
         subject_id="s_e2e",
         transaction_id=tx_id,
     )
-    assert snap2.phase == ParticipantControlPhaseV1.FINALIZED_VISIBLE
+    assert snap2.phase == ParticipantControlPhaseV2.FINALIZED_VISIBLE
     assert snap2.transaction_id == tx_id
 
 
@@ -212,6 +219,26 @@ def test_c2_subprocess_lifecycle_and_restart_persistence(tmp_path):
 
     # Seed DB
     _setup_operator_state(db_path)
+
+    daemon_priv = ed25519.Ed25519PrivateKey.generate()
+    daemon_priv_bytes = daemon_priv.private_bytes(
+        serialization.Encoding.Raw,
+        serialization.PrivateFormat.Raw,
+        serialization.NoEncryption(),
+    )
+    daemon_pub_bytes = daemon_priv.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    subproc_service_id = f"srv_e2e_{uuid.uuid4().hex[:8]}"
+
+    daemon_resp_key_file = os.path.join(key_dir, "control-response.key")
+    with open(daemon_resp_key_file, "wb") as f:
+        f.write(daemon_priv_bytes)
+
+    service_id_file = os.path.join(key_dir, "service_id")
+    with open(service_id_file, "w") as f:
+        f.write(subproc_service_id)
 
     python_path = os.pathsep.join(p for p in [project_root, os.environ.get("PYTHONPATH", "")] if p)
 
@@ -242,72 +269,69 @@ def test_c2_subprocess_lifecycle_and_restart_persistence(tmp_path):
             stdout, stderr = proc1.communicate(timeout=2.0)
             pytest.fail(f"Daemon socket not created in time. stdout: {stdout.decode()}, stderr: {stderr.decode()}")
 
-        daemon_resp_key_file = os.path.join(key_dir, "control-response.key")
-        while not os.path.exists(daemon_resp_key_file):
-            time.sleep(0.05)
+        verifier = DaemonResponseVerifier(trusted_keys={"daemon_resp_key_1": daemon_pub_bytes})
 
-        with open(daemon_resp_key_file, "rb") as f:
-            resp_priv_bytes = f.read()
-        resp_priv = ed25519.Ed25519PrivateKey.from_private_bytes(resp_priv_bytes)
-        resp_pub = resp_priv.public_key().public_bytes(
-            serialization.Encoding.Raw,
-            serialization.PublicFormat.Raw,
-        )
-        verifier = DaemonResponseVerifier(trusted_keys={"daemon_resp_key_1": resp_pub})
-
-        signer = ControlSignerV1(TEST_OPERATOR_KEY_ID, TEST_OPERATOR_SECRET)
+        signer = ControlSignerV2(TEST_OPERATOR_KEY_ID, TEST_OPERATOR_SECRET)
         client = DefaultC2ControlClient(
             signer=signer,
             socket_path=sock_path,
             daemon_verifier=verifier,
+            expected_service_id=subproc_service_id,
         )
 
         # 2. Test PING over UDS
         ping_res = client.ping(mission_id="m_e2e", subject_id="s_e2e")
-        assert isinstance(ping_res, ParticipantControlReceiptV1)
-        assert ping_res.action == C2ControlActionV1.PING
+        assert isinstance(ping_res, ParticipantControlReceiptV2)
+        assert ping_res.action == C2ControlAction.PING
 
         # 3. Test 2PC Transaction Lifecycle (Prepare -> Commit -> Finalize Visibility)
         tx_id = f"tx_e2e_{uuid.uuid4().hex[:8]}"
 
         # Prepare
         prep_res = client.execute_action(
-            action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+            action=C2ControlAction.PREPARE_C2_RESOURCE,
             payload={"resource_type": "build_target", "name": "agent_alpha"},
             mission_id="m_e2e",
             subject_id="s_e2e",
             transaction_id=tx_id,
         )
-        assert isinstance(prep_res, ParticipantControlReceiptV1)
+        assert isinstance(prep_res, ParticipantControlReceiptV2)
         assert prep_res.transaction_id == tx_id
 
         # Commit
         commit_res = client.execute_action(
-            action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+            action=C2ControlAction.COMMIT_C2_RESOURCE,
             payload={"resource_type": "build_target", "name": "agent_alpha"},
             mission_id="m_e2e",
             subject_id="s_e2e",
             transaction_id=tx_id,
+            prior_receipt_ref=prep_res.receipt_ref,
+            prior_receipt_digest=prep_res.receipt_digest,
         )
-        assert isinstance(commit_res, ParticipantControlReceiptV1)
+        assert isinstance(commit_res, ParticipantControlReceiptV2)
         assert commit_res.resource_revision == 1
 
         # Finalize Visibility
         fin_res = client.execute_action(
-            action=C2ControlActionV1.FINALIZE_C2_RESOURCE_VISIBILITY,
+            action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
             payload={"resource_type": "build_target", "name": "agent_alpha"},
             mission_id="m_e2e",
             subject_id="s_e2e",
             transaction_id=tx_id,
+            prior_receipt_ref=commit_res.receipt_ref,
+            prior_receipt_digest=commit_res.receipt_digest,
         )
-        assert isinstance(fin_res, ParticipantControlReceiptV1)
+        assert isinstance(fin_res, ParticipantControlReceiptV2)
 
         # Save an exact raw signed request frame to test replay rejection across restarts
         replay_tx = f"tx_replay_{uuid.uuid4().hex[:8]}"
         codec = ControlProtocolCodec()
-        raw_req = ParticipantControlRequestV1(
-            action=C2ControlActionV1.PING,
-            authorization=ParticipantControlAuthorizationV1(
+        now_ms = int(time.time() * 1000)
+        pdig = calculate_schema_bound_payload_digest("schema:test", b"{}")
+        raw_req = UnsignedParticipantControlRequestV2(
+            action=C2ControlAction.PING,
+            authorization=UnsignedParticipantControlAuthorizationV2(
+                protocol_version="2.0",
                 key_id=TEST_OPERATOR_KEY_ID,
                 transaction_id=replay_tx,
                 participant_id="c2_daemon",
@@ -315,14 +339,13 @@ def test_c2_subprocess_lifecycle_and_restart_persistence(tmp_path):
                 subject_id="s_e2e",
                 action_id="ping",
                 coordinator_revision=1,
-                request_digest="req_dig_1",
-                expires_at=time.time() + 300.0,
+                issued_at_ms=now_ms,
+                expires_at_ms=now_ms + 300000,
                 nonce=f"nonce_replay_save_{uuid.uuid4().hex[:8]}",
-                signature="",
             ),
-            payload_schema_id="schema:c2_control_v1",
-            payload_digest=calculate_payload_digest(b""),
-            canonical_payload_b64u="",
+            payload_schema_id="schema:test",
+            payload_digest=pdig,
+            canonical_payload_b64u="e30",
         )
         signed_raw_req = signer.sign_participant_request(raw_req)
         saved_raw_request_frame = codec.encode_request(signed_raw_req)
@@ -333,7 +356,7 @@ def test_c2_subprocess_lifecycle_and_restart_persistence(tmp_path):
             s.sendall(saved_raw_request_frame)
             resp_b = s.recv(4096)
             decoded_resp = codec.decode_response(resp_b)
-            assert isinstance(decoded_resp, SignedControlResponseV1)
+            assert isinstance(decoded_resp, SignedControlResponseV2)
             inner_bytes = strict_b64url_decode(decoded_resp.response_payload_b64u)
             assert b"receipt" in inner_bytes
 
@@ -359,18 +382,19 @@ def test_c2_subprocess_lifecycle_and_restart_persistence(tmp_path):
             signer=signer,
             socket_path=sock_path,
             daemon_verifier=verifier,
+            expected_service_id=subproc_service_id,
         )
 
         # Verify previous 2PC state survived restart
         snap_after_restart = client2.execute_action(
-            action=C2ControlActionV1.QUERY_C2_RESOURCE,
+            action=C2ControlAction.QUERY_C2_RESOURCE,
             payload={},
             mission_id="m_e2e",
             subject_id="s_e2e",
             transaction_id=tx_id,
         )
         assert hasattr(snap_after_restart, "phase")
-        assert snap_after_restart.phase == ParticipantControlPhaseV1.FINALIZED_VISIBLE
+        assert snap_after_restart.phase == ParticipantControlPhaseV2.FINALIZED_VISIBLE
         assert snap_after_restart.transaction_id == tx_id
 
         # Re-send exact raw request frame to process 2 -> assert REPLAY rejection
@@ -379,7 +403,7 @@ def test_c2_subprocess_lifecycle_and_restart_persistence(tmp_path):
             s.sendall(saved_raw_request_frame)
             resp_b = s.recv(4096)
             decoded_resp = codec.decode_response(resp_b)
-            assert isinstance(decoded_resp, SignedControlResponseV1)
+            assert isinstance(decoded_resp, SignedControlResponseV2)
             inner_bytes = strict_b64url_decode(decoded_resp.response_payload_b64u)
             assert b"replay" in inner_bytes.lower()
 

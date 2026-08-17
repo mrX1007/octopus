@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
-from core.c2.control_commands import C2ControlActionV1
+from core.c2.control_commands import C2ControlAction
 from core.c2.control_peer import PeerPrincipal
 from core.secrets import SecretValue
 
@@ -136,7 +136,7 @@ _ADMIN_ONLY_ACTIONS = {
     "sync_operator_mission_grants",
     "revoke_operator_mission_grant",
 }
-_KNOWN_ACTIONS = {action.value for action in C2ControlActionV1}
+_KNOWN_ACTIONS = {action.value for action in C2ControlAction}
 
 
 class ControlAuthenticatorV1:
@@ -323,12 +323,12 @@ class ControlAuthenticatorV1:
     def check_permission(
         self,
         principal: AuthenticatedControlPrincipal,
-        action: C2ControlActionV1 | str,
+        action: C2ControlAction | str,
         now: float | None = None,
     ) -> bool:
         if not self.is_current_principal(principal, now):
             return False
-        action_value = action.value if isinstance(action, C2ControlActionV1) else str(action)
+        action_value = action.value if isinstance(action, C2ControlAction) else str(action)
         if action_value not in _KNOWN_ACTIONS:
             return False
         if principal.role is OperatorRole.ADMIN:

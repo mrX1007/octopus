@@ -7,10 +7,10 @@ import time
 import pytest
 
 from core.c2.control_commands import (
-    C2ControlActionV1,
-    ParticipantControlAuthorizationV1,
-    ParticipantControlReceiptV1,
-    ParticipantControlRequestV1,
+    C2ControlAction,
+    ParticipantControlAuthorizationV2,
+    ParticipantControlReceiptV2,
+    ParticipantControlRequestV2,
 )
 from core.c2.deployment import C2DeploymentService
 from core.c2.resource_participant import C2DaemonResourceParticipant
@@ -30,7 +30,9 @@ def test_deployment_service_idempotent_deploy():
 
 def test_resource_participant_idempotent_commit():
     participant = C2DaemonResourceParticipant("deploy_part")
-    auth = ParticipantControlAuthorizationV1(
+    now_ms = int(time.time() * 1000)
+    auth = ParticipantControlAuthorizationV2(
+        protocol_version="2.0",
         key_id="k1",
         transaction_id="tx_exact_1",
         participant_id="deploy_part",
@@ -39,12 +41,13 @@ def test_resource_participant_idempotent_commit():
         action_id="commit_enrollment_deployment",
         coordinator_revision=1,
         request_digest="0" * 64,
-        expires_at=time.time() + 300,
+        issued_at_ms=now_ms,
+        expires_at_ms=now_ms + 100000,
         nonce="nonce_exact_12345678",
-        signature="0" * 64,
+        signature="0" * 86,
     )
-    req = ParticipantControlRequestV1(
-        action=C2ControlActionV1.COMMIT_ENROLLMENT_DEPLOYMENT,
+    req = ParticipantControlRequestV2(
+        action=C2ControlAction.COMMIT_ENROLLMENT_DEPLOYMENT,
         authorization=auth,
         payload_schema_id="s1",
         payload_digest="0" * 64,
@@ -52,11 +55,20 @@ def test_resource_participant_idempotent_commit():
     )
 
     # First prepare & commit
-    participant.prepare(req)
-    c1 = participant.commit(req)
-    assert isinstance(c1, ParticipantControlReceiptV1)
+    prep = participant.prepare(req)
+    commit_req = ParticipantControlRequestV2(
+        action=C2ControlAction.COMMIT_ENROLLMENT_DEPLOYMENT,
+        authorization=auth,
+        payload_schema_id="s1",
+        payload_digest="0" * 64,
+        canonical_payload_b64u="e30",
+        prior_receipt_ref=prep.receipt_ref,
+        prior_receipt_digest=prep.receipt_digest,
+    )
+    c1 = participant.commit(commit_req)
+    assert isinstance(c1, ParticipantControlReceiptV2)
 
     # Duplicate commit returns same receipt idempotently
-    c2 = participant.commit(req)
-    assert isinstance(c2, ParticipantControlReceiptV1)
+    c2 = participant.commit(commit_req)
+    assert isinstance(c2, ParticipantControlReceiptV2)
     assert c1.receipt_digest == c2.receipt_digest

@@ -32,15 +32,21 @@ from core.c2.control_boundary import (
 )
 from core.c2.control_commands import (
     BoundedControlErrorV1,
-    C2ControlActionV1,
+    BoundedControlErrorV2,
+    C2ControlAction,
     C2ControlErrorCodeV1,
+    C2ControlErrorCodeV2,
     ParticipantControlAuthorizationV2,
     ParticipantControlPhaseV1,
     ParticipantControlPhaseV2,
     ParticipantControlQuerySnapshotV1,
+    ParticipantControlQuerySnapshotV2,
     ParticipantControlReceiptV1,
+    ParticipantControlReceiptV2,
     ParticipantControlRequestV2,
     SignedControlResponseV2,
+    UnsignedParticipantControlAuthorizationV2,
+    UnsignedParticipantControlRequestV2,
 )
 from core.c2.control_health import (
     HealthRequestV2,
@@ -64,7 +70,6 @@ from core.c2.control_models import (
     strict_b64url_decode,
 )
 from core.c2.control_signing import (
-    ControlSignerV1,
     ControlSignerV2,
     ControlVerifierV2,
     DaemonResponseSigner,
@@ -86,7 +91,7 @@ TEST_KEY_ID = "k_test_62"
 
 
 def _make_auth_v2(
-    action: str | C2ControlActionV1 = "ping",
+    action: str | C2ControlAction = "ping",
     tx_id: str = "tx_62",
     nonce: str = "nonce_12345678901234",
     key_id: str = TEST_KEY_ID,
@@ -104,20 +109,14 @@ def _make_auth_v2(
     now_ms = int(time.time() * 1000)
     iss = now_ms if issued_at_ms is None else issued_at_ms
     exp = (now_ms + 60000) if expires_at_ms is None else expires_at_ms
-    if isinstance(action, C2ControlActionV1):
-        act_enum = action
-    else:
-        try:
-            act_enum = C2ControlActionV1(action)
-        except ValueError:
-            act_enum = C2ControlActionV1.PING
+    act_enum = C2ControlAction(action) if isinstance(action, str) else action
 
     signer = ControlSignerV2(key_id, TEST_ED_PRIV)
     aid = action_id or act_enum.value
 
-    raw_req = ParticipantControlRequestV2(
+    unsigned_req = UnsignedParticipantControlRequestV2(
         action=act_enum,
-        authorization=ParticipantControlAuthorizationV2(
+        authorization=UnsignedParticipantControlAuthorizationV2(
             protocol_version="2.0",
             key_id=key_id,
             transaction_id=tx_id,
@@ -129,8 +128,6 @@ def _make_auth_v2(
             issued_at_ms=iss,
             expires_at_ms=exp,
             nonce=nonce,
-            request_digest="",
-            signature="",
         ),
         payload_schema_id=payload_schema_id,
         payload_digest=payload_digest
@@ -139,7 +136,7 @@ def _make_auth_v2(
         prior_receipt_ref=prior_receipt_ref,
         prior_receipt_digest=prior_receipt_digest,
     )
-    signed_req = signer.sign_participant_request(raw_req)
+    signed_req = signer.sign_participant_request(unsigned_req)
     return signed_req.authorization
 
 
@@ -167,7 +164,7 @@ def test_hmac_public_ed25519_key_request_rejected():
         signature=base64.urlsafe_b64encode(fake_hmac_64).decode("ascii").rstrip("="),
     )
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=bad_auth,
         payload_schema_id="schema:test",
         payload_digest="0" * 64,
@@ -220,7 +217,7 @@ def test_v1_request_transcript_rejected_by_v2():
         signature=sig,
     )
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest="0" * 64,
@@ -321,7 +318,7 @@ def test_request_digest_self_reference_regression():
     """Verify request digest excludes the digest and signature fields to prevent circularity."""
     auth = _make_auth_v2()
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest="0" * 64,
@@ -435,7 +432,7 @@ def test_missing_operator_does_not_create_admin(tmp_path):
     )
     auth = _make_auth_v2(key_id=TEST_KEY_ID)
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest=auth.request_digest,
@@ -469,7 +466,7 @@ def test_subject_mismatch_does_not_mutate_db(tmp_path):
     )
     auth = _make_auth_v2(key_id=TEST_KEY_ID, subject_id="s_test")
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest=auth.request_digest,
@@ -496,7 +493,7 @@ def test_missing_peer_grant_does_not_create_grant(tmp_path):
     )
     auth = _make_auth_v2(key_id=TEST_KEY_ID, subject_id="s_test")
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest=auth.request_digest,
@@ -530,7 +527,7 @@ def test_missing_mission_grant_does_not_create_mission(tmp_path):
     )
     auth = _make_auth_v2(key_id=TEST_KEY_ID, subject_id="s_test", mission_id="m_ungranted")
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+        action=C2ControlAction.PREPARE_C2_RESOURCE,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest=auth.request_digest,
@@ -559,7 +556,7 @@ def test_auth_failure_leaves_logical_auth_state_unchanged(tmp_path):
     )
     auth = _make_auth_v2(key_id=TEST_KEY_ID)
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest=auth.request_digest,
@@ -582,42 +579,33 @@ def test_payload_exceeding_256kib_rejected():
 
 
 def test_empty_service_id_response_rejected():
-    """Verify client rejects responses with empty service_id when pinned."""
-    signer = ControlSignerV1(TEST_KEY_ID, TEST_ED_PRIV)
-    client = DefaultC2ControlClient(
+    """Verify client/wire rejects responses with empty service_id when pinned."""
+    signer = ControlSignerV2(TEST_KEY_ID, TEST_ED_PRIV)
+    DefaultC2ControlClient(
         signer=signer,
         expected_service_id="srv_expected_pinned",
         daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": TEST_ED_PUB}),
     )
-    resp = SignedControlResponseV2(
-        protocol_version="2.0",
-        service_id="",
-        boot_instance_id="b1",
-        daemon_generation="g0",
-        request_digest="0" * 64,
-        request_nonce="nonce_12345678901234",
-        response_type="receipt",
-        response_payload_b64u="e30",
-        response_digest="0" * 64,
-        issued_at_ms=int(time.time() * 1000),
-        key_id="k_resp",
-        signature="0" * 86,
-    )
-    auth = _make_auth_v2()
-    req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
-        authorization=auth,
-        payload_schema_id="s1",
-        payload_digest="0" * 64,
-        canonical_payload_b64u="e30",
-    )
-    with pytest.raises((ValueError, RuntimeError, C2ResponseVerificationError)):
-        client._verify_signed_response(resp, req)
+    with pytest.raises(ValueError, match="service_id length must be between 1 and 256"):
+        SignedControlResponseV2(
+            protocol_version="2.0",
+            service_id="",
+            boot_instance_id="b1",
+            daemon_generation="g0",
+            request_digest="0" * 64,
+            request_nonce="nonce_12345678901234",
+            response_type="receipt",
+            response_payload_b64u="e30",
+            response_digest="0" * 64,
+            issued_at_ms=int(time.time() * 1000),
+            key_id="k_resp",
+            signature="0" * 86,
+        )
 
 
 def test_wrong_service_id_response_rejected():
     """Verify client rejects responses with mismatched service_id."""
-    signer = ControlSignerV1(TEST_KEY_ID, TEST_ED_PRIV)
+    signer = ControlSignerV2(TEST_KEY_ID, TEST_ED_PRIV)
     client = DefaultC2ControlClient(
         signer=signer,
         expected_service_id="srv_expected_pinned",
@@ -639,7 +627,7 @@ def test_wrong_service_id_response_rejected():
     )
     auth = _make_auth_v2()
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="s1",
         payload_digest="0" * 64,
@@ -651,9 +639,10 @@ def test_wrong_service_id_response_rejected():
 
 def test_missing_inner_type_rejected():
     """Verify client response verification rejects envelopes missing inner type."""
-    signer = ControlSignerV1(TEST_KEY_ID, TEST_ED_PRIV)
+    signer = ControlSignerV2(TEST_KEY_ID, TEST_ED_PRIV)
     client = DefaultC2ControlClient(
         signer=signer,
+        expected_service_id="srv1",
         daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": TEST_ED_PUB}),
     )
     payload_without_type = canonical_json_bytes({"data": "foo"})
@@ -691,7 +680,7 @@ def test_missing_inner_type_rejected():
     )
     auth = _make_auth_v2(nonce="nonce_12345678901234")
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="s1",
         payload_digest="0" * 64,
@@ -703,9 +692,10 @@ def test_missing_inner_type_rejected():
 
 def test_string_retryable_rejected():
     """Verify string retryable value in error response is rejected."""
-    signer = ControlSignerV1(TEST_KEY_ID, TEST_ED_PRIV)
+    signer = ControlSignerV2(TEST_KEY_ID, TEST_ED_PRIV)
     client = DefaultC2ControlClient(
         signer=signer,
+        expected_service_id="srv1",
         daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": TEST_ED_PUB}),
     )
     err_payload = canonical_json_bytes({"type": "error", "reason_code": "internal_failure", "retryable": "true"})
@@ -744,7 +734,7 @@ def test_string_retryable_rejected():
     )
     auth = _make_auth_v2(nonce="nonce_12345678901234")
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="s1",
         payload_digest="0" * 64,
@@ -764,9 +754,10 @@ def test_result_payload_digest_mismatch_rejected():
 
 def test_response_request_digest_mismatch_rejected():
     """Verify mismatched request digest between envelope and request causes verification failure."""
-    signer = ControlSignerV1(TEST_KEY_ID, TEST_ED_PRIV)
+    signer = ControlSignerV2(TEST_KEY_ID, TEST_ED_PRIV)
     client = DefaultC2ControlClient(
         signer=signer,
+        expected_service_id="srv1",
         daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": TEST_ED_PUB}),
     )
     resp = SignedControlResponseV2(
@@ -785,7 +776,7 @@ def test_response_request_digest_mismatch_rejected():
     )
     auth = _make_auth_v2(nonce="nonce_12345678901234")
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="s1",
         payload_digest="0" * 64,
@@ -797,9 +788,10 @@ def test_response_request_digest_mismatch_rejected():
 
 def test_response_request_nonce_mismatch_rejected():
     """Verify mismatched nonce causes verification failure."""
-    signer = ControlSignerV1(TEST_KEY_ID, TEST_ED_PRIV)
+    signer = ControlSignerV2(TEST_KEY_ID, TEST_ED_PRIV)
     client = DefaultC2ControlClient(
         signer=signer,
+        expected_service_id="srv1",
         daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": TEST_ED_PUB}),
     )
     auth = _make_auth_v2(nonce="nonce_req_12345678")
@@ -818,7 +810,7 @@ def test_response_request_nonce_mismatch_rejected():
         signature="0" * 86,
     )
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="s1",
         payload_digest="0" * 64,
@@ -833,7 +825,7 @@ def test_receipt_transaction_id_mismatch_rejected():
     receipt = ParticipantControlReceiptV1(
         transaction_id="tx_wrong",
         participant_id="part1",
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         resource_ref="res1",
         resource_revision=1,
         receipt_ref="r1",
@@ -850,7 +842,7 @@ def test_receipt_participant_id_mismatch_rejected():
     receipt = ParticipantControlReceiptV1(
         transaction_id="tx1",
         participant_id="part_wrong",
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         resource_ref="res1",
         resource_revision=1,
         receipt_ref="r1",
@@ -867,7 +859,7 @@ def test_receipt_action_mismatch_rejected():
     receipt = ParticipantControlReceiptV1(
         transaction_id="tx1",
         participant_id="part1",
-        action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+        action=C2ControlAction.COMMIT_C2_RESOURCE,
         resource_ref="res1",
         resource_revision=1,
         receipt_ref="r1",
@@ -876,7 +868,7 @@ def test_receipt_action_mismatch_rejected():
         result_payload_schema_id="s1",
         result_payload_digest="0" * 64,
     )
-    assert receipt.action != C2ControlActionV1.PING
+    assert receipt.action != C2ControlAction.PING
 
 
 def test_receipt_digest_mismatch_rejected():
@@ -963,7 +955,7 @@ def test_commit_without_prepare_receipt_rejected():
     part = C2DaemonResourceParticipant("part_2pc")
     auth = _make_auth_v2(action="commit_c2_resource")
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+        action=C2ControlAction.COMMIT_C2_RESOURCE,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest="0" * 64,
@@ -972,16 +964,16 @@ def test_commit_without_prepare_receipt_rejected():
         prior_receipt_digest=None,
     )
     res = part.commit(req)
-    assert isinstance(res, BoundedControlErrorV1)
-    assert res.reason_code == C2ControlErrorCodeV1.WRONG_PHASE
+    assert isinstance(res, (BoundedControlErrorV2, BoundedControlErrorV1))
+    assert res.reason_code in (C2ControlErrorCodeV2.WRONG_PHASE, C2ControlErrorCodeV1.WRONG_PHASE)
 
 
 def test_finalize_without_commit_receipt_rejected():
     """Verify finalization without prior commit receipt reference is rejected."""
     part = C2DaemonResourceParticipant("part_2pc")
-    auth = _make_auth_v2(action=C2ControlActionV1.FINALIZE_C2_RESOURCE_VISIBILITY)
+    auth = _make_auth_v2(action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY)
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.FINALIZE_C2_RESOURCE_VISIBILITY,
+        action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest="0" * 64,
@@ -990,8 +982,8 @@ def test_finalize_without_commit_receipt_rejected():
         prior_receipt_digest=None,
     )
     res = part.finalize_visibility(req)
-    assert isinstance(res, BoundedControlErrorV1)
-    assert res.reason_code == C2ControlErrorCodeV1.WRONG_PHASE
+    assert isinstance(res, (BoundedControlErrorV2, BoundedControlErrorV1))
+    assert res.reason_code in (C2ControlErrorCodeV2.WRONG_PHASE, C2ControlErrorCodeV1.WRONG_PHASE)
 
 
 def test_wrong_receipt_ref_rejected():
@@ -999,18 +991,18 @@ def test_wrong_receipt_ref_rejected():
     part = C2DaemonResourceParticipant("part_2pc")
     auth = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_chain_1")
     prep_req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+        action=C2ControlAction.PREPARE_C2_RESOURCE,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest=auth.request_digest,
         canonical_payload_b64u="e30",
     )
     prep_res = part.prepare(prep_req)
-    assert isinstance(prep_res, ParticipantControlReceiptV1)
+    assert isinstance(prep_res, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     commit_auth = _make_auth_v2(action="commit_c2_resource", tx_id="tx_chain_1")
     commit_req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+        action=C2ControlAction.COMMIT_C2_RESOURCE,
         authorization=commit_auth,
         payload_schema_id="schema:test",
         payload_digest=commit_auth.request_digest,
@@ -1019,8 +1011,8 @@ def test_wrong_receipt_ref_rejected():
         prior_receipt_digest=prep_res.receipt_digest,
     )
     res = part.commit(commit_req)
-    assert isinstance(res, BoundedControlErrorV1)
-    assert res.reason_code == C2ControlErrorCodeV1.WRONG_PHASE
+    assert isinstance(res, (BoundedControlErrorV2, BoundedControlErrorV1))
+    assert res.reason_code in (C2ControlErrorCodeV2.WRONG_PHASE, C2ControlErrorCodeV1.WRONG_PHASE)
 
 
 def test_wrong_receipt_digest_rejected():
@@ -1028,18 +1020,18 @@ def test_wrong_receipt_digest_rejected():
     part = C2DaemonResourceParticipant("part_2pc")
     auth = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_chain_2")
     prep_req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+        action=C2ControlAction.PREPARE_C2_RESOURCE,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest=auth.request_digest,
         canonical_payload_b64u="e30",
     )
     prep_res = part.prepare(prep_req)
-    assert isinstance(prep_res, ParticipantControlReceiptV1)
+    assert isinstance(prep_res, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     commit_auth = _make_auth_v2(action="commit_c2_resource", tx_id="tx_chain_2")
     commit_req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+        action=C2ControlAction.COMMIT_C2_RESOURCE,
         authorization=commit_auth,
         payload_schema_id="schema:test",
         payload_digest=commit_auth.request_digest,
@@ -1048,8 +1040,8 @@ def test_wrong_receipt_digest_rejected():
         prior_receipt_digest="f" * 64,
     )
     res = part.commit(commit_req)
-    assert isinstance(res, BoundedControlErrorV1)
-    assert res.reason_code == C2ControlErrorCodeV1.WRONG_PHASE
+    assert isinstance(res, (BoundedControlErrorV2, BoundedControlErrorV1))
+    assert res.reason_code in (C2ControlErrorCodeV2.WRONG_PHASE, C2ControlErrorCodeV1.WRONG_PHASE)
 
 
 def test_intent_mismatch_across_phases_rejected():
@@ -1057,18 +1049,18 @@ def test_intent_mismatch_across_phases_rejected():
     part = C2DaemonResourceParticipant("part_2pc")
     auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_intent_1")
     prep_req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+        action=C2ControlAction.PREPARE_C2_RESOURCE,
         authorization=auth1,
         payload_schema_id="schema:test",
         payload_digest=auth1.request_digest,
         canonical_payload_b64u="e30",
     )
     prep_res = part.prepare(prep_req)
-    assert isinstance(prep_res, ParticipantControlReceiptV1)
+    assert isinstance(prep_res, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_intent_1")
     commit_req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+        action=C2ControlAction.COMMIT_C2_RESOURCE,
         authorization=auth2,
         payload_schema_id="schema:test",
         payload_digest="1" * 64,
@@ -1077,8 +1069,8 @@ def test_intent_mismatch_across_phases_rejected():
         prior_receipt_digest=prep_res.receipt_digest,
     )
     res = part.commit(commit_req)
-    assert isinstance(res, BoundedControlErrorV1)
-    assert res.reason_code == C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT
+    assert isinstance(res, (BoundedControlErrorV2, BoundedControlErrorV1))
+    assert res.reason_code in (C2ControlErrorCodeV2.IDEMPOTENCY_CONFLICT, C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT)
 
 
 def test_different_operator_or_key_revision_rejected():
@@ -1108,20 +1100,20 @@ def test_exception_after_cas_rolls_transaction_back():
     auth = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_fp_1", action_id="test_act")
     prep = part.prepare(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+            action=C2ControlAction.PREPARE_C2_RESOURCE,
             authorization=auth,
             payload_schema_id="schema:test",
             payload_digest=auth.request_digest,
             canonical_payload_b64u="e30",
         )
     )
-    assert isinstance(prep, ParticipantControlReceiptV1)
+    assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     part.set_failpoint(TransactionFailpoint.AFTER_CAS)
     commit_auth = _make_auth_v2(action="commit_c2_resource", tx_id="tx_fp_1", action_id="test_act")
     commit_res = part.commit(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+            action=C2ControlAction.COMMIT_C2_RESOURCE,
             authorization=commit_auth,
             payload_schema_id="schema:test",
             payload_digest=auth.request_digest,
@@ -1130,19 +1122,19 @@ def test_exception_after_cas_rolls_transaction_back():
             prior_receipt_digest=prep.receipt_digest,
         )
     )
-    assert isinstance(commit_res, BoundedControlErrorV1)
+    assert isinstance(commit_res, (BoundedControlErrorV2, BoundedControlErrorV1))
 
     part.clear_failpoints()
     snap = part.reconcile(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+            action=C2ControlAction.PREPARE_C2_RESOURCE,
             authorization=auth,
             payload_schema_id="schema:test",
             payload_digest=auth.request_digest,
             canonical_payload_b64u="e30",
         )
     )
-    assert isinstance(snap, ParticipantControlQuerySnapshotV1)
+    assert isinstance(snap, (ParticipantControlQuerySnapshotV2, ParticipantControlQuerySnapshotV1))
     assert snap.phase in (
         ParticipantControlPhaseV2.PREPARED,
         ParticipantControlPhaseV1.PENDING,
@@ -1155,7 +1147,7 @@ def test_crash_after_cas_recovers_deterministically():
     """Verify state recovery when transaction is queried after partial failpoint."""
     part = C2DaemonResourceParticipant("part_rec_1")
     snap = part.reconcile()
-    assert isinstance(snap, ParticipantControlQuerySnapshotV1)
+    assert isinstance(snap, (ParticipantControlQuerySnapshotV2, ParticipantControlQuerySnapshotV1))
 
 
 def test_abort_finalized_transaction_rejected():
@@ -1164,19 +1156,19 @@ def test_abort_finalized_transaction_rejected():
     auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_ab_1", action_id="test_ab")
     prep = part.prepare(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+            action=C2ControlAction.PREPARE_C2_RESOURCE,
             authorization=auth1,
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
             canonical_payload_b64u="e30",
         )
     )
-    assert isinstance(prep, ParticipantControlReceiptV1)
+    assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_ab_1", action_id="test_ab")
     commit = part.commit(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+            action=C2ControlAction.COMMIT_C2_RESOURCE,
             authorization=auth2,
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
@@ -1185,14 +1177,14 @@ def test_abort_finalized_transaction_rejected():
             prior_receipt_digest=prep.receipt_digest,
         )
     )
-    assert isinstance(commit, ParticipantControlReceiptV1)
+    assert isinstance(commit, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth3 = _make_auth_v2(
-        action=C2ControlActionV1.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_ab_1", action_id="test_ab"
+        action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_ab_1", action_id="test_ab"
     )
     fin = part.finalize_visibility(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.FINALIZE_C2_RESOURCE_VISIBILITY,
+            action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
             authorization=auth3,
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
@@ -1201,12 +1193,12 @@ def test_abort_finalized_transaction_rejected():
             prior_receipt_digest=commit.receipt_digest,
         )
     )
-    assert isinstance(fin, ParticipantControlReceiptV1)
+    assert isinstance(fin, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth4 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_ab_1", action_id="test_ab")
     ab_res = part.abort(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.ABORT_C2_RESOURCE,
+            action=C2ControlAction.ABORT_C2_RESOURCE,
             authorization=auth4,
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
@@ -1215,8 +1207,8 @@ def test_abort_finalized_transaction_rejected():
             prior_receipt_digest=fin.receipt_digest,
         )
     )
-    assert isinstance(ab_res, BoundedControlErrorV1)
-    assert ab_res.reason_code == C2ControlErrorCodeV1.WRONG_PHASE
+    assert isinstance(ab_res, (BoundedControlErrorV2, BoundedControlErrorV1))
+    assert ab_res.reason_code in (C2ControlErrorCodeV2.WRONG_PHASE, C2ControlErrorCodeV1.WRONG_PHASE)
 
 
 def test_query_without_transaction_returns_error():
@@ -1224,15 +1216,15 @@ def test_query_without_transaction_returns_error():
     part = C2DaemonResourceParticipant("part_q_1")
     auth = _make_auth_v2(action="ping", tx_id="tx_non_existent_123")
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest=auth.request_digest,
         canonical_payload_b64u="e30",
     )
     snap = part.reconcile(req)
-    assert isinstance(snap, BoundedControlErrorV1)
-    assert snap.reason_code == C2ControlErrorCodeV1.UNAVAILABLE
+    assert isinstance(snap, (BoundedControlErrorV2, BoundedControlErrorV1))
+    assert snap.reason_code in (C2ControlErrorCodeV2.UNAVAILABLE, C2ControlErrorCodeV1.UNAVAILABLE)
 
 
 def test_identical_commit_retry_returns_identical_persisted_receipt():
@@ -1241,18 +1233,18 @@ def test_identical_commit_retry_returns_identical_persisted_receipt():
     auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_c", action_id="act_c")
     prep = part.prepare(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+            action=C2ControlAction.PREPARE_C2_RESOURCE,
             authorization=auth1,
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
             canonical_payload_b64u="e30",
         )
     )
-    assert isinstance(prep, ParticipantControlReceiptV1)
+    assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_idem_c", action_id="act_c")
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+        action=C2ControlAction.COMMIT_C2_RESOURCE,
         authorization=auth2,
         payload_schema_id="schema:test",
         payload_digest=auth1.request_digest,
@@ -1261,10 +1253,10 @@ def test_identical_commit_retry_returns_identical_persisted_receipt():
         prior_receipt_digest=prep.receipt_digest,
     )
     res1 = part.commit(req)
-    assert isinstance(res1, ParticipantControlReceiptV1)
+    assert isinstance(res1, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     res2 = part.commit(req)
-    assert isinstance(res2, ParticipantControlReceiptV1)
+    assert isinstance(res2, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
     assert res2.receipt_ref == res1.receipt_ref
     assert res2.receipt_digest == res1.receipt_digest
 
@@ -1275,14 +1267,14 @@ def test_changed_commit_retry_returns_idempotency_conflict():
     auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_conf", action_id="act_conf")
     prep = part.prepare(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+            action=C2ControlAction.PREPARE_C2_RESOURCE,
             authorization=auth1,
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
             canonical_payload_b64u="e30",
         )
     )
-    assert isinstance(prep, ParticipantControlReceiptV1)
+    assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth2 = _make_auth_v2(
         action="commit_c2_resource",
@@ -1291,7 +1283,7 @@ def test_changed_commit_retry_returns_idempotency_conflict():
         nonce="nonce_orig_12345678",
     )
     req1 = ParticipantControlRequestV2(
-        action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+        action=C2ControlAction.COMMIT_C2_RESOURCE,
         authorization=auth2,
         payload_schema_id="schema:test",
         payload_digest=auth1.request_digest,
@@ -1300,7 +1292,7 @@ def test_changed_commit_retry_returns_idempotency_conflict():
         prior_receipt_digest=prep.receipt_digest,
     )
     res1 = part.commit(req1)
-    assert isinstance(res1, ParticipantControlReceiptV1)
+    assert isinstance(res1, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth3 = _make_auth_v2(
         action="commit_c2_resource",
@@ -1309,7 +1301,7 @@ def test_changed_commit_retry_returns_idempotency_conflict():
         nonce="nonce_changed_123456",
     )
     req2 = ParticipantControlRequestV2(
-        action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+        action=C2ControlAction.COMMIT_C2_RESOURCE,
         authorization=auth3,
         payload_schema_id="schema:test",
         payload_digest=auth1.request_digest,
@@ -1318,8 +1310,8 @@ def test_changed_commit_retry_returns_idempotency_conflict():
         prior_receipt_digest=prep.receipt_digest,
     )
     res2 = part.commit(req2)
-    assert isinstance(res2, BoundedControlErrorV1)
-    assert res2.reason_code == C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT
+    assert isinstance(res2, (BoundedControlErrorV2, BoundedControlErrorV1))
+    assert res2.reason_code in (C2ControlErrorCodeV2.IDEMPOTENCY_CONFLICT, C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT)
 
 
 def test_identical_finalize_retry_returns_identical_receipt():
@@ -1328,19 +1320,19 @@ def test_identical_finalize_retry_returns_identical_receipt():
     auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_f", action_id="act_f")
     prep = part.prepare(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+            action=C2ControlAction.PREPARE_C2_RESOURCE,
             authorization=auth1,
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
             canonical_payload_b64u="e30",
         )
     )
-    assert isinstance(prep, ParticipantControlReceiptV1)
+    assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_idem_f", action_id="act_f")
     commit = part.commit(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+            action=C2ControlAction.COMMIT_C2_RESOURCE,
             authorization=auth2,
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
@@ -1349,13 +1341,13 @@ def test_identical_finalize_retry_returns_identical_receipt():
             prior_receipt_digest=prep.receipt_digest,
         )
     )
-    assert isinstance(commit, ParticipantControlReceiptV1)
+    assert isinstance(commit, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth3 = _make_auth_v2(
-        action=C2ControlActionV1.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_idem_f", action_id="act_f"
+        action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_idem_f", action_id="act_f"
     )
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.FINALIZE_C2_RESOURCE_VISIBILITY,
+        action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
         authorization=auth3,
         payload_schema_id="schema:test",
         payload_digest=auth1.request_digest,
@@ -1364,10 +1356,10 @@ def test_identical_finalize_retry_returns_identical_receipt():
         prior_receipt_digest=commit.receipt_digest,
     )
     fin1 = part.finalize_visibility(req)
-    assert isinstance(fin1, ParticipantControlReceiptV1)
+    assert isinstance(fin1, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     fin2 = part.finalize_visibility(req)
-    assert isinstance(fin2, ParticipantControlReceiptV1)
+    assert isinstance(fin2, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
     assert fin2.receipt_ref == fin1.receipt_ref
 
 
@@ -1377,20 +1369,20 @@ def test_changed_abort_retry_returns_idempotency_conflict():
     auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_ab", action_id="act_ab")
     prep = part.prepare(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+            action=C2ControlAction.PREPARE_C2_RESOURCE,
             authorization=auth1,
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
             canonical_payload_b64u="e30",
         )
     )
-    assert isinstance(prep, ParticipantControlReceiptV1)
+    assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth2 = _make_auth_v2(
         action="abort_c2_resource", tx_id="tx_idem_ab", action_id="act_ab", nonce="nonce_ab_1_1234567"
     )
     req1 = ParticipantControlRequestV2(
-        action=C2ControlActionV1.ABORT_C2_RESOURCE,
+        action=C2ControlAction.ABORT_C2_RESOURCE,
         authorization=auth2,
         payload_schema_id="schema:test",
         payload_digest=auth1.request_digest,
@@ -1399,13 +1391,13 @@ def test_changed_abort_retry_returns_idempotency_conflict():
         prior_receipt_digest=prep.receipt_digest,
     )
     ab1 = part.abort(req1)
-    assert isinstance(ab1, ParticipantControlReceiptV1)
+    assert isinstance(ab1, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth3 = _make_auth_v2(
         action="abort_c2_resource", tx_id="tx_idem_ab", action_id="act_ab", nonce="nonce_ab_2_1234567"
     )
     req2 = ParticipantControlRequestV2(
-        action=C2ControlActionV1.ABORT_C2_RESOURCE,
+        action=C2ControlAction.ABORT_C2_RESOURCE,
         authorization=auth3,
         payload_schema_id="schema:test",
         payload_digest=auth1.request_digest,
@@ -1414,8 +1406,8 @@ def test_changed_abort_retry_returns_idempotency_conflict():
         prior_receipt_digest=prep.receipt_digest,
     )
     ab2 = part.abort(req2)
-    assert isinstance(ab2, BoundedControlErrorV1)
-    assert ab2.reason_code == C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT
+    assert isinstance(ab2, (BoundedControlErrorV2, BoundedControlErrorV1))
+    assert ab2.reason_code in (C2ControlErrorCodeV2.IDEMPOTENCY_CONFLICT, C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT)
 
 
 def test_committed_hidden_abort_with_failed_compensation_sets_recovery_required():
@@ -1424,19 +1416,19 @@ def test_committed_hidden_abort_with_failed_compensation_sets_recovery_required(
     auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_comp_1", action_id="act_comp")
     prep = part.prepare(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.PREPARE_C2_RESOURCE,
+            action=C2ControlAction.PREPARE_C2_RESOURCE,
             authorization=auth1,
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
             canonical_payload_b64u="e30",
         )
     )
-    assert isinstance(prep, ParticipantControlReceiptV1)
+    assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_comp_1", action_id="act_comp")
     commit = part.commit(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.COMMIT_C2_RESOURCE,
+            action=C2ControlAction.COMMIT_C2_RESOURCE,
             authorization=auth2,
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
@@ -1445,12 +1437,12 @@ def test_committed_hidden_abort_with_failed_compensation_sets_recovery_required(
             prior_receipt_digest=prep.receipt_digest,
         )
     )
-    assert isinstance(commit, ParticipantControlReceiptV1)
+    assert isinstance(commit, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth3 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_comp_1", action_id="act_comp")
     ab = part.abort(
         ParticipantControlRequestV2(
-            action=C2ControlActionV1.ABORT_C2_RESOURCE,
+            action=C2ControlAction.ABORT_C2_RESOURCE,
             authorization=auth3,
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
@@ -1459,7 +1451,7 @@ def test_committed_hidden_abort_with_failed_compensation_sets_recovery_required(
             prior_receipt_digest=commit.receipt_digest,
         )
     )
-    assert isinstance(ab, ParticipantControlReceiptV1)
+    assert isinstance(ab, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
 
 def test_authority_revision_revoked_between_boundary_and_db_write_rejected(tmp_path):
@@ -1619,7 +1611,7 @@ def test_real_ed25519_subprocess_lifecycle():
     pdig = calculate_schema_bound_payload_digest("schema:test", raw_payload)
     auth = _make_auth_v2(key_id="k_live", payload_digest=pdig, canonical_payload_b64u=b64u)
     req = ParticipantControlRequestV2(
-        action=C2ControlActionV1.PING,
+        action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest=pdig,

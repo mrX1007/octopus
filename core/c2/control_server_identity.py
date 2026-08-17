@@ -7,6 +7,8 @@ import base64
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
+from core.c2.control_models import strict_decode_signature_v2
+
 DOMAIN_SEPARATOR = "OCTOPUS-C2-SERVER-CHALLENGE-V1"
 
 
@@ -47,6 +49,8 @@ def sign_server_challenge(
     boot_id: str,
 ) -> str:
     """Sign the server challenge transcript and return base64url signature."""
+    if len(private_key_bytes) != 32:
+        raise ValueError(f"private_key_bytes must be exactly 32 bytes, got {len(private_key_bytes)}")
     priv = Ed25519PrivateKey.from_private_bytes(private_key_bytes)
     transcript = compute_server_challenge_transcript(
         daemon_instance_id=daemon_instance_id,
@@ -70,6 +74,8 @@ def verify_server_challenge(
 ) -> bool:
     """Verify the server challenge signature using pinned public key."""
     try:
+        if len(public_key_bytes) != 32:
+            return False
         pub = Ed25519PublicKey.from_public_bytes(public_key_bytes)
         transcript = compute_server_challenge_transcript(
             daemon_instance_id=daemon_instance_id,
@@ -78,9 +84,7 @@ def verify_server_challenge(
             listener_st_ino=listener_st_ino,
             boot_id=boot_id,
         )
-        # Pad base64url string if needed
-        padding = "=" * ((4 - len(signature_b64u) % 4) % 4)
-        sig_bytes = base64.urlsafe_b64decode(signature_b64u + padding)
+        sig_bytes = strict_decode_signature_v2(signature_b64u)
         pub.verify(sig_bytes, transcript)
         return True
     except Exception:

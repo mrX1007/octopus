@@ -7,30 +7,30 @@ import time
 from collections.abc import Callable
 
 from core.c2.control_auth import AuthenticatedControlPrincipal, OperatorRole
-from core.c2.control_commands import C2ControlActionV1
+from core.c2.control_commands import C2ControlAction
 from core.c2.control_peer import PeerPrincipal
 
 _ADMIN_ONLY_ACTIONS = frozenset(
     {
-        C2ControlActionV1.PURGE_RESULTS,
-        C2ControlActionV1.MANAGE_OPERATORS_LIST,
-        C2ControlActionV1.MANAGE_OPERATORS_CREATE,
-        C2ControlActionV1.MANAGE_OPERATORS_DEACTIVATE,
-        C2ControlActionV1.MANAGE_OPERATORS_ROTATE,
-        C2ControlActionV1.SYNC_OPERATOR_PEER_BINDINGS,
-        C2ControlActionV1.REVOKE_OPERATOR_PEER_BINDING,
-        C2ControlActionV1.SYNC_OPERATOR_MISSION_GRANTS,
-        C2ControlActionV1.REVOKE_OPERATOR_MISSION_GRANT,
+        C2ControlAction.PURGE_RESULTS,
+        C2ControlAction.MANAGE_OPERATORS_LIST,
+        C2ControlAction.MANAGE_OPERATORS_CREATE,
+        C2ControlAction.MANAGE_OPERATORS_DEACTIVATE,
+        C2ControlAction.MANAGE_OPERATORS_ROTATE,
+        C2ControlAction.SYNC_OPERATOR_PEER_BINDINGS,
+        C2ControlAction.REVOKE_OPERATOR_PEER_BINDING,
+        C2ControlAction.SYNC_OPERATOR_MISSION_GRANTS,
+        C2ControlAction.REVOKE_OPERATOR_MISSION_GRANT,
     }
 )
 
 _READONLY_ACTIONS = frozenset(
     {
-        C2ControlActionV1.PING,
-        C2ControlActionV1.VERSION,
-        C2ControlActionV1.READINESS,
-        C2ControlActionV1.LIST_AGENTS,
-        C2ControlActionV1.LIST_RESULTS,
+        C2ControlAction.PING,
+        C2ControlAction.VERSION,
+        C2ControlAction.READINESS,
+        C2ControlAction.LIST_AGENTS,
+        C2ControlAction.LIST_RESULTS,
     }
 )
 
@@ -59,7 +59,7 @@ class ControlRBACPolicy:
     def evaluate(
         self,
         principal: AuthenticatedControlPrincipal,
-        action: C2ControlActionV1 | str,
+        action: C2ControlAction | str,
         resource_ref: str | None = None,
         *,
         mission_id: str | None = None,
@@ -73,8 +73,8 @@ class ControlRBACPolicy:
         try:
             closed_action = (
                 action
-                if type(action) is C2ControlActionV1
-                else C2ControlActionV1(action)
+                if type(action) is C2ControlAction
+                else C2ControlAction(action)
                 if type(action) is str
                 else None
             )
@@ -105,7 +105,7 @@ class ControlRBACPolicy:
     def require(
         self,
         principal: AuthenticatedControlPrincipal,
-        action: C2ControlActionV1 | str,
+        action: C2ControlAction | str,
         resource_ref: str | None = None,
         *,
         mission_id: str | None = None,

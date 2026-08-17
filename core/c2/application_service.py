@@ -8,7 +8,7 @@ bypass.
 from __future__ import annotations
 
 from core.c2.control_auth import AuthenticatedControlPrincipal
-from core.c2.control_commands import C2ControlActionV1
+from core.c2.control_commands import C2ControlAction
 from core.c2.control_rbac import ControlRBACPolicy
 from core.c2.result_models import (
     AgentPageV1,
@@ -46,7 +46,7 @@ class C2ApplicationService:
     ) -> AgentPageV1:
         self._policy.require(
             principal,
-            C2ControlActionV1.LIST_AGENTS,
+            C2ControlAction.LIST_AGENTS,
             mission_id=mission_id,
         )
         return self._result_service.list_agents(
@@ -67,7 +67,7 @@ class C2ApplicationService:
     ) -> ResultPageV1:
         self._policy.require(
             principal,
-            C2ControlActionV1.LIST_RESULTS,
+            C2ControlAction.LIST_RESULTS,
             agent_ref,
             mission_id=mission_id,
         )
@@ -88,7 +88,7 @@ class C2ApplicationService:
             raise TypeError("request must be ResultAckRequestV1")
         self._policy.require(
             principal,
-            C2ControlActionV1.ACK_RESULTS,
+            C2ControlAction.ACK_RESULTS,
             request.agent_ref,
             mission_id=request.mission_id,
         )
@@ -104,7 +104,7 @@ class C2ApplicationService:
     ) -> PurgeResultV1:
         self._policy.require(
             principal,
-            C2ControlActionV1.PURGE_RESULTS,
+            C2ControlAction.PURGE_RESULTS,
             mission_id=mission_id,
         )
         return self._result_service.purge_results(
