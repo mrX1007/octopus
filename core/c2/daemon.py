@@ -19,7 +19,7 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager, suppress
-from typing import Any
+from typing import Any, Literal, cast
 
 import uvicorn
 from cryptography.hazmat.primitives import serialization
@@ -47,7 +47,9 @@ from core.c2.control_commands import (
     ParticipantControlQuerySnapshotV1,
     ParticipantControlReceiptV1,
     ParticipantControlRequestV1,
+    ParticipantControlRequestV2,
     SignedControlResponseV1,
+    SignedControlResponseV2,
 )
 from core.c2.control_models import (
     calculate_receipt_digest,
@@ -121,17 +123,31 @@ def _load_or_create_keystore_passphrase() -> str:
 
 
 def _load_or_create_service_id() -> str:
+    if os.path.islink(SERVICE_ID_FILE):
+        raise RuntimeError(f"symlink not allowed for service_id: {SERVICE_ID_FILE}")
     if os.path.exists(SERVICE_ID_FILE):
-        with suppress(Exception), open(SERVICE_ID_FILE, encoding="utf-8") as handle:
+        with open(SERVICE_ID_FILE, encoding="utf-8") as handle:
             val = handle.read().strip()
-            if val:
-                return val
+        if val and len(val) >= 8:
+            return val
+        raise RuntimeError("corrupted service_id file")
     new_id = f"srv_{uuid.uuid4().hex}"
-    with suppress(Exception):
-        os.makedirs(KEY_DIR, exist_ok=True)
-        with open(SERVICE_ID_FILE, "w", encoding="utf-8") as handle:
+    try:
+        parent_dir = os.path.dirname(os.path.abspath(SERVICE_ID_FILE))
+        os.makedirs(parent_dir, exist_ok=True)
+        temp_file = os.path.join(parent_dir, f".tmp_srv_{uuid.uuid4().hex}")
+        fd = os.open(temp_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(new_id)
-        os.chmod(SERVICE_ID_FILE, 0o600)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_file, SERVICE_ID_FILE)
+        with suppress(Exception):
+            dir_fd = os.open(parent_dir, os.O_RDONLY)
+            os.fsync(dir_fd)
+            os.close(dir_fd)
+    except OSError:
+        pass
     return new_id
 
 
@@ -147,17 +163,35 @@ def _load_or_create_daemon_response_key() -> tuple[str, ed25519.Ed25519PrivateKe
         )
         return "daemon_resp_key_1", priv_key, pub_bytes
 
-    if os.path.exists(DAEMON_RESPONSE_KEY_FILE):
-        with suppress(Exception):
-            with open(DAEMON_RESPONSE_KEY_FILE, "rb") as handle:
-                raw_bytes = handle.read()
-            if len(raw_bytes) == 32:
-                priv_key = ed25519.Ed25519PrivateKey.from_private_bytes(raw_bytes)
-                pub_bytes = priv_key.public_key().public_bytes(
-                    serialization.Encoding.Raw,
-                    serialization.PublicFormat.Raw,
-                )
-                return "daemon_resp_key_1", priv_key, pub_bytes
+    key_file = DAEMON_RESPONSE_KEY_FILE
+    if os.path.islink(key_file):
+        raise RuntimeError(f"symlink not allowed for daemon key: {key_file}")
+
+    if os.path.exists(key_file):
+        with open(key_file, "rb") as handle:
+            raw_data = handle.read()
+        if len(raw_data) == 32:
+            raw_bytes = raw_data
+        elif raw_data.startswith(b"OCTOPUS_KEY_V1\n"):
+            parts = raw_data.split(b"\n")
+            if len(parts) >= 4:
+                raw_bytes = base64.b64decode(parts[2])
+                checksum = parts[3].decode("ascii")
+                if hashlib.sha256(raw_bytes).hexdigest() != checksum:
+                    raise RuntimeError("corrupted daemon response key checksum")
+            else:
+                raise RuntimeError("corrupted daemon response key envelope")
+        else:
+            raise RuntimeError("corrupted daemon response key file")
+
+        if len(raw_bytes) != 32:
+            raise RuntimeError("invalid daemon response key length")
+        priv_key = ed25519.Ed25519PrivateKey.from_private_bytes(raw_bytes)
+        pub_bytes = priv_key.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
+        return "daemon_resp_key_1", priv_key, pub_bytes
 
     priv_key = ed25519.Ed25519PrivateKey.generate()
     raw_bytes = priv_key.private_bytes(
@@ -165,11 +199,22 @@ def _load_or_create_daemon_response_key() -> tuple[str, ed25519.Ed25519PrivateKe
         serialization.PrivateFormat.Raw,
         serialization.NoEncryption(),
     )
-    with suppress(Exception):
-        os.makedirs(os.path.dirname(os.path.abspath(DAEMON_RESPONSE_KEY_FILE)), exist_ok=True)
-        with open(DAEMON_RESPONSE_KEY_FILE, "wb") as handle:
+    try:
+        parent_dir = os.path.dirname(os.path.abspath(key_file))
+        os.makedirs(parent_dir, exist_ok=True)
+        temp_file = os.path.join(parent_dir, f".tmp_key_{uuid.uuid4().hex}")
+        fd = os.open(temp_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as handle:
             handle.write(raw_bytes)
-        os.chmod(DAEMON_RESPONSE_KEY_FILE, 0o600)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_file, key_file)
+        with suppress(Exception):
+            dir_fd = os.open(parent_dir, os.O_RDONLY)
+            os.fsync(dir_fd)
+            os.close(dir_fd)
+    except OSError:
+        pass
     pub_bytes = priv_key.public_key().public_bytes(
         serialization.Encoding.Raw,
         serialization.PublicFormat.Raw,
@@ -662,12 +707,21 @@ class DaemonKeyResolver:
     """Key resolver for operator control verification keys."""
 
     def __init__(self) -> None:
-        self._test_keys: dict[str, bytes | ResolvedControlKey] = {}
+        self._test_keys: dict[str, ResolvedControlKey] = {}
 
     def register_key(self, key_id: str, key_bytes: bytes | ResolvedControlKey) -> None:
-        self._test_keys[key_id] = key_bytes
+        if isinstance(key_bytes, ResolvedControlKey):
+            self._test_keys[key_id] = key_bytes
+        else:
+            raw = key_bytes if len(key_bytes) == 32 else hashlib.sha256(key_bytes).digest()
+            self._test_keys[key_id] = ResolvedControlKey(
+                key_id=key_id,
+                operator_id=f"op_{key_id}",
+                verification_key=raw,
+                algorithm="ed25519",
+            )
 
-    def require_key(self, key_id: str, *, now: float) -> bytes | ResolvedControlKey:
+    def require_key(self, key_id: str, *, now: float) -> ResolvedControlKey:
         if key_id in self._test_keys:
             return self._test_keys[key_id]
         ks = get_verification_key_store()
@@ -678,7 +732,7 @@ class DaemonKeyResolver:
 
 
 class DaemonPrincipalResolver:
-    """Principal resolver validating operators and mission grants from persistent DB."""
+    """Principal resolver validating operators and mission grants from persistent DB (strictly read-only)."""
 
     def __init__(
         self,
@@ -704,105 +758,42 @@ class DaemonPrincipalResolver:
             ks = self._key_store_obj or get_verification_key_store()
             resolved_key = ks.resolve_active(key_id, now=now)
 
+        if resolved_key is None:
+            raise NotAuthorizedControlRequest("unknown_key_id")
+
         db_path = get_control_db_path()
         op_mgr = self._operators_mgr or OperatorManager(db_path)
         grant_svc = self._grants_svc or GrantService(db_path)
 
-        if resolved_key is not None:
-            op = op_mgr.get_operator(resolved_key.operator_id, active_only=True)
-            if op is None:
-                with suppress(Exception), sqlite3.connect(db_path) as conn:
-                    from core.c2.grant_service import insert_initial_bootstrap_grants
-                    from core.c2.operators import insert_operator_record
+        op = op_mgr.get_operator(resolved_key.operator_id, active_only=True)
+        if op is None:
+            raise NotAuthorizedControlRequest("operator_not_found")
 
-                    insert_operator_record(
-                        conn,
-                        operator_id=resolved_key.operator_id,
-                        subject_id=subject_id or "s_test",
-                        name=f"Operator {resolved_key.operator_id}",
-                        role="admin",
-                        api_key=f"api_key_{resolved_key.operator_id}",
-                    )
-                    insert_initial_bootstrap_grants(
-                        conn,
-                        operator_id=resolved_key.operator_id,
-                        subject_id=subject_id or "s_test",
-                        peer_uid=peer.uid if peer else os.getuid(),
-                        peer_gid=peer.gid if peer else os.getgid(),
-                    )
-                op = op_mgr.get_operator(resolved_key.operator_id, active_only=True)
-            if op is None:
-                raise NotAuthorizedControlRequest("inactive_operator")
-            if op["subject_id"] != subject_id:
-                # If admin operator, update subject_id dynamically in test environments
-                if str(op["role"]) == "admin":
-                    with suppress(Exception), sqlite3.connect(db_path) as conn:
-                        conn.execute(
-                            "UPDATE operators SET subject_id = ? WHERE operator_id = ?",
-                            (subject_id, resolved_key.operator_id),
-                        )
-                    op = op_mgr.get_operator(resolved_key.operator_id, active_only=True)
-                if op is None or op["subject_id"] != subject_id:
-                    raise NotAuthorizedControlRequest("subject_mismatch")
+        if op["subject_id"] != subject_id:
+            raise NotAuthorizedControlRequest("subject_mismatch")
 
-            peer_b = grant_svc.resolve_peer_binding(resolved_key.operator_id, uid=peer.uid, gid=peer.gid)
-            if peer_b is None and str(op["role"]) == "admin" and peer.uid == os.getuid():
-                with suppress(Exception), sqlite3.connect(db_path) as conn:
-                    conn.execute(
-                        """
-                        INSERT INTO operator_peer_bindings (operator_id, peer_uid, peer_gid, active, updated_at)
-                        VALUES (?, ?, ?, 1, ?)
-                        ON CONFLICT(operator_id, peer_uid, peer_gid) DO NOTHING
-                        """,
-                        (resolved_key.operator_id, peer.uid, peer.gid, now),
-                    )
-                peer_b = grant_svc.resolve_peer_binding(resolved_key.operator_id, uid=peer.uid, gid=peer.gid)
+        peer_b = grant_svc.resolve_peer_binding(resolved_key.operator_id, uid=peer.uid, gid=peer.gid)
+        if peer_b is None:
+            raise NotAuthorizedControlRequest("peer_not_bound")
 
-            if peer_b is None:
-                raise NotAuthorizedControlRequest("peer_not_bound")
+        mission_g = grant_svc.resolve_mission_grant(
+            resolved_key.operator_id, subject_id=subject_id, mission_id=mission_id
+        )
+        if mission_g is None:
+            raise NotAuthorizedControlRequest("mission_not_granted")
 
-            mission_g = grant_svc.resolve_mission_grant(
-                resolved_key.operator_id, subject_id=subject_id, mission_id=mission_id
-            )
-            if mission_g is None and str(op["role"]) == "admin":
-                with suppress(Exception), sqlite3.connect(db_path) as conn:
-                    conn.execute(
-                        """
-                        INSERT INTO control_missions (mission_id, mission_kind, active, created_at)
-                        VALUES (?, 'operation', 1, ?)
-                        ON CONFLICT(mission_id) DO NOTHING
-                        """,
-                        (mission_id, now),
-                    )
-                    conn.execute(
-                        """
-                        INSERT INTO operator_mission_grants (operator_id, subject_id, mission_id, active, updated_at)
-                        VALUES (?, ?, ?, 1, ?)
-                        ON CONFLICT(operator_id, mission_id) DO NOTHING
-                        """,
-                        (resolved_key.operator_id, subject_id, mission_id, now),
-                    )
-                mission_g = grant_svc.resolve_mission_grant(
-                    resolved_key.operator_id, subject_id=subject_id, mission_id=mission_id
-                )
-
-            if mission_g is None:
-                raise NotAuthorizedControlRequest("mission_not_granted")
-
-            return AuthenticatedControlPrincipal(
-                operator_id=resolved_key.operator_id,
-                subject_id=subject_id,
-                role=OperatorRole(str(op["role"])),
-                peer=peer,
-                mission_id=mission_id,
-                operator_revision=int(op["authorization_revision"]),
-                peer_binding_revision=peer_b.revision if peer_b else 1,
-                mission_grant_revision=mission_g.revision if mission_g else 1,
-                authenticated_at=now,
-                expires_at=now + 300.0,
-            )
-
-        raise NotAuthorizedControlRequest("unknown_key_id")
+        return AuthenticatedControlPrincipal(
+            operator_id=resolved_key.operator_id,
+            subject_id=subject_id,
+            role=OperatorRole(str(op["role"])),
+            peer=peer,
+            mission_id=mission_id,
+            operator_revision=int(op["authorization_revision"]),
+            peer_binding_revision=peer_b.revision if peer_b else 1,
+            mission_grant_revision=mission_g.revision if mission_g else 1,
+            authenticated_at=now,
+            expires_at=now + 300.0,
+        )
 
 
 _key_resolver = DaemonKeyResolver()
@@ -848,51 +839,64 @@ def register_control_key(
     key_id: str,
     key_bytes: bytes,
     operator_id: str | None = None,
-    algorithm: str | None = None,
+    algorithm: str = "ed25519",
 ) -> None:
-    """Register an operator control signing key into persistent key store and resolver."""
+    """Register an operator control signing key into persistent key store, database, and resolver."""
     op_id = operator_id or f"op_{key_id}"
-    algo = algorithm or (
-        "ed25519"
-        if (len(key_bytes) == 32 and not key_bytes.startswith(b"test_") and not key_bytes.startswith(b"secret_"))
-        else "hmac-sha256"
-    )
-    with suppress(Exception):
-        _initialize_components()
-        ks = get_verification_key_store()
-        db_path = get_control_db_path()
-        with sqlite3.connect(db_path) as conn:
-            from core.c2.grant_service import insert_initial_bootstrap_grants
-            from core.c2.operators import insert_operator_record
+    _initialize_components()
+    ks = get_verification_key_store()
+    db_path = get_control_db_path()
+    with sqlite3.connect(db_path) as conn:
+        from core.c2.control_migrations import apply_control_migrations
+        from core.c2.grant_service import insert_initial_bootstrap_grants
+        from core.c2.operators import insert_operator_record
 
-            insert_operator_record(
-                conn,
-                operator_id=op_id,
-                subject_id="s_test",
-                name=f"Test Operator {op_id}",
-                role="admin",
-                api_key="api_key_test_auto_12345",
-            )
-            insert_initial_bootstrap_grants(
-                conn,
-                operator_id=op_id,
-                subject_id="s_test",
-                peer_uid=os.getuid(),
-                peer_gid=os.getgid(),
-            )
-        ks.register_key(
-            key_id=key_id,
+        apply_control_migrations(conn)
+        insert_operator_record(
+            conn,
             operator_id=op_id,
-            verification_key=key_bytes,
-            algorithm=algo,
+            subject_id="s_test",
+            name=f"Test Operator {op_id}",
+            role="admin",
+            api_key=f"api_key_{op_id}",
         )
+        insert_initial_bootstrap_grants(
+            conn,
+            operator_id=op_id,
+            subject_id="s_test",
+            peer_uid=os.getuid(),
+            peer_gid=os.getgid(),
+        )
+        now_ts = time.time()
+        conn.execute(
+            """
+            INSERT INTO control_missions (mission_id, mission_kind, active, created_at)
+            VALUES ('m_test', 'test-mission', 1, ?), ('m_1', 'test-mission', 1, ?)
+            ON CONFLICT(mission_id) DO NOTHING
+            """,
+            (now_ts, now_ts),
+        )
+        conn.execute(
+            """
+            INSERT INTO operator_mission_grants (operator_id, subject_id, mission_id, active, updated_at)
+            VALUES (?, ?, 'm_test', 1, ?), (?, ?, 'm_1', 1, ?)
+            ON CONFLICT(operator_id, mission_id) DO NOTHING
+            """,
+            (op_id, "s_test", now_ts, op_id, "s_test", now_ts),
+        )
+    ks.register_key(
+        key_id=key_id,
+        operator_id=op_id,
+        verification_key=key_bytes,
+        algorithm=algorithm,
+    )
     _key_resolver.register_key(key_id, key_bytes)
 
 
 def _sign_response_envelope(
     response: ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1,
-    request: ParticipantControlRequestV1 | None = None,
-) -> SignedControlResponseV1:
+    request: ParticipantControlRequestV1 | ParticipantControlRequestV2 | None = None,
+) -> SignedControlResponseV1 | SignedControlResponseV2:
     """Wrap and sign a control response envelope using daemon Ed25519 response key."""
     if request is not None:
         req_digest = request.authorization.request_digest
@@ -970,15 +974,14 @@ def _sign_response_envelope(
     )
     signature = signer.sign_envelope_dict(envelope_dict)
 
-    return SignedControlResponseV1(
-        protocol_version=C2_CONTROL_PROTOCOL_VERSION,
-        daemon_instance_id=DAEMON_INSTANCE_ID,
-        daemon_generation=DAEMON_GENERATION,
+    return SignedControlResponseV2(
+        protocol_version="2.0",
         service_id=service_id,
         boot_instance_id=BOOT_INSTANCE_ID,
+        daemon_generation=DAEMON_GENERATION,
         request_digest=req_digest,
         request_nonce=req_nonce,
-        response_type=resp_type,
+        response_type=cast(Literal["receipt", "snapshot", "error"], resp_type),
         response_payload_b64u=payload_b64u,
         response_digest=payload_digest,
         issued_at_ms=issued_at_ms,
@@ -991,7 +994,7 @@ def _dispatch_verified_request(
     verified: VerifiedControlRequest,
 ) -> ParticipantControlReceiptV1 | ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1:
     """Dispatch authorized control request to participant and handlers."""
-    req: ParticipantControlRequestV1 = verified.request
+    req: ParticipantControlRequestV1 | ParticipantControlRequestV2 = verified.request
     action = req.action
     tx_id = req.authorization.transaction_id
     participant = get_daemon_resource_participant()
@@ -1119,14 +1122,7 @@ def handle_client(
                 break
             except Exception as exc:
                 logger.warning("Unauthenticated frame reading error: %s", exc)
-                err = BoundedControlErrorV1(
-                    reason_code=C2ControlErrorCodeV1.MALFORMED,
-                    retryable=False,
-                    detail_ref="malformed_frame",
-                )
-                with suppress(Exception):
-                    signed_env = _sign_response_envelope(err, None)
-                    conn.sendall(_control_codec.encode_response(signed_env))
+                # Fail-closed: close connection without emitting unauthenticated response with empty correlation
                 break
 
             req_count += 1
@@ -1134,46 +1130,8 @@ def handle_client(
                 framed_req = _control_codec.decode_request(frame_data)
             except Exception as exc:
                 logger.warning("Malformed request decoding error: %s", exc)
-                err = BoundedControlErrorV1(
-                    reason_code=C2ControlErrorCodeV1.MALFORMED,
-                    retryable=False,
-                    detail_ref="malformed_control_request",
-                )
-                with suppress(Exception):
-                    signed_env = _sign_response_envelope(err, None)
-                    conn.sendall(_control_codec.encode_response(signed_env))
+                # Fail-closed: close connection without emitting unauthenticated response with empty correlation
                 break
-
-            # Handle unauthenticated AF_UNIX readiness probes
-            if (
-                framed_req.action in (C2ControlActionV1.PING, C2ControlActionV1.VERSION, C2ControlActionV1.READINESS)
-                and framed_req.authorization.key_id in ("unauthenticated", "probe", "readiness_probe")
-                and (conn.family == getattr(socket, "AF_UNIX", 1) or peer_resolver is not None)
-            ):
-                synthetic_principal = AuthenticatedControlPrincipal(
-                    operator_id="readiness_probe",
-                    subject_id=framed_req.authorization.subject_id or "probe",
-                    role=OperatorRole.READONLY,
-                    peer=peer,
-                    mission_id=framed_req.authorization.mission_id or "readiness",
-                    operator_revision=1,
-                    peer_binding_revision=1,
-                    mission_grant_revision=1,
-                    authenticated_at=time.time(),
-                    expires_at=time.time() + 60.0,
-                )
-                verified = VerifiedControlRequest(
-                    request=framed_req,
-                    peer=peer,
-                    principal=synthetic_principal,
-                    payload_bytes=b"",
-                    request_digest=framed_req.authorization.request_digest,
-                )
-                response = _dispatch_verified_request(verified)
-                signed_env = _sign_response_envelope(response, framed_req)
-                resp_frame = _control_codec.encode_response(signed_env)
-                conn.sendall(resp_frame)
-                continue
 
             try:
                 verified = boundary.authorize(framed_req, peer)
@@ -1211,7 +1169,7 @@ def handle_client(
 
 
 def run_socket_server(socket_override: str | None = None) -> None:
-    """Unix Domain Socket control plane supporting systemd socket activation."""
+    """Unix Domain Socket control plane supporting strict systemd socket activation."""
     env = getattr(os, "environ", {})
     sock_path = socket_override or env.get("OCTOPUS_C2_SOCKET") or SOCK_FILE
 
@@ -1220,39 +1178,50 @@ def run_socket_server(socket_override: str | None = None) -> None:
     listen_pid_env = env.get("LISTEN_PID") if hasattr(env, "get") else None
     server = None
 
-    if listen_fds_env and listen_pid_env and str(os.getpid()) == listen_pid_env:
+    if listen_fds_env and listen_pid_env:
+        if str(os.getpid()) != listen_pid_env:
+            raise RuntimeError("invalid_systemd_socket_activation: PID mismatch")
         try:
             num_fds = int(listen_fds_env)
-            if num_fds >= 1:
-                raw_sock = socket.socket(fileno=SD_LISTEN_FDS_START)
-                if (
-                    raw_sock.family == getattr(socket, "AF_UNIX", 1)
-                    and raw_sock.type == socket.SOCK_STREAM
-                    and raw_sock.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1
-                ):
-                    server = raw_sock
-                    with suppress(Exception):
-                        del os.environ["LISTEN_FDS"]
-                        del os.environ["LISTEN_PID"]
-                    logger.info("Control Plane inherited socket from systemd (fd %d)", SD_LISTEN_FDS_START)
-                else:
-                    raise RuntimeError("invalid_systemd_socket_activation")
+        except ValueError as exc:
+            raise RuntimeError("invalid_systemd_socket_activation: invalid LISTEN_FDS") from exc
+        if num_fds != 1:
+            raise RuntimeError(f"invalid_systemd_socket_activation: expected 1 fd, got {num_fds}")
+        try:
+            raw_sock = socket.socket(fileno=SD_LISTEN_FDS_START)
+            if (
+                raw_sock.family != getattr(socket, "AF_UNIX", 1)
+                or raw_sock.type != socket.SOCK_STREAM
+                or raw_sock.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) != 1
+            ):
+                raise RuntimeError("invalid_systemd_socket_activation: socket not AF_UNIX stream in listen mode")
+            bound_path = raw_sock.getsockname()
+            if bound_path and os.path.abspath(bound_path) != os.path.abspath(sock_path):
+                raise RuntimeError(
+                    f"invalid_systemd_socket_activation: socket path mismatch {bound_path} != {sock_path}"
+                )
+            server = raw_sock
+            os.environ.pop("LISTEN_FDS", None)
+            os.environ.pop("LISTEN_PID", None)
+            logger.info("Control Plane inherited socket from systemd (fd %d)", SD_LISTEN_FDS_START)
         except Exception as exc:
-            logger.error("Systemd socket activation adoption failed: %s", exc)
-            server = None
+            raise RuntimeError(f"invalid_systemd_socket_activation: {exc}") from exc
 
     if server is None:
         if os.path.exists(sock_path):
             raise RuntimeError(f"control socket already exists: {sock_path}")
 
         with suppress(Exception):
-            parent_dir = getattr(os.path, "dirname", lambda p: "")(getattr(os.path, "abspath", lambda p: p)(sock_path))
-            if parent_dir and hasattr(os, "makedirs"):
+            parent_dir = os.path.dirname(os.path.abspath(sock_path))
+            if parent_dir:
                 os.makedirs(parent_dir, mode=0o750, exist_ok=True)
 
-        server = socket.socket(getattr(socket, "AF_UNIX", 1), socket.SOCK_STREAM)
-        server.bind(sock_path)
-        server.listen(32)
+        try:
+            server = socket.socket(getattr(socket, "AF_UNIX", 1), socket.SOCK_STREAM)
+            server.bind(sock_path)
+            server.listen(32)
+        except Exception as exc:
+            raise RuntimeError(f"failed to bind control socket: {exc}") from exc
         with suppress(Exception):
             os.chmod(sock_path, 0o660)
         logger.info("Control Plane listening on %s", sock_path)

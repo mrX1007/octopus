@@ -1,21 +1,31 @@
+"""Deterministic 2PC resource participant with durable SQLite persistence and failpoints (§14.4-§14.6)."""
+
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import threading
 import time
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from enum import Enum
 from typing import Any
 
-from core.c2.control_auth import AuthenticatedControlPrincipal
+from core.c2.control_auth import (
+    AuthenticatedControlPrincipal,
+    AuthorityFence,
+)
 from core.c2.control_commands import (
     BoundedControlErrorV1,
     C2ControlErrorCodeV1,
     ParticipantControlPhaseV1,
+    ParticipantControlPhaseV2,
     ParticipantControlQuerySnapshotV1,
     ParticipantControlReceiptV1,
+    ParticipantControlReceiptV2,
     ParticipantControlRequestV1,
+    ParticipantControlRequestV2,
 )
 from core.c2.control_migrations import apply_control_migrations
 from core.c2.control_models import (
@@ -25,8 +35,15 @@ from core.c2.control_models import (
 )
 
 
+class TransactionFailpoint(str, Enum):
+    AFTER_BEGIN = "after_begin"
+    AFTER_CAS = "after_cas"
+    AFTER_PHASE_PERSIST = "after_phase_persist"
+    AFTER_RECEIPT_PERSIST = "after_receipt_persist"
+
+
 class C2DaemonResourceParticipant:
-    """Resource participant managing transactions for C2 daemon resources with durable SQLite persistence."""
+    """Resource participant managing transactions for C2 daemon resources with atomic 2PC state machine."""
 
     def __init__(
         self,
@@ -41,6 +58,9 @@ class C2DaemonResourceParticipant:
         self._lock = threading.RLock()
         self._pending_transactions: dict[str, Any] = {}
         self._committed_resources: dict[str, Any] = {}
+        self._active_failpoint: TransactionFailpoint | None = None
+        self._failpoint_exception: Exception | None = None
+
         if self.db_path == ":memory:":
             self._conn_uri = f"file:mem_res_{id(self)}?mode=memory&cache=shared"
             self._shared_conn: sqlite3.Connection | None = sqlite3.connect(
@@ -50,6 +70,25 @@ class C2DaemonResourceParticipant:
             self._conn_uri = self.db_path
             self._shared_conn = None
         self._init_db()
+
+    def set_failpoint(
+        self,
+        failpoint: TransactionFailpoint | None,
+        exception: Exception | None = None,
+    ) -> None:
+        """Inject a deterministic failpoint for rollback/crash recovery testing."""
+        self._active_failpoint = failpoint
+        self._failpoint_exception = exception or RuntimeError(f"failpoint_triggered:{failpoint}")
+
+    def clear_failpoints(self) -> None:
+        """Clear all active failpoints."""
+        self._active_failpoint = None
+        self._failpoint_exception = None
+
+    def _trigger_failpoint(self, failpoint: TransactionFailpoint) -> None:
+        if self._active_failpoint == failpoint:
+            exc = self._failpoint_exception or RuntimeError(f"failpoint_triggered:{failpoint}")
+            raise exc
 
     def _init_db(self) -> None:
         with self._lock, self._connection() as conn:
@@ -74,6 +113,27 @@ class C2DaemonResourceParticipant:
         finally:
             conn.close()
 
+    @contextmanager
+    def _immediate_transaction(self) -> Iterator[sqlite3.Connection]:
+        """Open a connection and issue BEGIN IMMEDIATE for atomic 2PC mutations."""
+        if self._shared_conn is not None:
+            conn = sqlite3.connect(self._conn_uri, uri=True, timeout=30.0, check_same_thread=False)
+        else:
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
+        conn.isolation_level = None
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield conn
+            conn.execute("COMMIT")
+        except Exception:
+            with contextlib.suppress(Exception):
+                conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.close()
+
     def close(self) -> None:
         with self._lock:
             if self._shared_conn is not None:
@@ -87,8 +147,9 @@ class C2DaemonResourceParticipant:
 
     def prepare(
         self,
-        request: ParticipantControlRequestV1,
+        request: ParticipantControlRequestV1 | ParticipantControlRequestV2,
         principal: AuthenticatedControlPrincipal | None = None,
+        resolved_key: Any = None,
     ) -> ParticipantControlReceiptV1 | BoundedControlErrorV1:
         """Prepare phase of 2PC transaction."""
         tx_id = request.authorization.transaction_id
@@ -101,144 +162,188 @@ class C2DaemonResourceParticipant:
             resource_ref=res_ref,
             mission_id=request.authorization.mission_id,
             subject_id=request.authorization.subject_id,
-            operation_kind=request.action.value,
+            operation_kind="c2_resource",
             payload_schema_id=request.payload_schema_id,
             payload_digest=request.payload_digest,
         )
 
-        with self._lock, self._connection() as conn:
+        with self._lock:
             try:
-                # 1. Query existing transaction FIRST
-                cur = conn.execute(
-                    """
-                    SELECT phase, prepare_receipt_ref, prepare_receipt_digest, payload_digest,
-                           operator_id, subject_id, mission_id, prepared_base_revision
-                    FROM control_2pc_transactions
-                    WHERE participant_id = ? AND transaction_id = ?
-                    """,
-                    (self.participant_id, tx_id),
-                )
-                existing = cur.fetchone()
+                with self._immediate_transaction() as conn:
+                    self._trigger_failpoint(TransactionFailpoint.AFTER_BEGIN)
 
-                if existing is not None:
-                    phase, prep_ref, prep_dig, p_dig, _op_id, subj_id, mis_id, base_rev = existing
+                    # TOCTOU Authority Fence
+                    if principal is not None and resolved_key is not None:
+                        try:
+                            AuthorityFence.verify_current(conn, principal, resolved_key)
+                        except PermissionError as exc:
+                            return BoundedControlErrorV1(
+                                reason_code=C2ControlErrorCodeV1.NOT_AUTHORIZED,
+                                retryable=False,
+                                detail_ref=f"authority_fence_failed:{exc}",
+                            )
+
+                    # 1. Query existing transaction FIRST
+                    cur = conn.execute(
+                        """
+                        SELECT phase, prepare_receipt_ref, prepare_receipt_digest, payload_digest,
+                               operator_id, subject_id, mission_id, prepared_base_revision,
+                               prepare_request_digest, transaction_intent_digest
+                        FROM control_2pc_transactions
+                        WHERE participant_id = ? AND transaction_id = ?
+                        """,
+                        (self.participant_id, tx_id),
+                    )
+                    existing = cur.fetchone()
+
+                    if existing is not None:
+                        (
+                            phase,
+                            prep_ref,
+                            prep_dig,
+                            p_dig,
+                            op_id,
+                            subj_id,
+                            mis_id,
+                            base_rev,
+                            prep_req_dig,
+                            stored_intent_dig,
+                        ) = existing
+
+                        # Idempotency check: same request digest and same intent digest
+                        if (
+                            prep_req_dig != request.authorization.request_digest
+                            or stored_intent_dig != intent_digest
+                            or p_dig != request.payload_digest
+                            or subj_id != request.authorization.subject_id
+                            or mis_id != request.authorization.mission_id
+                            or (operator_id and op_id != operator_id)
+                        ):
+                            return BoundedControlErrorV1(
+                                reason_code=C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT,
+                                retryable=False,
+                                detail_ref="transaction_identity_or_payload_mismatch",
+                            )
+
+                        if phase not in (
+                            ParticipantControlPhaseV2.PREPARED.value,
+                            ParticipantControlPhaseV1.PENDING.value,
+                        ):
+                            return BoundedControlErrorV1(
+                                reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                                retryable=False,
+                                detail_ref=f"Transaction already in phase {phase}",
+                            )
+
+                        # Idempotent prepare receipt return
+                        return ParticipantControlReceiptV1(
+                            transaction_id=tx_id,
+                            participant_id=self.participant_id,
+                            action=request.action,
+                            resource_ref=res_ref,
+                            resource_revision=base_rev,
+                            receipt_ref=prep_ref,
+                            receipt_digest=prep_dig,
+                            daemon_instance_id=self.daemon_instance_id,
+                            result_payload_schema_id=request.payload_schema_id,
+                            result_payload_digest=request.payload_digest,
+                            result_payload_b64u=request.canonical_payload_b64u,
+                        )
+
+                    # 2. If new: validate expected revision
+                    current_rev = self._get_resource_revision(conn, res_ref)
                     if (
-                        p_dig != request.payload_digest
-                        or subj_id != request.authorization.subject_id
-                        or mis_id != request.authorization.mission_id
+                        request.expected_resource_revision is not None
+                        and request.expected_resource_revision != current_rev
                     ):
                         return BoundedControlErrorV1(
                             reason_code=C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT,
-                            retryable=False,
-                            detail_ref="transaction_identity_or_payload_mismatch",
+                            retryable=True,
+                            detail_ref=f"revision_mismatch: expected {request.expected_resource_revision}, current {current_rev}",
                         )
 
-                    if phase != ParticipantControlPhaseV1.PENDING.value:
-                        return BoundedControlErrorV1(
-                            reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
-                            retryable=False,
-                            detail_ref=f"Transaction already in phase {phase}",
-                        )
+                    # Ensure resource revision row exists
+                    conn.execute(
+                        """
+                        INSERT INTO control_resource_revisions (resource_ref, revision, updated_at_ms)
+                        VALUES (?, ?, ?)
+                        ON CONFLICT(resource_ref) DO NOTHING
+                        """,
+                        (res_ref, current_rev, now_ms),
+                    )
 
-                    # Idempotent prepare receipt return
-                    return ParticipantControlReceiptV1(
+                    rcpt_ref = f"rcpt_prep_{uuid.uuid4().hex[:8]}"
+                    rcpt_digest = calculate_receipt_digest(
+                        transaction_id=tx_id,
+                        participant_id=self.participant_id,
+                        action=request.action.value if hasattr(request.action, "value") else str(request.action),
+                        resource_ref=res_ref,
+                        resource_revision=current_rev,
+                        receipt_ref=rcpt_ref,
+                        daemon_instance_id=self.daemon_instance_id,
+                        result_payload_schema_id=request.payload_schema_id,
+                        result_payload_digest=request.payload_digest,
+                    )
+
+                    key_rev = getattr(resolved_key, "key_revision", 1) if resolved_key else 1
+
+                    conn.execute(
+                        """
+                        INSERT INTO control_2pc_transactions (
+                            transaction_id, participant_id, operator_id, key_id, key_revision,
+                            subject_id, mission_id, action, resource_ref, resource_revision,
+                            phase, payload_schema_id, payload_digest, canonical_payload_b64u,
+                            transaction_intent_digest, prepared_base_revision,
+                            prepare_request_digest, prepare_receipt_ref, prepare_receipt_digest,
+                            created_at_ms, updated_at_ms
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            tx_id,
+                            self.participant_id,
+                            operator_id,
+                            request.authorization.key_id,
+                            key_rev,
+                            request.authorization.subject_id,
+                            request.authorization.mission_id,
+                            request.action.value if hasattr(request.action, "value") else str(request.action),
+                            res_ref,
+                            current_rev,
+                            ParticipantControlPhaseV2.PREPARED.value,
+                            request.payload_schema_id,
+                            request.payload_digest,
+                            request.canonical_payload_b64u,
+                            intent_digest,
+                            current_rev,
+                            request.authorization.request_digest,
+                            rcpt_ref,
+                            rcpt_digest,
+                            now_ms,
+                            now_ms,
+                        ),
+                    )
+
+                    self._trigger_failpoint(TransactionFailpoint.AFTER_RECEIPT_PERSIST)
+
+                    res = ParticipantControlReceiptV1(
                         transaction_id=tx_id,
                         participant_id=self.participant_id,
                         action=request.action,
                         resource_ref=res_ref,
-                        resource_revision=base_rev,
-                        receipt_ref=prep_ref,
-                        receipt_digest=prep_dig,
+                        resource_revision=current_rev,
+                        receipt_ref=rcpt_ref,
+                        receipt_digest=rcpt_digest,
                         daemon_instance_id=self.daemon_instance_id,
                         result_payload_schema_id=request.payload_schema_id,
                         result_payload_digest=request.payload_digest,
                         result_payload_b64u=request.canonical_payload_b64u,
                     )
-
-                # 2. If new: validate expected revision
-                current_rev = self._get_resource_revision(conn, res_ref)
-                if request.expected_resource_revision is not None and request.expected_resource_revision != current_rev:
-                    return BoundedControlErrorV1(
-                        reason_code=C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT,
-                        retryable=True,
-                        detail_ref=f"Revision mismatch: expected {request.expected_resource_revision}, current {current_rev}",
-                    )
-
-                # Ensure resource revision row exists
-                conn.execute(
-                    "INSERT OR IGNORE INTO control_resource_revisions (resource_ref, revision) VALUES (?, ?)",
-                    (res_ref, current_rev),
-                )
-
-                rcpt_ref = f"rcpt_prep_{uuid.uuid4().hex[:8]}"
-                rcpt_digest = calculate_receipt_digest(
-                    transaction_id=tx_id,
-                    participant_id=self.participant_id,
-                    action=request.action.value,
-                    resource_ref=res_ref,
-                    resource_revision=current_rev,
-                    receipt_ref=rcpt_ref,
-                    daemon_instance_id=self.daemon_instance_id,
-                    result_payload_schema_id=request.payload_schema_id,
-                    result_payload_digest=request.payload_digest,
-                )
-
-                conn.execute(
-                    """
-                    INSERT INTO control_2pc_transactions (
-                        participant_id, transaction_id, operator_id, key_id, key_revision,
-                        subject_id, mission_id, operation_kind, transaction_intent_digest,
-                        resource_ref, resource_revision, phase, action, payload_schema_id,
-                        payload_digest, canonical_payload_b64u, prepared_request_digest,
-                        prepared_base_revision, prepare_receipt_ref, prepare_receipt_digest,
-                        created_at_ms, updated_at_ms
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        self.participant_id,
-                        tx_id,
-                        operator_id,
-                        request.authorization.key_id,
-                        request.authorization.coordinator_revision,
-                        request.authorization.subject_id,
-                        request.authorization.mission_id,
-                        request.action.value,
-                        intent_digest,
-                        res_ref,
-                        current_rev,
-                        ParticipantControlPhaseV1.PENDING.value,
-                        request.action.value,
-                        request.payload_schema_id,
-                        request.payload_digest,
-                        request.canonical_payload_b64u,
-                        request.authorization.request_digest,
-                        current_rev,
-                        rcpt_ref,
-                        rcpt_digest,
-                        now_ms,
-                        now_ms,
-                    ),
-                )
-
-                res = ParticipantControlReceiptV1(
-                    transaction_id=tx_id,
-                    participant_id=self.participant_id,
-                    action=request.action,
-                    resource_ref=res_ref,
-                    resource_revision=current_rev,
-                    receipt_ref=rcpt_ref,
-                    receipt_digest=rcpt_digest,
-                    daemon_instance_id=self.daemon_instance_id,
-                    result_payload_schema_id=request.payload_schema_id,
-                    result_payload_digest=request.payload_digest,
-                    result_payload_b64u=request.canonical_payload_b64u,
-                )
-                self._pending_transactions[tx_id] = {
-                    "phase": ParticipantControlPhaseV1.PENDING,
-                    "request": request,
-                    "receipt": res,
-                }
-                return res
+                    self._pending_transactions[tx_id] = {
+                        "phase": ParticipantControlPhaseV2.PREPARED,
+                        "request": request,
+                        "receipt": res,
+                    }
+                    return res
             except Exception as exc:
                 return BoundedControlErrorV1(
                     reason_code=C2ControlErrorCodeV1.INTERNAL_FAILURE,
@@ -248,159 +353,225 @@ class C2DaemonResourceParticipant:
 
     def commit(
         self,
-        request: ParticipantControlRequestV1,
+        request: ParticipantControlRequestV1 | ParticipantControlRequestV2,
         principal: AuthenticatedControlPrincipal | None = None,
+        resolved_key: Any = None,
     ) -> ParticipantControlReceiptV1 | BoundedControlErrorV1:
         """Commit phase of 2PC transaction."""
         tx_id = request.authorization.transaction_id
         res_ref = f"resource:{self.participant_id}"
         now_ms = int(time.time() * 1000)
 
-        with self._lock, self._connection() as conn:
-            try:
-                cur = conn.execute(
-                    """
-                    SELECT phase, resource_revision, payload_digest, commit_receipt_ref,
-                           commit_receipt_digest, canonical_payload_b64u, prepare_receipt_ref,
-                           prepare_receipt_digest, prepared_base_revision
-                    FROM control_2pc_transactions
-                    WHERE participant_id = ? AND transaction_id = ?
-                    """,
-                    (self.participant_id, tx_id),
+        # Mandatory receipt chaining
+        prior_ref = request.prior_receipt_ref
+        prior_dig = request.prior_receipt_digest
+        if not prior_ref or not prior_dig:
+            pending = self._pending_transactions.get(tx_id)
+            if pending and "receipt" in pending:
+                prior_ref = pending["receipt"].receipt_ref
+                prior_dig = pending["receipt"].receipt_digest
+            else:
+                with self._connection() as conn:
+                    row = conn.execute(
+                        "SELECT prepare_receipt_ref, prepare_receipt_digest FROM control_2pc_transactions WHERE participant_id = ? AND transaction_id = ?",
+                        (self.participant_id, tx_id),
+                    ).fetchone()
+                    if row and row[0] and row[1]:
+                        prior_ref, prior_dig = row
+            if not prior_ref or not prior_dig:
+                return BoundedControlErrorV1(
+                    reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                    retryable=False,
+                    detail_ref="prior_receipt_required_for_commit",
                 )
-                row = cur.fetchone()
-                if row is None:
-                    return BoundedControlErrorV1(
-                        reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
-                        retryable=False,
-                        detail_ref=f"transaction_not_found:{tx_id}",
+
+        with self._lock:
+            try:
+                with self._immediate_transaction() as conn:
+                    self._trigger_failpoint(TransactionFailpoint.AFTER_BEGIN)
+
+                    # TOCTOU Authority Fence
+                    if principal is not None and resolved_key is not None:
+                        try:
+                            AuthorityFence.verify_current(conn, principal, resolved_key)
+                        except PermissionError as exc:
+                            return BoundedControlErrorV1(
+                                reason_code=C2ControlErrorCodeV1.NOT_AUTHORIZED,
+                                retryable=False,
+                                detail_ref=f"authority_fence_failed:{exc}",
+                            )
+
+                    cur = conn.execute(
+                        """
+                        SELECT phase, resource_revision, payload_digest, commit_receipt_ref,
+                               commit_receipt_digest, canonical_payload_b64u, prepare_receipt_ref,
+                               prepare_receipt_digest, prepared_base_revision, commit_request_digest,
+                               operator_id, subject_id, mission_id, transaction_intent_digest
+                        FROM control_2pc_transactions
+                        WHERE participant_id = ? AND transaction_id = ?
+                        """,
+                        (self.participant_id, tx_id),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        return BoundedControlErrorV1(
+                            reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                            retryable=False,
+                            detail_ref=f"transaction_not_found:{tx_id}",
+                        )
+
+                    (
+                        phase_val,
+                        stored_rev,
+                        prep_pdig,
+                        comm_ref,
+                        comm_dig,
+                        stored_b64,
+                        prep_ref,
+                        prep_dig,
+                        base_rev,
+                        stored_comm_req_dig,
+                        _op_id,
+                        subj_id,
+                        mis_id,
+                        _stored_intent_dig,
+                    ) = row
+
+                    if phase_val in (
+                        ParticipantControlPhaseV2.COMMITTED_HIDDEN.value,
+                        ParticipantControlPhaseV2.FINALIZED_VISIBLE.value,
+                        ParticipantControlPhaseV1.COMMITTED_HIDDEN.value,
+                        ParticipantControlPhaseV1.FINALIZED_VISIBLE.value,
+                    ):
+                        # Idempotency validation
+                        if stored_comm_req_dig and stored_comm_req_dig != request.authorization.request_digest:
+                            return BoundedControlErrorV1(
+                                reason_code=C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT,
+                                retryable=False,
+                                detail_ref="commit_request_digest_mismatch",
+                            )
+
+                        res = ParticipantControlReceiptV1(
+                            transaction_id=tx_id,
+                            participant_id=self.participant_id,
+                            action=request.action,
+                            resource_ref=res_ref,
+                            resource_revision=stored_rev,
+                            receipt_ref=comm_ref,
+                            receipt_digest=comm_dig,
+                            daemon_instance_id=self.daemon_instance_id,
+                            result_payload_schema_id=request.payload_schema_id,
+                            result_payload_digest=request.payload_digest,
+                            result_payload_b64u=stored_b64,
+                        )
+                        self._pending_transactions.pop(tx_id, None)
+                        if tx_id not in self._committed_resources:
+                            self._committed_resources[tx_id] = {
+                                "phase": ParticipantControlPhaseV2.COMMITTED_HIDDEN,
+                                "request": request,
+                                "receipt": res,
+                            }
+                        return res
+
+                    if phase_val not in (
+                        ParticipantControlPhaseV2.PREPARED.value,
+                        ParticipantControlPhaseV1.PENDING.value,
+                    ):
+                        return BoundedControlErrorV1(
+                            reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                            retryable=False,
+                            detail_ref=f"Transaction in phase {phase_val} cannot be committed",
+                        )
+
+                    # Validate prepare receipt chain
+                    if prior_ref != prep_ref or prior_dig != prep_dig:
+                        return BoundedControlErrorV1(
+                            reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                            retryable=False,
+                            detail_ref="prior_receipt_chain_validation_failed",
+                        )
+
+                    # Intent validation across phases
+                    if (
+                        request.payload_digest != prep_pdig
+                        or request.authorization.subject_id != subj_id
+                        or request.authorization.mission_id != mis_id
+                    ):
+                        return BoundedControlErrorV1(
+                            reason_code=C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT,
+                            retryable=False,
+                            detail_ref="intent_mismatch_across_phases",
+                        )
+
+                    # Perform atomic CAS on resource revision
+                    new_rev = base_rev + 1
+                    cas_cur = conn.execute(
+                        "UPDATE control_resource_revisions SET revision = ? WHERE resource_ref = ? AND revision = ?",
+                        (new_rev, res_ref, base_rev),
+                    )
+                    if cas_cur.rowcount != 1:
+                        return BoundedControlErrorV1(
+                            reason_code=C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT,
+                            retryable=True,
+                            detail_ref="concurrent_revision_conflict",
+                        )
+
+                    self._trigger_failpoint(TransactionFailpoint.AFTER_CAS)
+
+                    rcpt_ref = f"rcpt_commit_{uuid.uuid4().hex[:8]}"
+                    rcpt_digest = calculate_receipt_digest(
+                        transaction_id=tx_id,
+                        participant_id=self.participant_id,
+                        action=request.action.value if hasattr(request.action, "value") else str(request.action),
+                        resource_ref=res_ref,
+                        resource_revision=new_rev,
+                        receipt_ref=rcpt_ref,
+                        daemon_instance_id=self.daemon_instance_id,
+                        result_payload_schema_id=request.payload_schema_id,
+                        result_payload_digest=request.payload_digest,
                     )
 
-                (
-                    phase_val,
-                    stored_rev,
-                    _prep_pdig,
-                    comm_ref,
-                    comm_dig,
-                    stored_b64,
-                    prep_ref,
-                    prep_dig,
-                    base_rev,
-                ) = row
+                    conn.execute(
+                        """
+                        UPDATE control_2pc_transactions
+                        SET phase = ?, resource_revision = ?, commit_receipt_ref = ?,
+                            commit_receipt_digest = ?, commit_request_digest = ?, updated_at_ms = ?
+                        WHERE participant_id = ? AND transaction_id = ?
+                        """,
+                        (
+                            ParticipantControlPhaseV2.COMMITTED_HIDDEN.value,
+                            new_rev,
+                            rcpt_ref,
+                            rcpt_digest,
+                            request.authorization.request_digest,
+                            now_ms,
+                            self.participant_id,
+                            tx_id,
+                        ),
+                    )
 
-                if phase_val in (
-                    ParticipantControlPhaseV1.COMMITTED_HIDDEN.value,
-                    ParticipantControlPhaseV1.FINALIZED_VISIBLE.value,
-                ):
-                    # Idempotent commit return
+                    self._trigger_failpoint(TransactionFailpoint.AFTER_RECEIPT_PERSIST)
+
                     res = ParticipantControlReceiptV1(
                         transaction_id=tx_id,
                         participant_id=self.participant_id,
                         action=request.action,
                         resource_ref=res_ref,
-                        resource_revision=stored_rev,
-                        receipt_ref=comm_ref,
-                        receipt_digest=comm_dig,
+                        resource_revision=new_rev,
+                        receipt_ref=rcpt_ref,
+                        receipt_digest=rcpt_digest,
                         daemon_instance_id=self.daemon_instance_id,
                         result_payload_schema_id=request.payload_schema_id,
                         result_payload_digest=request.payload_digest,
-                        result_payload_b64u=stored_b64,
+                        result_payload_b64u=request.canonical_payload_b64u,
                     )
                     self._pending_transactions.pop(tx_id, None)
-                    if tx_id not in self._committed_resources:
-                        self._committed_resources[tx_id] = {
-                            "phase": ParticipantControlPhaseV1.COMMITTED_HIDDEN,
-                            "request": request,
-                            "receipt": res,
-                        }
+                    self._committed_resources[tx_id] = {
+                        "phase": ParticipantControlPhaseV2.COMMITTED_HIDDEN,
+                        "request": request,
+                        "receipt": res,
+                    }
                     return res
-
-                if phase_val != ParticipantControlPhaseV1.PENDING.value:
-                    return BoundedControlErrorV1(
-                        reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
-                        retryable=False,
-                        detail_ref=f"Transaction in phase {phase_val} cannot be committed",
-                    )
-
-                # Validate prepare receipt chain
-                if request.prior_receipt_ref and request.prior_receipt_ref != prep_ref:
-                    return BoundedControlErrorV1(
-                        reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
-                        retryable=False,
-                        detail_ref="prior_receipt_ref_mismatch",
-                    )
-                if request.prior_receipt_digest and request.prior_receipt_digest != prep_dig:
-                    return BoundedControlErrorV1(
-                        reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
-                        retryable=False,
-                        detail_ref="prior_receipt_digest_mismatch",
-                    )
-
-                # Perform atomic CAS on resource revision
-                new_rev = base_rev + 1
-                cas_cur = conn.execute(
-                    "UPDATE control_resource_revisions SET revision = ? WHERE resource_ref = ? AND revision = ?",
-                    (new_rev, res_ref, base_rev),
-                )
-                if cas_cur.rowcount != 1:
-                    return BoundedControlErrorV1(
-                        reason_code=C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT,
-                        retryable=True,
-                        detail_ref="concurrent_revision_conflict",
-                    )
-
-                rcpt_ref = f"rcpt_commit_{uuid.uuid4().hex[:8]}"
-                rcpt_digest = calculate_receipt_digest(
-                    transaction_id=tx_id,
-                    participant_id=self.participant_id,
-                    action=request.action.value,
-                    resource_ref=res_ref,
-                    resource_revision=new_rev,
-                    receipt_ref=rcpt_ref,
-                    daemon_instance_id=self.daemon_instance_id,
-                    result_payload_schema_id=request.payload_schema_id,
-                    result_payload_digest=request.payload_digest,
-                )
-
-                conn.execute(
-                    """
-                    UPDATE control_2pc_transactions
-                    SET phase = ?, resource_revision = ?, commit_receipt_ref = ?,
-                        commit_receipt_digest = ?, commit_request_digest = ?, updated_at_ms = ?
-                    WHERE participant_id = ? AND transaction_id = ?
-                    """,
-                    (
-                        ParticipantControlPhaseV1.COMMITTED_HIDDEN.value,
-                        new_rev,
-                        rcpt_ref,
-                        rcpt_digest,
-                        request.authorization.request_digest,
-                        now_ms,
-                        self.participant_id,
-                        tx_id,
-                    ),
-                )
-
-                res = ParticipantControlReceiptV1(
-                    transaction_id=tx_id,
-                    participant_id=self.participant_id,
-                    action=request.action,
-                    resource_ref=res_ref,
-                    resource_revision=new_rev,
-                    receipt_ref=rcpt_ref,
-                    receipt_digest=rcpt_digest,
-                    daemon_instance_id=self.daemon_instance_id,
-                    result_payload_schema_id=request.payload_schema_id,
-                    result_payload_digest=request.payload_digest,
-                    result_payload_b64u=request.canonical_payload_b64u,
-                )
-                self._pending_transactions.pop(tx_id, None)
-                self._committed_resources[tx_id] = {
-                    "phase": ParticipantControlPhaseV1.COMMITTED_HIDDEN,
-                    "request": request,
-                    "receipt": res,
-                }
-                return res
             except Exception as exc:
                 return BoundedControlErrorV1(
                     reason_code=C2ControlErrorCodeV1.INTERNAL_FAILURE,
@@ -410,233 +581,401 @@ class C2DaemonResourceParticipant:
 
     def finalize_visibility(
         self,
-        request_or_receipt: ParticipantControlRequestV1 | ParticipantControlReceiptV1,
-        principal: AuthenticatedControlPrincipal | None = None,
-        operation: Any = None,
-        finalization_fence: Any = None,
+        request_or_receipt: ParticipantControlRequestV1 | ParticipantControlRequestV2 | ParticipantControlReceiptV1,
+        commit_receipt_or_principal: Any = None,
+        resolved_key: Any = None,
     ) -> ParticipantControlReceiptV1 | BoundedControlErrorV1:
         """Finalize visibility of committed resource."""
-        if isinstance(request_or_receipt, ParticipantControlRequestV1):
+        principal = (
+            commit_receipt_or_principal
+            if isinstance(commit_receipt_or_principal, AuthenticatedControlPrincipal)
+            else None
+        )
+        commit_receipt = (
+            commit_receipt_or_principal
+            if isinstance(commit_receipt_or_principal, (ParticipantControlReceiptV1, ParticipantControlReceiptV2))
+            else None
+        )
+
+        if isinstance(request_or_receipt, (ParticipantControlRequestV1, ParticipantControlRequestV2)):
             tx_id = request_or_receipt.authorization.transaction_id
             prior_ref = request_or_receipt.prior_receipt_ref
             prior_dig = request_or_receipt.prior_receipt_digest
             req_dig = request_or_receipt.authorization.request_digest
             action = request_or_receipt.action
         else:
-            if isinstance(principal, ParticipantControlReceiptV1):
-                tx_id = principal.transaction_id
-                prior_ref = principal.receipt_ref
-                prior_dig = principal.receipt_digest
-                req_dig = ""
-                action = principal.action
-            elif isinstance(operation, ParticipantControlReceiptV1):
-                tx_id = operation.transaction_id
-                prior_ref = operation.receipt_ref
-                prior_dig = operation.receipt_digest
-                req_dig = ""
-                action = operation.action
+            tx_id = request_or_receipt.transaction_id
+            if commit_receipt is not None:
+                prior_ref = commit_receipt.receipt_ref
+                prior_dig = commit_receipt.receipt_digest
             else:
-                tx_id = request_or_receipt.transaction_id
                 prior_ref = request_or_receipt.receipt_ref
                 prior_dig = request_or_receipt.receipt_digest
-                req_dig = ""
-                action = request_or_receipt.action
+            req_dig = ""
+            action = request_or_receipt.action
+
+        # Mandatory receipt chaining
+        if not prior_ref or not prior_dig:
+            with self._connection() as conn:
+                row = conn.execute(
+                    "SELECT commit_receipt_ref, commit_receipt_digest FROM control_2pc_transactions WHERE participant_id = ? AND transaction_id = ?",
+                    (self.participant_id, tx_id),
+                ).fetchone()
+                if row and row[0] and row[1]:
+                    prior_ref, prior_dig = row
+            if not prior_ref or not prior_dig:
+                return BoundedControlErrorV1(
+                    reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                    retryable=False,
+                    detail_ref="prior_receipt_required_for_finalize",
+                )
 
         res_ref = f"resource:{self.participant_id}"
         now_ms = int(time.time() * 1000)
 
-        with self._lock, self._connection() as conn:
-            cur = conn.execute(
-                """
-                SELECT phase, resource_revision, commit_receipt_ref, commit_receipt_digest,
-                       payload_schema_id, payload_digest, canonical_payload_b64u,
-                       finalize_receipt_ref, finalize_receipt_digest
-                FROM control_2pc_transactions
-                WHERE participant_id = ? AND transaction_id = ?
-                """,
-                (self.participant_id, tx_id),
-            )
-            row = cur.fetchone()
-            if row is None:
+        with self._lock:
+            try:
+                with self._immediate_transaction() as conn:
+                    self._trigger_failpoint(TransactionFailpoint.AFTER_BEGIN)
+
+                    # TOCTOU Authority Fence
+                    if principal is not None and resolved_key is not None:
+                        try:
+                            AuthorityFence.verify_current(conn, principal, resolved_key)
+                        except PermissionError as exc:
+                            return BoundedControlErrorV1(
+                                reason_code=C2ControlErrorCodeV1.NOT_AUTHORIZED,
+                                retryable=False,
+                                detail_ref=f"authority_fence_failed:{exc}",
+                            )
+
+                    cur = conn.execute(
+                        """
+                        SELECT phase, resource_revision, commit_receipt_ref, commit_receipt_digest,
+                               payload_schema_id, payload_digest, canonical_payload_b64u,
+                               finalize_receipt_ref, finalize_receipt_digest, finalize_request_digest
+                        FROM control_2pc_transactions
+                        WHERE participant_id = ? AND transaction_id = ?
+                        """,
+                        (self.participant_id, tx_id),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        return BoundedControlErrorV1(
+                            reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                            retryable=False,
+                            detail_ref=f"transaction_not_found:{tx_id}",
+                        )
+
+                    (
+                        phase,
+                        rev,
+                        comm_ref,
+                        comm_dig,
+                        sch_id,
+                        p_dig,
+                        b64u,
+                        fin_ref,
+                        fin_dig,
+                        stored_fin_req_dig,
+                    ) = row
+
+                    if phase in (
+                        ParticipantControlPhaseV2.FINALIZED_VISIBLE.value,
+                        ParticipantControlPhaseV1.FINALIZED_VISIBLE.value,
+                    ):
+                        # Idempotency check
+                        if req_dig and stored_fin_req_dig and stored_fin_req_dig != req_dig:
+                            return BoundedControlErrorV1(
+                                reason_code=C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT,
+                                retryable=False,
+                                detail_ref="finalize_request_digest_mismatch",
+                            )
+
+                        res = ParticipantControlReceiptV1(
+                            transaction_id=tx_id,
+                            participant_id=self.participant_id,
+                            action=action,
+                            resource_ref=res_ref,
+                            resource_revision=rev,
+                            receipt_ref=fin_ref or comm_ref,
+                            receipt_digest=fin_dig or comm_dig,
+                            daemon_instance_id=self.daemon_instance_id,
+                            result_payload_schema_id=sch_id,
+                            result_payload_digest=p_dig,
+                            result_payload_b64u=b64u,
+                        )
+                        if tx_id in self._committed_resources:
+                            self._committed_resources[tx_id]["phase"] = ParticipantControlPhaseV2.FINALIZED_VISIBLE
+                        return res
+
+                    if phase not in (
+                        ParticipantControlPhaseV2.COMMITTED_HIDDEN.value,
+                        ParticipantControlPhaseV1.COMMITTED_HIDDEN.value,
+                    ):
+                        return BoundedControlErrorV1(
+                            reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                            retryable=False,
+                            detail_ref=f"Cannot finalize transaction in phase {phase}",
+                        )
+
+                    if prior_ref != comm_ref or prior_dig != comm_dig:
+                        return BoundedControlErrorV1(
+                            reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                            retryable=False,
+                            detail_ref="prior_receipt_chain_validation_failed",
+                        )
+
+                    rcpt_ref = f"rcpt_fin_{uuid.uuid4().hex[:8]}"
+                    rcpt_digest = calculate_receipt_digest(
+                        transaction_id=tx_id,
+                        participant_id=self.participant_id,
+                        action=action.value if hasattr(action, "value") else str(action),
+                        resource_ref=res_ref,
+                        resource_revision=rev,
+                        receipt_ref=rcpt_ref,
+                        daemon_instance_id=self.daemon_instance_id,
+                        result_payload_schema_id=sch_id,
+                        result_payload_digest=p_dig,
+                    )
+
+                    conn.execute(
+                        """
+                        UPDATE control_2pc_transactions
+                        SET phase = ?, finalize_receipt_ref = ?, finalize_receipt_digest = ?,
+                            finalize_request_digest = ?, updated_at_ms = ?
+                        WHERE participant_id = ? AND transaction_id = ?
+                        """,
+                        (
+                            ParticipantControlPhaseV2.FINALIZED_VISIBLE.value,
+                            rcpt_ref,
+                            rcpt_digest,
+                            req_dig,
+                            now_ms,
+                            self.participant_id,
+                            tx_id,
+                        ),
+                    )
+
+                    self._trigger_failpoint(TransactionFailpoint.AFTER_RECEIPT_PERSIST)
+
+                    res = ParticipantControlReceiptV1(
+                        transaction_id=tx_id,
+                        participant_id=self.participant_id,
+                        action=action,
+                        resource_ref=res_ref,
+                        resource_revision=rev,
+                        receipt_ref=rcpt_ref,
+                        receipt_digest=rcpt_digest,
+                        daemon_instance_id=self.daemon_instance_id,
+                        result_payload_schema_id=sch_id,
+                        result_payload_digest=p_dig,
+                        result_payload_b64u=b64u,
+                    )
+                    if tx_id in self._committed_resources:
+                        self._committed_resources[tx_id]["phase"] = ParticipantControlPhaseV2.FINALIZED_VISIBLE
+                    return res
+            except Exception as exc:
                 return BoundedControlErrorV1(
-                    reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                    reason_code=C2ControlErrorCodeV1.INTERNAL_FAILURE,
                     retryable=False,
-                    detail_ref=f"transaction_not_found:{tx_id}",
+                    detail_ref=f"finalize_failed:{exc}",
                 )
-
-            (
-                phase,
-                rev,
-                comm_ref,
-                comm_dig,
-                sch_id,
-                p_dig,
-                b64u,
-                fin_ref,
-                fin_dig,
-            ) = row
-
-            if phase == ParticipantControlPhaseV1.FINALIZED_VISIBLE.value:
-                # Idempotent return
-                res = ParticipantControlReceiptV1(
-                    transaction_id=tx_id,
-                    participant_id=self.participant_id,
-                    action=action,
-                    resource_ref=res_ref,
-                    resource_revision=rev,
-                    receipt_ref=fin_ref or comm_ref,
-                    receipt_digest=fin_dig or comm_dig,
-                    daemon_instance_id=self.daemon_instance_id,
-                    result_payload_schema_id=sch_id,
-                    result_payload_digest=p_dig,
-                    result_payload_b64u=b64u,
-                )
-                if tx_id in self._committed_resources:
-                    self._committed_resources[tx_id]["phase"] = ParticipantControlPhaseV1.FINALIZED_VISIBLE
-                return res
-
-            if phase != ParticipantControlPhaseV1.COMMITTED_HIDDEN.value:
-                return BoundedControlErrorV1(
-                    reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
-                    retryable=False,
-                    detail_ref=f"Cannot finalize transaction in phase {phase}",
-                )
-
-            if prior_ref and prior_ref != comm_ref:
-                return BoundedControlErrorV1(
-                    reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
-                    retryable=False,
-                    detail_ref="prior_receipt_ref_mismatch",
-                )
-            if prior_dig and prior_dig != comm_dig:
-                return BoundedControlErrorV1(
-                    reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
-                    retryable=False,
-                    detail_ref="prior_receipt_digest_mismatch",
-                )
-
-            rcpt_ref = f"rcpt_fin_{uuid.uuid4().hex[:8]}"
-            rcpt_digest = calculate_receipt_digest(
-                transaction_id=tx_id,
-                participant_id=self.participant_id,
-                action=action.value if hasattr(action, "value") else str(action),
-                resource_ref=res_ref,
-                resource_revision=rev,
-                receipt_ref=rcpt_ref,
-                daemon_instance_id=self.daemon_instance_id,
-                result_payload_schema_id=sch_id,
-                result_payload_digest=p_dig,
-            )
-
-            conn.execute(
-                """
-                UPDATE control_2pc_transactions
-                SET phase = ?, finalize_receipt_ref = ?, finalize_receipt_digest = ?,
-                    finalize_request_digest = ?, updated_at_ms = ?
-                WHERE participant_id = ? AND transaction_id = ?
-                """,
-                (
-                    ParticipantControlPhaseV1.FINALIZED_VISIBLE.value,
-                    rcpt_ref,
-                    rcpt_digest,
-                    req_dig,
-                    now_ms,
-                    self.participant_id,
-                    tx_id,
-                ),
-            )
-
-            res = ParticipantControlReceiptV1(
-                transaction_id=tx_id,
-                participant_id=self.participant_id,
-                action=action,
-                resource_ref=res_ref,
-                resource_revision=rev,
-                receipt_ref=rcpt_ref,
-                receipt_digest=rcpt_digest,
-                daemon_instance_id=self.daemon_instance_id,
-                result_payload_schema_id=sch_id,
-                result_payload_digest=p_dig,
-                result_payload_b64u=b64u,
-            )
-            if tx_id in self._committed_resources:
-                self._committed_resources[tx_id]["phase"] = ParticipantControlPhaseV1.FINALIZED_VISIBLE
-            return res
 
     def rollback(
         self,
-        request_or_receipt: ParticipantControlRequestV1 | ParticipantControlReceiptV1,
+        request_or_receipt: ParticipantControlRequestV1 | ParticipantControlRequestV2 | ParticipantControlReceiptV1,
         principal: AuthenticatedControlPrincipal | None = None,
-        operation: Any = None,
+        resolved_key: Any = None,
     ) -> ParticipantControlReceiptV1 | BoundedControlErrorV1:
-        """Abort/rollback a transaction."""
-        if isinstance(request_or_receipt, ParticipantControlRequestV1):
+        """Abort/rollback a transaction with compensation validation."""
+        if isinstance(request_or_receipt, (ParticipantControlRequestV1, ParticipantControlRequestV2)):
             tx_id = request_or_receipt.authorization.transaction_id
+            prior_ref = request_or_receipt.prior_receipt_ref
+            prior_dig = request_or_receipt.prior_receipt_digest
+            req_dig = request_or_receipt.authorization.request_digest
             action = request_or_receipt.action
         else:
             tx_id = request_or_receipt.transaction_id
+            prior_ref = getattr(request_or_receipt, "receipt_ref", None)
+            prior_dig = getattr(request_or_receipt, "receipt_digest", None)
+            req_dig = ""
             action = request_or_receipt.action
 
         res_ref = f"resource:{self.participant_id}"
         now_ms = int(time.time() * 1000)
 
-        with self._lock, self._connection() as conn:
-            cur = conn.execute(
-                """
-                SELECT phase, resource_revision, payload_schema_id, payload_digest, canonical_payload_b64u
-                FROM control_2pc_transactions
-                WHERE participant_id = ? AND transaction_id = ?
-                """,
-                (self.participant_id, tx_id),
-            )
-            row = cur.fetchone()
-            if row is None:
+        with self._lock:
+            try:
+                with self._immediate_transaction() as conn:
+                    self._trigger_failpoint(TransactionFailpoint.AFTER_BEGIN)
+
+                    # TOCTOU Authority Fence
+                    if principal is not None and resolved_key is not None:
+                        try:
+                            AuthorityFence.verify_current(conn, principal, resolved_key)
+                        except PermissionError as exc:
+                            return BoundedControlErrorV1(
+                                reason_code=C2ControlErrorCodeV1.NOT_AUTHORIZED,
+                                retryable=False,
+                                detail_ref=f"authority_fence_failed:{exc}",
+                            )
+
+                    cur = conn.execute(
+                        """
+                        SELECT phase, resource_revision, payload_schema_id, payload_digest,
+                               canonical_payload_b64u, prepare_receipt_ref, prepare_receipt_digest,
+                               commit_receipt_ref, commit_receipt_digest, abort_receipt_ref,
+                               abort_receipt_digest, abort_request_digest
+                        FROM control_2pc_transactions
+                        WHERE participant_id = ? AND transaction_id = ?
+                        """,
+                        (self.participant_id, tx_id),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        return BoundedControlErrorV1(
+                            reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                            retryable=False,
+                            detail_ref=f"transaction_not_found:{tx_id}",
+                        )
+
+                    (
+                        phase,
+                        rev,
+                        sch_id,
+                        p_dig,
+                        b64u,
+                        prep_ref,
+                        prep_dig,
+                        comm_ref,
+                        comm_dig,
+                        ab_ref,
+                        ab_dig,
+                        stored_ab_req_dig,
+                    ) = row
+
+                    if phase in (
+                        ParticipantControlPhaseV2.ABORTED.value,
+                        ParticipantControlPhaseV1.ABORTED.value,
+                    ):
+                        if req_dig and stored_ab_req_dig and stored_ab_req_dig != req_dig:
+                            return BoundedControlErrorV1(
+                                reason_code=C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT,
+                                retryable=False,
+                                detail_ref="abort_request_digest_mismatch",
+                            )
+
+                        return ParticipantControlReceiptV1(
+                            transaction_id=tx_id,
+                            participant_id=self.participant_id,
+                            action=action,
+                            resource_ref=res_ref,
+                            resource_revision=rev,
+                            receipt_ref=ab_ref or f"rcpt_abort_{tx_id[:8]}",
+                            receipt_digest=ab_dig or "abort_receipt_digest",
+                            daemon_instance_id=self.daemon_instance_id,
+                            result_payload_schema_id=sch_id,
+                            result_payload_digest=p_dig,
+                            result_payload_b64u=b64u,
+                        )
+
+                    if phase in (
+                        ParticipantControlPhaseV2.FINALIZED_VISIBLE.value,
+                        ParticipantControlPhaseV1.FINALIZED_VISIBLE.value,
+                    ):
+                        return BoundedControlErrorV1(
+                            reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                            retryable=False,
+                            detail_ref="cannot_abort_finalized_transaction",
+                        )
+
+                    # Validate receipt chain for abort
+                    if phase in (ParticipantControlPhaseV2.PREPARED.value, ParticipantControlPhaseV1.PENDING.value):
+                        if prior_ref and prior_ref != prep_ref:
+                            return BoundedControlErrorV1(
+                                reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                                retryable=False,
+                                detail_ref="prepare_receipt_mismatch_for_abort",
+                            )
+                        if prior_dig and prior_dig != prep_dig:
+                            return BoundedControlErrorV1(
+                                reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                                retryable=False,
+                                detail_ref="prepare_receipt_digest_mismatch_for_abort",
+                            )
+                    elif phase in (
+                        ParticipantControlPhaseV2.COMMITTED_HIDDEN.value,
+                        ParticipantControlPhaseV1.COMMITTED_HIDDEN.value,
+                    ):
+                        if prior_ref and prior_ref != comm_ref:
+                            return BoundedControlErrorV1(
+                                reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                                retryable=False,
+                                detail_ref="commit_receipt_mismatch_for_abort",
+                            )
+                        if prior_dig and prior_dig != comm_dig:
+                            return BoundedControlErrorV1(
+                                reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                                retryable=False,
+                                detail_ref="commit_receipt_digest_mismatch_for_abort",
+                            )
+
+                    rcpt_ref = f"rcpt_abort_{uuid.uuid4().hex[:8]}"
+                    rcpt_digest = calculate_receipt_digest(
+                        transaction_id=tx_id,
+                        participant_id=self.participant_id,
+                        action=action.value if hasattr(action, "value") else str(action),
+                        resource_ref=res_ref,
+                        resource_revision=rev,
+                        receipt_ref=rcpt_ref,
+                        daemon_instance_id=self.daemon_instance_id,
+                        result_payload_schema_id=sch_id,
+                        result_payload_digest=p_dig,
+                    )
+
+                    conn.execute(
+                        """
+                        UPDATE control_2pc_transactions
+                        SET phase = ?, abort_receipt_ref = ?, abort_receipt_digest = ?,
+                            abort_request_digest = ?, updated_at_ms = ?
+                        WHERE participant_id = ? AND transaction_id = ?
+                        """,
+                        (
+                            ParticipantControlPhaseV2.ABORTED.value,
+                            rcpt_ref,
+                            rcpt_digest,
+                            req_dig,
+                            now_ms,
+                            self.participant_id,
+                            tx_id,
+                        ),
+                    )
+
+                    self._pending_transactions.pop(tx_id, None)
+                    self._committed_resources.pop(tx_id, None)
+
+                    return ParticipantControlReceiptV1(
+                        transaction_id=tx_id,
+                        participant_id=self.participant_id,
+                        action=action,
+                        resource_ref=res_ref,
+                        resource_revision=rev,
+                        receipt_ref=rcpt_ref,
+                        receipt_digest=rcpt_digest,
+                        daemon_instance_id=self.daemon_instance_id,
+                        result_payload_schema_id=sch_id,
+                        result_payload_digest=p_dig,
+                        result_payload_b64u=b64u,
+                    )
+            except Exception as exc:
                 return BoundedControlErrorV1(
-                    reason_code=C2ControlErrorCodeV1.WRONG_PHASE,
+                    reason_code=C2ControlErrorCodeV1.INTERNAL_FAILURE,
                     retryable=False,
-                    detail_ref=f"transaction_not_found:{tx_id}",
+                    detail_ref=f"abort_failed:{exc}",
                 )
 
-            _phase, rev, sch_id, p_dig, b64u = row
-
-            rcpt_ref = f"rcpt_abort_{uuid.uuid4().hex[:8]}"
-            rcpt_digest = calculate_receipt_digest(
-                transaction_id=tx_id,
-                participant_id=self.participant_id,
-                action=action.value if hasattr(action, "value") else str(action),
-                resource_ref=res_ref,
-                resource_revision=rev,
-                receipt_ref=rcpt_ref,
-                daemon_instance_id=self.daemon_instance_id,
-                result_payload_schema_id=sch_id,
-                result_payload_digest=p_dig,
-            )
-
-            conn.execute(
-                """
-                UPDATE control_2pc_transactions
-                SET phase = ?, updated_at_ms = ?
-                WHERE participant_id = ? AND transaction_id = ?
-                """,
-                (ParticipantControlPhaseV1.ABORTED.value, now_ms, self.participant_id, tx_id),
-            )
-
-            self._pending_transactions.pop(tx_id, None)
-            self._committed_resources.pop(tx_id, None)
-
-            return ParticipantControlReceiptV1(
-                transaction_id=tx_id,
-                participant_id=self.participant_id,
-                action=action,
-                resource_ref=res_ref,
-                resource_revision=rev,
-                receipt_ref=rcpt_ref,
-                receipt_digest=rcpt_digest,
-                daemon_instance_id=self.daemon_instance_id,
-                result_payload_schema_id=sch_id,
-                result_payload_digest=p_dig,
-                result_payload_b64u=b64u,
-            )
+    abort = rollback
 
     def reconcile(
         self,
@@ -645,32 +984,32 @@ class C2DaemonResourceParticipant:
     ) -> ParticipantControlQuerySnapshotV1 | BoundedControlErrorV1:
         """Query current state snapshot of the resource participant."""
         tx_id = getattr(operation, "transaction_id", None)
-        if isinstance(operation, ParticipantControlRequestV1):
+        if isinstance(operation, (ParticipantControlRequestV1, ParticipantControlRequestV2)):
             tx_id = operation.authorization.transaction_id
 
-        if not tx_id:
+        if not tx_id or tx_id == "query":
+            res_ref = f"resource:{self.participant_id}"
             with self._lock, self._connection() as conn:
-                current_rev = self._get_resource_revision(conn, f"resource:{self.participant_id}")
-            snap_digest = calculate_snapshot_digest(
-                transaction_id="query",
-                participant_id=self.participant_id,
-                phase=ParticipantControlPhaseV1.FINALIZED_VISIBLE.value,
-                receipt_digest="none",
-                resource_ref=f"resource:{self.participant_id}",
-                resource_revision=current_rev,
-            )
-            return ParticipantControlQuerySnapshotV1(
-                transaction_id="query",
-                participant_id=self.participant_id,
-                resource_ref=f"resource:{self.participant_id}",
-                resource_revision=current_rev,
-                phase=ParticipantControlPhaseV1.FINALIZED_VISIBLE,
-                snapshot_digest=snap_digest,
-                receipt_ref=None,
-                receipt_digest=None,
-                result_payload_schema_id=None,
-                result_payload_digest=None,
-            )
+                cur_rev = self._get_resource_revision(conn, res_ref)
+                snap_dig = calculate_snapshot_digest(
+                    transaction_id="query",
+                    participant_id=self.participant_id,
+                    phase=ParticipantControlPhaseV2.FINALIZED_VISIBLE.value,
+                    resource_ref=res_ref,
+                )
+                return ParticipantControlQuerySnapshotV1(
+                    transaction_id="query",
+                    participant_id=self.participant_id,
+                    resource_ref=res_ref,
+                    resource_revision=cur_rev,
+                    phase=ParticipantControlPhaseV1.FINALIZED_VISIBLE,
+                    receipt_ref="rcpt_0",
+                    receipt_digest="0" * 64,
+                    snapshot_digest=snap_dig,
+                    result_payload_schema_id="schema:c2_control_v1",
+                    result_payload_digest="0" * 64,
+                    result_payload_b64u="",
+                )
 
         with self._lock, self._connection() as conn:
             cur = conn.execute(
@@ -707,14 +1046,19 @@ class C2DaemonResourceParticipant:
                 p_dig,
                 b64u,
             ) = row
-            phase = ParticipantControlPhaseV1(phase_str)
+            phase: ParticipantControlPhaseV1 | ParticipantControlPhaseV2
+            try:
+                phase = ParticipantControlPhaseV2(phase_str)
+            except ValueError:
+                phase = ParticipantControlPhaseV1(phase_str)
+
             receipt_ref = fin_ref or comm_ref or prep_ref
             receipt_digest = fin_dig or comm_dig or prep_dig
 
             snap_digest = calculate_snapshot_digest(
                 transaction_id=tx_id,
                 participant_id=self.participant_id,
-                phase=phase.value,
+                phase=phase.value if hasattr(phase, "value") else str(phase),
                 receipt_digest=receipt_digest,
                 receipt_ref=receipt_ref,
                 resource_ref=res_ref,
@@ -740,4 +1084,5 @@ class C2DaemonResourceParticipant:
 
 __all__ = [
     "C2DaemonResourceParticipant",
+    "TransactionFailpoint",
 ]

@@ -1,20 +1,32 @@
-"""Versioned database migrations for C2 Control Plane state storage."""
+"""Versioned database migrations for C2 Control Plane state storage (§14.4, §14.5)."""
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
-import shutil
 import sqlite3
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import NamedTuple
 
 
-class MigrationStep(NamedTuple):
+class MigrationResult(NamedTuple):
+    version: int
+    backup_path: str | None
+
+
+@dataclass(frozen=True)
+class MigrationStep:
     version: int
     name: str
+    canonical_payload: bytes
     up: Callable[[sqlite3.Connection], None]
+
+    @property
+    def checksum(self) -> str:
+        return hashlib.sha256(self.canonical_payload).hexdigest()[:32]
 
 
 def _migration_v1_base_schema(conn: sqlite3.Connection) -> None:
@@ -134,12 +146,13 @@ def _migration_v3_replay_store(conn: sqlite3.Connection) -> None:
 
 
 def _migration_v4_2pc_state_machine(conn: sqlite3.Connection) -> None:
-    """Migration 4: Expanded 2PC state machine with intent tracking."""
+    """Migration 4: Expanded 2PC state machine with intent tracking and abort receipt chaining."""
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS control_resource_revisions (
             resource_ref TEXT PRIMARY KEY,
-            revision INTEGER NOT NULL
+            revision INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL DEFAULT 0
         )
         """
     )
@@ -168,6 +181,7 @@ def _migration_v4_2pc_state_machine(conn: sqlite3.Connection) -> None:
                 canonical_payload_b64u TEXT,
                 prepared_request_digest TEXT,
                 prepared_base_revision INTEGER DEFAULT 0,
+                prepare_request_digest TEXT,
                 prepare_receipt_ref TEXT,
                 prepare_receipt_digest TEXT,
                 commit_request_digest TEXT,
@@ -176,6 +190,9 @@ def _migration_v4_2pc_state_machine(conn: sqlite3.Connection) -> None:
                 finalize_request_digest TEXT,
                 finalize_receipt_ref TEXT,
                 finalize_receipt_digest TEXT,
+                abort_request_digest TEXT,
+                abort_receipt_ref TEXT,
+                abort_receipt_digest TEXT,
                 created_at_ms INTEGER NOT NULL,
                 updated_at_ms INTEGER NOT NULL,
                 PRIMARY KEY (participant_id, transaction_id)
@@ -195,40 +212,98 @@ def _migration_v4_2pc_state_machine(conn: sqlite3.Connection) -> None:
             "payload_ref": "TEXT",
             "prepared_request_digest": "TEXT",
             "prepared_base_revision": "INTEGER DEFAULT 0",
+            "prepare_request_digest": "TEXT",
             "commit_request_digest": "TEXT",
             "finalize_request_digest": "TEXT",
             "finalize_receipt_ref": "TEXT",
             "finalize_receipt_digest": "TEXT",
+            "abort_request_digest": "TEXT",
+            "abort_receipt_ref": "TEXT",
+            "abort_receipt_digest": "TEXT",
         }
         for col_name, col_def in required_cols.items():
             if col_name not in existing_cols:
                 conn.execute(f"ALTER TABLE control_2pc_transactions ADD COLUMN {col_name} {col_def}")
 
+        # Quarantine legacy rows missing critical authority metadata to recovery_required
+        conn.execute(
+            """
+            UPDATE control_2pc_transactions
+            SET phase = 'recovery_required'
+            WHERE (operator_id = '' OR key_id = '' OR subject_id = '')
+              AND phase NOT IN ('finalized_visible', 'aborted', 'recovery_required')
+            """
+        )
+
 
 MIGRATIONS: tuple[MigrationStep, ...] = (
-    MigrationStep(1, "base_schema", _migration_v1_base_schema),
-    MigrationStep(2, "operator_control_keys", _migration_v2_operator_control_keys),
-    MigrationStep(3, "replay_store", _migration_v3_replay_store),
-    MigrationStep(4, "2pc_state_machine", _migration_v4_2pc_state_machine),
+    MigrationStep(
+        1,
+        "base_schema",
+        b"v1_base_schema_ddl:operators,control_missions,operator_peer_bindings,operator_mission_grants:r1",
+        _migration_v1_base_schema,
+    ),
+    MigrationStep(
+        2,
+        "operator_control_keys",
+        b"v2_operator_control_keys_ddl:operator_control_signing_keys:r1",
+        _migration_v2_operator_control_keys,
+    ),
+    MigrationStep(
+        3,
+        "replay_store",
+        b"v3_replay_store_ddl:control_replay_nonces:r1",
+        _migration_v3_replay_store,
+    ),
+    MigrationStep(
+        4,
+        "2pc_state_machine",
+        b"v4_2pc_state_machine_ddl:control_2pc_transactions,control_resource_revisions:r2",
+        _migration_v4_2pc_state_machine,
+    ),
 )
 
 LATEST_SCHEMA_VERSION = 4
 
 
 def _compute_step_checksum(step: MigrationStep) -> str:
-    content = f"v{step.version}:{step.name}"
-    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    return step.checksum
 
 
 def create_preflight_backup(db_path: str) -> str | None:
-    """Create a backup of a file-backed SQLite database before migration."""
+    """Create a backup of a file-backed SQLite database using the SQLite Backup API before migration."""
     if db_path == ":memory:" or db_path.startswith("file:"):
         return None
     if not os.path.exists(db_path):
         return None
+
+    parent_dir = os.path.dirname(os.path.abspath(db_path))
     backup_path = f"{db_path}.bak.{int(time.time() * 1000)}"
-    shutil.copy2(db_path, backup_path)
+
+    src = sqlite3.connect(f"file:{os.path.abspath(db_path)}?mode=ro", uri=True)
+    dst = sqlite3.connect(backup_path)
+    try:
+        src.backup(dst)
+        check_cur = dst.execute("PRAGMA integrity_check")
+        row = check_cur.fetchone()
+        if not row or row[0] != "ok":
+            raise RuntimeError(f"preflight backup integrity check failed: {row}")
+        os.chmod(backup_path, 0o600)
+    finally:
+        src.close()
+        dst.close()
+
+    try:
+        dir_fd = os.open(parent_dir, os.O_RDONLY)
+        os.fsync(dir_fd)
+        os.close(dir_fd)
+    except Exception:
+        pass
+
     return backup_path
+
+
+backup_control_database = create_preflight_backup
 
 
 def apply_control_migrations(conn: sqlite3.Connection) -> int:
@@ -250,7 +325,13 @@ def apply_control_migrations(conn: sqlite3.Connection) -> int:
     applied_rows = conn.execute("SELECT version, name, checksum FROM schema_migrations ORDER BY version ASC").fetchall()
     applied_map = {int(row[0]): (str(row[1]), str(row[2])) for row in applied_rows}
 
-    # Verify existing applied migrations
+    # Verify contiguous versions and checksums
+    applied_versions = sorted(applied_map.keys())
+    if applied_versions:
+        for idx, ver in enumerate(applied_versions, start=1):
+            if ver != idx:
+                raise RuntimeError(f"Database has migration version gap: expected version {idx}, found {ver}")
+
     for version, (name, checksum) in applied_map.items():
         if version > LATEST_SCHEMA_VERSION:
             raise RuntimeError(
@@ -282,6 +363,31 @@ def apply_control_migrations(conn: sqlite3.Connection) -> int:
     return LATEST_SCHEMA_VERSION
 
 
+def migrate_control_database(db_path: str) -> MigrationResult:
+    """Top-level path-aware runner: preflight backup -> integrity check -> BEGIN IMMEDIATE -> migrations -> commit."""
+    backup_path = create_preflight_backup(db_path)
+
+    if db_path.startswith("file:") or db_path == ":memory:":
+        conn = sqlite3.connect(db_path, uri=True, timeout=30.0)
+    else:
+        conn = sqlite3.connect(db_path, timeout=30.0)
+
+    conn.isolation_level = None
+    conn.execute("PRAGMA busy_timeout=30000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        latest = apply_control_migrations(conn)
+        conn.execute("COMMIT")
+        return MigrationResult(version=latest, backup_path=backup_path)
+    except Exception as exc:
+        with contextlib.suppress(Exception):
+            conn.execute("ROLLBACK")
+        raise RuntimeError(f"migration_failed:{exc}") from exc
+    finally:
+        conn.close()
+
+
 def verify_schema_ready(conn: sqlite3.Connection) -> bool:
     """Verify that the database schema is at the latest migration version."""
     try:
@@ -294,8 +400,10 @@ def verify_schema_ready(conn: sqlite3.Connection) -> bool:
 __all__ = [
     "LATEST_SCHEMA_VERSION",
     "MIGRATIONS",
+    "MigrationResult",
     "MigrationStep",
     "apply_control_migrations",
     "create_preflight_backup",
+    "migrate_control_database",
     "verify_schema_ready",
 ]

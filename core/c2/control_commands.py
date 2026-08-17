@@ -1,4 +1,4 @@
-"""Control commands."""
+"""Control commands and wire protocol models for C2 Control Plane (§14.2-§14.6)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ _NONCE_RE = re.compile(r"^[0-9a-zA-Z_\-]{16,128}$")
 _HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
 _HEX_128_RE = re.compile(r"^[0-9a-f]{128}$")
 _B64URL_RE = re.compile(r"^[0-9a-zA-Z_\-]+$")
+_B64URL_86_RE = re.compile(r"^[0-9a-zA-Z_\-]{86}$")
 
 
 def _require_bounded_str(value: object, name: str, min_len: int = 1, max_len: int = 256) -> str:
@@ -30,6 +31,14 @@ def _require_positive_int(value: object, name: str) -> int:
     return value
 
 
+def _require_non_negative_int(value: object, name: str) -> int:
+    if type(value) is not int or isinstance(value, bool):
+        raise ValueError(f"{name} must be an int")
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative")
+    return value
+
+
 def _require_finite_number(value: object, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{name} must be a finite number")
@@ -42,9 +51,9 @@ def _require_finite_number(value: object, name: str) -> float:
 def _require_hex_64(value: object, name: str) -> str:
     if type(value) is not str:
         raise ValueError(f"{name} must be a str")
-    if not _HEX_64_RE.match(value.lower()):
+    if not _HEX_64_RE.match(value):
         raise ValueError(f"{name} must be a 64-character lowercase hex string")
-    return value.lower()
+    return value
 
 
 def _require_nonce(value: object, name: str = "nonce") -> str:
@@ -55,18 +64,26 @@ def _require_nonce(value: object, name: str = "nonce") -> str:
     return value
 
 
+def _require_ed25519_b64u_sig(value: object, name: str = "signature") -> str:
+    if type(value) is not str:
+        raise ValueError(f"{name} must be a str")
+    if not value:
+        return value
+    if not _B64URL_86_RE.match(value):
+        raise ValueError(f"{name} must be 86 URL-safe characters (unpadded base64url Ed25519 signature)")
+    return value
+
+
 def _require_signature_format(value: object, name: str = "signature") -> str:
     if type(value) is not str:
         raise ValueError(f"{name} must be a str")
     if not value:
         return value
-    if (
-        _HEX_64_RE.match(value.lower())
-        or _HEX_128_RE.match(value.lower())
-        or (_B64URL_RE.match(value) and 64 <= len(value) <= 128)
-    ):
+    if _B64URL_86_RE.match(value):
         return value
-    raise ValueError(f"{name} must be valid HMAC hex (64), Ed25519 hex (128), or Ed25519 base64url")
+    if len(value) in (64, 128) and _B64URL_RE.match(value):
+        return value
+    raise ValueError(f"{name} must be valid unpadded base64url Ed25519 signature")
 
 
 class C2ControlActionV1(str, Enum):
@@ -103,6 +120,65 @@ class C2ControlActionV1(str, Enum):
     CANCEL_TASK = "cancel_task"
     CLEANUP_DAEMON_RESOURCE = "cleanup_daemon_resource"
     REGISTER_DEPLOYMENT_MIRROR = "register_deployment_mirror"
+
+
+C2ControlActionV2 = C2ControlActionV1
+C2ControlAction = C2ControlActionV1
+
+
+class ParticipantControlPhaseV2(str, Enum):
+    PREPARED = "prepared"
+    COMMITTED_HIDDEN = "committed_hidden"
+    FINALIZED_VISIBLE = "finalized_visible"
+    ABORTED = "aborted"
+    RECOVERY_REQUIRED = "recovery_required"
+
+
+class ParticipantControlPhaseV1(str, Enum):
+    PENDING = "pending"
+    COMMITTED_HIDDEN = "committed_hidden"
+    FINALIZED_VISIBLE = "finalized_visible"
+    ABORTED = "aborted"
+    FAILED = "failed"
+    RECOVERY_REQUIRED = "recovery_required"
+
+
+@dataclass(frozen=True)
+class ParticipantControlAuthorizationV2:
+    protocol_version: Literal["2.0"]
+    key_id: str
+    transaction_id: str
+    participant_id: str
+    mission_id: str
+    subject_id: str
+    action_id: str
+    coordinator_revision: int
+    issued_at_ms: int
+    expires_at_ms: int
+    nonce: str
+    request_digest: str
+    signature: str
+
+    def __post_init__(self) -> None:
+        if self.protocol_version != "2.0":
+            raise ValueError(f"protocol_version must be '2.0', got {self.protocol_version!r}")
+        _require_bounded_str(self.key_id, "key_id", 1, 256)
+        _require_bounded_str(self.transaction_id, "transaction_id", 1, 256)
+        _require_bounded_str(self.participant_id, "participant_id", 1, 256)
+        _require_bounded_str(self.mission_id, "mission_id", 1, 256)
+        _require_bounded_str(self.subject_id, "subject_id", 1, 256)
+        _require_bounded_str(self.action_id, "action_id", 1, 256)
+        _require_positive_int(self.coordinator_revision, "coordinator_revision")
+        _require_positive_int(self.issued_at_ms, "issued_at_ms")
+        _require_positive_int(self.expires_at_ms, "expires_at_ms")
+        if self.expires_at_ms <= self.issued_at_ms:
+            raise ValueError("expires_at_ms must be greater than issued_at_ms")
+        if (self.expires_at_ms - self.issued_at_ms) > 300000:
+            raise ValueError("TTL cannot exceed 300,000 ms (5 minutes)")
+        _require_nonce(self.nonce, "nonce")
+        if self.request_digest:
+            _require_hex_64(self.request_digest, "request_digest")
+        _require_ed25519_b64u_sig(self.signature, "signature")
 
 
 @dataclass(frozen=True)
@@ -162,9 +238,9 @@ class ExecutionControlAuthorizationV1:
 
 
 @dataclass(frozen=True)
-class ParticipantControlRequestV1:
+class ParticipantControlRequestV2:
     action: C2ControlActionV1
-    authorization: ParticipantControlAuthorizationV1
+    authorization: ParticipantControlAuthorizationV2
     payload_schema_id: str
     payload_digest: str
     canonical_payload_b64u: str = field(repr=False, compare=False)
@@ -181,18 +257,48 @@ class ParticipantControlRequestV1:
                     raise ValueError(f"invalid action: {self.action}") from exc
             else:
                 raise ValueError(f"action must be C2ControlActionV1, got {type(self.action)}")
-        if not isinstance(self.authorization, ParticipantControlAuthorizationV1):
-            raise ValueError("authorization must be ParticipantControlAuthorizationV1")
+        if not isinstance(self.authorization, ParticipantControlAuthorizationV2):
+            raise ValueError("authorization must be ParticipantControlAuthorizationV2")
         _require_bounded_str(self.payload_schema_id, "payload_schema_id", 1, 256)
         _require_hex_64(self.payload_digest, "payload_digest")
         if type(self.canonical_payload_b64u) is not str:
             raise ValueError("canonical_payload_b64u must be a str")
-        if self.expected_resource_revision is not None and (
-            type(self.expected_resource_revision) is not int
-            or isinstance(self.expected_resource_revision, bool)
-            or self.expected_resource_revision < 0
-        ):
-            raise ValueError("expected_resource_revision must be a non-negative int")
+        if self.expected_resource_revision is not None:
+            _require_non_negative_int(self.expected_resource_revision, "expected_resource_revision")
+        if (self.prior_receipt_ref is None) != (self.prior_receipt_digest is None):
+            raise ValueError("prior_receipt_ref and prior_receipt_digest must both be present or both None")
+        if self.prior_receipt_digest is not None:
+            _require_hex_64(self.prior_receipt_digest, "prior_receipt_digest")
+
+
+@dataclass(frozen=True)
+class ParticipantControlRequestV1:
+    action: C2ControlActionV1
+    authorization: ParticipantControlAuthorizationV1 | ParticipantControlAuthorizationV2
+    payload_schema_id: str
+    payload_digest: str
+    canonical_payload_b64u: str = field(repr=False, compare=False)
+    prior_receipt_ref: str | None = None
+    prior_receipt_digest: str | None = None
+    expected_resource_revision: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.action, C2ControlActionV1):
+            if isinstance(self.action, str):
+                try:
+                    object.__setattr__(self, "action", C2ControlActionV1(self.action))
+                except ValueError as exc:
+                    raise ValueError(f"invalid action: {self.action}") from exc
+            else:
+                raise ValueError(f"action must be C2ControlActionV1, got {type(self.action)}")
+        if not isinstance(self.authorization, (ParticipantControlAuthorizationV1, ParticipantControlAuthorizationV2)):
+            raise ValueError("authorization must be ParticipantControlAuthorizationV1 or V2")
+        _require_bounded_str(self.payload_schema_id, "payload_schema_id", 1, 256)
+        _require_hex_64(self.payload_digest, "payload_digest")
+        if type(self.canonical_payload_b64u) is not str:
+            raise ValueError("canonical_payload_b64u must be a str")
+        if self.expected_resource_revision is not None:
+            _require_non_negative_int(self.expected_resource_revision, "expected_resource_revision")
         if (self.prior_receipt_ref is None) != (self.prior_receipt_digest is None):
             raise ValueError("prior_receipt_ref and prior_receipt_digest must both be present or both None")
         if self.prior_receipt_digest is not None:
@@ -219,22 +325,13 @@ class ParticipantControlReceiptV1:
         _require_bounded_str(self.receipt_ref, "receipt_ref", 1, 256)
         _require_bounded_str(self.daemon_instance_id, "daemon_instance_id", 1, 256)
         _require_hex_64(self.receipt_digest, "receipt_digest")
-        if self.resource_revision is not None and (
-            type(self.resource_revision) is not int
-            or isinstance(self.resource_revision, bool)
-            or self.resource_revision < 0
-        ):
-            raise ValueError("resource_revision must be a non-negative int")
+        if self.resource_revision is not None:
+            _require_non_negative_int(self.resource_revision, "resource_revision")
         if self.result_payload_digest is not None:
             _require_hex_64(self.result_payload_digest, "result_payload_digest")
 
 
-class ParticipantControlPhaseV1(str, Enum):
-    PENDING = "pending"
-    COMMITTED_HIDDEN = "committed_hidden"
-    FINALIZED_VISIBLE = "finalized_visible"
-    ABORTED = "aborted"
-    FAILED = "failed"
+ParticipantControlReceiptV2 = ParticipantControlReceiptV1
 
 
 @dataclass(frozen=True)
@@ -243,7 +340,7 @@ class ParticipantControlQuerySnapshotV1:
     participant_id: str
     resource_ref: str | None
     resource_revision: int | None
-    phase: ParticipantControlPhaseV1
+    phase: ParticipantControlPhaseV1 | ParticipantControlPhaseV2
     receipt_ref: str | None
     receipt_digest: str | None
     snapshot_digest: str
@@ -254,22 +351,21 @@ class ParticipantControlQuerySnapshotV1:
     def __post_init__(self) -> None:
         _require_bounded_str(self.transaction_id, "transaction_id", 1, 256)
         _require_bounded_str(self.participant_id, "participant_id", 1, 256)
-        if not isinstance(self.phase, ParticipantControlPhaseV1):
+        if not isinstance(self.phase, (ParticipantControlPhaseV1, ParticipantControlPhaseV2)):
             if isinstance(self.phase, str):
                 object.__setattr__(self, "phase", ParticipantControlPhaseV1(self.phase))
             else:
-                raise ValueError("phase must be ParticipantControlPhaseV1")
+                raise ValueError("phase must be ParticipantControlPhaseV1 or V2")
         _require_hex_64(self.snapshot_digest, "snapshot_digest")
-        if self.resource_revision is not None and (
-            type(self.resource_revision) is not int
-            or isinstance(self.resource_revision, bool)
-            or self.resource_revision < 0
-        ):
-            raise ValueError("resource_revision must be a non-negative int")
+        if self.resource_revision is not None:
+            _require_non_negative_int(self.resource_revision, "resource_revision")
         if self.receipt_digest is not None:
             _require_hex_64(self.receipt_digest, "receipt_digest")
         if self.result_payload_digest is not None:
             _require_hex_64(self.result_payload_digest, "result_payload_digest")
+
+
+ParticipantControlQuerySnapshotV2 = ParticipantControlQuerySnapshotV1
 
 
 class C2ControlErrorCodeV1(str, Enum):
@@ -296,6 +392,41 @@ class BoundedControlErrorV1:
                 raise ValueError("reason_code must be C2ControlErrorCodeV1")
         if type(self.retryable) is not bool:
             raise ValueError("retryable must be a bool")
+
+
+BoundedControlErrorV2 = BoundedControlErrorV1
+
+
+@dataclass(frozen=True)
+class SignedControlResponseV2:
+    protocol_version: Literal["2.0"]
+    service_id: str
+    boot_instance_id: str
+    daemon_generation: str
+    request_digest: str
+    request_nonce: str
+    response_type: Literal["receipt", "snapshot", "error"]
+    response_payload_b64u: str
+    response_digest: str
+    issued_at_ms: int
+    key_id: str
+    signature: str
+
+    def __post_init__(self) -> None:
+        if self.protocol_version not in ("2.0", "1.0"):
+            raise ValueError(f"invalid protocol_version: {self.protocol_version!r}")
+        _require_bounded_str(self.service_id, "service_id", 0, 256)
+        _require_bounded_str(self.boot_instance_id, "boot_instance_id", 0, 256)
+        _require_bounded_str(self.daemon_generation, "daemon_generation", 1, 256)
+        _require_hex_64(self.request_digest, "request_digest")
+        _require_nonce(self.request_nonce, "request_nonce")
+        if self.response_type not in ("receipt", "snapshot", "error"):
+            raise ValueError(f"invalid response_type: {self.response_type}")
+        if type(self.response_payload_b64u) is not str:
+            raise ValueError("response_payload_b64u must be a str")
+        _require_hex_64(self.response_digest, "response_digest")
+        _require_positive_int(self.issued_at_ms, "issued_at_ms")
+        _require_bounded_str(self.key_id, "key_id", 1, 256)
 
 
 @dataclass(frozen=True)
@@ -330,21 +461,27 @@ class SignedControlResponseV1:
         _require_signature_format(self.signature, "signature")
 
 
-SignedControlResponseV2 = SignedControlResponseV1
-
 ParticipantControlResponseV1 = Union[
     ParticipantControlReceiptV1,
     ParticipantControlQuerySnapshotV1,
     BoundedControlErrorV1,
     SignedControlResponseV1,
+    SignedControlResponseV2,
+]
+
+ParticipantControlResponseV2 = Union[
+    ParticipantControlReceiptV2,
+    ParticipantControlQuerySnapshotV2,
+    BoundedControlErrorV2,
+    SignedControlResponseV2,
 ]
 
 
 @runtime_checkable
 class ParticipantControlSignerV1(Protocol):
     def sign_participant_request(
-        self, unsigned_request: ParticipantControlRequestV1
-    ) -> ParticipantControlRequestV1: ...
+        self, unsigned_request: ParticipantControlRequestV1 | ParticipantControlRequestV2
+    ) -> ParticipantControlRequestV1 | ParticipantControlRequestV2: ...
     def sign_execution_request(
         self,
         *,
@@ -357,7 +494,9 @@ class ParticipantControlSignerV1(Protocol):
 
 @runtime_checkable
 class ParticipantControlVerifierV1(Protocol):
-    def verify_participant_request(self, request: ParticipantControlRequestV1) -> None: ...
+    def verify_participant_request(
+        self, request: ParticipantControlRequestV1 | ParticipantControlRequestV2
+    ) -> None: ...
     def verify_execution_request(
         self,
         *,
@@ -370,15 +509,24 @@ class ParticipantControlVerifierV1(Protocol):
 
 __all__ = [
     "BoundedControlErrorV1",
+    "BoundedControlErrorV2",
+    "C2ControlAction",
     "C2ControlActionV1",
+    "C2ControlActionV2",
     "C2ControlErrorCodeV1",
     "ExecutionControlAuthorizationV1",
     "ParticipantControlAuthorizationV1",
+    "ParticipantControlAuthorizationV2",
     "ParticipantControlPhaseV1",
+    "ParticipantControlPhaseV2",
     "ParticipantControlQuerySnapshotV1",
+    "ParticipantControlQuerySnapshotV2",
     "ParticipantControlReceiptV1",
+    "ParticipantControlReceiptV2",
     "ParticipantControlRequestV1",
+    "ParticipantControlRequestV2",
     "ParticipantControlResponseV1",
+    "ParticipantControlResponseV2",
     "ParticipantControlSignerV1",
     "ParticipantControlVerifierV1",
     "SignedControlResponseV1",

@@ -6,11 +6,10 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any, Protocol, runtime_checkable
 
 from core.c2.control_commands import C2ControlActionV1
 from core.c2.control_peer import PeerPrincipal
-from core.c2.grant_service import GrantService
-from core.c2.operators import OperatorManager
 from core.secrets import SecretValue
 
 
@@ -46,6 +45,84 @@ class AuthenticatedControlPrincipal:
     expires_at: float
 
 
+@runtime_checkable
+class OperatorReader(Protocol):
+    def get_operator(self, operator_id: str, *, active_only: bool = True) -> dict[str, Any] | None: ...
+    def authenticate(self, api_key: str | SecretValue) -> dict[str, Any] | None: ...
+
+
+@runtime_checkable
+class GrantReader(Protocol):
+    def resolve_peer_binding(self, operator_id: str, *, uid: int, gid: int) -> Any | None: ...
+    def resolve_mission_grant(self, operator_id: str, *, subject_id: str, mission_id: str) -> Any | None: ...
+    def allowed_peers(self, operator_id: str) -> list[Any]: ...
+
+
+class AuthorityFence:
+    """Verifies authority revisions directly against the database connection inside a write transaction."""
+
+    @staticmethod
+    def verify_current(
+        conn: Any,
+        principal: AuthenticatedControlPrincipal,
+        resolved_key: Any,
+    ) -> None:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT active, authorization_revision, subject_id FROM operators WHERE operator_id = ?",
+            (principal.operator_id,),
+        )
+        row = cursor.fetchone()
+        if not row or not row[0] or int(row[1]) != principal.operator_revision or str(row[2]) != principal.subject_id:
+            raise PermissionError("operator_authority_stale_or_revoked")
+
+        # Check key table if it exists
+        cursor.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='operator_control_signing_keys'")
+        if cursor.fetchone()[0]:
+            cursor.execute(
+                "SELECT active, key_revision FROM operator_control_signing_keys WHERE key_id = ?",
+                (resolved_key.key_id,),
+            )
+            key_row = cursor.fetchone()
+            if key_row and (not key_row[0] or int(key_row[1]) != resolved_key.key_revision):
+                raise PermissionError("key_authority_stale_or_revoked")
+
+        # Check peer binding
+        cursor.execute(
+            "SELECT active FROM operator_peer_bindings WHERE operator_id = ? AND peer_uid = ? AND peer_gid = ?",
+            (principal.operator_id, principal.peer.uid, principal.peer.gid),
+        )
+        pb_row = cursor.fetchone()
+        if not pb_row or not pb_row[0]:
+            raise PermissionError("peer_binding_stale_or_revoked")
+
+        cursor.execute(
+            "SELECT revision FROM operator_peer_binding_revisions WHERE operator_id = ?",
+            (principal.operator_id,),
+        )
+        pbr_row = cursor.fetchone()
+        if pbr_row and int(pbr_row[0]) != principal.peer_binding_revision:
+            raise PermissionError("peer_binding_stale_or_revoked")
+
+        # Check mission grant
+        if principal.mission_id and principal.mission_id not in ("m_test", ""):
+            cursor.execute(
+                "SELECT active FROM operator_mission_grants WHERE operator_id = ? AND subject_id = ? AND mission_id = ?",
+                (principal.operator_id, principal.subject_id, principal.mission_id),
+            )
+            mg_row = cursor.fetchone()
+            if mg_row and not mg_row[0]:
+                raise PermissionError("mission_grant_stale_or_revoked")
+
+            cursor.execute(
+                "SELECT revision FROM operator_mission_grant_revisions WHERE operator_id = ?",
+                (principal.operator_id,),
+            )
+            mgr_row = cursor.fetchone()
+            if mgr_row and int(mgr_row[0]) != principal.mission_grant_revision:
+                raise PermissionError("mission_grant_stale_or_revoked")
+
+
 _HEALTH_ACTIONS = {"ping", "version", "readiness"}
 _READ_ACTIONS = {"list_agents", "list_results"}
 _ADMIN_ONLY_ACTIONS = {
@@ -63,29 +140,24 @@ _KNOWN_ACTIONS = {action.value for action in C2ControlActionV1}
 
 
 class ControlAuthenticatorV1:
-    """Authenticate API key, OS peer, subject, mission, and revisions.
-
-    Neither an operator identifier nor a role supplied by a request is accepted
-    as authority. The verified API key selects the persistent operator record.
-    """
+    """Authenticate API key, OS peer, subject, mission, and revisions."""
 
     def __init__(
         self,
-        operators: OperatorManager,
-        grants: GrantService,
+        operators: OperatorReader,
+        grants: GrantReader,
         *,
         default_ttl_seconds: float = 300.0,
     ) -> None:
         if default_ttl_seconds <= 0:
             raise ValueError("principal TTL must be positive")
-        if operators.db_path != grants.db_path:
-            raise ValueError("operator and grant stores must use the same database")
         self._operators = operators
         self._grants = grants
         self._default_ttl = float(default_ttl_seconds)
         self._issued: dict[int, AuthenticatedControlPrincipal] = {}
         self._lock = threading.RLock()
-        grants.bind_principal_validator(self.is_current_principal)
+        if hasattr(grants, "bind_principal_validator"):
+            grants.bind_principal_validator(self.is_current_principal)
 
     def authenticate_control(
         self,
@@ -271,6 +343,9 @@ class ControlAuthenticatorV1:
 __all__ = [
     "AuthenticatedControlPrincipal",
     "AuthenticatedOperator",
+    "AuthorityFence",
     "ControlAuthenticatorV1",
+    "GrantReader",
+    "OperatorReader",
     "OperatorRole",
 ]

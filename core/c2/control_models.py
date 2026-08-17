@@ -6,28 +6,26 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from core.c2.control_commands import (
+    ParticipantControlPhaseV1,
+    ParticipantControlPhaseV2,
+)
 from core.c2.protocol import C2_CONTROL_PROTOCOL_VERSION
 
 if TYPE_CHECKING:
     from core.c2.control_commands import (
         ParticipantControlRequestV1,
+        ParticipantControlRequestV2,
     )
 
 MAX_BASE64_PAYLOAD_LENGTH = 16 * 1024 * 1024
-MAX_CONTROL_PAYLOAD_BYTES = 256 * 1024  # 256 KiB limit on control payloads
+MAX_CONTROL_PAYLOAD_BYTES = 256 * 1024  # 256 KiB decoded limit on control payloads
+MAX_HEALTH_PAYLOAD_BYTES = 4 * 1024  # 4 KiB limit on health probe payloads
 
 _BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]*$")
-
-
-class ParticipantControlPhaseV1(str, Enum):
-    PENDING = "pending"
-    COMMITTED_HIDDEN = "committed_hidden"
-    FINALIZED_VISIBLE = "finalized_visible"
-    ABORTED = "aborted"
-    FAILED = "failed"
+_HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -66,11 +64,11 @@ def canonical_json_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def strict_b64url_decode(value: str, max_len: int = MAX_BASE64_PAYLOAD_LENGTH) -> bytes:
+def strict_b64url_decode(value: str, max_len: int = MAX_CONTROL_PAYLOAD_BYTES) -> bytes:
     """Strictly decode unpadded or padded base64url string with size and character validation."""
     if not isinstance(value, str):
         raise ValueError("payload_not_string")
-    if len(value) > max_len:
+    if len(value) > MAX_BASE64_PAYLOAD_LENGTH:
         raise ValueError("encoded_payload_too_large")
     stripped = value.rstrip("=")
     if not _BASE64URL_RE.match(stripped):
@@ -85,6 +83,11 @@ def strict_b64url_decode(value: str, max_len: int = MAX_BASE64_PAYLOAD_LENGTH) -
     return raw
 
 
+def calculate_schema_bound_payload_digest(schema_id: str, payload_bytes: bytes) -> str:
+    """Calculate SHA-256 hex digest bound to schema identity: SHA-256(schema_id || NUL || payload_bytes)."""
+    return hashlib.sha256(schema_id.encode("utf-8") + b"\x00" + payload_bytes).hexdigest()
+
+
 def calculate_payload_digest(payload: bytes | str | dict, schema_id: str | None = None) -> str:
     """Calculate SHA-256 hex digest of payload data."""
     if isinstance(payload, dict):
@@ -94,7 +97,7 @@ def calculate_payload_digest(payload: bytes | str | dict, schema_id: str | None 
     else:
         raw = payload
     if schema_id:
-        raw = f"{schema_id}\x00".encode() + raw
+        return calculate_schema_bound_payload_digest(schema_id, raw)
     return hashlib.sha256(raw).hexdigest()
 
 
@@ -104,7 +107,7 @@ def calculate_transaction_intent_digest(
     resource_ref: str,
     mission_id: str,
     subject_id: str,
-    operation_kind: str,
+    operation_kind: str = "c2_resource",
     payload_schema_id: str,
     payload_digest: str,
 ) -> str:
@@ -123,11 +126,14 @@ def calculate_transaction_intent_digest(
     return hashlib.sha256(b"OCTOPUS-C2-INTENT-V2\x00" + body).hexdigest()
 
 
-def canonical_request_dict(request: ParticipantControlRequestV1) -> dict[str, Any]:
-    """Extract canonical authority dictionary from request."""
+def canonical_unsigned_request_dict(
+    request: ParticipantControlRequestV1 | ParticipantControlRequestV2,
+) -> dict[str, Any]:
+    """Extract canonical unsigned authority dictionary from request."""
     auth = request.authorization
     act_val = request.action.value if hasattr(request.action, "value") else str(request.action)
-    expires_ms = int(auth.expires_at * 1000) if isinstance(auth.expires_at, (int, float)) else 0
+    expires_ms = int(getattr(auth, "expires_at_ms", int(getattr(auth, "expires_at", 0) * 1000)))
+    issued_ms = int(getattr(auth, "issued_at_ms", 0))
     return {
         "action": act_val,
         "action_id": auth.action_id,
@@ -136,6 +142,7 @@ def canonical_request_dict(request: ParticipantControlRequestV1) -> dict[str, An
         if request.expected_resource_revision is not None
         else -1,
         "expires_at_ms": expires_ms,
+        "issued_at_ms": issued_ms,
         "mission_id": auth.mission_id,
         "nonce": auth.nonce,
         "participant_id": auth.participant_id,
@@ -149,10 +156,32 @@ def canonical_request_dict(request: ParticipantControlRequestV1) -> dict[str, An
     }
 
 
-def calculate_canonical_request_digest(request: ParticipantControlRequestV1) -> str:
-    """Compute canonical SHA-256 request digest with domain separation."""
-    body = canonical_json_bytes(canonical_request_dict(request))
+canonical_request_dict = canonical_unsigned_request_dict
+
+
+def calculate_canonical_request_digest(request: ParticipantControlRequestV1 | ParticipantControlRequestV2) -> str:
+    """Compute canonical SHA-256 request digest over unsigned canonical request dict."""
+    body = canonical_json_bytes(canonical_unsigned_request_dict(request))
     return hashlib.sha256(b"OCTOPUS-C2-REQUEST-V2\x00" + body).hexdigest()
+
+
+def canonical_signed_request_dict(
+    request: ParticipantControlRequestV1 | ParticipantControlRequestV2,
+    request_digest: str | None = None,
+) -> dict[str, Any]:
+    """Extract canonical signed request dictionary (including request_digest, excluding signature)."""
+    d = canonical_unsigned_request_dict(request)
+    d["request_digest"] = request_digest or calculate_canonical_request_digest(request)
+    return d
+
+
+def calculate_canonical_auth_transcript(
+    request: ParticipantControlRequestV1 | ParticipantControlRequestV2,
+    request_digest: str | None = None,
+) -> bytes:
+    """Compute canonical transcript to sign for a participant control request."""
+    signed_dict = canonical_signed_request_dict(request, request_digest)
+    return b"OCTOPUS-C2-AUTH-V2\x00" + canonical_json_bytes(signed_dict)
 
 
 def calculate_request_digest(
@@ -162,7 +191,7 @@ def calculate_request_digest(
     subject_id: str | None = None,
     nonce: str | None = None,
     *,
-    request: ParticipantControlRequestV1 | None = None,
+    request: ParticipantControlRequestV1 | ParticipantControlRequestV2 | None = None,
     **kwargs: Any,
 ) -> str:
     """Calculate SHA-256 hex digest of control request."""
@@ -183,6 +212,7 @@ def calculate_request_digest(
             "coordinator_revision": int(kwargs.get("coordinator_revision", 1)),
             "expected_resource_revision": kwargs.get("expected_resource_revision", -1),
             "expires_at_ms": int(kwargs.get("expires_at_ms", 0)),
+            "issued_at_ms": int(kwargs.get("issued_at_ms", 0)),
             "mission_id": mission_id,
             "nonce": nonce,
             "participant_id": kwargs.get("participant_id", ""),
@@ -260,23 +290,22 @@ def calculate_snapshot_digest(
 def canonical_response_envelope_dict(
     *,
     protocol_version: str = C2_CONTROL_PROTOCOL_VERSION,
-    daemon_instance_id: str,
-    daemon_generation: str,
+    daemon_instance_id: str | None = None,
+    daemon_generation: str = "gen_0",
     service_id: str = "",
     boot_instance_id: str = "",
-    request_digest: str,
-    request_nonce: str,
-    response_type: str,
-    response_payload_b64u: str,
-    response_digest: str,
-    issued_at_ms: int,
-    key_id: str,
+    request_digest: str = "",
+    request_nonce: str = "",
+    response_type: str = "receipt",
+    response_payload_b64u: str = "",
+    response_digest: str = "",
+    issued_at_ms: int = 0,
+    key_id: str = "",
 ) -> dict[str, Any]:
     """Construct canonical dict for signed control response envelope."""
-    return {
+    d: dict[str, Any] = {
         "boot_instance_id": boot_instance_id,
         "daemon_generation": daemon_generation,
-        "daemon_instance_id": daemon_instance_id,
         "issued_at_ms": issued_at_ms,
         "key_id": key_id,
         "protocol_version": protocol_version,
@@ -287,6 +316,9 @@ def canonical_response_envelope_dict(
         "response_type": response_type,
         "service_id": service_id,
     }
+    if daemon_instance_id is not None and protocol_version != "2.0":
+        d["daemon_instance_id"] = daemon_instance_id
+    return d
 
 
 def calculate_response_signature_digest(envelope_dict: dict[str, Any]) -> bytes:
@@ -294,21 +326,33 @@ def calculate_response_signature_digest(envelope_dict: dict[str, Any]) -> bytes:
     return b"OCTOPUS-C2-RESPONSE-V2\x00" + canonical_json_bytes(envelope_dict)
 
 
+def calculate_health_signature_digest(health_dict: dict[str, Any]) -> bytes:
+    """Return the transcript bytes to sign for a health response."""
+    return b"OCTOPUS-C2-HEALTH-RESPONSE-V2\x00" + canonical_json_bytes(health_dict)
+
+
 __all__ = [
     "MAX_BASE64_PAYLOAD_LENGTH",
     "MAX_CONTROL_PAYLOAD_BYTES",
+    "MAX_HEALTH_PAYLOAD_BYTES",
     "ControlPayloadDigest",
     "ControlRequestDigest",
     "ParticipantControlPhaseV1",
+    "ParticipantControlPhaseV2",
+    "calculate_canonical_auth_transcript",
     "calculate_canonical_request_digest",
+    "calculate_health_signature_digest",
     "calculate_payload_digest",
     "calculate_receipt_digest",
     "calculate_request_digest",
     "calculate_response_signature_digest",
+    "calculate_schema_bound_payload_digest",
     "calculate_snapshot_digest",
     "calculate_transaction_intent_digest",
     "canonical_json_bytes",
     "canonical_request_dict",
     "canonical_response_envelope_dict",
+    "canonical_signed_request_dict",
+    "canonical_unsigned_request_dict",
     "strict_b64url_decode",
 ]

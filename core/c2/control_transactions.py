@@ -1,12 +1,15 @@
+"""Coordinator for two-phase commit (2PC) transactions across resource participants (§14.4)."""
+
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from core.c2.control_commands import (
     BoundedControlErrorV1,
     C2ControlErrorCodeV1,
     ParticipantControlReceiptV1,
     ParticipantControlRequestV1,
+    ParticipantControlRequestV2,
 )
 
 
@@ -21,7 +24,7 @@ class ControlTransactionCoordinator:
         self._participants[participant_id] = participant
 
     def execute_transaction(
-        self, request: ParticipantControlRequestV1
+        self, request: ParticipantControlRequestV1 | ParticipantControlRequestV2
     ) -> ParticipantControlReceiptV1 | BoundedControlErrorV1:
         """Execute a 2PC transaction across registered participants with chained receipts."""
         p_id = request.authorization.participant_id
@@ -39,9 +42,10 @@ class ControlTransactionCoordinator:
             return prep_res
 
         # Phase 2: Commit (chained to prepare receipt)
-        commit_req = ParticipantControlRequestV1(
+        req_cls = type(request)
+        commit_req = req_cls(
             action=request.action,
-            authorization=request.authorization,
+            authorization=cast(Any, request.authorization),
             payload_schema_id=request.payload_schema_id,
             payload_digest=request.payload_digest,
             canonical_payload_b64u=request.canonical_payload_b64u,
@@ -55,9 +59,9 @@ class ControlTransactionCoordinator:
             return commit_res
 
         # Phase 3: Finalize Visibility (chained to commit receipt)
-        finalize_req = ParticipantControlRequestV1(
+        finalize_req = req_cls(
             action=request.action,
-            authorization=request.authorization,
+            authorization=cast(Any, request.authorization),
             payload_schema_id=request.payload_schema_id,
             payload_digest=request.payload_digest,
             canonical_payload_b64u=request.canonical_payload_b64u,
