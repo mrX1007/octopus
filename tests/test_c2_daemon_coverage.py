@@ -559,6 +559,7 @@ def test_ipc_dispatches_auth_rbac_actions_management_and_audit(
         ParticipantControlAuthorizationV1,
         ParticipantControlRequestV1,
         SignedControlResponseV1,
+        SignedControlResponseV2,
     )
     from core.c2.control_models import calculate_payload_digest
     from core.c2.control_signing import ControlSignerV1
@@ -635,8 +636,8 @@ def test_ipc_dispatches_auth_rbac_actions_management_and_audit(
 
     assert connection.closed is True
     assert len(connection.responses) == 4
-    # All responses are wrapped in SignedControlResponseV1
-    assert all(isinstance(r, SignedControlResponseV1) for r in connection.responses)
+    # All responses are wrapped in SignedControlResponse
+    assert all(isinstance(r, (SignedControlResponseV1, SignedControlResponseV2)) for r in connection.responses)
 
     broken = IPCConnection([b"not-json-or-ctrl1"])
     daemon.handle_client(broken, peer_resolver=peer_mock)

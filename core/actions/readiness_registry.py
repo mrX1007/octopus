@@ -263,12 +263,8 @@ def _default_probes() -> tuple[ProviderReadinessProbe, ...]:
 
     def _default_daemon_status_supplier() -> DaemonProtocolStatus:
         import os
-        import secrets
 
-        from core.c2 import daemon
-        from core.c2.client import DefaultC2ControlClient
-        from core.c2.control_commands import C2ControlActionV1, ParticipantControlReceiptV1
-        from core.c2.control_signing import ControlSignerV1, DaemonResponseVerifier
+        from core.c2.control_health import query_health_status
 
         sock_path = os.environ.get("OCTOPUS_C2_SOCKET", "/run/octopus/octopus-c2.sock")
         if (
@@ -278,48 +274,20 @@ def _default_probes() -> tuple[ProviderReadinessProbe, ...]:
         ):
             sock_path = "/tmp/octopus.sock"
 
-        if not os.path.exists(sock_path):
+        status = query_health_status(sock_path)
+        if status.reachable:
             return DaemonProtocolStatus(
-                reachable=False,
-                protocol_version=C2_CONTROL_PROTOCOL_VERSION,
-                daemon_instance_id=None,
-                provider_generation="unverified",
+                reachable=True,
+                protocol_version=status.protocol_version,
+                daemon_instance_id=status.boot_instance_id or "c2-daemon-local-1",
+                provider_generation=status.daemon_generation or "1",
             )
-
-        signer = ControlSignerV1("readiness_probe", secrets.token_bytes(32))
-        verifier = DaemonResponseVerifier(trusted_keys={"daemon_resp_key_1": daemon.get_daemon_response_public_key()})
-        client = DefaultC2ControlClient(signer=signer, daemon_verifier=verifier, socket_path=sock_path)
-
-        try:
-            res = client.execute_action(
-                action=C2ControlActionV1.READINESS,
-                payload={"check": "readiness"},
-                mission_id="mission_readiness",
-                subject_id="probe_subj",
-                transaction_id=f"tx_ready_{secrets.token_hex(4)}",
-                participant_id="readiness_probe",
-                ttl_seconds=30.0,
-            )
-            if isinstance(res, ParticipantControlReceiptV1):
-                return DaemonProtocolStatus(
-                    reachable=True,
-                    protocol_version=C2_CONTROL_PROTOCOL_VERSION,
-                    daemon_instance_id=res.daemon_instance_id or "c2-daemon-local-1",
-                    provider_generation="1",
-                )
-            return DaemonProtocolStatus(
-                reachable=False,
-                protocol_version=C2_CONTROL_PROTOCOL_VERSION,
-                daemon_instance_id=None,
-                provider_generation="unverified",
-            )
-        except Exception:
-            return DaemonProtocolStatus(
-                reachable=False,
-                protocol_version=C2_CONTROL_PROTOCOL_VERSION,
-                daemon_instance_id=None,
-                provider_generation="unverified",
-            )
+        return DaemonProtocolStatus(
+            reachable=False,
+            protocol_version=C2_CONTROL_PROTOCOL_VERSION,
+            daemon_instance_id=None,
+            provider_generation="unverified",
+        )
 
     dns = DaemonProtocolProbe(
         "probe:dns_c2_channel",
