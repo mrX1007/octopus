@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import base64
-import contextlib
 import hashlib
 import os
 import re
@@ -182,7 +181,7 @@ def load_or_persist_service_id(file_path: str) -> str:
         return new_id
     except Exception as exc:
         if os.path.exists(temp_file):
-            with contextlib.suppress(OSError):
+            with suppress(OSError):
                 os.unlink(temp_file)
         raise RuntimeError(f"service_id persistence failed: {exc}") from exc
 
@@ -280,6 +279,6 @@ def load_or_persist_daemon_response_key(
         return key_id, priv_key, pub_bytes
     except Exception as exc:
         if os.path.exists(temp_file):
-            with contextlib.suppress(OSError):
+            with suppress(OSError):
                 os.unlink(temp_file)
         raise RuntimeError(f"daemon response key persistence failed: {exc}") from exc

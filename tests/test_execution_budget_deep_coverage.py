@@ -224,7 +224,7 @@ def test_budget_authority_validation_branches():
     ctrl = ExecutorCancellationController("canc-1")
     token = ctrl.token
 
-    ExecutionBudget(
+    root_budget = ExecutionBudget(
         absolute_deadline_monotonic=time.monotonic() + 100.0,
         max_output_bytes=1000,
         max_child_depth=2,

@@ -217,6 +217,16 @@ def _metadata_matches_kind(metadata: ReferenceMetadataSnapshot, kind: ReferenceK
     return False
 
 
+def _is_checkout_lock_participant(store: object) -> bool:
+    if isinstance(store, CheckoutLockParticipantV2):
+        return True
+    return (
+        hasattr(store, "checkout_lock_order_key")
+        and hasattr(store, "acquire_checkout_lock")
+        and hasattr(store, "release_checkout_lock")
+    )
+
+
 class ReferenceCheckoutCoordinator:
     """Coordinate all immutable authorization snapshots and reference fences."""
 
@@ -231,15 +241,15 @@ class ReferenceCheckoutCoordinator:
         fact_store: TrustedFactCheckoutStoreV2 | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        if not isinstance(ingress_store, CheckoutLockParticipantV2):
+        if not _is_checkout_lock_participant(ingress_store):
             raise TypeError("checkout_ingress_store_invalid")
-        if not isinstance(principal_store, CheckoutLockParticipantV2):
+        if not _is_checkout_lock_participant(principal_store):
             raise TypeError("checkout_principal_store_invalid")
-        if not isinstance(mission_store, CheckoutLockParticipantV2):
+        if not _is_checkout_lock_participant(mission_store):
             raise TypeError("checkout_mission_store_invalid")
-        if approval_store is not None and not isinstance(approval_store, CheckoutLockParticipantV2):
+        if approval_store is not None and not _is_checkout_lock_participant(approval_store):
             raise TypeError("checkout_approval_store_invalid")
-        if fact_store is not None and not isinstance(fact_store, CheckoutLockParticipantV2):
+        if fact_store is not None and not _is_checkout_lock_participant(fact_store):
             raise TypeError("checkout_fact_store_invalid")
         if not callable(clock):
             raise TypeError("checkout_clock_invalid")
@@ -248,7 +258,7 @@ class ReferenceCheckoutCoordinator:
         for kind, store in reference_stores.items():
             if type(kind) is not ReferenceKind:
                 raise TypeError("checkout_reference_store_kind_invalid")
-            if not isinstance(store, CheckoutLockParticipantV2):
+            if not _is_checkout_lock_participant(store):
                 raise TypeError("checkout_reference_store_invalid")
             normalized_reference_stores[kind] = store
 

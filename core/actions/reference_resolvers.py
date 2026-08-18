@@ -211,6 +211,12 @@ class _DirectReferenceMetadataStore(_MetadataSnapshotStore[ReferenceMetadataSnap
     _snapshot_types = REFERENCE_METADATA_SNAPSHOT_TYPES
 
 
+def _is_reference_metadata_resolver(resolver: object) -> bool:
+    if isinstance(resolver, ReferenceMetadataResolver):
+        return True
+    return hasattr(resolver, "resolve_metadata") and callable(getattr(resolver, "resolve_metadata", None))
+
+
 class ReferenceResolverRegistry:
     """Routes opaque namespaces to metadata-only resolvers, fail-closed."""
 
@@ -227,7 +233,7 @@ class ReferenceResolverRegistry:
     def register_resolver(self, reference_prefix: str, resolver: ReferenceMetadataResolver) -> None:
         if type(reference_prefix) is not str or not reference_prefix.endswith("://"):
             raise ValueError("reference_prefix_invalid")
-        if not isinstance(resolver, ReferenceMetadataResolver):
+        if not _is_reference_metadata_resolver(resolver):
             raise TypeError("reference_resolver_invalid")
         with self._lock:
             if reference_prefix in self._resolvers:
