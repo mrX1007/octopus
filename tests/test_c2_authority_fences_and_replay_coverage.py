@@ -174,6 +174,9 @@ def test_authority_fence_negative_invariants_matrix(tmp_path):
             request_digest="0" * 64,
             authorization_issued_at_ms=now_ms - 1000,
             authorization_expires_at_ms=now_ms + 60000,
+            transaction_id="tx_mat",
+            participant_id="part_mat",
+            action_id="prepare_c2_resource",
         )
 
         # Baseline PASS
@@ -209,6 +212,9 @@ def test_authority_fence_negative_invariants_matrix(tmp_path):
             request_digest = "0" * 64
             authorization_issued_at_ms = now_ms - 1000
             authorization_expires_at_ms = now_ms + 60000
+            transaction_id = "tx_mat"
+            participant_id = "part_mat"
+            action_id = "prepare_c2_resource"
 
         with pytest.raises(TypeError, match="VerifiedMutationAuthority"):
             AuthorityFence.verify_current(conn, FakeAuthority())  # type: ignore[arg-type]
@@ -229,6 +235,9 @@ def test_authority_fence_negative_invariants_matrix(tmp_path):
             request_digest="0" * 64,
             authorization_issued_at_ms=now_ms - 10000,
             authorization_expires_at_ms=now_ms - 1000,
+            transaction_id="tx_mat",
+            participant_id="part_mat",
+            action_id="prepare_c2_resource",
         )
         with pytest.raises(PermissionError, match="authority_validity_window_expired"):
             AuthorityFence.verify_current(conn, expired_auth)
@@ -249,6 +258,9 @@ def test_authority_fence_negative_invariants_matrix(tmp_path):
             request_digest="0" * 64,
             authorization_issued_at_ms=now_ms - 1000,
             authorization_expires_at_ms=now_ms + 60000,
+            transaction_id="tx_mat",
+            participant_id="part_mat",
+            action_id="prepare_c2_resource",
         )
         with pytest.raises(PermissionError, match="operator_authority_stale_or_revoked"):
             AuthorityFence.verify_current(conn, bad_op_auth)
@@ -269,6 +281,9 @@ def test_authority_fence_negative_invariants_matrix(tmp_path):
             request_digest="0" * 64,
             authorization_issued_at_ms=now_ms - 1000,
             authorization_expires_at_ms=now_ms + 60000,
+            transaction_id="tx_mat",
+            participant_id="part_mat",
+            action_id="prepare_c2_resource",
         )
         with pytest.raises(PermissionError, match="operator_subject_mismatch"):
             AuthorityFence.verify_current(conn, bad_subj_auth)
@@ -289,6 +304,9 @@ def test_authority_fence_negative_invariants_matrix(tmp_path):
             request_digest="0" * 64,
             authorization_issued_at_ms=now_ms - 1000,
             authorization_expires_at_ms=now_ms + 60000,
+            transaction_id="tx_mat",
+            participant_id="part_mat",
+            action_id="prepare_c2_resource",
         )
         with pytest.raises(PermissionError, match="key_authority_missing_or_revoked"):
             AuthorityFence.verify_current(conn, bad_key_auth)
@@ -311,6 +329,9 @@ def test_authority_fence_negative_invariants_matrix(tmp_path):
             request_digest="0" * 64,
             authorization_issued_at_ms=now_ms - 1000,
             authorization_expires_at_ms=now_ms + 60000,
+            transaction_id="tx_mat",
+            participant_id="part_mat",
+            action_id="prepare_c2_resource",
         )
         with pytest.raises(PermissionError, match="key_operator_mismatch"):
             AuthorityFence.verify_current(conn, mismatch_key_auth)
@@ -361,6 +382,9 @@ def test_authority_fence_negative_invariants_matrix(tmp_path):
             request_digest="0" * 64,
             authorization_issued_at_ms=now_ms - 1000,
             authorization_expires_at_ms=now_ms + 60000,
+            transaction_id="tx_mat",
+            participant_id="part_mat",
+            action_id="prepare_c2_resource",
         )
         with pytest.raises(PermissionError, match="peer_binding_stale_or_revoked"):
             AuthorityFence.verify_current(conn, bad_peer_auth)
@@ -381,6 +405,9 @@ def test_authority_fence_negative_invariants_matrix(tmp_path):
             request_digest="0" * 64,
             authorization_issued_at_ms=now_ms - 1000,
             authorization_expires_at_ms=now_ms + 60000,
+            transaction_id="tx_mat",
+            participant_id="part_mat",
+            action_id="prepare_c2_resource",
         )
         with pytest.raises(PermissionError, match="mission_inactive_or_revoked"):
             AuthorityFence.verify_current(conn, bad_mission_auth)
@@ -408,6 +435,9 @@ def test_authority_fence_negative_invariants_matrix(tmp_path):
             request_digest="0" * 64,
             authorization_issued_at_ms=now_ms - 1000,
             authorization_expires_at_ms=now_ms + 60000,
+            transaction_id="tx_mat",
+            participant_id="part_mat",
+            action_id="prepare_c2_resource",
         )
         with pytest.raises(PermissionError, match="mission_grant_stale_or_revoked"):
             AuthorityFence.verify_current(conn, unassigned_grant_auth)
@@ -589,6 +619,9 @@ def test_authority_fence_missing_database_tables():
         request_digest="0" * 64,
         authorization_issued_at_ms=now_ms - 1000,
         authorization_expires_at_ms=now_ms + 60000,
+        transaction_id="tx_tab",
+        participant_id="part_tab",
+        action_id="prepare_c2_resource",
     )
 
     # 1. Empty DB (missing operators table)

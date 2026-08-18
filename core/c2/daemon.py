@@ -986,7 +986,7 @@ def _dispatch_verified_request(
                 retryable=False,
                 detail_ref="mandatory_verified_mutation_authority_required",
             )
-        return participant.prepare(req, verified.authority, verified.resolved_key)
+        return participant.prepare(req, authority=verified.authority)
 
     if action == C2ControlAction.COMMIT_C2_RESOURCE:
         if verified.authority is None:
@@ -995,7 +995,7 @@ def _dispatch_verified_request(
                 retryable=False,
                 detail_ref="mandatory_verified_mutation_authority_required",
             )
-        return participant.commit(req, verified.authority, verified.resolved_key)
+        return participant.commit(req, authority=verified.authority)
 
     if action == C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY:
         if verified.authority is None:
@@ -1004,7 +1004,7 @@ def _dispatch_verified_request(
                 retryable=False,
                 detail_ref="mandatory_verified_mutation_authority_required",
             )
-        return participant.finalize_visibility(req, verified.authority, verified.resolved_key)
+        return participant.finalize_visibility(req, authority=verified.authority)
 
     if action == C2ControlAction.ABORT_C2_RESOURCE:
         if verified.authority is None:
@@ -1013,7 +1013,7 @@ def _dispatch_verified_request(
                 retryable=False,
                 detail_ref="mandatory_verified_mutation_authority_required",
             )
-        return participant.rollback(req, verified.authority, verified.resolved_key)
+        return participant.rollback(req, authority=verified.authority)
 
     if action == C2ControlAction.QUERY_C2_RESOURCE:
         return participant.reconcile(req)
@@ -1063,11 +1063,26 @@ def handle_client(
 
             req_count += 1
 
-            # Check if frame_data is dedicated health probe request
-            if b'"type":"health_request_v2"' in frame_data or b'"type": "health_request_v2"' in frame_data:
+            # 1. Parse JSON strictly
+            try:
+                raw_json = strict_json_loads(frame_data)
+            except Exception as exc:
+                logger.warning("Malformed JSON in frame: %s", exc)
+                break
+
+            if not isinstance(raw_json, dict):
+                logger.warning("Frame payload must be a JSON object")
+                break
+
+            msg_type = raw_json.get("type")
+
+            # 2. Strict health probe request discrimination
+            if msg_type == "health_request_v2":
                 try:
-                    health_req = strict_json_loads(frame_data)
-                    probe_nonce = str(health_req.get("nonce", ""))
+                    probe_nonce = str(raw_json.get("nonce", ""))
+                    if not probe_nonce:
+                        logger.warning("Health request missing nonce")
+                        break
                     key_id, signer = get_daemon_response_signer()
                     service_id = get_service_id()
                     issued_at_ms = int(time.time() * 1000)
@@ -1100,6 +1115,11 @@ def handle_client(
                 except Exception as exc:
                     logger.warning("Health probe error: %s", exc)
                     break
+
+            # If message contains an unexpected message type, fail closed
+            if msg_type in ("signed_health_response_v2", "signed_envelope", "receipt", "snapshot", "error"):
+                logger.warning("Unexpected message type in client request frame: %s", msg_type)
+                break
 
             try:
                 framed_req = _control_codec.decode_request(frame_data)

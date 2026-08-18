@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
+import uuid
 
 import pytest
 
@@ -41,6 +42,7 @@ def _setup_participant_with_auth(
             peer_uid=os.getuid(),
             peer_gid=os.getgid(),
         )
+
     now_ms = int(time.time() * 1000)
     auth = VerifiedMutationAuthority(
         operator_id="op_admin",
@@ -57,9 +59,9 @@ def _setup_participant_with_auth(
         request_digest="0" * 64,
         authorization_issued_at_ms=now_ms - 1000,
         authorization_expires_at_ms=now_ms + 100000,
-        transaction_id="",
+        transaction_id="tx_default",
         participant_id=participant_id,
-        action_id="",
+        action_id="prepare_c2_resource",
     )
     return participant, auth
 
@@ -71,8 +73,10 @@ def _make_request(
     prior_receipt_ref: str | None = None,
     prior_receipt_digest: str | None = None,
     participant_id: str = "part1",
+    nonce: str | None = None,
 ) -> ParticipantControlRequestV2:
     now_ms = int(time.time() * 1000)
+    req_nonce = nonce or f"nonce_{action.value}_{uuid.uuid4().hex[:12]}"
     auth = ParticipantControlAuthorizationV2(
         protocol_version="2.0",
         key_id="k1",
@@ -85,7 +89,7 @@ def _make_request(
         request_digest="0" * 64,
         issued_at_ms=now_ms,
         expires_at_ms=now_ms + 100000,
-        nonce="nonce_part1_12345678",
+        nonce=req_nonce,
         signature="0" * 86,
     )
     return ParticipantControlRequestV2(
@@ -348,7 +352,7 @@ def test_resource_participant_error_and_fence_paths():
         authorization_expires_at_ms=now_ms + 100000,
         transaction_id="tx_unknown",
         participant_id="part1",
-        action_id="",
+        action_id=C2ControlAction.ABORT_C2_RESOURCE.value,
     )
     unknown_req = _make_request("tx_unknown", action=C2ControlAction.ABORT_C2_RESOURCE, participant_id="part1")
     roll_unk = participant.rollback(unknown_req, authority=valid_auth)
