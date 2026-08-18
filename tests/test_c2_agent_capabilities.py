@@ -1,54 +1,53 @@
-"""Tests for agent capabilities negotiation."""
+"""Tests for agent capabilities re-export and canonical V12 definitions."""
 
 from __future__ import annotations
 
 import pytest
 
 from core.c2.agent_capabilities import (
-    AgentCapabilityNegotiatorV12,
     AgentCapabilitySetV12,
+    AgentProtocolNegotiatorV12,
+    compute_capabilities_digest,
 )
+from core.c2.agent_task_protocol import (
+    C2_AGENT_PROTOCOL_V11,
+    C2_AGENT_PROTOCOL_V12,
+    AgentPayloadSchemaIdV12,
+    AgentResultSchemaIdV12,
+)
+from core.c2.task_catalog import C2TaskOperationId
 
 pytestmark = pytest.mark.unit
 
 
-def test_capability_set_dataclass():
-    caps = AgentCapabilitySetV12(
-        supported_operations=("exec", "file_read", "cleanup"),
-        supported_transports=("http", "dns"),
-        platform="darwin",
-        arch="arm64",
+def test_capability_set_canonical_create():
+    caps = AgentCapabilitySetV12.create(
+        supported_operation_ids=(
+            C2TaskOperationId.IDENTITY,
+            C2TaskOperationId.HOST_INVENTORY,
+        ),
+        supported_payload_schema_versions=(
+            AgentPayloadSchemaIdV12.IDENTITY_V1,
+            AgentPayloadSchemaIdV12.HOST_INVENTORY_V1,
+        ),
+        supported_result_schema_versions=(
+            AgentResultSchemaIdV12.IDENTITY_V1,
+            AgentResultSchemaIdV12.HOST_INVENTORY_V1,
+        ),
     )
-    assert caps.platform == "darwin"
-    assert caps.arch == "arm64"
-    assert "exec" in caps.supported_operations
-
-
-def test_negotiate_operations():
-    negotiator = AgentCapabilityNegotiatorV12()
-    agent_caps = AgentCapabilitySetV12(
-        supported_operations=("exec", "file_read", "custom_op"),
-        supported_transports=("http",),
-        platform="linux",
-        arch="amd64",
+    assert C2TaskOperationId.IDENTITY in caps.supported_operation_ids
+    assert C2TaskOperationId.HOST_INVENTORY in caps.supported_operation_ids
+    expected_digest = compute_capabilities_digest(
+        supported_operation_ids=caps.supported_operation_ids,
+        supported_payload_schema_versions=caps.supported_payload_schema_versions,
+        supported_result_schema_versions=caps.supported_result_schema_versions,
     )
-    server_ops = ("exec", "file_read", "file_write")
-
-    agreed = negotiator.negotiate_operations(agent_caps, server_ops)
-    assert agreed == ("exec", "file_read")
-    assert "custom_op" not in agreed
+    assert caps.capabilities_digest == expected_digest
 
 
-def test_negotiate_transports():
-    negotiator = AgentCapabilityNegotiatorV12()
-    agent_caps = AgentCapabilitySetV12(
-        supported_operations=("exec",),
-        supported_transports=("http", "dns", "icmp"),
-        platform="windows",
-        arch="amd64",
-    )
-    server_transports = ("http", "dns")
-
-    agreed = negotiator.negotiate_transports(agent_caps, server_transports)
-    assert agreed == ("http", "dns")
-    assert "icmp" not in agreed
+def test_agent_protocol_negotiator_v12_reexport():
+    negotiator = AgentProtocolNegotiatorV12()
+    assert negotiator.negotiate_protocol([C2_AGENT_PROTOCOL_V11, C2_AGENT_PROTOCOL_V12]) == C2_AGENT_PROTOCOL_V12
+    assert negotiator.negotiate_protocol([C2_AGENT_PROTOCOL_V11]) == C2_AGENT_PROTOCOL_V11
+    with pytest.raises(ValueError, match="no compatible agent protocol version"):
+        negotiator.negotiate_protocol(["9.0"])
