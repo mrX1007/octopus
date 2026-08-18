@@ -64,19 +64,19 @@ def test_load_or_persist_daemon_response_key_file(tmp_path):
     key_file = tmp_path / "daemon.key"
 
     # First generation
-    key_id, _priv1, pub1 = load_or_persist_daemon_response_key(str(key_file))
+    key_id, priv1, pub1 = load_or_persist_daemon_response_key(str(key_file))
     assert key_id == "daemon_resp_key_1"
     assert len(pub1) == 32
     assert os.path.exists(key_file)
 
     # Second read
-    key_id2, _priv2, pub2 = load_or_persist_daemon_response_key(str(key_file))
+    key_id2, priv2, pub2 = load_or_persist_daemon_response_key(str(key_file))
     assert key_id2 == "daemon_resp_key_1"
     assert pub1 == pub2
 
 
 def test_load_or_persist_daemon_response_key_env():
     hex_key = "4" * 64
-    key_id, _priv, pub = load_or_persist_daemon_response_key("/tmp/unused", env_secret=hex_key)
+    key_id, priv, pub = load_or_persist_daemon_response_key("/tmp/unused", env_secret=hex_key)
     assert key_id == "daemon_resp_key_1"
     assert len(pub) == 32

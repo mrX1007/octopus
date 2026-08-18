@@ -44,9 +44,10 @@ def test_run_linpeas():
             return "LinPEAS Report\nCVE-2021-4034 vulnerable\n" * 10
         return ""
 
-    with patch("core.killchain.privesc._ssh_exec", side_effect=fake_lp_exec), patch("time.sleep"):
-        out, _cves = privesc._run_linpeas(mock_client)
-        assert "LinPEAS" in out
+    with patch("core.killchain.privesc._ssh_exec", side_effect=fake_lp_exec):
+        with patch("time.sleep"):
+            out, cves = privesc._run_linpeas(mock_client)
+            assert "LinPEAS" in out
 
 
 @pytest.mark.unit

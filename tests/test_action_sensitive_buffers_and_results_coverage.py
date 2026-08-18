@@ -89,8 +89,9 @@ def test_zeroizable_buffers():
     assert dest.closed is False
     assert dest.zeroized is False
 
-    with dest as d, d.borrow_writable_view() as w:
-        w[:4] = b"test"
+    with dest as d:
+        with d.borrow_writable_view() as w:
+            w[:4] = b"test"
 
     assert dest.closed is True
     assert dest.zeroized is True

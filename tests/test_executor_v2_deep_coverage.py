@@ -117,7 +117,7 @@ def test_execute_v2_root_provider_not_mounted():
 
 
 def test_execute_v2_root_request_mismatch():
-    executor, _envelope, bridge = _setup_executor_and_root_bridge()
+    executor, envelope, bridge = _setup_executor_and_root_bridge()
     wrong_envelope = ActionRequestV2EnvelopeDecoder.decode(
         json.dumps(
             {

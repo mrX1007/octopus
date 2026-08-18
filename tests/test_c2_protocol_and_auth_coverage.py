@@ -255,7 +255,7 @@ def test_cancellation_recovery_and_service():
 
     # Bind live controller
     mock_ctrl = MagicMock(spec=ExecutorCancellationController)
-    _rec_bound, binding = store.bind_live_controller(c_ref, mock_ctrl)
+    rec_bound, binding = store.bind_live_controller(c_ref, mock_ctrl)
     assert binding.reference == "cancel://1"
 
     # Unbind controller

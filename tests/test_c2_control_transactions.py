@@ -182,3 +182,90 @@ def test_coordinator_multiple_transactions():
     assert isinstance(r2, ParticipantControlReceiptV2)
     assert r1.resource_revision == 1
     assert r2.resource_revision == 2
+
+
+def test_coordinator_v1_unregistered_and_failure_rollbacks():
+    """Verify coordinator handling for V1 unregistered participant and commit rollback propagation."""
+    from unittest.mock import MagicMock
+
+    from core.c2.control_commands import (
+        BoundedControlErrorV1,
+        BoundedControlErrorV2,
+        C2ControlErrorCodeV1,
+        C2ControlErrorCodeV2,
+        ParticipantControlAuthorizationV1,
+        ParticipantControlRequestV1,
+    )
+
+    coord = ControlTransactionCoordinator()
+
+    # 1. V1 request to unregistered participant returns BoundedControlErrorV1
+    auth_v1 = ParticipantControlAuthorizationV1(
+        key_id="k1",
+        transaction_id="tx_v1_1",
+        participant_id="part_unreg_v1",
+        mission_id="m1",
+        subject_id="s1",
+        action_id=C2ControlAction.PREPARE_C2_RESOURCE.value,
+        coordinator_revision=1,
+        request_digest="0" * 64,
+        expires_at=time.time() + 100,
+        nonce="nonce123456789012",
+        signature="0" * 86,
+    )
+    req_v1 = ParticipantControlRequestV1(
+        action=C2ControlAction.PREPARE_C2_RESOURCE,
+        authorization=auth_v1,
+        payload_schema_id="s1",
+        payload_digest="0" * 64,
+        canonical_payload_b64u="e30",
+    )
+    res_v1 = coord.execute_transaction(req_v1)
+    assert isinstance(res_v1, BoundedControlErrorV1)
+    assert res_v1.reason_code == C2ControlErrorCodeV1.UNAVAILABLE
+
+    # 2. Mock participant where prepare fails with BoundedControlErrorV2
+    mock_part = MagicMock()
+    mock_part.prepare.return_value = BoundedControlErrorV2(
+        reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+        retryable=False,
+        detail_ref="prep_failed",
+    )
+    coord.register_participant("part_mock", mock_part)
+
+    req_v2 = _make_req("tx_fail_prep", "part_mock")
+    res_prep_fail = coord.execute_transaction(req_v2)
+    assert isinstance(res_prep_fail, BoundedControlErrorV2)
+    assert res_prep_fail.detail_ref == "prep_failed"
+
+    # 3. Mock participant where commit fails with BoundedControlErrorV2 (with authority)
+    prep_receipt = ParticipantControlReceiptV2(
+        transaction_id="tx_fail_commit",
+        participant_id="part_mock",
+        action=C2ControlAction.PREPARE_C2_RESOURCE,
+        resource_ref="c2:res:1",
+        resource_revision=1,
+        receipt_ref="rcpt:prep",
+        receipt_digest="0" * 64,
+        daemon_instance_id="inst1",
+        result_payload_schema_id=None,
+        result_payload_digest=None,
+    )
+    mock_part.prepare.return_value = prep_receipt
+    mock_part.commit.return_value = BoundedControlErrorV2(
+        reason_code=C2ControlErrorCodeV2.INTERNAL_FAILURE,
+        retryable=False,
+        detail_ref="commit_failed",
+    )
+
+    dummy_auth = MagicMock(spec=VerifiedMutationAuthority)
+    req_commit_fail = _make_req("tx_fail_commit", "part_mock")
+    res_commit_fail = coord.execute_transaction(req_commit_fail, authority=dummy_auth)
+    assert isinstance(res_commit_fail, BoundedControlErrorV2)
+    assert res_commit_fail.detail_ref == "commit_failed"
+    mock_part.rollback.assert_called_with(prep_receipt, authority=dummy_auth)
+
+    # 4. Commit fails without authority
+    res_commit_fail_no_auth = coord.execute_transaction(req_commit_fail, authority=None)
+    assert isinstance(res_commit_fail_no_auth, BoundedControlErrorV2)
+    mock_part.rollback.assert_called_with(prep_receipt)

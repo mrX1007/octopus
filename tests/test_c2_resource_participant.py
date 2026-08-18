@@ -12,6 +12,7 @@ from core.c2.control_auth import VerifiedMutationAuthority
 from core.c2.control_commands import (
     BoundedControlErrorV2,
     C2ControlAction,
+    C2ControlErrorCodeV2,
     ParticipantControlAuthorizationV2,
     ParticipantControlPhaseV2,
     ParticipantControlReceiptV2,
@@ -282,3 +283,75 @@ def test_resource_participant_reconcile():
     snap = participant.reconcile()
     assert snap.participant_id == "part1"
     assert snap.phase == ParticipantControlPhaseV2.FINALIZED_VISIBLE
+
+
+def test_resource_participant_error_and_fence_paths():
+    """Verify fence errors and mismatch handling across commit, finalize_visibility, and rollback."""
+    participant, auth = _setup_participant_with_auth("part1")
+    req = _make_request("tx_err_1", participant_id="part1")
+    now_ms = int(time.time() * 1000)
+
+    # 1. Prepare with DB fence failure (e.g. invalid key revision)
+    bad_fence_auth = VerifiedMutationAuthority(
+        operator_id=auth.operator_id,
+        subject_id=auth.subject_id,
+        mission_id=auth.mission_id,
+        peer_pid=auth.peer_pid,
+        peer_uid=auth.peer_uid,
+        peer_gid=auth.peer_gid,
+        key_id=auth.key_id,
+        key_revision=999,  # Bad key revision
+        operator_revision=auth.operator_revision,
+        peer_binding_revision=auth.peer_binding_revision,
+        mission_grant_revision=auth.mission_grant_revision,
+        request_digest=req.authorization.request_digest,
+        authorization_issued_at_ms=now_ms - 1000,
+        authorization_expires_at_ms=now_ms + 100000,
+        transaction_id="tx_err_1",
+        participant_id="part1",
+        action_id=req.action.value,
+    )
+    res_prep_fence = participant.prepare(req, authority=bad_fence_auth)
+    assert isinstance(res_prep_fence, BoundedControlErrorV2)
+
+    # 2. Commit with DB fence failure
+    commit_req = _make_request("tx_err_1", action=C2ControlAction.COMMIT_C2_RESOURCE, participant_id="part1")
+    res_commit_fence = participant.commit(commit_req, authority=bad_fence_auth)
+    assert isinstance(res_commit_fence, BoundedControlErrorV2)
+
+    # 3. Finalize visibility with DB fence failure
+    finalize_req = _make_request(
+        "tx_err_1", action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, participant_id="part1"
+    )
+    res_final_fence = participant.finalize_visibility(finalize_req, authority=bad_fence_auth)
+    assert isinstance(res_final_fence, BoundedControlErrorV2)
+
+    # 4. Rollback with DB fence failure
+    res_roll_fence = participant.rollback(req, authority=bad_fence_auth)
+    assert isinstance(res_roll_fence, BoundedControlErrorV2)
+
+    # 5. Rollback with valid authority for unknown transaction returns clean receipt
+    valid_auth = VerifiedMutationAuthority(
+        operator_id=auth.operator_id,
+        subject_id=auth.subject_id,
+        mission_id=auth.mission_id,
+        peer_pid=auth.peer_pid,
+        peer_uid=auth.peer_uid,
+        peer_gid=auth.peer_gid,
+        key_id=auth.key_id,
+        key_revision=auth.key_revision,
+        operator_revision=auth.operator_revision,
+        peer_binding_revision=auth.peer_binding_revision,
+        mission_grant_revision=auth.mission_grant_revision,
+        request_digest=req.authorization.request_digest,
+        authorization_issued_at_ms=now_ms - 1000,
+        authorization_expires_at_ms=now_ms + 100000,
+        transaction_id="tx_unknown",
+        participant_id="part1",
+        action_id="",
+    )
+    unknown_req = _make_request("tx_unknown", action=C2ControlAction.ABORT_C2_RESOURCE, participant_id="part1")
+    roll_unk = participant.rollback(unknown_req, authority=valid_auth)
+    assert isinstance(roll_unk, BoundedControlErrorV2)
+    assert roll_unk.reason_code == C2ControlErrorCodeV2.WRONG_PHASE
+    assert "transaction_not_found" in roll_unk.detail_ref

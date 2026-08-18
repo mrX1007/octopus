@@ -60,7 +60,7 @@ def test_cleanup_ssh_connection_failed(monkeypatch) -> None:
 
 
 def test_cleanup_root_authorized_keys_and_edge_paths() -> None:
-    cmd, _desc = cleanup._artifact_command(
+    cmd, desc = cleanup._artifact_command(
         {"artifact_id": 10, "type": "ssh_key", "marker": "root-key", "user": "root"}, "root"
     )
     assert "$HOME/.ssh/authorized_keys" in cmd
@@ -73,7 +73,7 @@ def test_cleanup_root_authorized_keys_and_edge_paths() -> None:
     assert "invalid user" in desc2
 
     # invalid bashrc path
-    cmd3, _desc3 = cleanup._artifact_command(
+    cmd3, desc3 = cleanup._artifact_command(
         {"artifact_id": 12, "type": "file_line", "path": "/etc/profile", "marker": "m", "user": "alice"}, "alice"
     )
     assert cmd3 == ""

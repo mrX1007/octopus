@@ -569,3 +569,208 @@ def test_durable_idempotency_and_replay_protection():
             idempotency_key="key-nonexistent",
             response_data={"status": "ok"},
         )
+
+
+def test_authority_fence_missing_database_tables():
+    """Verify AuthorityFence raises fail-closed PermissionError when mandatory tables are missing."""
+    now_ms = int(time.time() * 1000)
+    auth = VerifiedMutationAuthority(
+        operator_id="op_tab",
+        subject_id="s_tab",
+        mission_id="m_tab",
+        peer_pid=os.getpid(),
+        peer_uid=os.getuid(),
+        peer_gid=os.getgid(),
+        key_id="k_tab",
+        key_revision=1,
+        operator_revision=1,
+        peer_binding_revision=1,
+        mission_grant_revision=1,
+        request_digest="0" * 64,
+        authorization_issued_at_ms=now_ms - 1000,
+        authorization_expires_at_ms=now_ms + 60000,
+    )
+
+    # 1. Empty DB (missing operators table)
+    with sqlite3.connect(":memory:") as conn:
+        with pytest.raises(PermissionError, match="operators_table_missing"):
+            AuthorityFence.verify_current(conn, auth)
+
+        # Create operators, missing signing keys table
+        conn.execute(
+            "CREATE TABLE operators (operator_id TEXT, subject_id TEXT, active INTEGER, authorization_revision INTEGER)"
+        )
+        conn.execute("INSERT INTO operators VALUES ('op_tab', 's_tab', 1, 1)")
+        with pytest.raises(PermissionError, match="signing_keys_table_missing"):
+            AuthorityFence.verify_current(conn, auth)
+
+        # Create signing keys, missing peer bindings table
+        conn.execute("""
+            CREATE TABLE operator_control_signing_keys (
+                key_id TEXT, active INTEGER, key_revision INTEGER, operator_id TEXT, algorithm TEXT,
+                public_key_bytes BLOB, valid_from_ms INTEGER, valid_until_ms INTEGER
+            )
+        """)
+        conn.execute(
+            "INSERT INTO operator_control_signing_keys VALUES ('k_tab', 1, 1, 'op_tab', 'ed25519', ?, 0, ?)",
+            (TEST_ED_PUB, now_ms + 100000),
+        )
+        with pytest.raises(PermissionError, match="peer_bindings_table_missing"):
+            AuthorityFence.verify_current(conn, auth)
+
+        # Create peer bindings, missing peer binding revisions table
+        conn.execute(
+            "CREATE TABLE operator_peer_bindings (operator_id TEXT, peer_uid INTEGER, peer_gid INTEGER, active INTEGER)"
+        )
+        conn.execute("INSERT INTO operator_peer_bindings VALUES ('op_tab', ?, ?, 1)", (os.getuid(), os.getgid()))
+        with pytest.raises(PermissionError, match="peer_binding_revisions_table_missing"):
+            AuthorityFence.verify_current(conn, auth)
+
+        # Create peer binding revisions, missing missions table
+        conn.execute("CREATE TABLE operator_peer_binding_revisions (operator_id TEXT, revision INTEGER)")
+        conn.execute("INSERT INTO operator_peer_binding_revisions VALUES ('op_tab', 1)")
+        with pytest.raises(PermissionError, match="missions_table_missing"):
+            AuthorityFence.verify_current(conn, auth)
+
+        # Create missions table, missing mission grants table
+        conn.execute("CREATE TABLE control_missions (mission_id TEXT, active INTEGER)")
+        conn.execute("INSERT INTO control_missions VALUES ('m_tab', 1)")
+        with pytest.raises(PermissionError, match="mission_grants_table_missing"):
+            AuthorityFence.verify_current(conn, auth)
+
+        # Create mission grants table, missing mission grant revisions table
+        conn.execute(
+            "CREATE TABLE operator_mission_grants (operator_id TEXT, subject_id TEXT, mission_id TEXT, active INTEGER)"
+        )
+        conn.execute("INSERT INTO operator_mission_grants VALUES ('op_tab', 's_tab', 'm_tab', 1)")
+        with pytest.raises(PermissionError, match="mission_grant_revisions_table_missing"):
+            AuthorityFence.verify_current(conn, auth)
+
+        # Create mission grant revisions -> verify_current succeeds
+        conn.execute("CREATE TABLE operator_mission_grant_revisions (operator_id TEXT, revision INTEGER)")
+        conn.execute("INSERT INTO operator_mission_grant_revisions VALUES ('op_tab', 1)")
+        AuthorityFence.verify_current(conn, auth)
+
+
+def test_resource_participant_authority_validation_branches():
+    """Verify all rejection branches in resource participant authority validation."""
+    from core.c2.control_commands import (
+        C2ControlAction,
+        C2ControlErrorCodeV2,
+        ParticipantControlAuthorizationV2,
+        ParticipantControlReceiptV2,
+        ParticipantControlRequestV2,
+    )
+    from core.c2.resource_participant import (
+        C2DaemonResourceParticipant,
+        _extract_and_validate_authority,
+    )
+
+    part = C2DaemonResourceParticipant("part_cov_test")
+    now_ms = int(time.time() * 1000)
+
+    auth_v2 = ParticipantControlAuthorizationV2(
+        protocol_version="2.0",
+        key_id="k_cov",
+        transaction_id="tx_cov_1",
+        participant_id="part_cov_test",
+        mission_id="m_cov",
+        subject_id="s_cov",
+        action_id=C2ControlAction.PREPARE_C2_RESOURCE.value,
+        coordinator_revision=1,
+        request_digest="0" * 64,
+        issued_at_ms=now_ms,
+        expires_at_ms=now_ms + 100000,
+        nonce="nonce_cov_12345678",
+        signature="0" * 86,
+    )
+    req = ParticipantControlRequestV2(
+        action=C2ControlAction.PREPARE_C2_RESOURCE,
+        authorization=auth_v2,
+        payload_schema_id="s1",
+        payload_digest="0" * 64,
+        canonical_payload_b64u="e30",
+    )
+    receipt = ParticipantControlReceiptV2(
+        transaction_id="tx_cov_1",
+        participant_id="part_cov_test",
+        action=C2ControlAction.PREPARE_C2_RESOURCE,
+        resource_ref="c2:res:1",
+        resource_revision=1,
+        receipt_ref="rcpt:1",
+        receipt_digest="0" * 64,
+        daemon_instance_id="inst:1",
+        result_payload_schema_id=None,
+        result_payload_digest=None,
+    )
+
+    # 1. None authority
+    _, err = _extract_and_validate_authority(None, req, "part_cov_test")
+    assert err is not None and err.detail_ref == "mandatory_verified_mutation_authority_required"
+
+    # 2. Wrong type authority
+    _, err = _extract_and_validate_authority("not_an_authority", req, "part_cov_test")
+    assert err is not None and err.detail_ref == "mandatory_verified_mutation_authority_required"
+
+    base_mut_auth = VerifiedMutationAuthority(
+        operator_id="op_cov",
+        subject_id="s_cov",
+        mission_id="m_cov",
+        peer_pid=os.getpid(),
+        peer_uid=os.getuid(),
+        peer_gid=os.getgid(),
+        key_id="k_cov",
+        key_revision=1,
+        operator_revision=1,
+        peer_binding_revision=1,
+        mission_grant_revision=1,
+        request_digest="0" * 64,
+        authorization_issued_at_ms=now_ms - 1000,
+        authorization_expires_at_ms=now_ms + 100000,
+        transaction_id="tx_cov_1",
+        participant_id="part_cov_test",
+        action_id=C2ControlAction.PREPARE_C2_RESOURCE.value,
+    )
+
+    # 3. Transaction mismatch on request
+    bad_tx_auth = VerifiedMutationAuthority(**{**base_mut_auth.__dict__, "transaction_id": "tx_mismatch"})
+    _, err = _extract_and_validate_authority(bad_tx_auth, req, "part_cov_test")
+    assert err is not None and err.detail_ref == "authority_transaction_mismatch"
+
+    # 4. Participant mismatch on request
+    bad_part_auth = VerifiedMutationAuthority(**{**base_mut_auth.__dict__, "participant_id": "part_other"})
+    _, err = _extract_and_validate_authority(bad_part_auth, req, "part_cov_test")
+    assert err is not None and err.detail_ref == "authority_participant_mismatch"
+
+    # 5. Action mismatch on request
+    bad_act_auth = VerifiedMutationAuthority(**{**base_mut_auth.__dict__, "action_id": "other_action"})
+    _, err = _extract_and_validate_authority(bad_act_auth, req, "part_cov_test")
+    assert err is not None and err.detail_ref == "authority_action_mismatch"
+
+    # 6. Scope mismatch (mission or subject)
+    bad_mission_auth = VerifiedMutationAuthority(**{**base_mut_auth.__dict__, "mission_id": "m_other"})
+    _, err = _extract_and_validate_authority(bad_mission_auth, req, "part_cov_test")
+    assert err is not None and err.detail_ref == "authority_scope_mismatch"
+
+    bad_subj_auth = VerifiedMutationAuthority(**{**base_mut_auth.__dict__, "subject_id": "s_other"})
+    _, err = _extract_and_validate_authority(bad_subj_auth, req, "part_cov_test")
+    assert err is not None and err.detail_ref == "authority_scope_mismatch"
+
+    # 7. Request digest mismatch
+    bad_digest_auth = VerifiedMutationAuthority(**{**base_mut_auth.__dict__, "request_digest": "1" * 64})
+    _, err = _extract_and_validate_authority(bad_digest_auth, req, "part_cov_test")
+    assert err is not None and err.detail_ref == "authority_request_digest_mismatch"
+
+    # 8. Receipt transaction mismatch
+    _, err = _extract_and_validate_authority(bad_tx_auth, receipt, "part_cov_test")
+    assert err is not None and err.detail_ref == "authority_transaction_mismatch"
+
+    # 9. Receipt participant mismatch
+    _, err = _extract_and_validate_authority(bad_part_auth, receipt, "part_cov_test")
+    assert err is not None and err.detail_ref == "authority_participant_mismatch"
+
+    # 10. Direct prepare/commit/finalize_visibility/rollback with rejected authority
+    assert part.prepare(req, authority=None).reason_code == C2ControlErrorCodeV2.NOT_AUTHORIZED
+    assert part.commit(req, authority=None).reason_code == C2ControlErrorCodeV2.NOT_AUTHORIZED
+    assert part.finalize_visibility(req, authority=None).reason_code == C2ControlErrorCodeV2.NOT_AUTHORIZED
+    assert part.rollback(req, authority=None).reason_code == C2ControlErrorCodeV2.NOT_AUTHORIZED

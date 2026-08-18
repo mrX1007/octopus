@@ -273,3 +273,77 @@ def test_principal_expiry_is_fail_closed(tmp_path: Path) -> None:
     )
     assert auth.check_permission(principal, "ping", now=14.9)
     assert not auth.check_permission(principal, "ping", now=15.0)
+
+
+def test_control_authenticator_edge_cases_and_rejections(tmp_path: Path) -> None:
+    """Verify all failure and branch conditions in ControlAuthenticatorV1."""
+    db_path = tmp_path / "edge_cases.db"
+    operators = OperatorManager(str(db_path))
+    key = operators.create_operator("Bob", ROLE_ADMIN, subject_id="subject:bob")
+    record = operators.authenticate(key)
+    assert record is not None
+    grants = GrantService(str(db_path))
+    with sqlite3.connect(db_path) as connection:
+        insert_initial_bootstrap_grants(
+            connection,
+            operator_id=str(record["operator_id"]),
+            subject_id="subject:bob",
+            peer_uid=1000,
+            peer_gid=1001,
+        )
+
+    # 1. Invalid default_ttl_seconds
+    with pytest.raises(ValueError, match="principal TTL must be positive"):
+        ControlAuthenticatorV1(operators, grants, default_ttl_seconds=0)
+
+    auth = ControlAuthenticatorV1(operators, grants, default_ttl_seconds=100)
+
+    # 2. authenticate_peer compatibility wrapper
+    peer = PeerPrincipal(pid=100, uid=1000, gid=1001)
+    p1 = auth.authenticate_peer(
+        peer=peer,
+        mission_id=SYSTEM_CONTROL_MISSION_ID,
+        api_key=key,
+        subject_id="subject:bob",
+    )
+    assert p1.operator_id == str(record["operator_id"])
+
+    # 3. authenticated_operator success & failure
+    op_info = auth.authenticated_operator(key)
+    assert op_info.operator_id == str(record["operator_id"])
+    with pytest.raises(PermissionError, match="operator API-key verification failed"):
+        auth.authenticated_operator("invalid_key_bytes")
+
+    # 4. authenticate_control input type validations
+    with pytest.raises(TypeError, match="server-observed PeerPrincipal"):
+        auth.authenticate_control(
+            api_key=key,
+            peer="not_a_peer",  # type: ignore[arg-type]
+            mission_id=SYSTEM_CONTROL_MISSION_ID,
+            subject_id="subject:bob",
+        )
+    with pytest.raises(PermissionError, match="mission binding is required"):
+        auth.authenticate_control(
+            api_key=key,
+            peer=peer,
+            mission_id="",
+            subject_id="subject:bob",
+        )
+    with pytest.raises(PermissionError, match="subject binding is required"):
+        auth.authenticate_control(
+            api_key=key,
+            peer=peer,
+            mission_id=SYSTEM_CONTROL_MISSION_ID,
+            subject_id="",
+        )
+
+    # 5. require_current_principal raises PermissionError on invalid/expired principal
+    auth.require_current_principal(p1, now=10.0)
+    with pytest.raises(PermissionError, match="control principal is expired"):
+        auth.require_current_principal(p1, now=9999999999.0)
+
+    # 6. is_current_principal invalid input type
+    assert auth.is_current_principal("not_a_principal") is False  # type: ignore[arg-type]
+
+    # 7. check_permission with unknown action
+    assert auth.check_permission(p1, "unknown_random_action") is False

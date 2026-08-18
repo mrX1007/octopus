@@ -112,7 +112,10 @@ def test_authenticator_and_stream_lifecycle():
     # Verify
     assert auth.verify(expected=tag, source=view) is True
 
-    # Verify with invalid algorithm
+    # Verify with invalid tag type
+    with pytest.raises(SensitiveIntegrityError, match="custom_integrity_tag_denied"):
+        auth.verify(expected="not_a_tag", source=view)  # type: ignore
+
     bad_algo_tag = SensitiveIntegrityTagV2(
         key_id="k1",
         algorithm="hmac-sha256-v2",
