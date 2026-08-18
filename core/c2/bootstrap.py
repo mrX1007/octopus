@@ -164,11 +164,14 @@ def _fsync_directory(directory: Path) -> None:
     flags = os.O_RDONLY
     if hasattr(os, "O_DIRECTORY"):
         flags |= os.O_DIRECTORY
-    descriptor = os.open(directory, flags)
     try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+        descriptor = os.open(directory, flags)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except OSError:
+        pass
 
 
 def _file_digest(path: Path) -> str:

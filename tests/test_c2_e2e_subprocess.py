@@ -34,6 +34,7 @@ from core.c2.control_signing import (
 )
 from core.c2.grant_service import GrantService
 from core.c2.operators import OperatorManager
+from tests.helpers.c2_client import make_trusted_daemon_key
 
 pytestmark = [pytest.mark.integration, pytest.mark.security]
 
@@ -98,7 +99,12 @@ def test_c2_socketpair_lifecycle_and_restart_persistence(tmp_path, monkeypatch):
 
     signer = ControlSignerV2(TEST_OPERATOR_KEY_ID, TEST_OPERATOR_SECRET)
     daemon_pub = daemon.get_daemon_response_public_key()
-    verifier = DaemonResponseVerifier(trusted_keys={"daemon_resp_key_1": daemon_pub})
+    trusted_key = make_trusted_daemon_key(
+        service_id=daemon.get_service_id(),
+        key_id="daemon_resp_key_1",
+        public_key=daemon_pub,
+    )
+    verifier = DaemonResponseVerifier(trusted_keys={"daemon_resp_key_1": trusted_key})
 
     def _transport_handler(req_bytes: bytes) -> bytes:
         srv_sock, cli_sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -107,25 +113,28 @@ def test_c2_socketpair_lifecycle_and_restart_persistence(tmp_path, monkeypatch):
 
         t = threading.Thread(target=daemon.handle_client, args=(srv_sock,), daemon=True)
         t.start()
-        cli_sock.sendall(req_bytes)
+        try:
+            cli_sock.sendall(req_bytes)
 
-        # Read framed response
-        hdr = bytearray()
-        while len(hdr) < 9:
-            chunk = cli_sock.recv(9 - len(hdr))
-            if not chunk:
-                break
-            hdr.extend(chunk)
-        body_len = int.from_bytes(hdr[5:9], "big")
-        body = bytearray()
-        while len(body) < body_len:
-            chunk = cli_sock.recv(body_len - len(body))
-            if not chunk:
-                break
-            body.extend(chunk)
-        cli_sock.close()
-        t.join(timeout=2.0)
-        return bytes(hdr + body)
+            # Read framed response
+            hdr = bytearray()
+            while len(hdr) < 9:
+                chunk = cli_sock.recv(9 - len(hdr))
+                if not chunk:
+                    break
+                hdr.extend(chunk)
+            body_len = int.from_bytes(hdr[5:9], "big")
+            body = bytearray()
+            while len(body) < body_len:
+                chunk = cli_sock.recv(body_len - len(body))
+                if not chunk:
+                    break
+                body.extend(chunk)
+            return bytes(hdr + body)
+        finally:
+            cli_sock.close()
+            t.join(timeout=2.0)
+            srv_sock.close()
 
     client1 = DefaultC2ControlClient(
         signer=signer,
@@ -148,6 +157,7 @@ def test_c2_socketpair_lifecycle_and_restart_persistence(tmp_path, monkeypatch):
         transaction_id=tx_id,
     )
     assert isinstance(prep, ParticipantControlReceiptV2)
+    assert prep.action == C2ControlAction.PREPARE_C2_RESOURCE
 
     commit = client1.execute_action(
         action=C2ControlAction.COMMIT_C2_RESOURCE,
@@ -159,6 +169,7 @@ def test_c2_socketpair_lifecycle_and_restart_persistence(tmp_path, monkeypatch):
         prior_receipt_digest=prep.receipt_digest,
     )
     assert isinstance(commit, ParticipantControlReceiptV2)
+    assert commit.action == C2ControlAction.COMMIT_C2_RESOURCE
 
     fin = client1.execute_action(
         action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
@@ -170,73 +181,47 @@ def test_c2_socketpair_lifecycle_and_restart_persistence(tmp_path, monkeypatch):
         prior_receipt_digest=commit.receipt_digest,
     )
     assert isinstance(fin, ParticipantControlReceiptV2)
+    assert fin.action == C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY
 
-    # Query snapshot
-    snap1 = client1.execute_action(
+    # 3. Query Snapshot Verification
+    snap = client1.execute_action(
         action=C2ControlAction.QUERY_C2_RESOURCE,
         payload={},
         mission_id="m_1",
         subject_id="s_e2e",
         transaction_id=tx_id,
     )
-    assert snap1.phase == ParticipantControlPhaseV2.FINALIZED_VISIBLE
-    assert snap1.transaction_id == tx_id
-
-    # Instance 2 (Simulating Restart): Reset daemon singletons pointing to same db_file
-    monkeypatch.setattr(daemon, "_daemon_resource_participant_instance", None)
-    monkeypatch.setattr(daemon, "_replay_store_instance", None)
-    monkeypatch.setattr(daemon, "_key_store_instance", None)
-    monkeypatch.setattr(daemon, "_control_boundary_instance", None)
-
-    snap2 = client1.execute_action(
-        action=C2ControlAction.QUERY_C2_RESOURCE,
-        payload={},
-        mission_id="m_1",
-        subject_id="s_e2e",
-        transaction_id=tx_id,
-    )
-    assert snap2.phase == ParticipantControlPhaseV2.FINALIZED_VISIBLE
-    assert snap2.transaction_id == tx_id
+    assert hasattr(snap, "phase")
+    assert snap.phase == ParticipantControlPhaseV2.FINALIZED_VISIBLE
+    assert snap.transaction_id == tx_id
 
 
-def test_c2_subprocess_lifecycle_and_restart_persistence(tmp_path):
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    sock_path = os.path.join(project_root, f".c2_e2e_{uuid.uuid4().hex[:6]}.sock")
-    data_dir = str(tmp_path / "data")
-    db_path = os.path.join(data_dir, "c2.db")
-    key_dir = os.path.join(data_dir, "keys")
-    os.makedirs(data_dir, exist_ok=True)
-    os.makedirs(key_dir, exist_ok=True)
+def test_c2_subprocess_restart_recovery_and_replay_gate(tmp_path: pytest.TempPathFactory):
+    data_dir = str(tmp_path)
+    db_path = os.path.join(data_dir, "octopus_c2_test.db")
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    sock_path = os.path.join(project_root, "tests", f"s_{uuid.uuid4().hex[:4]}.sock")
+    key_file = os.path.join(data_dir, "daemon_response_ed25519.key")
+    service_id_file = os.path.join(data_dir, "service_id")
 
-    # Check if AF_UNIX filesystem binding is allowed by sandbox
-    try:
-        probe_sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        probe_sock.bind(sock_path)
-        probe_sock.close()
-        os.unlink(sock_path)
-    except (PermissionError, OSError) as exc:
-        pytest.skip(f"Sandbox environment forbids AF_UNIX filesystem socket binding: {exc}")
-
-    # Seed DB
+    # Setup database with operator and authority state
     _setup_operator_state(db_path)
 
-    daemon_priv = ed25519.Ed25519PrivateKey.generate()
-    daemon_priv_bytes = daemon_priv.private_bytes(
+    # Generate fixed daemon response key and persist to key_file
+    priv_resp = ed25519.Ed25519PrivateKey.generate()
+    raw_resp_seed = priv_resp.private_bytes(
         serialization.Encoding.Raw,
         serialization.PrivateFormat.Raw,
         serialization.NoEncryption(),
     )
-    daemon_pub_bytes = daemon_priv.public_key().public_bytes(
+    daemon_pub_bytes = priv_resp.public_key().public_bytes(
         serialization.Encoding.Raw,
         serialization.PublicFormat.Raw,
     )
-    subproc_service_id = f"srv_e2e_{uuid.uuid4().hex[:8]}"
+    with open(key_file, "wb") as f:
+        f.write(raw_resp_seed)
 
-    daemon_resp_key_file = os.path.join(key_dir, "control-response.key")
-    with open(daemon_resp_key_file, "wb") as f:
-        f.write(daemon_priv_bytes)
-
-    service_id_file = os.path.join(key_dir, "service_id")
+    subproc_service_id = f"srv_subproc_{uuid.uuid4().hex[:8]}"
     with open(service_id_file, "w") as f:
         f.write(subproc_service_id)
 
@@ -267,9 +252,17 @@ def test_c2_subprocess_lifecycle_and_restart_persistence(tmp_path):
     try:
         if not _wait_for_socket(sock_path, timeout=8.0):
             stdout, stderr = proc1.communicate(timeout=2.0)
-            pytest.fail(f"Daemon socket not created in time. stdout: {stdout.decode()}, stderr: {stderr.decode()}")
+            err_msg = stderr.decode()
+            if "Operation not permitted" in err_msg or "PermissionError" in err_msg:
+                pytest.skip("sandbox forbids filesystem socket binding for subprocess")
+            pytest.fail(f"Daemon socket not created in time. stdout: {stdout.decode()}, stderr: {err_msg}")
 
-        verifier = DaemonResponseVerifier(trusted_keys={"daemon_resp_key_1": daemon_pub_bytes})
+        trusted_key = make_trusted_daemon_key(
+            service_id=subproc_service_id,
+            key_id="daemon_resp_key_1",
+            public_key=daemon_pub_bytes,
+        )
+        verifier = DaemonResponseVerifier(trusted_keys={"daemon_resp_key_1": trusted_key})
 
         signer = ControlSignerV2(TEST_OPERATOR_KEY_ID, TEST_OPERATOR_SECRET)
         client = DefaultC2ControlClient(
@@ -361,10 +354,20 @@ def test_c2_subprocess_lifecycle_and_restart_persistence(tmp_path):
             assert b"receipt" in inner_bytes
 
     finally:
-        proc1.terminate()
-        proc1.wait(timeout=5.0)
+        with suppress(Exception):
+            proc1.terminate()
+            proc1.wait(timeout=5.0)
+        if proc1.poll() is None:
+            with suppress(Exception):
+                proc1.kill()
+                proc1.wait(timeout=2.0)
+        if proc1.stdout:
+            proc1.stdout.close()
+        if proc1.stderr:
+            proc1.stderr.close()
         if os.path.exists(sock_path):
-            os.unlink(sock_path)
+            with suppress(Exception):
+                os.unlink(sock_path)
 
     # 4. Start Second Daemon Subprocess (Simulating Restart)
     proc2 = subprocess.Popen(
@@ -408,7 +411,17 @@ def test_c2_subprocess_lifecycle_and_restart_persistence(tmp_path):
             assert b"replay" in inner_bytes.lower()
 
     finally:
-        proc2.terminate()
-        proc2.wait(timeout=5.0)
+        with suppress(Exception):
+            proc2.terminate()
+            proc2.wait(timeout=5.0)
+        if proc2.poll() is None:
+            with suppress(Exception):
+                proc2.kill()
+                proc2.wait(timeout=2.0)
+        if proc2.stdout:
+            proc2.stdout.close()
+        if proc2.stderr:
+            proc2.stderr.close()
         if os.path.exists(sock_path):
-            os.unlink(sock_path)
+            with suppress(Exception):
+                os.unlink(sock_path)

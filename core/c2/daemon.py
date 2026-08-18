@@ -61,6 +61,10 @@ from core.c2.control_protocol import (
     strict_json_loads,
 )
 from core.c2.control_rbac import ControlRBACPolicy
+from core.c2.control_server_identity import (
+    load_or_persist_daemon_response_key,
+    load_or_persist_service_id,
+)
 from core.c2.control_signing import DaemonResponseSigner
 from core.c2.crypto_engine import C2CryptoEngine
 from core.c2.db_backend import C2Database
@@ -123,103 +127,15 @@ def _load_or_create_keystore_passphrase() -> str:
 
 
 def _load_or_create_service_id() -> str:
-    if os.path.islink(SERVICE_ID_FILE):
-        raise RuntimeError(f"symlink not allowed for service_id: {SERVICE_ID_FILE}")
-    if os.path.exists(SERVICE_ID_FILE):
-        with open(SERVICE_ID_FILE, encoding="utf-8") as handle:
-            val = handle.read().strip()
-        if val and len(val) >= 8:
-            return val
-        raise RuntimeError("corrupted service_id file")
-    new_id = f"srv_{uuid.uuid4().hex}"
-    try:
-        parent_dir = os.path.dirname(os.path.abspath(SERVICE_ID_FILE))
-        os.makedirs(parent_dir, exist_ok=True)
-        temp_file = os.path.join(parent_dir, f".tmp_srv_{uuid.uuid4().hex}")
-        fd = os.open(temp_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(new_id)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_file, SERVICE_ID_FILE)
-        with suppress(Exception):
-            dir_fd = os.open(parent_dir, os.O_RDONLY)
-            os.fsync(dir_fd)
-            os.close(dir_fd)
-    except OSError:
-        pass
-    return new_id
+    return load_or_persist_service_id(SERVICE_ID_FILE)
 
 
 def _load_or_create_daemon_response_key() -> tuple[str, ed25519.Ed25519PrivateKey, bytes]:
     """Load or generate Ed25519 response private key and return (key_id, private_key, public_bytes)."""
-    env_secret = os.environ.get("OCTOPUS_C2_DAEMON_SECRET")
-    if env_secret:
-        raw_bytes = hashlib.sha256(env_secret.encode("utf-8")).digest()
-        priv_key = ed25519.Ed25519PrivateKey.from_private_bytes(raw_bytes)
-        pub_bytes = priv_key.public_key().public_bytes(
-            serialization.Encoding.Raw,
-            serialization.PublicFormat.Raw,
-        )
-        return "daemon_resp_key_1", priv_key, pub_bytes
-
-    key_file = DAEMON_RESPONSE_KEY_FILE
-    if os.path.islink(key_file):
-        raise RuntimeError(f"symlink not allowed for daemon key: {key_file}")
-
-    if os.path.exists(key_file):
-        with open(key_file, "rb") as handle:
-            raw_data = handle.read()
-        if len(raw_data) == 32:
-            raw_bytes = raw_data
-        elif raw_data.startswith(b"OCTOPUS_KEY_V1\n"):
-            parts = raw_data.split(b"\n")
-            if len(parts) >= 4:
-                raw_bytes = base64.b64decode(parts[2])
-                checksum = parts[3].decode("ascii")
-                if hashlib.sha256(raw_bytes).hexdigest() != checksum:
-                    raise RuntimeError("corrupted daemon response key checksum")
-            else:
-                raise RuntimeError("corrupted daemon response key envelope")
-        else:
-            raise RuntimeError("corrupted daemon response key file")
-
-        if len(raw_bytes) != 32:
-            raise RuntimeError("invalid daemon response key length")
-        priv_key = ed25519.Ed25519PrivateKey.from_private_bytes(raw_bytes)
-        pub_bytes = priv_key.public_key().public_bytes(
-            serialization.Encoding.Raw,
-            serialization.PublicFormat.Raw,
-        )
-        return "daemon_resp_key_1", priv_key, pub_bytes
-
-    priv_key = ed25519.Ed25519PrivateKey.generate()
-    raw_bytes = priv_key.private_bytes(
-        serialization.Encoding.Raw,
-        serialization.PrivateFormat.Raw,
-        serialization.NoEncryption(),
+    return load_or_persist_daemon_response_key(
+        DAEMON_RESPONSE_KEY_FILE,
+        env_secret=os.environ.get("OCTOPUS_C2_DAEMON_SECRET"),
     )
-    try:
-        parent_dir = os.path.dirname(os.path.abspath(key_file))
-        os.makedirs(parent_dir, exist_ok=True)
-        temp_file = os.path.join(parent_dir, f".tmp_key_{uuid.uuid4().hex}")
-        fd = os.open(temp_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(raw_bytes)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp_file, key_file)
-        with suppress(Exception):
-            dir_fd = os.open(parent_dir, os.O_RDONLY)
-            os.fsync(dir_fd)
-            os.close(dir_fd)
-    except OSError:
-        pass
-    pub_bytes = priv_key.public_key().public_bytes(
-        serialization.Encoding.Raw,
-        serialization.PublicFormat.Raw,
-    )
-    return "daemon_resp_key_1", priv_key, pub_bytes
 
 
 # Module-level singletons
@@ -707,31 +623,33 @@ class DaemonKeyResolver:
     """Key resolver for operator control verification keys."""
 
     def __init__(self) -> None:
-        self._test_keys: dict[str, ResolvedControlKey] = {}
+        self._keys: dict[str, ResolvedControlKey] = {}
 
-    def register_key(self, key_id: str, key_bytes: bytes | ResolvedControlKey) -> None:
+    def register_key(
+        self,
+        key_id: str,
+        key_bytes: bytes | ResolvedControlKey,
+        operator_id: str | None = None,
+    ) -> None:
         if isinstance(key_bytes, ResolvedControlKey):
-            self._test_keys[key_id] = key_bytes
-        else:
-            if len(key_bytes) == 32:
-                raw_pub = key_bytes
-            else:
-                seed = hashlib.sha256(key_bytes).digest()
-                priv = ed25519.Ed25519PrivateKey.from_private_bytes(seed)
-                raw_pub = priv.public_key().public_bytes(
-                    serialization.Encoding.Raw,
-                    serialization.PublicFormat.Raw,
-                )
-            self._test_keys[key_id] = ResolvedControlKey(
+            if len(key_bytes.verification_key) != 32:
+                raise ValueError("verification_key must be exactly 32 bytes")
+            self._keys[key_id] = key_bytes
+        elif isinstance(key_bytes, (bytes, bytearray)):
+            if len(key_bytes) != 32:
+                raise ValueError(f"verification_key must be exactly 32 bytes, got {len(key_bytes)}")
+            self._keys[key_id] = ResolvedControlKey(
                 key_id=key_id,
-                operator_id=f"op_{key_id}",
-                verification_key=raw_pub,
+                operator_id=operator_id or f"op_{key_id}",
+                verification_key=bytes(key_bytes),
                 algorithm="ed25519",
             )
+        else:
+            raise TypeError("key_bytes must be 32-byte bytes or ResolvedControlKey")
 
     def require_key(self, key_id: str, *, now: float) -> ResolvedControlKey:
-        if key_id in self._test_keys:
-            return self._test_keys[key_id]
+        if key_id in self._keys:
+            return self._keys[key_id]
         ks = get_verification_key_store()
         resolved = ks.resolve_active(key_id, now=now)
         if resolved is not None:
@@ -780,37 +698,36 @@ class DaemonPrincipalResolver:
         grant_svc = self._grants_svc or GrantService(db_path)
 
         op = None
-        with suppress(Exception):
+        try:
             op = op_mgr.get_operator(resolved_key.operator_id, active_only=True)
+        except Exception as exc:
+            raise NotAuthorizedControlRequest(f"operator_lookup_failed:{exc}") from exc
 
         if op is None:
-            if resolved_key.key_id in _key_resolver._test_keys:
-                op = {"operator_id": resolved_key.operator_id, "subject_id": subject_id, "role": "admin"}
-            else:
-                raise NotAuthorizedControlRequest("operator_not_found")
+            raise NotAuthorizedControlRequest("operator_not_found")
 
         if op["subject_id"] != subject_id:
             raise NotAuthorizedControlRequest("subject_mismatch")
 
         peer_b = None
-        with suppress(Exception):
+        try:
             peer_b = grant_svc.resolve_peer_binding(resolved_key.operator_id, uid=peer.uid, gid=peer.gid)
+        except Exception as exc:
+            raise NotAuthorizedControlRequest(f"peer_binding_lookup_failed:{exc}") from exc
+
         if peer_b is None:
-            if resolved_key.key_id in _key_resolver._test_keys:
-                pass
-            else:
-                raise NotAuthorizedControlRequest("peer_not_bound")
+            raise NotAuthorizedControlRequest("peer_not_bound")
 
         mission_g = None
-        with suppress(Exception):
+        try:
             mission_g = grant_svc.resolve_mission_grant(
                 resolved_key.operator_id, subject_id=subject_id, mission_id=mission_id
             )
+        except Exception as exc:
+            raise NotAuthorizedControlRequest(f"mission_grant_lookup_failed:{exc}") from exc
+
         if mission_g is None:
-            if resolved_key.key_id in _key_resolver._test_keys:
-                pass
-            else:
-                raise NotAuthorizedControlRequest("mission_not_granted")
+            raise NotAuthorizedControlRequest("mission_not_granted")
 
         return AuthenticatedControlPrincipal(
             operator_id=resolved_key.operator_id,
@@ -871,73 +788,26 @@ def register_control_key(
     operator_id: str | None = None,
     algorithm: str = "ed25519",
 ) -> None:
-    """Register an operator control signing key into persistent key store, database, and resolver."""
+    """Register an operator control signing key into persistent key store and resolver."""
     op_id = operator_id or f"op_{key_id}"
     _initialize_components()
+    if not isinstance(key_bytes, (bytes, bytearray)) or len(key_bytes) != 32:
+        raise ValueError(
+            f"verification_key must be exactly 32 bytes, got {len(key_bytes) if isinstance(key_bytes, (bytes, bytearray)) else type(key_bytes)}"
+        )
+    raw_pub = bytes(key_bytes)
     ks = get_verification_key_store()
-    db_path = get_control_db_path()
-    with sqlite3.connect(db_path) as conn:
-        from core.c2.control_migrations import apply_control_migrations
-        from core.c2.grant_service import insert_initial_bootstrap_grants
-        from core.c2.operators import insert_operator_record
-
-        apply_control_migrations(conn)
-        insert_operator_record(
-            conn,
-            operator_id=op_id,
-            subject_id="s_test",
-            name=f"Test Operator {op_id}",
-            role="admin",
-            api_key=f"api_key_{op_id}",
-        )
-        insert_initial_bootstrap_grants(
-            conn,
-            operator_id=op_id,
-            subject_id="s_test",
-            peer_uid=os.getuid(),
-            peer_gid=os.getgid(),
-        )
-        now_ts = time.time()
-        conn.execute(
-            """
-            INSERT INTO control_missions (mission_id, mission_kind, active, created_at)
-            VALUES ('m_test', 'test-mission', 1, ?), ('m_1', 'test-mission', 1, ?)
-            ON CONFLICT(mission_id) DO NOTHING
-            """,
-            (now_ts, now_ts),
-        )
-        conn.execute(
-            """
-            INSERT INTO operator_mission_grants (operator_id, subject_id, mission_id, active, updated_at)
-            VALUES (?, ?, 'm_test', 1, ?), (?, ?, 'm_1', 1, ?)
-            ON CONFLICT(operator_id, mission_id) DO NOTHING
-            """,
-            (op_id, "s_test", now_ts, op_id, "s_test", now_ts),
-        )
-    try:
-        raw_seed = key_bytes if len(key_bytes) == 32 else hashlib.sha256(key_bytes).digest()
-        priv = ed25519.Ed25519PrivateKey.from_private_bytes(raw_seed)
-        raw_pub = priv.public_key().public_bytes(
-            serialization.Encoding.Raw,
-            serialization.PublicFormat.Raw,
-        )
-    except Exception:
-        raw_pub = key_bytes
     ks.register_key(
         key_id=key_id,
         operator_id=op_id,
         verification_key=raw_pub,
         algorithm=algorithm,
     )
-    _key_resolver.register_key(key_id, raw_pub)
+    _key_resolver.register_key(key_id, raw_pub, operator_id=op_id)
 
 
 def _sign_response_envelope(
-    response: (
-        ParticipantControlReceiptV2
-        | ParticipantControlQuerySnapshotV2
-        | BoundedControlErrorV2
-    ),
+    response: (ParticipantControlReceiptV2 | ParticipantControlQuerySnapshotV2 | BoundedControlErrorV2),
     request: ParticipantControlRequestV2 | None = None,
 ) -> SignedControlResponseV2:
     """Wrap and sign a control response envelope using daemon Ed25519 response key."""

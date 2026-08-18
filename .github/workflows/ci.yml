@@ -194,6 +194,7 @@ jobs:
         run: |
           python -m coverage erase
           python -m coverage run --rcfile=quality/coverage-ci.ini -m pytest -q
+          python -m coverage xml --rcfile=quality/coverage-ci.ini -o coverage.xml
 
       - name: Enforce global, package, and changed-line coverage
         shell: bash

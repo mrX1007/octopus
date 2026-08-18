@@ -64,7 +64,9 @@ class TrustedDaemonResponseKey:
         if type(self.key_id) is not str or not self.key_id or len(self.key_id) > 256:
             raise ValueError("key_id must be a non-empty str with len <= 256")
         if type(self.public_key) is not bytes or len(self.public_key) != 32:
-            raise ValueError(f"public_key must be exactly 32 bytes, got {len(self.public_key) if isinstance(self.public_key, bytes) else type(self.public_key)}")
+            raise ValueError(
+                f"public_key must be exactly 32 bytes, got {len(self.public_key) if isinstance(self.public_key, bytes) else type(self.public_key)}"
+            )
         if type(self.valid_from_ms) is not int or isinstance(self.valid_from_ms, bool):
             raise ValueError("valid_from_ms must be an int")
         if type(self.valid_until_ms) is not int or isinstance(self.valid_until_ms, bool):
@@ -264,51 +266,58 @@ class DaemonResponseSigner:
 
 
 class DaemonResponseVerifier:
-    """Verifies signed daemon responses against trusted Ed25519 public keys (zero normalization)."""
+    """Verifies signed daemon responses against trusted Ed25519 public keys with full trust metadata (zero normalization)."""
 
     def __init__(
         self,
-        trusted_keys: dict[str, bytes | TrustedDaemonResponseKey] | None = None,
-        key_resolver: Callable[[str, int], bytes | TrustedDaemonResponseKey | None] | None = None,
+        trusted_keys: dict[str, TrustedDaemonResponseKey] | None = None,
+        key_resolver: Callable[[str, int], TrustedDaemonResponseKey | None] | None = None,
     ) -> None:
-        self._trusted_keys: dict[str, bytes | TrustedDaemonResponseKey] = {}
+        self._trusted_keys: dict[str, TrustedDaemonResponseKey] = {}
         if trusted_keys:
             for k, v in trusted_keys.items():
-                if isinstance(v, TrustedDaemonResponseKey):
-                    self._trusted_keys[k] = v
-                elif isinstance(v, (bytes, bytearray)):
-                    if len(v) != 32:
-                        raise ValueError(f"trusted key must be exactly 32 bytes, got {len(v)}")
-                    self._trusted_keys[k] = bytes(v)
-                else:
-                    raise TypeError("trusted key must be bytes (32) or TrustedDaemonResponseKey")
+                if not isinstance(v, TrustedDaemonResponseKey):
+                    raise TypeError("trusted key must be a TrustedDaemonResponseKey instance")
+                if v.key_id != k:
+                    raise ValueError(f"trusted key map key '{k}' must match key_id '{v.key_id}'")
+                self._trusted_keys[k] = v
         self._key_resolver = key_resolver
 
-    def resolve_key(self, key_id: str, issued_at_ms: int) -> bytes | TrustedDaemonResponseKey | None:
+    def resolve_key(self, key_id: str, issued_at_ms: int) -> TrustedDaemonResponseKey | None:
         if self._key_resolver is not None:
             resolved = self._key_resolver(key_id, issued_at_ms)
             if resolved is not None:
+                if not isinstance(resolved, TrustedDaemonResponseKey):
+                    raise TypeError("resolved key must be a TrustedDaemonResponseKey instance")
                 return resolved
         return self._trusted_keys.get(key_id)
 
-    def verify_envelope(self, envelope: SignedControlResponseV2) -> None:
+    def verify_envelope(
+        self,
+        envelope: SignedControlResponseV2,
+        expected_service_id: str | None = None,
+    ) -> None:
         key_obj = self.resolve_key(envelope.key_id, envelope.issued_at_ms)
         if key_obj is None:
             raise ValueError(f"Unknown daemon response key_id: {envelope.key_id}")
+        if not isinstance(key_obj, TrustedDaemonResponseKey):
+            raise TypeError("trusted key must be a TrustedDaemonResponseKey instance")
 
-        if isinstance(key_obj, TrustedDaemonResponseKey):
-            if key_obj.revoked:
-                raise ValueError(f"Daemon response key is revoked: {envelope.key_id}")
-            if envelope.issued_at_ms < key_obj.valid_from_ms or envelope.issued_at_ms > key_obj.valid_until_ms:
-                raise ValueError(f"Daemon response key validity expired for key_id: {envelope.key_id}")
-            pub_bytes = key_obj.public_key
-        elif isinstance(key_obj, (bytes, bytearray)):
-            if len(key_obj) != 32:
-                raise ValueError(f"public_key must be exactly 32 bytes, got {len(key_obj)}")
-            pub_bytes = bytes(key_obj)
-        else:
-            raise TypeError("trusted key must be bytes or TrustedDaemonResponseKey")
+        if key_obj.key_id != envelope.key_id:
+            raise ValueError(f"key_id_mismatch: trusted {key_obj.key_id} != envelope {envelope.key_id}")
+        if key_obj.service_id != envelope.service_id:
+            raise ValueError(f"service_id_mismatch: trusted {key_obj.service_id} != envelope {envelope.service_id}")
+        if expected_service_id is not None and envelope.service_id != expected_service_id:
+            raise ValueError(
+                f"expected_service_id_mismatch: expected {expected_service_id} != envelope {envelope.service_id}"
+            )
 
+        if key_obj.revoked:
+            raise ValueError(f"Daemon response key is revoked: {envelope.key_id}")
+        if envelope.issued_at_ms < key_obj.valid_from_ms or envelope.issued_at_ms > key_obj.valid_until_ms:
+            raise ValueError(f"Daemon response key validity expired for key_id: {envelope.key_id}")
+
+        pub_bytes = key_obj.public_key
         if len(pub_bytes) != 32:
             raise ValueError(f"public_key must be exactly 32 bytes, got {len(pub_bytes)}")
 
@@ -366,9 +375,7 @@ class ControlSignerV1:
             serialization.PublicFormat.Raw,
         )
 
-    def sign_participant_request(
-        self, unsigned_request: ParticipantControlRequestV1
-    ) -> ParticipantControlRequestV1:
+    def sign_participant_request(self, unsigned_request: ParticipantControlRequestV1) -> ParticipantControlRequestV1:
         auth = unsigned_request.authorization
         req_digest = calculate_canonical_request_digest(unsigned_request)
 

@@ -81,7 +81,7 @@ class PivotRemoteForwardAdapter(ManualGatedActionAdapter):
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.pivot import PivotRemoteForwardAdapter as RealAdapter
 
-        return RealAdapter().verify_bound(context, result)
+        return RealAdapter().verify_bound(context)
 
 
 class PivotSSHChainAdapter(ManualGatedActionAdapter):
@@ -144,7 +144,7 @@ class PivotSSHChainAdapter(ManualGatedActionAdapter):
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.pivot import PivotSshChainAdapter as RealAdapter
 
-        return RealAdapter().verify_bound(context, result)
+        return RealAdapter().verify_bound(context)
 
 
 class PivotProxyScanAdapter(ManualGatedActionAdapter):
@@ -207,7 +207,7 @@ class PivotProxyScanAdapter(ManualGatedActionAdapter):
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.pivot import PivotProxyScanAdapter as RealAdapter
 
-        return RealAdapter().verify_bound(context, result)
+        return RealAdapter().verify_bound(context)
 
 
 __all__ = [

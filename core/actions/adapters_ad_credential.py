@@ -81,7 +81,7 @@ class ADPassTheTicketAdapter(ManualGatedActionAdapter):
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.ad_credentials import ADPassTheTicketAdapter as RealAdapter
 
-        return RealAdapter().verify_bound(context, result)
+        return RealAdapter().verify_bound(context)
 
 
 class PassTheHashAdapter(ManualGatedActionAdapter):
@@ -145,7 +145,7 @@ class PassTheHashAdapter(ManualGatedActionAdapter):
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.ad_credentials import PassTheHashAdapter as RealAdapter
 
-        return RealAdapter().verify_bound(context, result)
+        return RealAdapter().verify_bound(context)
 
 
 class ADDumpLsassAdapter(ManualGatedActionAdapter):
@@ -208,7 +208,7 @@ class ADDumpLsassAdapter(ManualGatedActionAdapter):
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.ad_credentials import ADDumpLsassAdapter as RealAdapter
 
-        return RealAdapter().verify_bound(context, result)
+        return RealAdapter().verify_bound(context)
 
 
 class ADSamDumpAdapter(ManualGatedActionAdapter):
@@ -271,7 +271,7 @@ class ADSamDumpAdapter(ManualGatedActionAdapter):
     def verify_bound(self, context: Any, result: Any = None) -> bool:
         from core.providers.ad_credentials import ADSamDumpAdapter as RealAdapter
 
-        return RealAdapter().verify_bound(context, result)
+        return RealAdapter().verify_bound(context)
 
 
 __all__ = [

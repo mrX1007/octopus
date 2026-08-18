@@ -43,6 +43,42 @@ def test_cleanup_is_noop_without_registered_artifacts(monkeypatch) -> None:
     assert "No registered artifacts" in result
 
 
+def test_cleanup_ssh_connection_failed(monkeypatch) -> None:
+    class Manager:
+        def __init__(self, *, target_ip: str) -> None:
+            pass
+
+        @staticmethod
+        def get_pending_cleanups() -> list[dict[str, Any]]:
+            return [{"artifact_id": 1, "type": "file", "path": "/tmp/test"}]
+
+    monkeypatch.setattr(cleanup, "ArtifactManager", Manager)
+    monkeypatch.setattr(cleanup, "_ssh_connect", lambda *_args, **_kwargs: (None, "Connection timeout"))
+
+    res = cleanup.stealth_cleanup("192.0.2.10", "alice", "credential")
+    assert "SSH connection failed" in res
+
+
+def test_cleanup_root_authorized_keys_and_edge_paths() -> None:
+    cmd, desc = cleanup._artifact_command(
+        {"artifact_id": 10, "type": "ssh_key", "marker": "root-key", "user": "root"}, "root"
+    )
+    assert "$HOME/.ssh/authorized_keys" in cmd
+
+    # invalid user
+    cmd2, desc2 = cleanup._artifact_command(
+        {"artifact_id": 11, "type": "file", "path": "/tmp/a", "user": "invalid user!"}, "alice"
+    )
+    assert cmd2 == ""
+    assert "invalid user" in desc2
+
+    # invalid bashrc path
+    cmd3, desc3 = cleanup._artifact_command(
+        {"artifact_id": 12, "type": "file_line", "path": "/etc/profile", "marker": "m", "user": "alice"}, "alice"
+    )
+    assert cmd3 == ""
+
+
 def test_cleanup_executes_only_exact_registered_records(monkeypatch) -> None:
     pending = [
         {

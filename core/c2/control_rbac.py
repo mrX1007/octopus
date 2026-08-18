@@ -72,11 +72,7 @@ class ControlRBACPolicy:
 
         try:
             closed_action = (
-                action
-                if type(action) is C2ControlAction
-                else C2ControlAction(action)
-                if type(action) is str
-                else None
+                action if type(action) is C2ControlAction else C2ControlAction(action) if type(action) is str else None
             )
         except ValueError:
             return False

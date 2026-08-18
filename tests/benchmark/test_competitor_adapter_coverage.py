@@ -1612,3 +1612,15 @@ def test_adapter_module_main_guard(monkeypatch, tmp_path):
     ):
         runpy.run_module("core.benchmarks.competitors.adapter", run_name="__main__")
     assert output.is_file()
+
+
+def test_extract_strix_v3_final_report_claims_malformed_borders():
+    # Top index is None
+    assert adapter._extract_strix_v3_final_report_claims("│ Penetration test summary │") == ()
+
+    # Bottom border before marker
+    assert adapter._extract_strix_v3_final_report_claims("╰──────────╯\n│ Penetration test summary │") == ()
+
+    # Bottom index is None or top border after marker
+    malformed = "╭─ STRIX ─╮\n│ Penetration test summary │\n╭─ STRIX ─╮\n"
+    assert adapter._extract_strix_v3_final_report_claims(malformed) == ()

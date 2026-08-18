@@ -30,6 +30,9 @@ from core.c2.control_models import (
 from core.c2.control_protocol import FRAME_MAGIC, ControlProtocolCodec, strict_json_loads
 from core.c2.control_signing import ControlSignerV2
 
+from tests.helpers.c2_authority import provision_test_authority
+import os
+
 pytestmark = pytest.mark.unit
 
 TEST_KEY_SECRET = b"01234567890123456789012345678901"
@@ -37,7 +40,20 @@ TEST_KEY_SECRET = b"01234567890123456789012345678901"
 
 @pytest.fixture(autouse=True)
 def setup_framing_test_key():
-    daemon.register_control_key("test_key", TEST_KEY_SECRET)
+    daemon._initialize_components()
+    signer = ControlSignerV2("test_key", TEST_KEY_SECRET)
+    db_path = daemon.get_control_db_path()
+    provision_test_authority(
+        db_path,
+        operator_id="op_test",
+        key_id="test_key",
+        public_key=signer.public_key_bytes,
+        subject_id="s_test",
+        mission_id="m_test",
+        peer_uid=os.getuid(),
+        peer_gid=os.getgid(),
+    )
+    daemon.register_control_key("test_key", signer.public_key_bytes, operator_id="op_test")
     yield
 
 
@@ -329,7 +345,7 @@ def test_socket_framing_rejects_unsupported_action():
     handler_thread.start()
 
     try:
-        _, encoded = _create_signed_request(action=C2ControlAction.RESERVE_ENROLLMENT_FOR_BUILD)
+        _, encoded = _create_signed_request(action=C2ControlAction.MANAGE_OPERATORS_LIST)
         client_sock.sendall(encoded)
 
         raw_resp = _recv_frame(client_sock)

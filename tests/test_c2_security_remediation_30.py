@@ -82,6 +82,7 @@ from core.c2.resource_participant import (
     C2DaemonResourceParticipant,
     TransactionFailpoint,
 )
+from tests.helpers.c2_client import make_trusted_daemon_key
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract]
 
@@ -176,7 +177,8 @@ def test_hmac_public_ed25519_key_request_rejected():
 
 def test_hmac_daemon_public_key_response_rejected():
     """Verify that a daemon response signed with HMAC is rejected by DaemonResponseVerifier."""
-    verifier = DaemonResponseVerifier(trusted_keys={"daemon_resp_key_1": TEST_ED_PUB})
+    tk = make_trusted_daemon_key(service_id="srv_test", key_id="daemon_resp_key_1", public_key=TEST_ED_PUB)
+    verifier = DaemonResponseVerifier(trusted_keys={"daemon_resp_key_1": tk})
     fake_hmac_64 = hmac.new(TEST_ED_PUB, b"some_transcript", hashlib.sha512).digest()
     resp = SignedControlResponseV2(
         protocol_version="2.0",
@@ -229,7 +231,8 @@ def test_v1_request_transcript_rejected_by_v2():
 
 def test_v1_response_transcript_rejected_by_v2():
     """Verify that a legacy response transcript format is rejected by V2 verifiers."""
-    verifier = DaemonResponseVerifier(trusted_keys={"daemon_resp_key_1": TEST_ED_PUB})
+    tk = make_trusted_daemon_key(service_id="srv_test", key_id="daemon_resp_key_1", public_key=TEST_ED_PUB)
+    verifier = DaemonResponseVerifier(trusted_keys={"daemon_resp_key_1": tk})
     bad_sig = base64.urlsafe_b64encode(TEST_ED_PRIV.sign(b"legacy_transcript")).decode("ascii").rstrip("=")
     resp = SignedControlResponseV2(
         protocol_version="2.0",
@@ -581,10 +584,11 @@ def test_payload_exceeding_256kib_rejected():
 def test_empty_service_id_response_rejected():
     """Verify client/wire rejects responses with empty service_id when pinned."""
     signer = ControlSignerV2(TEST_KEY_ID, TEST_ED_PRIV)
+    tk = make_trusted_daemon_key(service_id="srv_expected_pinned", key_id="k_resp", public_key=TEST_ED_PUB)
     DefaultC2ControlClient(
         signer=signer,
         expected_service_id="srv_expected_pinned",
-        daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": TEST_ED_PUB}),
+        daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": tk}),
     )
     with pytest.raises(ValueError, match="service_id length must be between 1 and 256"):
         SignedControlResponseV2(
@@ -606,10 +610,11 @@ def test_empty_service_id_response_rejected():
 def test_wrong_service_id_response_rejected():
     """Verify client rejects responses with mismatched service_id."""
     signer = ControlSignerV2(TEST_KEY_ID, TEST_ED_PRIV)
+    tk = make_trusted_daemon_key(service_id="srv_expected_pinned", key_id="k_resp", public_key=TEST_ED_PUB)
     client = DefaultC2ControlClient(
         signer=signer,
         expected_service_id="srv_expected_pinned",
-        daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": TEST_ED_PUB}),
+        daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": tk}),
     )
     resp = SignedControlResponseV2(
         protocol_version="2.0",
@@ -640,10 +645,11 @@ def test_wrong_service_id_response_rejected():
 def test_missing_inner_type_rejected():
     """Verify client response verification rejects envelopes missing inner type."""
     signer = ControlSignerV2(TEST_KEY_ID, TEST_ED_PRIV)
+    tk = make_trusted_daemon_key(service_id="srv1", key_id="k_resp", public_key=TEST_ED_PUB)
     client = DefaultC2ControlClient(
         signer=signer,
         expected_service_id="srv1",
-        daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": TEST_ED_PUB}),
+        daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": tk}),
     )
     payload_without_type = canonical_json_bytes({"data": "foo"})
     b64u = base64.urlsafe_b64encode(payload_without_type).decode("ascii").rstrip("=")
@@ -693,10 +699,11 @@ def test_missing_inner_type_rejected():
 def test_string_retryable_rejected():
     """Verify string retryable value in error response is rejected."""
     signer = ControlSignerV2(TEST_KEY_ID, TEST_ED_PRIV)
+    tk = make_trusted_daemon_key(service_id="srv1", key_id="k_resp", public_key=TEST_ED_PUB)
     client = DefaultC2ControlClient(
         signer=signer,
         expected_service_id="srv1",
-        daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": TEST_ED_PUB}),
+        daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": tk}),
     )
     err_payload = canonical_json_bytes({"type": "error", "reason_code": "internal_failure", "retryable": "true"})
     b64u = base64.urlsafe_b64encode(err_payload).decode("ascii").rstrip("=")
@@ -755,10 +762,11 @@ def test_result_payload_digest_mismatch_rejected():
 def test_response_request_digest_mismatch_rejected():
     """Verify mismatched request digest between envelope and request causes verification failure."""
     signer = ControlSignerV2(TEST_KEY_ID, TEST_ED_PRIV)
+    tk = make_trusted_daemon_key(service_id="srv1", key_id="k_resp", public_key=TEST_ED_PUB)
     client = DefaultC2ControlClient(
         signer=signer,
         expected_service_id="srv1",
-        daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": TEST_ED_PUB}),
+        daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": tk}),
     )
     resp = SignedControlResponseV2(
         protocol_version="2.0",
@@ -789,10 +797,11 @@ def test_response_request_digest_mismatch_rejected():
 def test_response_request_nonce_mismatch_rejected():
     """Verify mismatched nonce causes verification failure."""
     signer = ControlSignerV2(TEST_KEY_ID, TEST_ED_PRIV)
+    tk = make_trusted_daemon_key(service_id="srv1", key_id="k_resp", public_key=TEST_ED_PUB)
     client = DefaultC2ControlClient(
         signer=signer,
         expected_service_id="srv1",
-        daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": TEST_ED_PUB}),
+        daemon_verifier=DaemonResponseVerifier(trusted_keys={"k_resp": tk}),
     )
     auth = _make_auth_v2(nonce="nonce_req_12345678")
     resp = SignedControlResponseV2(
@@ -1179,9 +1188,7 @@ def test_abort_finalized_transaction_rejected():
     )
     assert isinstance(commit, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth3 = _make_auth_v2(
-        action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_ab_1", action_id="test_ab"
-    )
+    auth3 = _make_auth_v2(action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_ab_1", action_id="test_ab")
     fin = part.finalize_visibility(
         ParticipantControlRequestV2(
             action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
@@ -1343,9 +1350,7 @@ def test_identical_finalize_retry_returns_identical_receipt():
     )
     assert isinstance(commit, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth3 = _make_auth_v2(
-        action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_idem_f", action_id="act_f"
-    )
+    auth3 = _make_auth_v2(action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_idem_f", action_id="act_f")
     req = ParticipantControlRequestV2(
         action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
         authorization=auth3,

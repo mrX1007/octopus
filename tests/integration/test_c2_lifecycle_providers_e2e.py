@@ -46,15 +46,18 @@ def test_c2_lifecycle_e2e_full_flow():
     assert cleanup_res["status"] == "cleaned"
 
 
+from tests.helpers.c2_loopback import create_mock_loopback_transport
+
+
 def test_c2_lifecycle_client_integration():
     priv = ed25519.Ed25519PrivateKey.generate()
     signer = ControlSignerV2("key_e2e", priv)
-    mock_transport = DefaultC2ControlClient.create_mock_loopback_transport()
+    mock_transport, verifier, service_id = create_mock_loopback_transport()
     client = DefaultC2ControlClient(
         signer=signer,
         transport_handler=mock_transport,
-        daemon_verifier=getattr(mock_transport, "_mock_verifier", None),
-        expected_service_id=getattr(mock_transport, "_mock_service_id", None),
+        daemon_verifier=verifier,
+        expected_service_id=service_id,
     )
 
     ping_res = client.ping(mission_id="m_e2e", subject_id="sub_e2e")

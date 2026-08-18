@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+import core.runtime_config as rc
 from core.runtime_config import C2EnrollmentBounds, load_c2_enrollment_bounds
 
 pytestmark = pytest.mark.unit
@@ -38,3 +39,23 @@ def test_invalid_enrollment_bounds_fail_startup() -> None:
             config={"c2": {"enrollment": {"max_uses_default": 2}}},
             environ={},
         )
+
+    # Non-integer bound
+    with pytest.raises(ValueError, match="integers"):
+        C2EnrollmentBounds(ttl_min_seconds="not an int")  # type: ignore[arg-type]
+
+    # Exceeds safety bound
+    with pytest.raises(ValueError, match="hard safety bound"):
+        C2EnrollmentBounds(ttl_max_seconds=100_000)
+
+    # c2.enrollment not a mapping
+    with pytest.raises(ValueError, match="must be a mapping"):
+        load_c2_enrollment_bounds(config={"c2": {"enrollment": "invalid"}}, environ={})
+
+    # _strict_config_int with invalid value
+    with pytest.raises(ValueError, match="bounded integer"):
+        rc._strict_config_int("not_a_number", key="test_key")
+
+    # config=None default
+    b = load_c2_enrollment_bounds(config=None, environ={})
+    assert isinstance(b, C2EnrollmentBounds)

@@ -52,6 +52,7 @@ from core.c2.control_signing import (
 )
 from core.c2.grant_service import GrantService
 from core.c2.operators import OperatorManager
+from tests.helpers.c2_client import make_trusted_daemon_key
 
 pytestmark = [pytest.mark.unit, pytest.mark.security]
 
@@ -478,7 +479,12 @@ def test_hardcoded_keys_rejected_in_production():
 def test_client_detects_tampered_response_signature():
     signer = ControlSignerV2("key_a", PRIV_KEY_A)
     codec = ControlProtocolCodec()
-    verifier = DaemonResponseVerifier(trusted_keys={"daemon_key": DAEMON_PUB})
+    trusted_key = make_trusted_daemon_key(
+        service_id="srv_test_boundary",
+        key_id="daemon_key",
+        public_key=DAEMON_PUB,
+    )
+    verifier = DaemonResponseVerifier(trusted_keys={"daemon_key": trusted_key})
 
     def mock_tampered_transport(req_bytes: bytes) -> bytes:
         req = codec.decode_request(req_bytes)
@@ -541,7 +547,12 @@ def test_client_detects_tampered_response_signature():
 def test_client_detects_mismatched_response_nonce():
     signer = ControlSignerV2("key_a", PRIV_KEY_A)
     codec = ControlProtocolCodec()
-    verifier = DaemonResponseVerifier(trusted_keys={"daemon_key": DAEMON_PUB})
+    trusted_key = make_trusted_daemon_key(
+        service_id="srv_test_boundary",
+        key_id="daemon_key",
+        public_key=DAEMON_PUB,
+    )
+    verifier = DaemonResponseVerifier(trusted_keys={"daemon_key": trusted_key})
     daemon_signer = DaemonResponseSigner(key_id="daemon_key", private_key=DAEMON_PRIV)
 
     def mock_mismatched_nonce_transport(req_bytes: bytes) -> bytes:
@@ -649,7 +660,12 @@ def test_unsigned_response_rejected_by_client():
         )
         return codec.encode_response(receipt)
 
-    verifier = DaemonResponseVerifier(trusted_keys={"daemon_key": DAEMON_PUB})
+    trusted_key = make_trusted_daemon_key(
+        service_id="srv_test_boundary",
+        key_id="daemon_key",
+        public_key=DAEMON_PUB,
+    )
+    verifier = DaemonResponseVerifier(trusted_keys={"daemon_key": trusted_key})
     client = DefaultC2ControlClient(
         signer=signer,
         transport_handler=mock_unsigned_transport,

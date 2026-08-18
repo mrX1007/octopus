@@ -13,7 +13,9 @@ from core.c2.control_commands import (
     C2ControlAction,
     ParticipantControlReceiptV2,
 )
-from core.c2.control_signing import ControlSignerV2
+from core.c2.control_signing import ControlSignerV2, DaemonResponseVerifier
+from tests.helpers.c2_client import make_trusted_daemon_key
+from tests.helpers.c2_loopback import create_mock_loopback_transport
 
 pytestmark = pytest.mark.unit
 
@@ -23,10 +25,16 @@ TEST_DAEMON_KEY_32 = b"daemon_pubkey_012345678901234567"
 
 def test_control_client_init_and_context_manager():
     signer = ControlSignerV2("key_test", TEST_KEY_32)
+    trusted_key = make_trusted_daemon_key(
+        service_id="srv_test",
+        key_id="mock_daemon_key",
+        public_key=TEST_DAEMON_KEY_32,
+    )
+    verifier = DaemonResponseVerifier(trusted_keys={"mock_daemon_key": trusted_key})
     client = DefaultC2ControlClient(
         signer=signer,
+        daemon_verifier=verifier,
         expected_service_id="srv_test",
-        trusted_daemon_keys={"mock_daemon_key": TEST_DAEMON_KEY_32},
     )
     assert client.signer.key_id == "key_test"
 
@@ -37,9 +45,12 @@ def test_control_client_init_and_context_manager():
 
 def test_control_client_ping_with_mock_transport():
     signer = ControlSignerV2("key_test", TEST_KEY_32)
+    transport, verifier, service_id = create_mock_loopback_transport()
     client = DefaultC2ControlClient(
         signer=signer,
-        transport_handler=DefaultC2ControlClient.create_mock_loopback_transport(),
+        daemon_verifier=verifier,
+        expected_service_id=service_id,
+        transport_handler=transport,
     )
 
     receipt = client.ping(mission_id="mission_alpha", subject_id="op_1")
@@ -50,9 +61,12 @@ def test_control_client_ping_with_mock_transport():
 
 def test_control_client_execute_action_with_mock_transport():
     signer = ControlSignerV2("key_test", TEST_KEY_32)
+    transport, verifier, service_id = create_mock_loopback_transport()
     client = DefaultC2ControlClient(
         signer=signer,
-        transport_handler=DefaultC2ControlClient.create_mock_loopback_transport(),
+        daemon_verifier=verifier,
+        expected_service_id=service_id,
+        transport_handler=transport,
     )
 
     res = client.execute_action(
@@ -70,9 +84,12 @@ def test_control_client_execute_action_with_mock_transport():
 
 def test_control_client_closed_error():
     signer = ControlSignerV2("key_test", TEST_KEY_32)
+    transport, verifier, service_id = create_mock_loopback_transport()
     client = DefaultC2ControlClient(
         signer=signer,
-        transport_handler=DefaultC2ControlClient.create_mock_loopback_transport(),
+        daemon_verifier=verifier,
+        expected_service_id=service_id,
+        transport_handler=transport,
     )
     client.close()
 
@@ -83,10 +100,16 @@ def test_control_client_closed_error():
 def test_control_client_fails_closed_when_socket_unavailable(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("OCTOPUS_C2_SOCKET", "/tmp/nonexistent_octopus_test.sock")
     signer = ControlSignerV2("key_test", TEST_KEY_32)
+    trusted_key = make_trusted_daemon_key(
+        service_id="srv_test",
+        key_id="mock_daemon_key",
+        public_key=TEST_DAEMON_KEY_32,
+    )
+    verifier = DaemonResponseVerifier(trusted_keys={"mock_daemon_key": trusted_key})
     client = DefaultC2ControlClient(
         signer=signer,
+        daemon_verifier=verifier,
         expected_service_id="srv_test",
-        trusted_daemon_keys={"mock_daemon_key": TEST_DAEMON_KEY_32},
     )
 
     with pytest.raises(C2DaemonUnavailable):

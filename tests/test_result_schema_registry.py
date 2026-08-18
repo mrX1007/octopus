@@ -225,3 +225,47 @@ def test_provider_result_subclasses_are_denied() -> None:
             result_schema_id="octopus:result:payload_keying:2.0",
             provider_result=result,
         )
+
+
+def test_result_schema_registry_validate_binding_error_paths() -> None:
+    from core.actions.result_schema_registry import (
+        InvalidResultSchemaBinding,
+        ProviderResultPublicationBindingV2,
+        ProviderResultSchemaRegistry,
+    )
+
+    # Empty IDs
+    b_bad_id = ProviderResultPublicationBindingV2(
+        action_id="",
+        result_schema_id="schema",
+        projector_id="proj",
+        allowed_result_kinds=(),
+        allowed_runtime_type_ids=(),
+        binding_digest="",
+    )
+    with pytest.raises(InvalidResultSchemaBinding, match="result_publication_binding_has_empty_id"):
+        ProviderResultSchemaRegistry._validate_binding(b_bad_id)
+
+    # Empty variants
+    b_empty_variants = ProviderResultPublicationBindingV2(
+        action_id="act",
+        result_schema_id="schema",
+        projector_id="proj",
+        allowed_result_kinds=(),
+        allowed_runtime_type_ids=(),
+        binding_digest="",
+    )
+    with pytest.raises(InvalidResultSchemaBinding, match="result_publication_binding_has_no_variants"):
+        ProviderResultSchemaRegistry._validate_binding(b_empty_variants)
+
+    # Arity mismatch
+    b_arity = ProviderResultPublicationBindingV2(
+        action_id="act",
+        result_schema_id="schema",
+        projector_id="proj",
+        allowed_result_kinds=(ProviderResultKind.OPERATION,),
+        allowed_runtime_type_ids=("OperationProviderResult", "SessionProviderResult"),
+        binding_digest="",
+    )
+    with pytest.raises(InvalidResultSchemaBinding, match="result_publication_binding_variant_arity_mismatch"):
+        ProviderResultSchemaRegistry._validate_binding(b_arity)

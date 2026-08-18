@@ -673,9 +673,7 @@ class ParticipantControlSignerV1(Protocol):
 
 @runtime_checkable
 class ParticipantControlVerifierV1(Protocol):
-    def verify_participant_request(
-        self, request: ParticipantControlRequestV1
-    ) -> None: ...
+    def verify_participant_request(self, request: ParticipantControlRequestV1) -> None: ...
     def verify_execution_request(
         self,
         *,

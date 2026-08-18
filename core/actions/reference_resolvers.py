@@ -169,7 +169,7 @@ class ArtifactReferenceResolver:
         if type(snapshot) not in (NonSensitiveArtifactReferenceSnapshot, SensitiveArtifactReferenceSnapshot):
             raise TypeError("reference_metadata_type_mismatch")
         return cast(
-            NonSensitiveArtifactReferenceSnapshot | SensitiveArtifactReferenceSnapshot,
+            "NonSensitiveArtifactReferenceSnapshot | SensitiveArtifactReferenceSnapshot",
             snapshot,
         )
 

@@ -1,31 +1,33 @@
-"""Golden vectors for C2 V2 protocol canonicalization, digest calculations, and signatures.
+"""True fixed golden vector regression tests for C2 V2 protocol.
 
-Ensures byte-for-byte deterministic stability across platforms and releases.
+Loads literal reviewed constants from tests/fixtures/c2_v2_golden_vectors.json
+and asserts byte-for-byte matching without relying on runtime re-calculation.
 """
 
 from __future__ import annotations
 
 import base64
 import hashlib
+import json
+from pathlib import Path
 
 import pytest
 
 from core.c2.control_commands import (
     C2ControlAction,
-    ParticipantControlAuthorizationV2,
     ParticipantControlRequestV2,
     SignedControlResponseV2,
     UnsignedParticipantControlAuthorizationV2,
     UnsignedParticipantControlRequestV2,
 )
 from core.c2.control_models import (
+    calculate_health_signature_digest,
     calculate_receipt_digest,
     calculate_request_digest_v2,
     calculate_schema_bound_payload_digest,
     calculate_snapshot_digest,
     calculate_transaction_intent_digest,
     canonical_json_bytes,
-    canonical_response_envelope_dict,
     canonical_unsigned_request_v2,
     strict_b64url_decode,
 )
@@ -34,28 +36,35 @@ from core.c2.control_signing import (
     ControlVerifierV2,
     DaemonResponseSigner,
     DaemonResponseVerifier,
+    TrustedDaemonResponseKey,
 )
+from tests.helpers.c2_client import make_trusted_daemon_key
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract]
 
-# Fixed 32-byte Ed25519 test seeds
 FIXED_CLIENT_SEED_32 = b"golden_client_seed_0123456789012"
 FIXED_DAEMON_SEED_32 = b"golden_daemon_seed_0123456789012"
 
-
-def test_v2_canonical_json_deterministic():
-    """Verify that canonical JSON uses sorted keys, UTF-8, and no extra whitespace."""
-    data = {
-        "z": 1,
-        "a": "hello",
-        "nested": {"b": True, "a": None, "c": [3, 2, 1]},
-    }
-    raw = canonical_json_bytes(data)
-    assert raw == b'{"a":"hello","nested":{"a":null,"b":true,"c":[3,2,1]},"z":1}'
+FIXTURE_PATH = Path(__file__).parent / "fixtures" / "c2_v2_golden_vectors.json"
 
 
-def test_v2_unsigned_request_canonicalization_and_digest():
-    """Verify canonical unsigned request format and SHA-256 digest calculation."""
+@pytest.fixture(scope="module")
+def golden_vectors() -> dict:
+    with open(FIXTURE_PATH, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert data.get("format_version") == "2.0"
+
+    # Verify checksum
+    stored_checksum = data.pop("fixture_checksum_sha256")
+    canonical_doc = canonical_json_bytes(data)
+    computed_checksum = hashlib.sha256(canonical_doc).hexdigest()
+    assert computed_checksum == stored_checksum
+    data["fixture_checksum_sha256"] = stored_checksum
+    return data
+
+
+def test_v2_golden_unsigned_request_and_digest(golden_vectors: dict):
+    """Verify unsigned request canonicalization and request digest against literal golden constants."""
     auth = UnsignedParticipantControlAuthorizationV2(
         protocol_version="2.0",
         key_id="k_golden_1",
@@ -69,40 +78,36 @@ def test_v2_unsigned_request_canonicalization_and_digest():
         expires_at_ms=1700000060000,
         nonce="nonce_golden_1234567890",
     )
+    raw_payload = b'{"status":"ok"}'
+    p_b64u = base64.urlsafe_b64encode(raw_payload).decode("ascii").rstrip("=")
+    p_dig = calculate_schema_bound_payload_digest("schema:test_v2", raw_payload)
+
     req = UnsignedParticipantControlRequestV2(
         action=C2ControlAction.PING,
         authorization=auth,
         payload_schema_id="schema:test_v2",
-        payload_digest="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        canonical_payload_b64u="e30",
+        payload_digest=p_dig,
+        canonical_payload_b64u=p_b64u,
         expected_resource_revision=42,
         prior_receipt_ref="rcpt_golden_prev",
         prior_receipt_digest="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     )
 
-    d = canonical_unsigned_request_v2(req)
-    assert d["protocol_version"] == "2.0"
-    assert d["action"] == "ping"
-    assert d["expected_resource_revision"] == 42
-    assert d["prior_receipt_ref"] == "rcpt_golden_prev"
-    assert "request_digest" not in d
-    assert "signature" not in d
+    canonical_dict = canonical_unsigned_request_v2(req)
+    canonical_bytes = canonical_json_bytes(canonical_dict)
+    assert canonical_bytes.decode("utf-8") == golden_vectors["canonical_unsigned_request_utf8"]
 
     digest = calculate_request_digest_v2(req)
-    assert len(digest) == 64
-    assert digest == digest.lower()
-
-    # Re-calculate manually to check prefix OCTOPUS-C2-REQUEST-V2\0
-    expected_raw = b"OCTOPUS-C2-REQUEST-V2\x00" + canonical_json_bytes(d)
-    expected_hex = hashlib.sha256(expected_raw).hexdigest()
-    assert digest == expected_hex
+    assert digest == golden_vectors["request_digest_hex"]
+    assert digest == "396f6ecd2541a4be801c52117ec735c6b4c1012c478b8bb6e2c10b012a834e6f"
 
 
-def test_v2_signing_and_verification_golden_vector():
-    """Verify Ed25519 signature computation and strict Base64URL encoding (86 chars)."""
+def test_v2_golden_signing_and_signature(golden_vectors: dict):
+    """Verify Ed25519 request signature against literal golden vector constant."""
     signer = ControlSignerV2("k_golden_1", FIXED_CLIENT_SEED_32)
     pub_key_bytes = signer.public_key_bytes
-    assert len(pub_key_bytes) == 32
+    assert pub_key_bytes.hex() == golden_vectors["client_public_key_hex"]
+    assert pub_key_bytes.hex() == "a5412c4f53f3d5ed983a51c3632240ed94410f6a35c7f36156065e7417b38fba"
 
     auth = UnsignedParticipantControlAuthorizationV2(
         protocol_version="2.0",
@@ -127,77 +132,83 @@ def test_v2_signing_and_verification_golden_vector():
         payload_schema_id="schema:test_v2",
         payload_digest=p_dig,
         canonical_payload_b64u=p_b64u,
+        expected_resource_revision=42,
+        prior_receipt_ref="rcpt_golden_prev",
+        prior_receipt_digest="0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     )
 
     signed_req = signer.sign_participant_request(unsigned_req)
     assert isinstance(signed_req, ParticipantControlRequestV2)
-    assert isinstance(signed_req.authorization, ParticipantControlAuthorizationV2)
+    assert signed_req.authorization.signature == golden_vectors["request_signature_b64u"]
+    assert (
+        signed_req.authorization.signature
+        == "JlKKGBjFo3iuKQYwJRmWiN4y9My4bEVEEyvliCe8JFYN35Grdl0SOeend8ssvZHR-UGSGRAaSiG6n6aItaA0Bw"
+    )
 
-    # Signature must be exactly 86 chars Base64URL without padding
-    sig = signed_req.authorization.signature
-    assert len(sig) == 86
-    assert "=" not in sig
-    assert "+" not in sig
-    assert "/" not in sig
-
-    # Verifier test
+    # Verifier check
     from core.c2.control_boundary import StaticControlKeyResolver
+
     verifier = ControlVerifierV2(key_resolver=StaticControlKeyResolver({"k_golden_1": pub_key_bytes}))
     payload_returned = verifier.verify_participant_request(signed_req, now=1700000010000)
     assert payload_returned == raw_payload
 
 
-def test_v2_daemon_response_envelope_golden_vector():
-    """Verify daemon response envelope format, digest, and Ed25519 signing."""
+def test_v2_golden_daemon_response_envelope(golden_vectors: dict):
+    """Verify daemon response envelope format and signature against literal golden constants."""
     daemon_signer = DaemonResponseSigner("daemon_key_1", FIXED_DAEMON_SEED_32)
     daemon_pub_bytes = daemon_signer.public_key_bytes
-    assert len(daemon_pub_bytes) == 32
+    assert daemon_pub_bytes.hex() == golden_vectors["daemon_public_key_hex"]
+    assert daemon_pub_bytes.hex() == "d7d6f500118367251d7f75b3ae05b3b44bfb4cf068c24c6854e4acffa6126c85"
 
-    resp_payload = b'{"receipt_ref":"rcpt_001","status":"success"}'
-    resp_b64u = base64.urlsafe_b64encode(resp_payload).decode("ascii").rstrip("=")
-    resp_dig = hashlib.sha256(resp_payload).hexdigest()
-
-    envelope_dict = canonical_response_envelope_dict(
-        protocol_version="2.0",
-        service_id="srv_golden_octopus",
-        boot_instance_id="boot_golden_inst_1",
-        daemon_generation="gen_001",
-        request_digest="0" * 64,
-        request_nonce="nonce_golden_1234567890",
-        response_type="receipt",
-        response_payload_b64u=resp_b64u,
-        response_digest=resp_dig,
-        issued_at_ms=1700000000000,
-        key_id="daemon_key_1",
-    )
-
+    envelope_dict = golden_vectors["canonical_daemon_response_envelope"]
     sig = daemon_signer.sign_envelope_dict(envelope_dict)
-    assert len(sig) == 86
-    assert "=" not in sig
+    assert sig == golden_vectors["daemon_response_signature_b64u"]
+    assert sig == "k9dee7j0mDheVbuYXHBwNMzA7p1FeS7UrJBrAz8cjgvJouvxwaDRokO_VImdir3C-CPgjdoTV0J9WPi03MY-Cw"
 
     signed_resp = SignedControlResponseV2(
-        protocol_version="2.0",
-        service_id="srv_golden_octopus",
-        boot_instance_id="boot_golden_inst_1",
-        daemon_generation="gen_001",
-        request_digest="0" * 64,
-        request_nonce="nonce_golden_1234567890",
-        response_type="receipt",
-        response_payload_b64u=resp_b64u,
-        response_digest=resp_dig,
-        issued_at_ms=1700000000000,
-        key_id="daemon_key_1",
+        protocol_version=envelope_dict["protocol_version"],
+        service_id=envelope_dict["service_id"],
+        boot_instance_id=envelope_dict["boot_instance_id"],
+        daemon_generation=envelope_dict["daemon_generation"],
+        request_digest=envelope_dict["request_digest"],
+        request_nonce=envelope_dict["request_nonce"],
+        response_type=envelope_dict["response_type"],
+        response_payload_b64u=envelope_dict["response_payload_b64u"],
+        response_digest=envelope_dict["response_digest"],
+        issued_at_ms=envelope_dict["issued_at_ms"],
+        key_id=envelope_dict["key_id"],
         signature=sig,
     )
 
-    verifier = DaemonResponseVerifier(trusted_keys={"daemon_key_1": daemon_pub_bytes})
-    verifier.verify_envelope(signed_resp)
-    assert strict_b64url_decode(signed_resp.response_payload_b64u) == resp_payload
+    trusted_key = make_trusted_daemon_key(
+        service_id=envelope_dict["service_id"],
+        key_id="daemon_key_1",
+        public_key=daemon_pub_bytes,
+        valid_from_ms=0,
+        valid_until_ms=2147483647000,
+    )
+    verifier = DaemonResponseVerifier(trusted_keys={"daemon_key_1": trusted_key})
+    verifier.verify_envelope(signed_resp, expected_service_id="srv_golden_octopus")
+    assert (
+        strict_b64url_decode(signed_resp.response_payload_b64u).decode("utf-8")
+        == golden_vectors["daemon_response_payload_utf8"]
+    )
 
 
-def test_v2_receipt_digest_deterministic():
-    """Verify calculate_receipt_digest produces exact deterministic hex."""
-    d = calculate_receipt_digest(
+def test_v2_golden_health_response_signature(golden_vectors: dict):
+    """Verify health response body digest and signature against literal golden constants."""
+    daemon_signer = DaemonResponseSigner("daemon_key_1", FIXED_DAEMON_SEED_32)
+    health_body = golden_vectors["health_response_body"]
+    transcript = calculate_health_signature_digest(health_body)
+    sig_raw = daemon_signer._ed25519_key.sign(transcript)
+    sig_b64u = base64.urlsafe_b64encode(sig_raw).decode("ascii").rstrip("=")
+    assert sig_b64u == golden_vectors["health_response_signature_b64u"]
+    assert sig_b64u == "W7yoOJQddBSfNY-190-K-wUBMUocAGP1ASHWPvvQ8IlhkGQN3gNiLxqh9G4vU9q-p2A93A92RMlH9yza-IJpCA"
+
+
+def test_v2_golden_2pc_digests(golden_vectors: dict):
+    """Verify 2PC receipt, snapshot, and transaction intent digests against literal golden constants."""
+    rcpt_digest = calculate_receipt_digest(
         transaction_id="tx_100",
         participant_id="part_100",
         receipt_ref="rcpt_100",
@@ -209,35 +220,19 @@ def test_v2_receipt_digest_deterministic():
         result_payload_digest="0" * 64,
         protocol_version="2.0",
     )
-    assert len(d) == 64
-    assert d == d.lower()
-    # Digest is deterministic
-    d2 = calculate_receipt_digest(
-        transaction_id="tx_100",
-        participant_id="part_100",
-        receipt_ref="rcpt_100",
-        action="ping",
-        resource_ref="c2_daemon",
-        resource_revision=1,
-        daemon_instance_id="daemon_inst_1",
-        result_payload_schema_id="schema:test",
-        result_payload_digest="0" * 64,
-        protocol_version="2.0",
-    )
-    assert d == d2
+    assert rcpt_digest == golden_vectors["receipt_digest_hex"]
+    assert rcpt_digest == "f30fc73828b3ecdc42e4e14426f60685d04bc7ab523d9a9b18359db28fa5d1be"
 
-
-def test_v2_snapshot_and_intent_digest_deterministic():
-    """Verify snapshot and transaction intent digests."""
-    snap_d = calculate_snapshot_digest(
+    snap_digest = calculate_snapshot_digest(
         transaction_id="tx_100",
         participant_id="part_100",
         phase="prepared",
         resource_ref="c2_daemon",
     )
-    assert len(snap_d) == 64
+    assert snap_digest == golden_vectors["snapshot_digest_hex"]
+    assert snap_digest == "270dea22dbdb840c39a3a1123432c8fc66af0cdd172704f4fabd1e153f283bc3"
 
-    intent_d = calculate_transaction_intent_digest(
+    intent_digest = calculate_transaction_intent_digest(
         participant_id="part_100",
         resource_ref="c2_daemon",
         subject_id="subject_1",
@@ -245,4 +240,5 @@ def test_v2_snapshot_and_intent_digest_deterministic():
         payload_schema_id="schema:test",
         payload_digest="0" * 64,
     )
-    assert len(intent_d) == 64
+    assert intent_digest == golden_vectors["transaction_intent_digest_hex"]
+    assert intent_digest == "8c0bdc58153bac80f5af9aa5354b58eeb48fc05fbc25712166912f12e7daeea6"

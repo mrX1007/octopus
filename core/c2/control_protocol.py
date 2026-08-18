@@ -163,9 +163,7 @@ class ControlProtocolCodec:
         header = FRAME_MAGIC + struct.pack("!I", len(payload_bytes))
         return header + payload_bytes
 
-    def decode_request(
-        self, reader_or_data: BoundedFrameReaderV1 | bytes
-    ) -> ParticipantControlRequestV2:
+    def decode_request(self, reader_or_data: BoundedFrameReaderV1 | bytes) -> ParticipantControlRequestV2:
         """Decode strictly protocol 2.0 request from reader or bytes."""
         if isinstance(reader_or_data, (bytes, bytearray)):
             raw_bytes = bytes(reader_or_data)

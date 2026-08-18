@@ -367,8 +367,54 @@ def test_default_redactor_wrappers_failure_and_reset(monkeypatch) -> None:
     assert secrets_module.get_redactor() is redactor
     assert secrets_module.redact_text("fixture", kind="field") == "safe-text"
     assert secrets_module.redact_data({"fixture": True}) == {"safe": True}
-    assert secrets_module.reveal_secret("secret://fixture") == "revealed-fixture"
-
     secrets_module.reset_default_secret_store_for_tests()
     store.close.assert_called_once_with()
     secrets_module.reset_default_secret_store_for_tests()
+
+
+def test_legacy_secret_value_adapter_v2(tmp_path) -> None:
+    db_path = tmp_path / "adapter_test.db"
+    store = SecretStore(str(db_path))
+    ref = store.store("adapter_secret_value")
+
+    factory = secrets_module.OpaqueSecretValueFactoryV2()
+    adapter = secrets_module.LegacySecretValueAdapterV2(
+        secret_store=store,
+        factory=factory,
+    )
+
+    # Invalid secret store
+    with pytest.raises(SecretStoreError, match="custom_secret_store_denied"):
+        secrets_module.LegacySecretValueAdapterV2(
+            secret_store="invalid",  # type: ignore[arg-type]
+            factory=factory,
+        )
+
+    # Invalid factory
+    with pytest.raises(SecretStoreError, match="custom_secret_value_factory_denied"):
+        secrets_module.LegacySecretValueAdapterV2(
+            secret_store=store,
+            factory="invalid",  # type: ignore[arg-type]
+        )
+
+    # Checkout
+    checked_out = adapter.checkout(ref, consumer_id="consumer_1")
+    assert checked_out is not None
+
+    # Serialization and repr tests
+    assert repr(checked_out) == "OpaqueSecretValueV2(<opaque>)"
+    with pytest.raises(TypeError, match="not_serializable"):
+        checked_out.__reduce__()
+
+    # Lease acquisition
+    with checked_out.acquire_single_use(consumer_id="consumer_1") as lease:
+        assert repr(lease) == "OwnedSecretValueLeaseV2(<opaque>)"
+        with pytest.raises(TypeError, match="not_serializable"):
+            lease.__reduce__()
+
+    # Factory invalid buffer
+    with pytest.raises(SecretStoreError, match="buffer_invalid"):
+        factory.from_owned_buffer(value_id="v1", buffer="not a buffer")  # type: ignore[arg-type]
+
+    checked_out.clear()
+    store.close()

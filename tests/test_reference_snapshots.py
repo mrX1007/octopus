@@ -250,3 +250,73 @@ def test_sensitive_integrity_tag_has_exact_keyed_metadata() -> None:
             domain="test",
             tag="tag",
         )
+
+
+def test_snapshot_validations_and_predicates() -> None:
+    from core.actions.reference_snapshots import reference_has_active_state
+
+    # _require_reference_header errors
+    with pytest.raises(ValueError, match="reference_invalid"):
+        CredentialReferenceSnapshot(
+            reference="",
+            revision=1,
+            authorization=_authorization("credential://one"),
+            target="192.0.2.10",
+            service="ssh",
+            username="alice",
+            domain="",
+            auth_kind=CredentialAuthKind.PASSWORD,
+            port=22,
+            verified=True,
+            expires_at=None,
+        )
+
+    with pytest.raises(ValueError, match="reference_metadata_revision_invalid"):
+        CredentialReferenceSnapshot(
+            reference="credential://one",
+            revision=0,
+            authorization=_authorization("credential://one"),
+            target="192.0.2.10",
+            service="ssh",
+            username="alice",
+            domain="",
+            auth_kind=CredentialAuthKind.PASSWORD,
+            port=22,
+            verified=True,
+            expires_at=None,
+        )
+
+    with pytest.raises(ValueError, match="reference_authorization_snapshot_invalid"):
+        CredentialReferenceSnapshot(
+            reference="credential://one",
+            revision=1,
+            authorization="not_a_snapshot",  # type: ignore
+            target="192.0.2.10",
+            service="ssh",
+            username="alice",
+            domain="",
+            auth_kind=CredentialAuthKind.PASSWORD,
+            port=22,
+            verified=True,
+            expires_at=None,
+        )
+
+    # Expiry validation
+    with pytest.raises(ValueError, match="reference_expiry_invalid"):
+        CredentialReferenceSnapshot(
+            reference="credential://one",
+            revision=1,
+            authorization=_authorization("credential://one"),
+            target="192.0.2.10",
+            service="ssh",
+            username="alice",
+            domain="",
+            auth_kind=CredentialAuthKind.PASSWORD,
+            port=22,
+            verified=True,
+            expires_at=True,  # type: ignore
+        )
+
+    # Predicate testing
+    for snap in _snapshots():
+        assert reference_has_active_state(snap) is True

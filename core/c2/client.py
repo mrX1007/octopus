@@ -120,164 +120,26 @@ class C2ControlClient:
 class DefaultC2ControlClient(C2ControlClient):
     """Production C2ControlClient strictly requiring asymmetric daemon response verification and service pinning."""
 
-    @classmethod
-    def create_mock_loopback_transport(
-        cls,
-        daemon_signer: DaemonResponseSigner | None = None,
-        *,
-        daemon_instance_id: str = "daemon_inst_0",
-        daemon_generation: str = "gen_0",
-        service_id: str = "srv_mock_test_id",
-        boot_instance_id: str = "boot_0",
-        key_id: str = "mock_daemon_key",
-    ) -> Callable[[bytes], bytes]:
-        """Create a loopback transport handler that produces valid signed responses."""
-        if daemon_signer is None:
-            priv = ed25519.Ed25519PrivateKey.generate()
-            signer = DaemonResponseSigner(
-                key_id=key_id,
-                private_key=priv,
-            )
-            pub_bytes = priv.public_key().public_bytes(
-                serialization.Encoding.Raw,
-                serialization.PublicFormat.Raw,
-            )
-        else:
-            signer = daemon_signer
-            priv_key = getattr(daemon_signer, "_ed25519_key", None)
-            pub_bytes = (
-                priv_key.public_key().public_bytes(
-                    serialization.Encoding.Raw,
-                    serialization.PublicFormat.Raw,
-                )
-                if priv_key
-                else b""
-            )
-
-        codec = ControlProtocolCodec()
-
-        def _handler(raw_data: bytes) -> bytes:
-            req = codec.decode_request(raw_data)
-            rcpt_ref = f"rcpt_{req.authorization.transaction_id}"
-            receipt = ParticipantControlReceiptV2(
-                transaction_id=req.authorization.transaction_id,
-                participant_id=req.authorization.participant_id,
-                action=req.action,
-                resource_ref=f"res_{req.authorization.transaction_id}",
-                resource_revision=1,
-                receipt_ref=rcpt_ref,
-                receipt_digest=calculate_receipt_digest(
-                    transaction_id=req.authorization.transaction_id,
-                    participant_id=req.authorization.participant_id,
-                    receipt_ref=rcpt_ref,
-                    action=req.action.value if hasattr(req.action, "value") else str(req.action),
-                    resource_ref=f"res_{req.authorization.transaction_id}",
-                    resource_revision=1,
-                    daemon_instance_id=daemon_instance_id,
-                    protocol_version=C2_CONTROL_PROTOCOL_VERSION,
-                ),
-                daemon_instance_id=daemon_instance_id,
-                result_payload_schema_id=None,
-                result_payload_digest=None,
-                result_payload_b64u=None,
-            )
-            res_dict = {
-                "action": receipt.action.value if hasattr(receipt.action, "value") else str(receipt.action),
-                "daemon_instance_id": receipt.daemon_instance_id,
-                "participant_id": receipt.participant_id,
-                "receipt_digest": receipt.receipt_digest,
-                "receipt_ref": receipt.receipt_ref,
-                "resource_ref": receipt.resource_ref,
-                "resource_revision": receipt.resource_revision,
-                "result_payload_b64u": receipt.result_payload_b64u,
-                "result_payload_digest": receipt.result_payload_digest,
-                "result_payload_schema_id": receipt.result_payload_schema_id,
-                "transaction_id": receipt.transaction_id,
-                "type": "receipt",
-            }
-            payload_bytes = canonical_json_bytes(res_dict)
-            payload_b64u = base64.urlsafe_b64encode(payload_bytes).decode("ascii").rstrip("=")
-            payload_digest = hashlib.sha256(payload_bytes).hexdigest()
-            issued_at_ms = int(time.time() * 1000)
-
-            envelope_dict = canonical_response_envelope_dict(
-                protocol_version="2.0",
-                daemon_instance_id=daemon_instance_id,
-                daemon_generation=daemon_generation,
-                service_id=service_id,
-                boot_instance_id=boot_instance_id,
-                request_digest=req.authorization.request_digest,
-                request_nonce=req.authorization.nonce,
-                response_type="receipt",
-                response_payload_b64u=payload_b64u,
-                response_digest=payload_digest,
-                issued_at_ms=issued_at_ms,
-                key_id=signer.key_id,
-            )
-            sig = signer.sign_envelope_dict(envelope_dict)
-            signed_env = SignedControlResponseV2(
-                protocol_version="2.0",
-                daemon_generation=daemon_generation,
-                service_id=service_id,
-                boot_instance_id=boot_instance_id,
-                request_digest=req.authorization.request_digest,
-                request_nonce=req.authorization.nonce,
-                response_type="receipt",
-                response_payload_b64u=payload_b64u,
-                response_digest=payload_digest,
-                issued_at_ms=issued_at_ms,
-                key_id=signer.key_id,
-                signature=sig,
-            )
-            return codec.encode_response(signed_env)
-
-        _handler._mock_verifier = DaemonResponseVerifier(  # type: ignore[attr-defined]
-            {
-                signer.key_id: TrustedDaemonResponseKey(
-                    service_id=service_id,
-                    key_id=signer.key_id,
-                    public_key=pub_bytes,
-                    valid_from_ms=0,
-                    valid_until_ms=2147483647000,
-                )
-            }
-        )
-        _handler._mock_service_id = service_id  # type: ignore[attr-defined]
-        return _handler
-
     def __init__(
         self,
         signer: ControlSignerV2,
-        daemon_verifier: DaemonResponseVerifier | None = None,
+        daemon_verifier: DaemonResponseVerifier,
+        expected_service_id: str,
         *,
-        expected_service_id: str | None = None,
-        trusted_daemon_keys: dict[str, bytes | TrustedDaemonResponseKey] | None = None,
         codec: ControlProtocolCodec | None = None,
         transport_handler: Callable[[bytes], bytes] | None = None,
         socket_path: str | None = None,
     ) -> None:
         if not isinstance(signer, ControlSignerV2):
             raise TypeError("signer must be ControlSignerV2")
-        self.signer = signer
-
-        if daemon_verifier is not None:
-            self.daemon_verifier = daemon_verifier
-        elif trusted_daemon_keys is not None:
-            self.daemon_verifier = DaemonResponseVerifier(trusted_keys=trusted_daemon_keys)
-        elif transport_handler is not None and hasattr(transport_handler, "_mock_verifier"):
-            self.daemon_verifier = transport_handler._mock_verifier
-        else:
+        if daemon_verifier is None or not isinstance(daemon_verifier, DaemonResponseVerifier):
             raise ValueError("daemon_verifier_required")
-
-        if expected_service_id is not None and expected_service_id != "":
-            self.expected_service_id: str = expected_service_id
-        elif transport_handler is not None and hasattr(transport_handler, "_mock_service_id"):
-            self.expected_service_id = transport_handler._mock_service_id
-        else:
+        if not isinstance(expected_service_id, str) or not expected_service_id:
             raise ValueError("expected_service_id_required")
-
+        self.signer = signer
+        self.daemon_verifier = daemon_verifier
+        self.expected_service_id = expected_service_id
         self._tx_receipts: dict[str, Any] = {}
-
         self.codec = codec or ControlProtocolCodec()
         self.transport_handler = transport_handler
         self.socket_path = socket_path
@@ -515,10 +377,6 @@ class DefaultC2ControlClient(C2ControlClient):
 
         act_enum = C2ControlAction(action) if isinstance(action, str) else action
 
-        if prior_receipt_ref is None and prior_receipt_digest is None and transaction_id in self._tx_receipts:
-            prior_receipt_ref = self._tx_receipts[transaction_id].receipt_ref
-            prior_receipt_digest = self._tx_receipts[transaction_id].receipt_digest
-
         if isinstance(payload, bytes):
             payload_bytes = payload
         elif isinstance(payload, str):
@@ -649,11 +507,13 @@ class DefaultC2ControlClient(C2ControlClient):
         participant_id: str,
         mission_id: str,
         subject_id: str,
-        prior_receipt: ParticipantControlReceiptV2 | None = None,
+        prior_receipt: ParticipantControlReceiptV2,
         payload: dict[str, Any] | bytes | str = b"",
         schema_id: str = "schema:c2_resource_v2",
         ttl_seconds: float = 300.0,
     ) -> ParticipantControlReceiptV2 | BoundedControlErrorV2:
+        if not prior_receipt or not prior_receipt.receipt_ref or not prior_receipt.receipt_digest:
+            raise ValueError("prior_receipt with receipt_ref and receipt_digest required for abort")
         res = self.execute_action(
             action=C2ControlAction.ABORT_C2_RESOURCE,
             payload=payload,
@@ -662,8 +522,8 @@ class DefaultC2ControlClient(C2ControlClient):
             transaction_id=transaction_id,
             participant_id=participant_id,
             payload_schema_id=schema_id,
-            prior_receipt_ref=prior_receipt.receipt_ref if prior_receipt else None,
-            prior_receipt_digest=prior_receipt.receipt_digest if prior_receipt else None,
+            prior_receipt_ref=prior_receipt.receipt_ref,
+            prior_receipt_digest=prior_receipt.receipt_digest,
             ttl_seconds=ttl_seconds,
         )
         assert not isinstance(res, ParticipantControlQuerySnapshotV2)
