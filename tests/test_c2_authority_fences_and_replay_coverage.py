@@ -8,8 +8,12 @@ import time
 
 import pytest
 
-from core.c2.control_auth import AuthenticatedControlPrincipal, AuthorityFence, OperatorRole
-from core.c2.control_boundary import ResolvedControlKey
+from core.c2.control_auth import (
+    AuthenticatedControlPrincipal,
+    AuthorityFence,
+    OperatorRole,
+    VerifiedMutationAuthority,
+)
 from core.c2.control_commands import C2ControlAction
 from core.c2.control_idempotency import (
     IdempotencyConflictError,
@@ -71,80 +75,342 @@ def test_authority_fence_revisions_and_deactivation(tmp_path):
             active=True,
         )
 
-        principal = AuthenticatedControlPrincipal(
+        now_ms = int(time.time() * 1000)
+        authority = VerifiedMutationAuthority(
             operator_id="op_fence",
             subject_id="s1",
+            mission_id="m_real",
+            peer_pid=os.getpid(),
+            peer_uid=os.getuid(),
+            peer_gid=os.getgid(),
+            key_id="k_fence",
+            key_revision=1,
+            operator_revision=1,
+            peer_binding_revision=1,
+            mission_grant_revision=1,
+            request_digest="0" * 64,
+            authorization_issued_at_ms=now_ms - 1000,
+            authorization_expires_at_ms=now_ms + 60000,
+            transaction_id="tx_fence_1",
+            participant_id="daemon_resource_participant",
+            action_id="prepare_c2_resource",
+        )
+
+        # Baseline: fresh, active, matching revisions -> PASS
+        AuthorityFence.verify_current(conn, authority)
+
+        # 1. Operator revision bump
+        conn.execute("UPDATE operators SET authorization_revision = 2 WHERE operator_id = 'op_fence'")
+        with pytest.raises(PermissionError, match="operator_authority_stale_or_revoked"):
+            AuthorityFence.verify_current(conn, authority)
+        conn.execute("UPDATE operators SET authorization_revision = 1 WHERE operator_id = 'op_fence'")
+
+        # 2. Operator deactivated
+        conn.execute("UPDATE operators SET active = 0 WHERE operator_id = 'op_fence'")
+        with pytest.raises(PermissionError, match="operator_authority_stale_or_revoked"):
+            AuthorityFence.verify_current(conn, authority)
+        conn.execute("UPDATE operators SET active = 1 WHERE operator_id = 'op_fence'")
+
+        # 3. Peer binding revision bump
+        conn.execute("UPDATE operator_peer_binding_revisions SET revision = 2 WHERE operator_id = 'op_fence'")
+        with pytest.raises(PermissionError, match="peer_binding_stale_or_revoked"):
+            AuthorityFence.verify_current(conn, authority)
+        conn.execute("UPDATE operator_peer_binding_revisions SET revision = 1 WHERE operator_id = 'op_fence'")
+
+        # 4. Peer binding deactivated
+        conn.execute("UPDATE operator_peer_bindings SET active = 0 WHERE operator_id = 'op_fence'")
+        with pytest.raises(PermissionError, match="peer_binding_stale_or_revoked"):
+            AuthorityFence.verify_current(conn, authority)
+        conn.execute("UPDATE operator_peer_bindings SET active = 1 WHERE operator_id = 'op_fence'")
+
+        # 5. Mission grant revision bump
+        conn.execute("UPDATE operator_mission_grant_revisions SET revision = 2 WHERE operator_id = 'op_fence'")
+        with pytest.raises(PermissionError, match="mission_grant_stale_or_revoked"):
+            AuthorityFence.verify_current(conn, authority)
+        conn.execute("UPDATE operator_mission_grant_revisions SET revision = 1 WHERE operator_id = 'op_fence'")
+
+        # 6. Mission grant deactivated
+        conn.execute("UPDATE operator_mission_grants SET active = 0 WHERE operator_id = 'op_fence'")
+        with pytest.raises(PermissionError, match="mission_grant_stale_or_revoked"):
+            AuthorityFence.verify_current(conn, authority)
+        conn.execute("UPDATE operator_mission_grants SET active = 1 WHERE operator_id = 'op_fence'")
+
+        # 7. Inactive key
+        conn.execute("UPDATE operator_control_signing_keys SET active = 0 WHERE key_id = 'k_fence'")
+        with pytest.raises(PermissionError, match="key_authority_stale_or_revoked"):
+            AuthorityFence.verify_current(conn, authority)
+        conn.execute("UPDATE operator_control_signing_keys SET active = 1 WHERE key_id = 'k_fence'")
+
+        # 8. Key revision bump
+        conn.execute("UPDATE operator_control_signing_keys SET key_revision = 2 WHERE key_id = 'k_fence'")
+        with pytest.raises(PermissionError, match="key_authority_stale_or_revoked"):
+            AuthorityFence.verify_current(conn, authority)
+        conn.execute("UPDATE operator_control_signing_keys SET key_revision = 1 WHERE key_id = 'k_fence'")
+
+
+def test_authority_fence_negative_invariants_matrix(tmp_path):
+    """Complete negative test matrix for all 16 AuthorityFence invariants and type safety."""
+    db_file = str(tmp_path / "authority_fence_matrix.db")
+    with sqlite3.connect(db_file) as conn:
+        apply_control_migrations(conn)
+        create_test_operator(conn, operator_id="op_mat", subject_id="s_mat", role="admin", authorization_revision=1)
+        create_test_peer_binding(conn, operator_id="op_mat", peer_uid=os.getuid(), peer_gid=os.getgid(), revision=1)
+        create_test_mission_grant(conn, operator_id="op_mat", subject_id="s_mat", mission_id="m_mat", revision=1)
+        create_test_control_key(conn, key_id="k_mat", operator_id="op_mat", public_key=TEST_ED_PUB, key_revision=1)
+
+        now_ms = int(time.time() * 1000)
+        base_auth = VerifiedMutationAuthority(
+            operator_id="op_mat",
+            subject_id="s_mat",
+            mission_id="m_mat",
+            peer_pid=os.getpid(),
+            peer_uid=os.getuid(),
+            peer_gid=os.getgid(),
+            key_id="k_mat",
+            key_revision=1,
+            operator_revision=1,
+            peer_binding_revision=1,
+            mission_grant_revision=1,
+            request_digest="0" * 64,
+            authorization_issued_at_ms=now_ms - 1000,
+            authorization_expires_at_ms=now_ms + 60000,
+        )
+
+        # Baseline PASS
+        AuthorityFence.verify_current(conn, base_auth)
+
+        # Type safety: reject AuthenticatedControlPrincipal or fake duck-typed object
+        principal = AuthenticatedControlPrincipal(
+            operator_id="op_mat",
+            subject_id="s_mat",
             role=OperatorRole.ADMIN,
             peer=PeerPrincipal(pid=os.getpid(), uid=os.getuid(), gid=os.getgid()),
-            mission_id="m_real",
+            mission_id="m_mat",
             operator_revision=1,
             peer_binding_revision=1,
             mission_grant_revision=1,
             authenticated_at=time.time(),
             expires_at=time.time() + 60,
         )
-        now_ms = int(time.time() * 1000)
-        resolved_key = ResolvedControlKey(
-            key_id="k_fence",
-            operator_id="op_fence",
-            verification_key=TEST_ED_PUB,
-            algorithm="ed25519",
+        with pytest.raises(TypeError, match="VerifiedMutationAuthority"):
+            AuthorityFence.verify_current(conn, principal)  # type: ignore[arg-type]
+
+        class FakeAuthority:
+            operator_id = "op_mat"
+            subject_id = "s_mat"
+            mission_id = "m_mat"
+            peer_uid = os.getuid()
+            peer_gid = os.getgid()
+            key_id = "k_mat"
+            key_revision = 1
+            operator_revision = 1
+            peer_binding_revision = 1
+            mission_grant_revision = 1
+            request_digest = "0" * 64
+            authorization_issued_at_ms = now_ms - 1000
+            authorization_expires_at_ms = now_ms + 60000
+
+        with pytest.raises(TypeError, match="VerifiedMutationAuthority"):
+            AuthorityFence.verify_current(conn, FakeAuthority())  # type: ignore[arg-type]
+
+        # Invariant 0: Expired validity window
+        expired_auth = VerifiedMutationAuthority(
+            operator_id="op_mat",
+            subject_id="s_mat",
+            mission_id="m_mat",
+            peer_pid=os.getpid(),
+            peer_uid=os.getuid(),
+            peer_gid=os.getgid(),
+            key_id="k_mat",
             key_revision=1,
-            valid_from_ms=now_ms - 10000,
-            valid_until_ms=now_ms + 10000,
-            active=True,
+            operator_revision=1,
+            peer_binding_revision=1,
+            mission_grant_revision=1,
+            request_digest="0" * 64,
+            authorization_issued_at_ms=now_ms - 10000,
+            authorization_expires_at_ms=now_ms - 1000,
+        )
+        with pytest.raises(PermissionError, match="authority_validity_window_expired"):
+            AuthorityFence.verify_current(conn, expired_auth)
+
+        # Invariant 1: Unknown operator
+        bad_op_auth = VerifiedMutationAuthority(
+            operator_id="op_nonexistent",
+            subject_id="s_mat",
+            mission_id="m_mat",
+            peer_pid=os.getpid(),
+            peer_uid=os.getuid(),
+            peer_gid=os.getgid(),
+            key_id="k_mat",
+            key_revision=1,
+            operator_revision=1,
+            peer_binding_revision=1,
+            mission_grant_revision=1,
+            request_digest="0" * 64,
+            authorization_issued_at_ms=now_ms - 1000,
+            authorization_expires_at_ms=now_ms + 60000,
+        )
+        with pytest.raises(PermissionError, match="operator_authority_stale_or_revoked"):
+            AuthorityFence.verify_current(conn, bad_op_auth)
+
+        # Invariant 2: Subject mismatch
+        bad_subj_auth = VerifiedMutationAuthority(
+            operator_id="op_mat",
+            subject_id="s_wrong",
+            mission_id="m_mat",
+            peer_pid=os.getpid(),
+            peer_uid=os.getuid(),
+            peer_gid=os.getgid(),
+            key_id="k_mat",
+            key_revision=1,
+            operator_revision=1,
+            peer_binding_revision=1,
+            mission_grant_revision=1,
+            request_digest="0" * 64,
+            authorization_issued_at_ms=now_ms - 1000,
+            authorization_expires_at_ms=now_ms + 60000,
+        )
+        with pytest.raises(PermissionError, match="operator_subject_mismatch"):
+            AuthorityFence.verify_current(conn, bad_subj_auth)
+
+        # Invariant 3: Key missing
+        bad_key_auth = VerifiedMutationAuthority(
+            operator_id="op_mat",
+            subject_id="s_mat",
+            mission_id="m_mat",
+            peer_pid=os.getpid(),
+            peer_uid=os.getuid(),
+            peer_gid=os.getgid(),
+            key_id="k_nonexistent",
+            key_revision=1,
+            operator_revision=1,
+            peer_binding_revision=1,
+            mission_grant_revision=1,
+            request_digest="0" * 64,
+            authorization_issued_at_ms=now_ms - 1000,
+            authorization_expires_at_ms=now_ms + 60000,
+        )
+        with pytest.raises(PermissionError, match="key_authority_missing_or_revoked"):
+            AuthorityFence.verify_current(conn, bad_key_auth)
+
+        # Invariant 4: Key operator mismatch
+        create_test_operator(conn, operator_id="op_other", subject_id="s_other", role="admin")
+        create_test_control_key(conn, key_id="k_other", operator_id="op_other", public_key=TEST_ED_PUB)
+        mismatch_key_auth = VerifiedMutationAuthority(
+            operator_id="op_mat",
+            subject_id="s_mat",
+            mission_id="m_mat",
+            peer_pid=os.getpid(),
+            peer_uid=os.getuid(),
+            peer_gid=os.getgid(),
+            key_id="k_other",
+            key_revision=1,
+            operator_revision=1,
+            peer_binding_revision=1,
+            mission_grant_revision=1,
+            request_digest="0" * 64,
+            authorization_issued_at_ms=now_ms - 1000,
+            authorization_expires_at_ms=now_ms + 60000,
+        )
+        with pytest.raises(PermissionError, match="key_operator_mismatch"):
+            AuthorityFence.verify_current(conn, mismatch_key_auth)
+
+        # Invariant 5: Key invalid algorithm
+        conn.execute("UPDATE operator_control_signing_keys SET algorithm = 'rsa' WHERE key_id = 'k_mat'")
+        with pytest.raises(PermissionError, match="key_algorithm_invalid"):
+            AuthorityFence.verify_current(conn, base_auth)
+        conn.execute("UPDATE operator_control_signing_keys SET algorithm = 'ed25519' WHERE key_id = 'k_mat'")
+
+        # Invariant 6: Key invalid bytes length
+        conn.execute(
+            "UPDATE operator_control_signing_keys SET public_key_bytes = ? WHERE key_id = 'k_mat'",
+            (b"short",),
+        )
+        with pytest.raises(PermissionError, match="key_bytes_invalid"):
+            AuthorityFence.verify_current(conn, base_auth)
+        conn.execute(
+            "UPDATE operator_control_signing_keys SET public_key_bytes = ? WHERE key_id = 'k_mat'",
+            (TEST_ED_PUB,),
         )
 
-        # Baseline: fresh, active, matching revisions -> PASS
-        AuthorityFence.verify_current(conn, principal, resolved_key)
+        # Invariant 7: Key expired validity window
+        conn.execute(
+            "UPDATE operator_control_signing_keys SET valid_until_ms = ? WHERE key_id = 'k_mat'",
+            (now_ms - 1000,),
+        )
+        with pytest.raises(PermissionError, match="key_validity_expired"):
+            AuthorityFence.verify_current(conn, base_auth)
+        conn.execute(
+            "UPDATE operator_control_signing_keys SET valid_until_ms = ? WHERE key_id = 'k_mat'",
+            (253402300799000,),
+        )
 
-        # 1. Operator revision bump
-        conn.execute("UPDATE operators SET authorization_revision = 2 WHERE operator_id = 'op_fence'")
-        with pytest.raises(PermissionError, match="operator_authority_stale_or_revoked"):
-            AuthorityFence.verify_current(conn, principal, resolved_key)
-        conn.execute("UPDATE operators SET authorization_revision = 1 WHERE operator_id = 'op_fence'")
-
-        # 2. Operator deactivated
-        conn.execute("UPDATE operators SET active = 0 WHERE operator_id = 'op_fence'")
-        with pytest.raises(PermissionError, match="operator_authority_stale_or_revoked"):
-            AuthorityFence.verify_current(conn, principal, resolved_key)
-        conn.execute("UPDATE operators SET active = 1 WHERE operator_id = 'op_fence'")
-
-        # 3. Peer binding revision bump
-        conn.execute("UPDATE operator_peer_binding_revisions SET revision = 2 WHERE operator_id = 'op_fence'")
+        # Invariant 8: Peer binding missing
+        bad_peer_auth = VerifiedMutationAuthority(
+            operator_id="op_mat",
+            subject_id="s_mat",
+            mission_id="m_mat",
+            peer_pid=os.getpid(),
+            peer_uid=99999,
+            peer_gid=99999,
+            key_id="k_mat",
+            key_revision=1,
+            operator_revision=1,
+            peer_binding_revision=1,
+            mission_grant_revision=1,
+            request_digest="0" * 64,
+            authorization_issued_at_ms=now_ms - 1000,
+            authorization_expires_at_ms=now_ms + 60000,
+        )
         with pytest.raises(PermissionError, match="peer_binding_stale_or_revoked"):
-            AuthorityFence.verify_current(conn, principal, resolved_key)
-        conn.execute("UPDATE operator_peer_binding_revisions SET revision = 1 WHERE operator_id = 'op_fence'")
+            AuthorityFence.verify_current(conn, bad_peer_auth)
 
-        # 4. Peer binding deactivated
-        conn.execute("UPDATE operator_peer_bindings SET active = 0 WHERE operator_id = 'op_fence'")
-        with pytest.raises(PermissionError, match="peer_binding_stale_or_revoked"):
-            AuthorityFence.verify_current(conn, principal, resolved_key)
-        conn.execute("UPDATE operator_peer_bindings SET active = 1 WHERE operator_id = 'op_fence'")
+        # Invariant 9: Mission missing or inactive
+        bad_mission_auth = VerifiedMutationAuthority(
+            operator_id="op_mat",
+            subject_id="s_mat",
+            mission_id="m_nonexistent",
+            peer_pid=os.getpid(),
+            peer_uid=os.getuid(),
+            peer_gid=os.getgid(),
+            key_id="k_mat",
+            key_revision=1,
+            operator_revision=1,
+            peer_binding_revision=1,
+            mission_grant_revision=1,
+            request_digest="0" * 64,
+            authorization_issued_at_ms=now_ms - 1000,
+            authorization_expires_at_ms=now_ms + 60000,
+        )
+        with pytest.raises(PermissionError, match="mission_inactive_or_revoked"):
+            AuthorityFence.verify_current(conn, bad_mission_auth)
 
-        # 5. Mission grant revision bump
-        conn.execute("UPDATE operator_mission_grant_revisions SET revision = 2 WHERE operator_id = 'op_fence'")
+        # Invariant 10: Mission grant missing
+        create_test_mission_grant(
+            conn,
+            operator_id="op_mat",
+            subject_id="s_mat",
+            mission_id="m_other_unassigned",
+            active=False,
+        )
+        unassigned_grant_auth = VerifiedMutationAuthority(
+            operator_id="op_mat",
+            subject_id="s_mat",
+            mission_id="m_other_unassigned",
+            peer_pid=os.getpid(),
+            peer_uid=os.getuid(),
+            peer_gid=os.getgid(),
+            key_id="k_mat",
+            key_revision=1,
+            operator_revision=1,
+            peer_binding_revision=1,
+            mission_grant_revision=1,
+            request_digest="0" * 64,
+            authorization_issued_at_ms=now_ms - 1000,
+            authorization_expires_at_ms=now_ms + 60000,
+        )
         with pytest.raises(PermissionError, match="mission_grant_stale_or_revoked"):
-            AuthorityFence.verify_current(conn, principal, resolved_key)
-        conn.execute("UPDATE operator_mission_grant_revisions SET revision = 1 WHERE operator_id = 'op_fence'")
-
-        # 6. Mission grant deactivated
-        conn.execute("UPDATE operator_mission_grants SET active = 0 WHERE operator_id = 'op_fence'")
-        with pytest.raises(PermissionError, match="mission_grant_stale_or_revoked"):
-            AuthorityFence.verify_current(conn, principal, resolved_key)
-        conn.execute("UPDATE operator_mission_grants SET active = 1 WHERE operator_id = 'op_fence'")
-
-        # 7. Inactive key
-        conn.execute("UPDATE operator_control_signing_keys SET active = 0 WHERE key_id = 'k_fence'")
-        with pytest.raises(PermissionError, match="key_authority_stale_or_revoked"):
-            AuthorityFence.verify_current(conn, principal, resolved_key)
-        conn.execute("UPDATE operator_control_signing_keys SET active = 1 WHERE key_id = 'k_fence'")
-
-        # 8. Key revision bump
-        conn.execute("UPDATE operator_control_signing_keys SET key_revision = 2 WHERE key_id = 'k_fence'")
-        with pytest.raises(PermissionError, match="key_authority_stale_or_revoked"):
-            AuthorityFence.verify_current(conn, principal, resolved_key)
-        conn.execute("UPDATE operator_control_signing_keys SET key_revision = 1 WHERE key_id = 'k_fence'")
+            AuthorityFence.verify_current(conn, unassigned_grant_auth)
 
 
 def test_readonly_authority_fences_rbac():

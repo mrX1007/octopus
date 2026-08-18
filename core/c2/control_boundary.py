@@ -678,6 +678,9 @@ class FramedControlBoundary:
             request_digest=actual_request_digest,
             authorization_issued_at_ms=auth.issued_at_ms,
             authorization_expires_at_ms=expires_ms,
+            transaction_id=auth.transaction_id,
+            participant_id=auth.participant_id,
+            action_id=auth.action_id,
         )
 
         # 11. Atomic durable replay reservation

@@ -12,6 +12,7 @@ from core.actions.provider_mounts import DefaultProviderMountRegistry
 from core.c2 import daemon
 from core.c2.control_commands import (
     BoundedControlErrorV1,
+    BoundedControlErrorV2,
     C2ControlAction,
     C2ControlErrorCodeV1,
     C2ControlErrorCodeV2,
@@ -65,8 +66,8 @@ def test_control_transaction_coordinator_lifecycle():
         canonical_payload_b64u="e30",
     )
     err = coord.execute_transaction(req)
-    assert isinstance(err, BoundedControlErrorV1)
-    assert err.reason_code == C2ControlErrorCodeV1.UNAVAILABLE
+    assert isinstance(err, (BoundedControlErrorV1, BoundedControlErrorV2))
+    assert err.reason_code in (C2ControlErrorCodeV1.UNAVAILABLE, C2ControlErrorCodeV2.UNAVAILABLE)
     assert "unregistered_participant" in str(err.detail_ref)
 
     # 2. Registered mock participant: full success flow

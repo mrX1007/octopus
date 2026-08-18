@@ -980,16 +980,40 @@ def _dispatch_verified_request(
         )
 
     if action == C2ControlAction.PREPARE_C2_RESOURCE:
-        return participant.prepare(req, verified.authority or verified.principal, verified.resolved_key)
+        if verified.authority is None:
+            return BoundedControlErrorV2(
+                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                retryable=False,
+                detail_ref="mandatory_verified_mutation_authority_required",
+            )
+        return participant.prepare(req, verified.authority, verified.resolved_key)
 
     if action == C2ControlAction.COMMIT_C2_RESOURCE:
-        return participant.commit(req, verified.authority or verified.principal, verified.resolved_key)
+        if verified.authority is None:
+            return BoundedControlErrorV2(
+                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                retryable=False,
+                detail_ref="mandatory_verified_mutation_authority_required",
+            )
+        return participant.commit(req, verified.authority, verified.resolved_key)
 
     if action == C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY:
-        return participant.finalize_visibility(req, verified.authority or verified.principal, verified.resolved_key)
+        if verified.authority is None:
+            return BoundedControlErrorV2(
+                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                retryable=False,
+                detail_ref="mandatory_verified_mutation_authority_required",
+            )
+        return participant.finalize_visibility(req, verified.authority, verified.resolved_key)
 
     if action == C2ControlAction.ABORT_C2_RESOURCE:
-        return participant.rollback(req, verified.authority or verified.principal, verified.resolved_key)
+        if verified.authority is None:
+            return BoundedControlErrorV2(
+                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                retryable=False,
+                detail_ref="mandatory_verified_mutation_authority_required",
+            )
+        return participant.rollback(req, verified.authority, verified.resolved_key)
 
     if action == C2ControlAction.QUERY_C2_RESOURCE:
         return participant.reconcile(req)

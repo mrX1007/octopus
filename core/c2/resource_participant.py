@@ -13,7 +13,6 @@ from enum import Enum
 from typing import Any
 
 from core.c2.control_auth import (
-    AuthenticatedControlPrincipal,
     AuthorityFence,
     VerifiedMutationAuthority,
 )
@@ -39,6 +38,74 @@ class TransactionFailpoint(str, Enum):
     AFTER_CAS = "after_cas"
     AFTER_PHASE_PERSIST = "after_phase_persist"
     AFTER_RECEIPT_PERSIST = "after_receipt_persist"
+
+
+def _extract_and_validate_authority(
+    authority: Any,
+    request_or_receipt: Any,
+    participant_id: str,
+) -> tuple[VerifiedMutationAuthority | None, BoundedControlErrorV2 | None]:
+    if authority is None or (
+        type(authority) is not VerifiedMutationAuthority and not isinstance(authority, VerifiedMutationAuthority)
+    ):
+        return None, BoundedControlErrorV2(
+            reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+            retryable=False,
+            detail_ref="mandatory_verified_mutation_authority_required",
+        )
+
+    if isinstance(request_or_receipt, ParticipantControlRequestV2):
+        tx_id = request_or_receipt.authorization.transaction_id
+        if authority.transaction_id and authority.transaction_id != tx_id:
+            return None, BoundedControlErrorV2(
+                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                retryable=False,
+                detail_ref="authority_transaction_mismatch",
+            )
+        if authority.participant_id and authority.participant_id != participant_id:
+            return None, BoundedControlErrorV2(
+                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                retryable=False,
+                detail_ref="authority_participant_mismatch",
+            )
+        req_act = getattr(request_or_receipt.action, "value", str(request_or_receipt.action))
+        if authority.action_id and authority.action_id != req_act:
+            return None, BoundedControlErrorV2(
+                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                retryable=False,
+                detail_ref="authority_action_mismatch",
+            )
+        if (
+            authority.mission_id != request_or_receipt.authorization.mission_id
+            or authority.subject_id != request_or_receipt.authorization.subject_id
+        ):
+            return None, BoundedControlErrorV2(
+                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                retryable=False,
+                detail_ref="authority_scope_mismatch",
+            )
+        if authority.request_digest != request_or_receipt.authorization.request_digest:
+            return None, BoundedControlErrorV2(
+                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                retryable=False,
+                detail_ref="authority_request_digest_mismatch",
+            )
+    elif isinstance(request_or_receipt, ParticipantControlReceiptV2):
+        tx_id = request_or_receipt.transaction_id
+        if authority.transaction_id and authority.transaction_id != tx_id:
+            return None, BoundedControlErrorV2(
+                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                retryable=False,
+                detail_ref="authority_transaction_mismatch",
+            )
+        if authority.participant_id and authority.participant_id != participant_id:
+            return None, BoundedControlErrorV2(
+                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                retryable=False,
+                detail_ref="authority_participant_mismatch",
+            )
+
+    return authority, None
 
 
 class C2DaemonResourceParticipant:
@@ -181,12 +248,19 @@ class C2DaemonResourceParticipant:
         request: ParticipantControlRequestV2,
         authority_or_principal: Any = None,
         resolved_key: Any = None,
+        authority: Any = None,
     ) -> ParticipantControlReceiptV2 | BoundedControlErrorV2:
         """Prepare phase of 2PC transaction."""
+        passed_auth = authority if authority is not None else authority_or_principal
+        auth, auth_err = _extract_and_validate_authority(passed_auth, request, self.participant_id)
+        if auth_err is not None:
+            return auth_err
+        assert auth is not None
+
         tx_id = request.authorization.transaction_id
         res_ref = f"resource:{self.participant_id}"
         now_ms = int(time.time() * 1000)
-        operator_id = getattr(authority_or_principal, "operator_id", "")
+        operator_id = auth.operator_id
 
         intent_digest = calculate_transaction_intent_digest(
             participant_id=self.participant_id,
@@ -204,15 +278,14 @@ class C2DaemonResourceParticipant:
                     self._trigger_failpoint(TransactionFailpoint.AFTER_BEGIN)
 
                     # TOCTOU Authority Fence
-                    if authority_or_principal is not None:
-                        try:
-                            AuthorityFence.verify_current(conn, authority_or_principal, resolved_key)
-                        except PermissionError as exc:
-                            return BoundedControlErrorV2(
-                                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
-                                retryable=False,
-                                detail_ref=f"authority_fence_failed:{exc}",
-                            )
+                    try:
+                        AuthorityFence.verify_current(conn, auth)
+                    except PermissionError as exc:
+                        return BoundedControlErrorV2(
+                            reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                            retryable=False,
+                            detail_ref=f"authority_fence_failed:{exc}",
+                        )
 
                     # 1. Query existing transaction FIRST
                     cur = conn.execute(
@@ -316,7 +389,7 @@ class C2DaemonResourceParticipant:
                         result_payload_digest=request.payload_digest,
                     )
 
-                    key_rev = getattr(resolved_key, "key_revision", getattr(authority_or_principal, "key_revision", 1))
+                    key_rev = auth.key_revision
 
                     conn.execute(
                         """
@@ -387,8 +460,15 @@ class C2DaemonResourceParticipant:
         request: ParticipantControlRequestV2,
         authority_or_principal: Any = None,
         resolved_key: Any = None,
+        authority: Any = None,
     ) -> ParticipantControlReceiptV2 | BoundedControlErrorV2:
         """Commit phase of 2PC transaction."""
+        passed_auth = authority if authority is not None else authority_or_principal
+        auth, auth_err = _extract_and_validate_authority(passed_auth, request, self.participant_id)
+        if auth_err is not None:
+            return auth_err
+        assert auth is not None
+
         tx_id = request.authorization.transaction_id
         res_ref = f"resource:{self.participant_id}"
         now_ms = int(time.time() * 1000)
@@ -409,15 +489,14 @@ class C2DaemonResourceParticipant:
                     self._trigger_failpoint(TransactionFailpoint.AFTER_BEGIN)
 
                     # TOCTOU Authority Fence
-                    if authority_or_principal is not None:
-                        try:
-                            AuthorityFence.verify_current(conn, authority_or_principal, resolved_key)
-                        except PermissionError as exc:
-                            return BoundedControlErrorV2(
-                                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
-                                retryable=False,
-                                detail_ref=f"authority_fence_failed:{exc}",
-                            )
+                    try:
+                        AuthorityFence.verify_current(conn, auth)
+                    except PermissionError as exc:
+                        return BoundedControlErrorV2(
+                            reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                            retryable=False,
+                            detail_ref=f"authority_fence_failed:{exc}",
+                        )
 
                     cur = conn.execute(
                         """
@@ -603,13 +682,23 @@ class C2DaemonResourceParticipant:
         request_or_receipt: Any,
         commit_receipt_or_authority: Any = None,
         resolved_key: Any = None,
+        authority: Any = None,
     ) -> ParticipantControlReceiptV2 | BoundedControlErrorV2:
         """Finalize visibility of committed resource."""
-        authority = (
-            commit_receipt_or_authority
-            if isinstance(commit_receipt_or_authority, (VerifiedMutationAuthority, AuthenticatedControlPrincipal))
-            else None
+        passed_auth = (
+            authority
+            if authority is not None
+            else (
+                commit_receipt_or_authority
+                if isinstance(commit_receipt_or_authority, VerifiedMutationAuthority)
+                else None
+            )
         )
+        auth, auth_err = _extract_and_validate_authority(passed_auth, request_or_receipt, self.participant_id)
+        if auth_err is not None:
+            return auth_err
+        assert auth is not None
+
         commit_receipt = (
             commit_receipt_or_authority
             if isinstance(commit_receipt_or_authority, ParticipantControlReceiptV2)
@@ -650,15 +739,14 @@ class C2DaemonResourceParticipant:
                     self._trigger_failpoint(TransactionFailpoint.AFTER_BEGIN)
 
                     # TOCTOU Authority Fence
-                    if authority is not None:
-                        try:
-                            AuthorityFence.verify_current(conn, authority, resolved_key)
-                        except PermissionError as exc:
-                            return BoundedControlErrorV2(
-                                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
-                                retryable=False,
-                                detail_ref=f"authority_fence_failed:{exc}",
-                            )
+                    try:
+                        AuthorityFence.verify_current(conn, auth)
+                    except PermissionError as exc:
+                        return BoundedControlErrorV2(
+                            reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                            retryable=False,
+                            detail_ref=f"authority_fence_failed:{exc}",
+                        )
 
                     cur = conn.execute(
                         """
@@ -798,8 +886,15 @@ class C2DaemonResourceParticipant:
         request_or_receipt: Any,
         authority_or_principal: Any = None,
         resolved_key: Any = None,
+        authority: Any = None,
     ) -> ParticipantControlReceiptV2 | BoundedControlErrorV2:
         """Abort/rollback a transaction with compensation validation."""
+        passed_auth = authority if authority is not None else authority_or_principal
+        auth, auth_err = _extract_and_validate_authority(passed_auth, request_or_receipt, self.participant_id)
+        if auth_err is not None:
+            return auth_err
+        assert auth is not None
+
         if isinstance(request_or_receipt, ParticipantControlRequestV2):
             tx_id = request_or_receipt.authorization.transaction_id
             prior_ref = request_or_receipt.prior_receipt_ref
@@ -822,15 +917,14 @@ class C2DaemonResourceParticipant:
                     self._trigger_failpoint(TransactionFailpoint.AFTER_BEGIN)
 
                     # TOCTOU Authority Fence
-                    if authority_or_principal is not None:
-                        try:
-                            AuthorityFence.verify_current(conn, authority_or_principal, resolved_key)
-                        except PermissionError as exc:
-                            return BoundedControlErrorV2(
-                                reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
-                                retryable=False,
-                                detail_ref=f"authority_fence_failed:{exc}",
-                            )
+                    try:
+                        AuthorityFence.verify_current(conn, auth)
+                    except PermissionError as exc:
+                        return BoundedControlErrorV2(
+                            reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
+                            retryable=False,
+                            detail_ref=f"authority_fence_failed:{exc}",
+                        )
 
                     cur = conn.execute(
                         """

@@ -18,16 +18,15 @@ from core.c2.client import (
     DefaultC2ControlClient,
 )
 from core.c2.control_auth import (
-    AuthenticatedControlPrincipal,
     AuthorityFence,
     PeerPrincipal,
+    VerifiedMutationAuthority,
 )
 from core.c2.control_boundary import (
     ControlReplayStore,
     FramedControlBoundary,
     NotAuthorizedControlRequest,
     ReplayControlRequest,
-    ResolvedControlKey,
     StaticControlKeyResolver,
 )
 from core.c2.control_commands import (
@@ -82,6 +81,7 @@ from core.c2.resource_participant import (
     C2DaemonResourceParticipant,
     TransactionFailpoint,
 )
+from tests.helpers.c2_authority import provision_test_authority
 from tests.helpers.c2_client import make_trusted_daemon_key
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract]
@@ -959,9 +959,71 @@ def test_readiness_trust_descriptor_with_wrong_owner_or_mode_rejected(tmp_path):
 # 3. 2PC State Machine, Idempotency & Failure Tests (§14.4, §14.5)
 
 
+def _setup_participant_with_auth(
+    participant_id: str = "part_2pc",
+) -> tuple[C2DaemonResourceParticipant, VerifiedMutationAuthority]:
+    part = C2DaemonResourceParticipant(participant_id=participant_id)
+    with sqlite3.connect(part._conn_uri, uri=True) as conn:
+        provision_test_authority(
+            conn,
+            operator_id="op_admin",
+            subject_id="s_test",
+            key_id=TEST_KEY_ID,
+            public_key=TEST_ED_PUB,
+            mission_id="m_test",
+            peer_uid=os.getuid(),
+            peer_gid=os.getgid(),
+        )
+    now_ms = int(time.time() * 1000)
+    auth = VerifiedMutationAuthority(
+        operator_id="op_admin",
+        subject_id="s_test",
+        mission_id="m_test",
+        peer_pid=os.getpid(),
+        peer_uid=os.getuid(),
+        peer_gid=os.getgid(),
+        key_id=TEST_KEY_ID,
+        key_revision=1,
+        operator_revision=1,
+        peer_binding_revision=1,
+        mission_grant_revision=1,
+        request_digest="0" * 64,
+        authorization_issued_at_ms=now_ms - 1000,
+        authorization_expires_at_ms=now_ms + 100000,
+        transaction_id="",
+        participant_id=participant_id,
+        action_id="",
+    )
+    return part, auth
+
+
+def _make_mutation_auth(
+    auth: ParticipantControlAuthorizationV2, participant_id: str = "part_2pc"
+) -> VerifiedMutationAuthority:
+    return VerifiedMutationAuthority(
+        operator_id="op_admin",
+        subject_id=auth.subject_id,
+        mission_id=auth.mission_id,
+        peer_pid=os.getpid(),
+        peer_uid=os.getuid(),
+        peer_gid=os.getgid(),
+        key_id=auth.key_id,
+        key_revision=1,
+        operator_revision=1,
+        peer_binding_revision=1,
+        mission_grant_revision=1,
+        request_digest=auth.request_digest,
+        authorization_issued_at_ms=auth.issued_at_ms,
+        authorization_expires_at_ms=auth.expires_at_ms,
+        transaction_id=auth.transaction_id,
+        participant_id=participant_id,
+        action_id=auth.action_id,
+    )
+
+
 def test_commit_without_prepare_receipt_rejected():
     """Verify committing without prior prepare receipt reference is rejected."""
-    part = C2DaemonResourceParticipant("part_2pc")
+    part, _ = _setup_participant_with_auth("part_2pc")
     auth = _make_auth_v2(action="commit_c2_resource")
     req = ParticipantControlRequestV2(
         action=C2ControlAction.COMMIT_C2_RESOURCE,
@@ -972,14 +1034,14 @@ def test_commit_without_prepare_receipt_rejected():
         prior_receipt_ref=None,
         prior_receipt_digest=None,
     )
-    res = part.commit(req)
+    res = part.commit(req, authority=_make_mutation_auth(auth, "part_2pc"))
     assert isinstance(res, (BoundedControlErrorV2, BoundedControlErrorV1))
     assert res.reason_code in (C2ControlErrorCodeV2.WRONG_PHASE, C2ControlErrorCodeV1.WRONG_PHASE)
 
 
 def test_finalize_without_commit_receipt_rejected():
     """Verify finalization without prior commit receipt reference is rejected."""
-    part = C2DaemonResourceParticipant("part_2pc")
+    part, _ = _setup_participant_with_auth("part_2pc")
     auth = _make_auth_v2(action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY)
     req = ParticipantControlRequestV2(
         action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
@@ -990,14 +1052,14 @@ def test_finalize_without_commit_receipt_rejected():
         prior_receipt_ref=None,
         prior_receipt_digest=None,
     )
-    res = part.finalize_visibility(req)
+    res = part.finalize_visibility(req, authority=_make_mutation_auth(auth, "part_2pc"))
     assert isinstance(res, (BoundedControlErrorV2, BoundedControlErrorV1))
     assert res.reason_code in (C2ControlErrorCodeV2.WRONG_PHASE, C2ControlErrorCodeV1.WRONG_PHASE)
 
 
 def test_wrong_receipt_ref_rejected():
     """Verify mismatched prior receipt reference is rejected."""
-    part = C2DaemonResourceParticipant("part_2pc")
+    part, _ = _setup_participant_with_auth("part_2pc")
     auth = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_chain_1")
     prep_req = ParticipantControlRequestV2(
         action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1006,7 +1068,7 @@ def test_wrong_receipt_ref_rejected():
         payload_digest=auth.request_digest,
         canonical_payload_b64u="e30",
     )
-    prep_res = part.prepare(prep_req)
+    prep_res = part.prepare(prep_req, authority=_make_mutation_auth(auth, "part_2pc"))
     assert isinstance(prep_res, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     commit_auth = _make_auth_v2(action="commit_c2_resource", tx_id="tx_chain_1")
@@ -1019,14 +1081,14 @@ def test_wrong_receipt_ref_rejected():
         prior_receipt_ref="rcpt_wrong_random",
         prior_receipt_digest=prep_res.receipt_digest,
     )
-    res = part.commit(commit_req)
+    res = part.commit(commit_req, authority=_make_mutation_auth(commit_auth, "part_2pc"))
     assert isinstance(res, (BoundedControlErrorV2, BoundedControlErrorV1))
     assert res.reason_code in (C2ControlErrorCodeV2.WRONG_PHASE, C2ControlErrorCodeV1.WRONG_PHASE)
 
 
 def test_wrong_receipt_digest_rejected():
     """Verify mismatched prior receipt digest is rejected."""
-    part = C2DaemonResourceParticipant("part_2pc")
+    part, _ = _setup_participant_with_auth("part_2pc")
     auth = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_chain_2")
     prep_req = ParticipantControlRequestV2(
         action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1035,7 +1097,7 @@ def test_wrong_receipt_digest_rejected():
         payload_digest=auth.request_digest,
         canonical_payload_b64u="e30",
     )
-    prep_res = part.prepare(prep_req)
+    prep_res = part.prepare(prep_req, authority=_make_mutation_auth(auth, "part_2pc"))
     assert isinstance(prep_res, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     commit_auth = _make_auth_v2(action="commit_c2_resource", tx_id="tx_chain_2")
@@ -1048,14 +1110,14 @@ def test_wrong_receipt_digest_rejected():
         prior_receipt_ref=prep_res.receipt_ref,
         prior_receipt_digest="f" * 64,
     )
-    res = part.commit(commit_req)
+    res = part.commit(commit_req, authority=_make_mutation_auth(commit_auth, "part_2pc"))
     assert isinstance(res, (BoundedControlErrorV2, BoundedControlErrorV1))
     assert res.reason_code in (C2ControlErrorCodeV2.WRONG_PHASE, C2ControlErrorCodeV1.WRONG_PHASE)
 
 
 def test_intent_mismatch_across_phases_rejected():
     """Verify modifying intent/payload across phases is rejected."""
-    part = C2DaemonResourceParticipant("part_2pc")
+    part, _ = _setup_participant_with_auth("part_2pc")
     auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_intent_1")
     prep_req = ParticipantControlRequestV2(
         action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1064,7 +1126,7 @@ def test_intent_mismatch_across_phases_rejected():
         payload_digest=auth1.request_digest,
         canonical_payload_b64u="e30",
     )
-    prep_res = part.prepare(prep_req)
+    prep_res = part.prepare(prep_req, authority=_make_mutation_auth(auth1, "part_2pc"))
     assert isinstance(prep_res, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_intent_1")
@@ -1077,7 +1139,7 @@ def test_intent_mismatch_across_phases_rejected():
         prior_receipt_ref=prep_res.receipt_ref,
         prior_receipt_digest=prep_res.receipt_digest,
     )
-    res = part.commit(commit_req)
+    res = part.commit(commit_req, authority=_make_mutation_auth(auth2, "part_2pc"))
     assert isinstance(res, (BoundedControlErrorV2, BoundedControlErrorV1))
     assert res.reason_code in (C2ControlErrorCodeV2.IDEMPOTENCY_CONFLICT, C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT)
 
@@ -1105,8 +1167,8 @@ def test_different_operator_or_key_revision_rejected():
 
 def test_exception_after_cas_rolls_transaction_back():
     """Verify deterministic rollback on failpoint injection after CAS."""
-    part = C2DaemonResourceParticipant("part_fp_1")
-    auth = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_fp_1", action_id="test_act")
+    part, _ = _setup_participant_with_auth("part_fp_1")
+    auth = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_fp_1")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1114,12 +1176,13 @@ def test_exception_after_cas_rolls_transaction_back():
             payload_schema_id="schema:test",
             payload_digest=auth.request_digest,
             canonical_payload_b64u="e30",
-        )
+        ),
+        authority=_make_mutation_auth(auth, "part_fp_1"),
     )
     assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     part.set_failpoint(TransactionFailpoint.AFTER_CAS)
-    commit_auth = _make_auth_v2(action="commit_c2_resource", tx_id="tx_fp_1", action_id="test_act")
+    commit_auth = _make_auth_v2(action="commit_c2_resource", tx_id="tx_fp_1")
     commit_res = part.commit(
         ParticipantControlRequestV2(
             action=C2ControlAction.COMMIT_C2_RESOURCE,
@@ -1129,7 +1192,8 @@ def test_exception_after_cas_rolls_transaction_back():
             canonical_payload_b64u="e30",
             prior_receipt_ref=prep.receipt_ref,
             prior_receipt_digest=prep.receipt_digest,
-        )
+        ),
+        authority=_make_mutation_auth(commit_auth, "part_fp_1"),
     )
     assert isinstance(commit_res, (BoundedControlErrorV2, BoundedControlErrorV1))
 
@@ -1161,8 +1225,8 @@ def test_crash_after_cas_recovers_deterministically():
 
 def test_abort_finalized_transaction_rejected():
     """Verify that a finalized visible transaction cannot be aborted."""
-    part = C2DaemonResourceParticipant("part_ab_1")
-    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_ab_1", action_id="test_ab")
+    part, _ = _setup_participant_with_auth("part_ab_1")
+    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_ab_1")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1170,11 +1234,12 @@ def test_abort_finalized_transaction_rejected():
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
             canonical_payload_b64u="e30",
-        )
+        ),
+        authority=_make_mutation_auth(auth1, "part_ab_1"),
     )
     assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_ab_1", action_id="test_ab")
+    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_ab_1")
     commit = part.commit(
         ParticipantControlRequestV2(
             action=C2ControlAction.COMMIT_C2_RESOURCE,
@@ -1184,11 +1249,12 @@ def test_abort_finalized_transaction_rejected():
             canonical_payload_b64u="e30",
             prior_receipt_ref=prep.receipt_ref,
             prior_receipt_digest=prep.receipt_digest,
-        )
+        ),
+        authority=_make_mutation_auth(auth2, "part_ab_1"),
     )
     assert isinstance(commit, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth3 = _make_auth_v2(action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_ab_1", action_id="test_ab")
+    auth3 = _make_auth_v2(action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_ab_1")
     fin = part.finalize_visibility(
         ParticipantControlRequestV2(
             action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
@@ -1198,11 +1264,12 @@ def test_abort_finalized_transaction_rejected():
             canonical_payload_b64u="e30",
             prior_receipt_ref=commit.receipt_ref,
             prior_receipt_digest=commit.receipt_digest,
-        )
+        ),
+        authority=_make_mutation_auth(auth3, "part_ab_1"),
     )
     assert isinstance(fin, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth4 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_ab_1", action_id="test_ab")
+    auth4 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_ab_1")
     ab_res = part.abort(
         ParticipantControlRequestV2(
             action=C2ControlAction.ABORT_C2_RESOURCE,
@@ -1212,7 +1279,8 @@ def test_abort_finalized_transaction_rejected():
             canonical_payload_b64u="e30",
             prior_receipt_ref=fin.receipt_ref,
             prior_receipt_digest=fin.receipt_digest,
-        )
+        ),
+        authority=_make_mutation_auth(auth4, "part_ab_1"),
     )
     assert isinstance(ab_res, (BoundedControlErrorV2, BoundedControlErrorV1))
     assert ab_res.reason_code in (C2ControlErrorCodeV2.WRONG_PHASE, C2ControlErrorCodeV1.WRONG_PHASE)
@@ -1236,8 +1304,8 @@ def test_query_without_transaction_returns_error():
 
 def test_identical_commit_retry_returns_identical_persisted_receipt():
     """Verify commit retry with matching request digest returns idempotent stored receipt."""
-    part = C2DaemonResourceParticipant("part_idem_commit")
-    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_c", action_id="act_c")
+    part, _ = _setup_participant_with_auth("part_idem_commit")
+    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_c")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1245,11 +1313,12 @@ def test_identical_commit_retry_returns_identical_persisted_receipt():
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
             canonical_payload_b64u="e30",
-        )
+        ),
+        authority=_make_mutation_auth(auth1, "part_idem_commit"),
     )
     assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_idem_c", action_id="act_c")
+    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_idem_c")
     req = ParticipantControlRequestV2(
         action=C2ControlAction.COMMIT_C2_RESOURCE,
         authorization=auth2,
@@ -1259,10 +1328,10 @@ def test_identical_commit_retry_returns_identical_persisted_receipt():
         prior_receipt_ref=prep.receipt_ref,
         prior_receipt_digest=prep.receipt_digest,
     )
-    res1 = part.commit(req)
+    res1 = part.commit(req, authority=_make_mutation_auth(auth2, "part_idem_commit"))
     assert isinstance(res1, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    res2 = part.commit(req)
+    res2 = part.commit(req, authority=_make_mutation_auth(auth2, "part_idem_commit"))
     assert isinstance(res2, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
     assert res2.receipt_ref == res1.receipt_ref
     assert res2.receipt_digest == res1.receipt_digest
@@ -1270,8 +1339,8 @@ def test_identical_commit_retry_returns_identical_persisted_receipt():
 
 def test_changed_commit_retry_returns_idempotency_conflict():
     """Verify commit retry with different request digest returns IDEMPOTENCY_CONFLICT."""
-    part = C2DaemonResourceParticipant("part_idem_conf")
-    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_conf", action_id="act_conf")
+    part, _ = _setup_participant_with_auth("part_idem_conf")
+    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_conf")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1279,14 +1348,14 @@ def test_changed_commit_retry_returns_idempotency_conflict():
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
             canonical_payload_b64u="e30",
-        )
+        ),
+        authority=_make_mutation_auth(auth1, "part_idem_conf"),
     )
     assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth2 = _make_auth_v2(
         action="commit_c2_resource",
         tx_id="tx_idem_conf",
-        action_id="act_conf",
         nonce="nonce_orig_12345678",
     )
     req1 = ParticipantControlRequestV2(
@@ -1298,13 +1367,12 @@ def test_changed_commit_retry_returns_idempotency_conflict():
         prior_receipt_ref=prep.receipt_ref,
         prior_receipt_digest=prep.receipt_digest,
     )
-    res1 = part.commit(req1)
+    res1 = part.commit(req1, authority=_make_mutation_auth(auth2, "part_idem_conf"))
     assert isinstance(res1, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     auth3 = _make_auth_v2(
         action="commit_c2_resource",
         tx_id="tx_idem_conf",
-        action_id="act_conf",
         nonce="nonce_changed_123456",
     )
     req2 = ParticipantControlRequestV2(
@@ -1316,15 +1384,15 @@ def test_changed_commit_retry_returns_idempotency_conflict():
         prior_receipt_ref=prep.receipt_ref,
         prior_receipt_digest=prep.receipt_digest,
     )
-    res2 = part.commit(req2)
+    res2 = part.commit(req2, authority=_make_mutation_auth(auth3, "part_idem_conf"))
     assert isinstance(res2, (BoundedControlErrorV2, BoundedControlErrorV1))
     assert res2.reason_code in (C2ControlErrorCodeV2.IDEMPOTENCY_CONFLICT, C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT)
 
 
 def test_identical_finalize_retry_returns_identical_receipt():
     """Verify finalize retry with identical request returns identical receipt."""
-    part = C2DaemonResourceParticipant("part_idem_fin")
-    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_f", action_id="act_f")
+    part, _ = _setup_participant_with_auth("part_idem_fin")
+    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_f")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1332,11 +1400,12 @@ def test_identical_finalize_retry_returns_identical_receipt():
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
             canonical_payload_b64u="e30",
-        )
+        ),
+        authority=_make_mutation_auth(auth1, "part_idem_fin"),
     )
     assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_idem_f", action_id="act_f")
+    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_idem_f")
     commit = part.commit(
         ParticipantControlRequestV2(
             action=C2ControlAction.COMMIT_C2_RESOURCE,
@@ -1346,11 +1415,12 @@ def test_identical_finalize_retry_returns_identical_receipt():
             canonical_payload_b64u="e30",
             prior_receipt_ref=prep.receipt_ref,
             prior_receipt_digest=prep.receipt_digest,
-        )
+        ),
+        authority=_make_mutation_auth(auth2, "part_idem_fin"),
     )
     assert isinstance(commit, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth3 = _make_auth_v2(action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_idem_f", action_id="act_f")
+    auth3 = _make_auth_v2(action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_idem_f")
     req = ParticipantControlRequestV2(
         action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
         authorization=auth3,
@@ -1360,18 +1430,18 @@ def test_identical_finalize_retry_returns_identical_receipt():
         prior_receipt_ref=commit.receipt_ref,
         prior_receipt_digest=commit.receipt_digest,
     )
-    fin1 = part.finalize_visibility(req)
+    fin1 = part.finalize_visibility(req, authority=_make_mutation_auth(auth3, "part_idem_fin"))
     assert isinstance(fin1, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    fin2 = part.finalize_visibility(req)
+    fin2 = part.finalize_visibility(req, authority=_make_mutation_auth(auth3, "part_idem_fin"))
     assert isinstance(fin2, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
     assert fin2.receipt_ref == fin1.receipt_ref
 
 
 def test_changed_abort_retry_returns_idempotency_conflict():
     """Verify abort retry with different request digest returns IDEMPOTENCY_CONFLICT."""
-    part = C2DaemonResourceParticipant("part_idem_ab")
-    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_ab", action_id="act_ab")
+    part, _ = _setup_participant_with_auth("part_idem_ab")
+    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_ab")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1379,13 +1449,12 @@ def test_changed_abort_retry_returns_idempotency_conflict():
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
             canonical_payload_b64u="e30",
-        )
+        ),
+        authority=_make_mutation_auth(auth1, "part_idem_ab"),
     )
     assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth2 = _make_auth_v2(
-        action="abort_c2_resource", tx_id="tx_idem_ab", action_id="act_ab", nonce="nonce_ab_1_1234567"
-    )
+    auth2 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_idem_ab", nonce="nonce_ab_1_1234567")
     req1 = ParticipantControlRequestV2(
         action=C2ControlAction.ABORT_C2_RESOURCE,
         authorization=auth2,
@@ -1395,12 +1464,10 @@ def test_changed_abort_retry_returns_idempotency_conflict():
         prior_receipt_ref=prep.receipt_ref,
         prior_receipt_digest=prep.receipt_digest,
     )
-    ab1 = part.abort(req1)
+    ab1 = part.abort(req1, authority=_make_mutation_auth(auth2, "part_idem_ab"))
     assert isinstance(ab1, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth3 = _make_auth_v2(
-        action="abort_c2_resource", tx_id="tx_idem_ab", action_id="act_ab", nonce="nonce_ab_2_1234567"
-    )
+    auth3 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_idem_ab", nonce="nonce_ab_2_1234567")
     req2 = ParticipantControlRequestV2(
         action=C2ControlAction.ABORT_C2_RESOURCE,
         authorization=auth3,
@@ -1410,15 +1477,15 @@ def test_changed_abort_retry_returns_idempotency_conflict():
         prior_receipt_ref=prep.receipt_ref,
         prior_receipt_digest=prep.receipt_digest,
     )
-    ab2 = part.abort(req2)
+    ab2 = part.abort(req2, authority=_make_mutation_auth(auth3, "part_idem_ab"))
     assert isinstance(ab2, (BoundedControlErrorV2, BoundedControlErrorV1))
     assert ab2.reason_code in (C2ControlErrorCodeV2.IDEMPOTENCY_CONFLICT, C2ControlErrorCodeV1.IDEMPOTENCY_CONFLICT)
 
 
 def test_committed_hidden_abort_with_failed_compensation_sets_recovery_required():
     """Verify phase transitions to ABORTED on valid abort of committed hidden."""
-    part = C2DaemonResourceParticipant("part_ab_rec")
-    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_comp_1", action_id="act_comp")
+    part, _ = _setup_participant_with_auth("part_ab_rec")
+    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_comp_1")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1426,11 +1493,12 @@ def test_committed_hidden_abort_with_failed_compensation_sets_recovery_required(
             payload_schema_id="schema:test",
             payload_digest=auth1.request_digest,
             canonical_payload_b64u="e30",
-        )
+        ),
+        authority=_make_mutation_auth(auth1, "part_ab_rec"),
     )
     assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_comp_1", action_id="act_comp")
+    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_comp_1")
     commit = part.commit(
         ParticipantControlRequestV2(
             action=C2ControlAction.COMMIT_C2_RESOURCE,
@@ -1440,11 +1508,12 @@ def test_committed_hidden_abort_with_failed_compensation_sets_recovery_required(
             canonical_payload_b64u="e30",
             prior_receipt_ref=prep.receipt_ref,
             prior_receipt_digest=prep.receipt_digest,
-        )
+        ),
+        authority=_make_mutation_auth(auth2, "part_ab_rec"),
     )
     assert isinstance(commit, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth3 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_comp_1", action_id="act_comp")
+    auth3 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_comp_1")
     ab = part.abort(
         ParticipantControlRequestV2(
             action=C2ControlAction.ABORT_C2_RESOURCE,
@@ -1454,7 +1523,8 @@ def test_committed_hidden_abort_with_failed_compensation_sets_recovery_required(
             canonical_payload_b64u="e30",
             prior_receipt_ref=commit.receipt_ref,
             prior_receipt_digest=commit.receipt_digest,
-        )
+        ),
+        authority=_make_mutation_auth(auth3, "part_ab_rec"),
     )
     assert isinstance(ab, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
@@ -1464,39 +1534,42 @@ def test_authority_revision_revoked_between_boundary_and_db_write_rejected(tmp_p
     db_file = str(tmp_path / "fence_test.db")
     with sqlite3.connect(db_file) as conn:
         apply_control_migrations(conn)
-        insert_operator_record(conn, operator_id="op_fence", subject_id="s1", name="Op", role="admin", api_key="k1")
-        insert_initial_bootstrap_grants(
-            conn, operator_id="op_fence", subject_id="s1", peer_uid=os.getuid(), peer_gid=os.getgid()
-        )
-
-        principal = AuthenticatedControlPrincipal(
+        provision_test_authority(
+            conn,
             operator_id="op_fence",
             subject_id="s1",
-            role="admin",
-            peer=PeerPrincipal(pid=os.getpid(), uid=os.getuid(), gid=os.getgid()),
+            key_id="k_fence",
+            public_key=TEST_ED_PUB,
             mission_id="m_test",
+            peer_uid=os.getuid(),
+            peer_gid=os.getgid(),
+        )
+
+        now_ms = int(time.time() * 1000)
+        authority = VerifiedMutationAuthority(
+            operator_id="op_fence",
+            subject_id="s1",
+            mission_id="m_test",
+            peer_pid=os.getpid(),
+            peer_uid=os.getuid(),
+            peer_gid=os.getgid(),
+            key_id="k_fence",
+            key_revision=1,
             operator_revision=1,
             peer_binding_revision=1,
             mission_grant_revision=1,
-            authenticated_at=time.time(),
-            expires_at=time.time() + 60,
+            request_digest="0" * 64,
+            authorization_issued_at_ms=now_ms - 1000,
+            authorization_expires_at_ms=now_ms + 60000,
+            transaction_id="tx_fence_test",
+            participant_id="daemon_resource_participant",
+            action_id="prepare_c2_resource",
         )
-        now_ms = int(time.time() * 1000)
-        resolved_key = ResolvedControlKey(
-            key_id="k_fence",
-            operator_id="op_fence",
-            verification_key=TEST_ED_PUB,
-            algorithm="ed25519",
-            key_revision=1,
-            valid_from_ms=now_ms - 10000,
-            valid_until_ms=now_ms + 10000,
-            active=True,
-        )
-        AuthorityFence.verify_current(conn, principal, resolved_key)
+        AuthorityFence.verify_current(conn, authority)
 
         conn.execute("UPDATE operators SET authorization_revision = 2 WHERE operator_id = 'op_fence'")
         with pytest.raises(PermissionError):
-            AuthorityFence.verify_current(conn, principal, resolved_key)
+            AuthorityFence.verify_current(conn, authority)
 
 
 # 4. Migrations & Persistence Tests (§14.4, §14.5)
