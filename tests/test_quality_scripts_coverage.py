@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import argparse
 import copy
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -126,7 +125,7 @@ def test_provider_mount_gate(tmp_path: Path):
 
 @pytest.mark.unit
 def test_provider_legacy_field_inventory(tmp_path: Path):
-    unallowed_reads, v2_violations = legacy_inv.audit_repository()
+    _unallowed_reads, v2_violations = legacy_inv.audit_repository()
     assert v2_violations == []
     with patch.object(legacy_inv, "audit_repository", return_value=([], [])):
         assert legacy_inv.main() == 0
@@ -192,21 +191,21 @@ def test_provider_plan_ledger_gate(tmp_path: Path):
     # Directory manifest
     dir_manifest = tmp_path / "dir_manifest"
     dir_manifest.mkdir()
-    present_d, state_d, err_d = ledger_gate._read_migration_manifest_state(dir_manifest)
+    present_d, _state_d, err_d = ledger_gate._read_migration_manifest_state(dir_manifest)
     assert present_d
     assert "not a file" in str(err_d)
 
     # Non-dict manifest
     list_manifest = tmp_path / "list_manifest.json"
     list_manifest.write_text("[]")
-    present_l, state_l, err_l = ledger_gate._read_migration_manifest_state(list_manifest)
+    present_l, _state_l, err_l = ledger_gate._read_migration_manifest_state(list_manifest)
     assert present_l
     assert "must be a JSON object" in str(err_l)
 
     # Corrupt JSON manifest
     bad_manifest = tmp_path / "bad_manifest.json"
     bad_manifest.write_text("{bad")
-    present_b, state_b, err_b = ledger_gate._read_migration_manifest_state(bad_manifest)
+    present_b, _state_b, err_b = ledger_gate._read_migration_manifest_state(bad_manifest)
     assert present_b
     assert "Unable to read" in str(err_b)
 
@@ -231,7 +230,7 @@ def test_provider_plan_ledger_gate(tmp_path: Path):
         assert "Unable to parse the plan" in str(err_c)
 
     # validate_ledger with errors
-    errors, warnings = ledger_gate.validate_ledger(phase="invalid")
+    errors, _warnings = ledger_gate.validate_ledger(phase="invalid")
     assert len(errors) > 0
 
 
@@ -244,7 +243,7 @@ def test_mypy_config_inventory(tmp_path: Path):
     assert not inv.ok
 
     # Normal directory
-    refs, violations = mypy_inv.audit_repository(tmp_path)
+    refs, _violations = mypy_inv.audit_repository(tmp_path)
     assert isinstance(refs, list)
 
     # Main CLI

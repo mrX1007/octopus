@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
 import pytest
 
 from core.actions.checkout_models import ReferenceKind
 from core.actions.input_migrations import (
-    LegacyInputMigrationRequiredV2,
     V1ToV2InputMigrator,
 )
 from core.actions.invocation_scope import InvocationScope
 from core.actions.materials import (
-    ExecutorCheckoutHandleV2,
     ExecutorOpenedMaterialBundleV2,
     ExecutorOpenedMaterialV2,
 )
@@ -197,11 +194,10 @@ def test_executor_opened_material_and_bundle():
 
     # _metadata_matches_kind branches
     from core.actions.materials import _metadata_matches_kind
-
     from core.actions.reference_snapshots import (
-        PivotRouteReferenceSnapshot,
         C2ReferenceSnapshot,
         DeploymentReferenceSnapshot,
+        PivotRouteReferenceSnapshot,
     )
 
     pivot_meta = object.__new__(PivotRouteReferenceSnapshot)

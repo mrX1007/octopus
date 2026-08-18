@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+
 import pytest
 
 from core.actions.adapter_versions import AdapterApiVersion
@@ -14,7 +15,6 @@ from core.actions.composite_execution import (
 from core.actions.execution_commit_store import (
     CommittedExecutionMarkerV2,
     DefaultExecutionCommitStoreV2,
-    canonical_committed_execution_marker_digest,
 )
 from core.actions.execution_drafts import (
     ArtifactDraftRefV2,
@@ -37,7 +37,7 @@ def test_adapter_api_version():
 
 
 def test_legacy_descriptor_decoder():
-    from core.actions.models import ActionKind, LegacyActionDescriptorV1
+    from core.actions.models import ActionKind
 
     legacy = LegacyActionDescriptorV1(
         action_id="c2:c2_deploy",

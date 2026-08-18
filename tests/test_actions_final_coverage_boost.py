@@ -3,21 +3,14 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+
 import pytest
 
-from core.actions.execution_budget import (
-    ExecutionBudget,
-    ExecutionBudgetExhaustedError,
-    ExecutionBudgetLeaseInvalidError,
-    OwnedExecutionBudgetAuthorityV2,
-)
 from core.actions.execution_commit import (
     CommitFinalizationFailedError,
     CommitPreparationFailedError,
     ExecutionCommitCoordinator,
-    ExecutionCommitParticipant,
     ExecutionCommitStateV2,
-    ParticipantFinalizeReceiptV2,
     ParticipantPrepareResultV2,
     ParticipantStateV2,
 )
@@ -34,7 +27,6 @@ from core.actions.input_contracts import (
     C2ChannelCreateInputV2,
     C2EnrollmentIssueInput,
     C2Transport,
-    DNSChannelConfig,
     PivotProxyScanInputV2,
     RemoteForwardInputV2,
     SSHChainHopInputV2,
@@ -250,7 +242,7 @@ def test_two_phase_execution_commit_coordinator_branches():
 
 def test_input_contracts_validation_errors():
     # RemoteForwardInputV2
-    with pytest.raises(ValueError, match="remote_port must be an integer in 1..65535"):
+    with pytest.raises(ValueError, match=r"remote_port must be an integer in 1\.\.65535"):
         RemoteForwardInputV2(
             session_ref="sess-1",
             target="10.0.0.1",
@@ -260,7 +252,7 @@ def test_input_contracts_validation_errors():
         )
 
     # SSHChainHopInputV2
-    with pytest.raises(ValueError, match="port must be an integer in 1..65535"):
+    with pytest.raises(ValueError, match=r"port must be an integer in 1\.\.65535"):
         SSHChainHopInputV2(target="10.0.0.1", credential_ref="cred-1", port=0)
 
     # SSHChainInputV2
@@ -274,17 +266,17 @@ def test_input_contracts_validation_errors():
     with pytest.raises(ValueError, match="ports must not be empty"):
         PivotProxyScanInputV2(route_ref="r-1", target="10.0.0.1", ports=(), timeout_seconds=10)
 
-    with pytest.raises(ValueError, match="ports must contain only integers in 1..65535"):
+    with pytest.raises(ValueError, match=r"ports must contain only integers in 1\.\.65535"):
         PivotProxyScanInputV2(route_ref="r-1", target="10.0.0.1", ports=(0,), timeout_seconds=10)
 
     with pytest.raises(ValueError, match="ports must be unique"):
         PivotProxyScanInputV2(route_ref="r-1", target="10.0.0.1", ports=(80, 80), timeout_seconds=10)
 
-    with pytest.raises(ValueError, match="timeout_seconds must be an integer in 1..3600"):
+    with pytest.raises(ValueError, match=r"timeout_seconds must be an integer in 1\.\.3600"):
         PivotProxyScanInputV2(route_ref="r-1", target="10.0.0.1", ports=(80,), timeout_seconds=0)
 
     # C2EnrollmentIssueInput
-    with pytest.raises(ValueError, match="agent_protocol_version must be 12.0"):
+    with pytest.raises(ValueError, match=r"agent_protocol_version must be 12\.0"):
         C2EnrollmentIssueInput(
             channel_ref="c-1",
             target="10.0.0.1",

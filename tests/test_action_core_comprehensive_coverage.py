@@ -2,57 +2,39 @@
 
 from __future__ import annotations
 
-import math
-from unittest.mock import MagicMock
 import pytest
 
-from core.actions.checkout_models import CheckoutRecoveryRefV2
 from core.actions.execution_finalization import (
     DefaultInvocationFinalizationIntentStoreV2,
     InvocationFinalizationIntentBodyV2,
     InvocationFinalizationIntentCheckpointV2,
-    InvocationFinalizationIntentCompletionReceiptV2,
     InvocationFinalizationIntentPhaseV2,
     InvocationFinalizationIntentRecordV2,
     InvocationFinalizationIntentRefV2,
-    canonical_finalization_intent_completion_digest,
-    canonical_finalization_intent_digest,
-)
-from core.actions.execution_results_v2 import (
-    ActionExecutionReportEnvelopeV2,
-    FinalizationPersistenceOutcomeV2,
 )
 from core.actions.provider_mounts import DefaultProviderMountRegistry
-from core.actions.readiness import DependencyStateV2
-from core.actions.readiness_probes import PythonImportProbe
 from core.actions.readiness_registry import ReadinessRegistry
 from core.actions.reference_authorization import ReferenceAuthorizationSnapshot
 from core.actions.reference_snapshots import (
     C2ReferenceSnapshot,
     CredentialReferenceSnapshot,
     DeploymentReferenceSnapshot,
-    NonSensitiveArtifactReferenceSnapshot,
     PivotRouteReferenceSnapshot,
-    SensitiveArtifactReferenceSnapshot,
     SessionReferenceSnapshot,
     reference_has_active_state,
 )
 from core.actions.reference_types import (
-    ArtifactKind,
     C2ResourceKind,
     C2ResourceState,
     DeploymentState,
     RouteState,
     SessionState,
 )
-from core.actions.sensitive_integrity import SensitiveIntegrityTagV2
 from core.actions.target_scope import (
     ExtractedActionTarget,
-    NetworkProtocol,
     TargetKind,
     TargetRole,
     TargetScopeCanonicalizer,
-    TargetScopeDecision,
     TargetScopePolicy,
     TargetScopeRule,
     TargetScopeSnapshot,

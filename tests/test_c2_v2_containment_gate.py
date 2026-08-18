@@ -23,25 +23,10 @@ from core.c2 import (
     control_signing,
 )
 from core.c2.control_commands import (
-    BoundedControlErrorV2,
-    C2ControlAction,
-    C2ControlErrorCodeV2,
-    ParticipantControlAuthorizationV2,
-    ParticipantControlReceiptV2,
-    ParticipantControlRequestV2,
     SignedControlResponseV2,
-    UnsignedParticipantControlAuthorizationV2,
-    UnsignedParticipantControlRequestV2,
-)
-from core.c2.control_models import (
-    canonical_response_envelope_dict,
 )
 from core.c2.control_signing import (
-    ControlSignerV2,
-    ControlVerifierV2,
-    DaemonResponseSigner,
     DaemonResponseVerifier,
-    TrustedDaemonResponseKey,
 )
 from tests.helpers.c2_client import make_trusted_daemon_key
 
@@ -163,7 +148,7 @@ def test_gate_production_ast_scans_disallow_forbidden_patterns():
 
     for t_dir in target_dirs:
         for py_path in t_dir.rglob("*.py"):
-            with open(py_path, "r", encoding="utf-8") as f:
+            with open(py_path, encoding="utf-8") as f:
                 tree = ast.parse(f.read(), filename=str(py_path))
 
             # Scan AST nodes

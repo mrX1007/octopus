@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -68,10 +67,8 @@ def test_ldap_search_impacket_and_ldap3():
             return FakeAttr()
 
     class FakeLdap3Connection:
-        entries = [FakeEntry()]
-
         def __init__(self, *args, **kwargs):
-            pass
+            self.entries = [FakeEntry()]
 
         def bind(self):
             return True

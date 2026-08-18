@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
-from unittest.mock import MagicMock
+
 import pytest
 
 from core.c2.control_auth import AuthenticatedControlPrincipal, AuthorityFence, OperatorRole
@@ -13,7 +13,6 @@ from core.c2.control_boundary import ResolvedControlKey
 from core.c2.control_commands import C2ControlAction
 from core.c2.control_idempotency import (
     IdempotencyConflictError,
-    IdempotencyRecordV1,
     IdempotencyStateV1,
     IdempotencyStoreV1,
     compute_idempotency_fingerprint,
@@ -21,7 +20,6 @@ from core.c2.control_idempotency import (
 from core.c2.control_migrations import apply_control_migrations
 from core.c2.control_peer import PeerPrincipal
 from core.c2.control_rbac import ControlRBACPolicy
-from core.c2.operators import insert_operator_record
 from tests.helpers.c2_authority import (
     create_test_control_key,
     create_test_mission_grant,

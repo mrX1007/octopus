@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
+
 import pytest
 
 from core.actions.request_v2 import (
     ACTION_REQUEST_V2_MAX_ENVELOPE_BYTES,
-    ACTION_REQUEST_V2_MAX_ITEMS,
     ACTION_REQUEST_V2_MAX_STRING_BYTES,
     ActionRequestV2EnvelopeDecoder,
     ActionRequestV2EnvelopeValidationError,

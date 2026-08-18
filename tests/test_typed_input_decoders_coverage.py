@@ -7,7 +7,7 @@ import json
 from dataclasses import dataclass
 from enum import Enum
 from typing import Literal, Union
-from unittest.mock import MagicMock
+
 import pytest
 
 from core.actions.input_contracts import PayloadKeyingInputV2

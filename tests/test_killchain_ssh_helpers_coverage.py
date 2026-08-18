@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import socket
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest

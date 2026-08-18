@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+
 import pytest
 
 from core.actions.adapters_ad_credential import (
@@ -54,10 +55,7 @@ from core.actions.execution_commit_participants import (
 from core.actions.provider_call_boundary import (
     BoundProviderInvocationContext,
     ProviderCallBoundary,
-    _ProviderExecutePhaseLeaseControllerV2,
 )
-from core.actions.provider_mounts import ProviderMountSnapshotV2
-from core.actions.readiness import DependencyStateV2
 from core.actions.readiness_probes import (
     BinaryProbe,
     CompositeLeafProbe,
@@ -70,8 +68,6 @@ from core.actions.target_scope import (
     ExtractedActionTarget,
     TargetKind,
     TargetRole,
-    TargetScopeRule,
-    TargetScopeSnapshot,
 )
 
 pytestmark = pytest.mark.unit
@@ -100,7 +96,7 @@ def test_action_adapters_methods_execution():
         # Verify bound checks (fail-closed)
         assert adapter.check_bound(None) is False
         assert adapter.verify_bound(None) is False
-        with pytest.raises(Exception):
+        with pytest.raises((RuntimeError, ValueError, TypeError, AttributeError, NotImplementedError)):
             adapter.execute_bound(None)
 
 

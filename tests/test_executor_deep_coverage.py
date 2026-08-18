@@ -7,8 +7,6 @@ import pytest
 from core.actions.catalog import ActionCatalog
 from core.actions.executor import ActionExecutor
 from core.actions.models import ActionRequest
-from core.actions.request_v2 import ActionRequestV2EnvelopeDecoder
-from core.auth.ingress_store import IngressSessionStore
 from core.execution import ExecutionContext, ExecutionPolicy
 
 pytestmark = pytest.mark.unit
@@ -43,7 +41,7 @@ def test_action_executor_run_request_validations():
     # ExecutionContext invalid type
     bad_req = object.__new__(ActionRequest)
     object.__setattr__(bad_req, "execution_context", "not_a_context")
-    with pytest.raises(TypeError, match="request.execution_context must be an ExecutionContext"):
+    with pytest.raises(TypeError, match=r"request\.execution_context must be an ExecutionContext"):
         executor.run("custom:test", bad_req)
 
 

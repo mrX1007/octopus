@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+
 import pytest
 
 from core.actions.execution_results_v2 import (
@@ -13,7 +14,6 @@ from core.actions.execution_results_v2 import (
     CleanupSummaryV2,
     CommittedExecutionResultBindingV2,
     ExecutionProgressReportV2,
-    ExecutionResultDraftRefV2,
     ExecutionResultRefV2,
     ExecutionResultV2,
     ExecutionStatusV2,
@@ -21,8 +21,6 @@ from core.actions.execution_results_v2 import (
     FinalizationRetryClaimV2,
     FinalizationRetryCompletionReceiptV2,
     FinalizationRetryEnqueuedV2,
-    FinalizationRetryRecordV2,
-    FinalizationRetryStateV2,
     InvocationFinalizationFactoryV2,
     InvocationFinalizationRefV2,
     InvocationFinalizationRetryRefV2,
@@ -31,7 +29,6 @@ from core.actions.execution_results_v2 import (
     canonical_finalization_persistence_outcome_digest,
     canonical_finalization_retry_claim_digest,
     canonical_finalization_retry_completion_digest,
-    canonical_finalization_retry_record_digest,
     canonical_invocation_finalization_digest,
     derive_effective_status_and_reasons,
 )

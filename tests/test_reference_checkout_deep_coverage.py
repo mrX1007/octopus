@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import hmac
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from core.actions.checkout_models import (
     ApprovalCheckoutRequest,
@@ -22,7 +22,6 @@ from core.actions.checkout_models import (
     ReferenceLeaseToken,
 )
 from core.actions.reference_authorization import (
-    ReferenceAuthorizationError,
     ReferenceAuthorizationSnapshot,
 )
 from core.actions.reference_checkout import (
@@ -31,7 +30,6 @@ from core.actions.reference_checkout import (
 )
 from core.actions.reference_snapshots import CredentialReferenceSnapshot
 from core.actions.target_scope import (
-    ExtractedActionTarget,
     TargetKind,
     TargetRole,
     TargetScopeCanonicalizer,
@@ -50,7 +48,6 @@ from core.auth.approval_leases import ApprovalExecutionLease
 from core.auth.types import (
     AuthenticationMethod,
     IngressKind,
-    PrincipalRole,
     SubjectType,
 )
 from core.credentials import CredentialAuthKind

@@ -115,29 +115,31 @@ def test_run_full_killchain_with_credential(tmp_path: Path):
         port=22,
     )
 
-    with patch("core.killchain.orchestrator.resolve_credential_handle", return_value=ref):
-        with patch(
+    with (
+        patch("core.killchain.orchestrator.resolve_credential_handle", return_value=ref),
+        patch(
             "core.killchain.orchestrator.call_credential_provider",
             side_effect=lambda cred, fn: fn(SimpleNamespace(username=cred.username, password="pwd")),
-        ):
-            with patch("core.killchain.orchestrator.run_privesc", return_value="ROOT ACCESS CONFIRMED uid=0(root)"):
-                with patch("core.killchain.orchestrator.get_best_credential_ref", return_value=root_ref):
-                    with patch("core.killchain.orchestrator._connect_with_credential", return_value=(MagicMock(), "")):
-                        with patch("core.killchain.orchestrator.plant_persistence", return_value="[PERSISTENCE]"):
-                            with patch("core.killchain.orchestrator.lateral_move", return_value="[LATERAL]"):
-                                with patch("core.killchain.orchestrator.data_exfil", return_value="[EXFIL]"):
-                                    with patch("core.killchain.orchestrator.stealth_cleanup", return_value="[CLEANUP]"):
-                                        with patch.object(orch.os.path, "expanduser", return_value=str(tmp_path)):
-                                            res = orch.run_full_killchain(
-                                                "10.0.0.1",
-                                                credential=ref.handle,
-                                                callback_host="10.0.0.2",
-                                            )
-                                            assert "Re-authenticated as root" in res
-                                            assert "[PERSISTENCE]" in res
-                                            assert "[LATERAL]" in res
-                                            assert "[EXFIL]" in res
-                                            assert "[CLEANUP]" in res
+        ),
+        patch("core.killchain.orchestrator.run_privesc", return_value="ROOT ACCESS CONFIRMED uid=0(root)"),
+    ):
+        with patch("core.killchain.orchestrator.get_best_credential_ref", return_value=root_ref):
+            with patch("core.killchain.orchestrator._connect_with_credential", return_value=(MagicMock(), "")):
+                with patch("core.killchain.orchestrator.plant_persistence", return_value="[PERSISTENCE]"):
+                    with patch("core.killchain.orchestrator.lateral_move", return_value="[LATERAL]"):
+                        with patch("core.killchain.orchestrator.data_exfil", return_value="[EXFIL]"):
+                            with patch("core.killchain.orchestrator.stealth_cleanup", return_value="[CLEANUP]"):
+                                with patch.object(orch.os.path, "expanduser", return_value=str(tmp_path)):
+                                    res = orch.run_full_killchain(
+                                        "10.0.0.1",
+                                        credential=ref.handle,
+                                        callback_host="10.0.0.2",
+                                    )
+                                    assert "Re-authenticated as root" in res
+                                    assert "[PERSISTENCE]" in res
+                                    assert "[LATERAL]" in res
+                                    assert "[EXFIL]" in res
+                                    assert "[CLEANUP]" in res
 
 
 @pytest.mark.unit

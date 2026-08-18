@@ -8,7 +8,6 @@ from core.actions.trusted_facts import (
     AssessmentStatus,
     EvidenceCoverageStatus,
     FactFreshnessStatus,
-    StoredFactRecord,
     TrustedFactDecoder,
     TrustedFactSnapshot,
     TrustedFactTrustLevelV2,

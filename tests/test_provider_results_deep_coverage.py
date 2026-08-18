@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+
 import pytest
 
 from core.actions.execution_results_v2 import ExecutionStatusV2

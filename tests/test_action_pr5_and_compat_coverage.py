@@ -6,33 +6,27 @@ import pytest
 
 from core.actions.intent_bound_owner_factories import (
     ApprovalGraphCreationSpecV2,
-    AttemptReservationCreationSpecV2,
-    CheckoutOwnerCreationSpecV2,
     ExecutorCheckoutRequestBundle,
     IntentBoundOwnerFactory,
     InvocationScopeCreationSpecV2,
 )
 from core.actions.managed_resources import (
-    ManagedResourceHandleV2,
     ManagedResourceKind,
     ManagedResourceManagerV2,
     ManagedResourceStageRequestV2,
 )
 from core.actions.participant_authority import (
     DefaultParticipantExecutionAuthorityFactoryV2,
-    ParticipantExecutionAuthorityBindingV2,
     canonical_participant_authority_digest,
 )
 from core.actions.policy_snapshots import (
     ActionPolicyRequestHeaderV2,
-    ActionPolicyRequestSnapshot,
 )
 from core.actions.sensitive_artifact_envelope import (
     SensitiveArtifactEnvelopeV2,
 )
 from core.actions.sensitive_integrity import SensitiveIntegrityTagV2
 from core.actions.target_schemas import (
-    V2ActionTargetSchema,
     get_all_v2_target_schemas,
     require_v2_target_schema,
 )

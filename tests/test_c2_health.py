@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
-import uuid
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -14,16 +12,9 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from core.c2.control_health import (
     HealthRequestV2,
     HealthTrustDescriptor,
-    SignedHealthResponseV2,
-    VerifiedHealthStatusV2,
     load_health_trust_descriptor,
     query_health_status,
 )
-from core.c2.control_models import (
-    calculate_health_signature_digest,
-    canonical_json_bytes,
-)
-from core.c2.control_protocol import strict_json_loads
 
 pytestmark = [pytest.mark.unit, pytest.mark.contract]
 
@@ -57,7 +48,7 @@ def test_health_trust_descriptor_validation():
     assert desc.service_id == "srv_test_1"
 
     # Invalid version
-    with pytest.raises(ValueError, match="version must be '2.0'"):
+    with pytest.raises(ValueError, match=r"version must be '2\.0'"):
         HealthTrustDescriptor(
             version="1.0",
             service_id="srv_test_1",

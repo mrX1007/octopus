@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import time
 from unittest.mock import MagicMock
+
 import pytest
 
 from core.actions.cancellation import (
     ExecutorCancellationController,
-    ExecutorCancellationToken,
 )
 from core.actions.execution_budget import (
     ExecutionBudget,
@@ -218,13 +218,13 @@ def test_in_memory_lease_registry_and_authority_validations():
 
 def test_budget_authority_validation_branches():
     from core.auth.ingress_store import IngressSessionStore
-    from core.auth.types import IngressChannelBinding, IngressKind, Principal, PrincipalRole
+    from core.auth.types import IngressChannelBinding, Principal, PrincipalRole
 
     auth = OwnedExecutionBudgetAuthorityV2()
     ctrl = ExecutorCancellationController("canc-1")
     token = ctrl.token
 
-    root_budget = ExecutionBudget(
+    ExecutionBudget(
         absolute_deadline_monotonic=time.monotonic() + 100.0,
         max_output_bytes=1000,
         max_child_depth=2,

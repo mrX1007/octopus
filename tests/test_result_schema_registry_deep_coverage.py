@@ -5,13 +5,10 @@ from __future__ import annotations
 import pytest
 
 from core.actions.provider_results import (
-    ArtifactProviderResult,
     CredentialProviderResult,
-    ProviderProvenanceV2,
     ProviderResultKind,
 )
 from core.actions.result_schema_registry import (
-    DuplicateResultSchemaRegistration,
     InvalidResultSchemaBinding,
     ProviderResultPublicationBindingV2,
     ProviderResultSchemaRegistry,

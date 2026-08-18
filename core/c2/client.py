@@ -13,9 +13,6 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519
-
 from core.c2.control_commands import (
     BoundedControlErrorV2,
     C2ControlAction,
@@ -34,7 +31,6 @@ from core.c2.control_models import (
     calculate_schema_bound_payload_digest,
     calculate_snapshot_digest,
     canonical_json_bytes,
-    canonical_response_envelope_dict,
     strict_b64url_decode,
 )
 from core.c2.control_protocol import (
@@ -45,11 +41,8 @@ from core.c2.control_protocol import (
 )
 from core.c2.control_signing import (
     ControlSignerV2,
-    DaemonResponseSigner,
     DaemonResponseVerifier,
-    TrustedDaemonResponseKey,
 )
-from core.c2.protocol import C2_CONTROL_PROTOCOL_VERSION
 
 MAX_RESPONSE_SKEW_MS = 5000  # 5 seconds maximum clock skew for daemon responses
 

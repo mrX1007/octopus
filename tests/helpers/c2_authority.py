@@ -34,7 +34,7 @@ def create_test_operator(
 ) -> dict[str, Any]:
     conn, should_close = _get_connection(conn_or_path)
     try:
-        from core.c2.operators import OperatorManager, insert_operator_record
+        from core.c2.operators import insert_operator_record
 
         key_val = api_key or f"api_key_{operator_id}"
         cur = conn.execute("SELECT operator_id FROM operators WHERE operator_id = ?", (operator_id,))

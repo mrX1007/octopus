@@ -99,10 +99,10 @@ def test_target_kind_values_are_closed_and_single_owner() -> None:
 
 def test_target_scope_canonicalizer_and_model_validations() -> None:
     # Port validation
-    with pytest.raises(ValueError, match="target port must be in 1..65535"):
+    with pytest.raises(ValueError, match=r"target port must be in 1\.\.65535"):
         TargetScopeCanonicalizer.canonicalize("10.0.0.1", role=TargetRole.PRIMARY, port=0)
 
-    with pytest.raises(ValueError, match="target port must be in 1..65535"):
+    with pytest.raises(ValueError, match=r"target port must be in 1\.\.65535"):
         TargetScopeCanonicalizer.canonicalize("10.0.0.1", role=TargetRole.PRIMARY, port=True)  # type: ignore
 
     # Protocol validation

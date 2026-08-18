@@ -11,6 +11,7 @@ from core.providers.c2_cleanup import C2CleanupProvider
 from core.providers.c2_deploy import C2DeployProvider
 from core.providers.c2_enroll import C2EnrollProvider
 from core.providers.c2_task import C2TaskProvider
+from tests.helpers.c2_loopback import create_mock_loopback_transport
 
 pytestmark = pytest.mark.unit
 
@@ -44,9 +45,6 @@ def test_c2_lifecycle_e2e_full_flow():
     cleanup_provider = C2CleanupProvider()
     cleanup_res = cleanup_provider.execute({"mission_id": "e2e_mission"})
     assert cleanup_res["status"] == "cleaned"
-
-
-from tests.helpers.c2_loopback import create_mock_loopback_transport
 
 
 def test_c2_lifecycle_client_integration():

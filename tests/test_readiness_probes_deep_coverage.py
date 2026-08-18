@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
 import pytest
 
 from core.actions.readiness_probes import (
+    CompositeLeafProbe,
     DaemonProtocolProbe,
     DaemonProtocolStatus,
-    CompositeLeafProbe,
-    DependencyKindV2,
-    DependencyReadiness,
-    DependencyStateV2,
     ProbeObservation,
     _ReadinessProbeBase,
 )

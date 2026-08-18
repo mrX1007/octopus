@@ -2,63 +2,42 @@
 
 from __future__ import annotations
 
-import math
 from unittest.mock import MagicMock
+
 import pytest
 
-from core.actions.checkout_models import ReferenceKind
 from core.actions.execution_results_v2 import ExecutionResultRefV2, ExecutionStatusV2
-from core.actions.provider_participants import ParticipantRegistrationRefV2
 from core.actions.provider_results import (
     ArtifactProviderResult,
-    C2ArtifactStageReceiptV1,
     C2ProviderResult,
     CompositeProviderResult,
-    CredentialProviderResult,
-    ExternalEffectRegistrationResultV2,
     ManagedResourceDraftRefV2,
     ManagedResourceKind,
-    NonSensitiveArtifactDraftRefV2,
-    ObservationDraftRefV2,
     OperationProviderResult,
     PartialCommitDispositionV2,
-    PartialCommitPolicyRegistryV2,
     PartialCommitPolicySnapshotV2,
     PartialCommitPolicyV2,
     PartialCommitRuleV2,
-    ParticipantPayloadDraftRefV2,
-    ProviderOutcomeNormalizationV2,
     ProviderOutcomeNormalizerV2,
     ProviderOutcomeV2,
     ProviderProvenanceV2,
     ProviderResultHeaderV2,
     ProviderResultKind,
     RouteProviderResult,
-    SensitiveArtifactDraftRefV2,
-    SensitiveBatchDraftRefV2,
-    SensitiveBatchHandleV2,
-    SensitiveHandleStateV2,
-    SensitiveProviderResult,
     SessionProviderResult,
-    StagedArtifactV2,
-    StagedObservationV2,
     canonical_partial_commit_policy_digest,
 )
-from core.actions.reference_types import ArtifactKind
 from core.actions.sensitive_integrity import SensitiveIntegrityTagV2
 from core.actions.sensitive_integrity_runtime import (
     OwnedHmacSensitiveIntegrityAuthenticatorFactoryV2,
-    OwnedHmacSensitiveIntegrityAuthenticatorV2,
     PersistentSensitiveIntegrityKeyringV2,
     SensitiveIntegrityError,
-    SensitiveIntegrityKeyLeaseStateV2,
-    SensitiveIntegrityStreamStateV2,
 )
 from core.actions.zeroizable_buffers import (
+    _OWNED_BUFFER_TOKEN,
     OwnedZeroizableSensitiveBufferV2,
     ZeroizableBufferError,
     ZeroizableDestinationBufferV2,
-    _OWNED_BUFFER_TOKEN,
 )
 
 pytestmark = pytest.mark.unit
@@ -110,9 +89,8 @@ def test_zeroizable_buffers():
     assert dest.closed is False
     assert dest.zeroized is False
 
-    with dest as d:
-        with d.borrow_writable_view() as w:
-            w[:4] = b"test"
+    with dest as d, d.borrow_writable_view() as w:
+        w[:4] = b"test"
 
     assert dest.closed is True
     assert dest.zeroized is True

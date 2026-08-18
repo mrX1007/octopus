@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+
 import pytest
 
 from core.actions.reference_authorization import ReferenceAuthorizationSnapshot
@@ -34,7 +35,6 @@ from core.actions.reference_types import (
     SessionState,
 )
 from core.actions.target_scope import (
-    ExtractedActionTarget,
     TargetKind,
     TargetRole,
     TargetScopeCanonicalizer,

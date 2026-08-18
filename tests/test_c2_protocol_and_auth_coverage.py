@@ -2,57 +2,34 @@
 
 from __future__ import annotations
 
-import math
 from unittest.mock import MagicMock
+
 import pytest
 
 from core.actions.cancellation import ExecutorCancellationController
 from core.actions.cancellation_recovery import (
     CancelExecutionRequestV2,
-    CancellationCompletionReceiptV2,
-    CancellationRecoveryManager,
     DefaultCancellationRecoveryStoreV2,
     ExecutionCancellationReasonV2,
-    ExecutionCancellationReceiptV2,
-    canonical_execution_cancellation_receipt_digest,
 )
 from core.actions.checkout_models import ReferenceKind
 from core.actions.execution_cancellation_service import (
     DefaultExecutionCancellationServiceV2,
-    ExecutionCancellationService,
 )
 from core.actions.execution_recovery_types import (
     CancellationRecoveryRecordV2,
     CancellationRecoveryRefV2,
 )
 from core.actions.materials import (
-    ExecutorCheckoutHandleV2,
     ExecutorOpenedMaterialBundleV2,
     ExecutorOpenedMaterialV2,
-    _metadata_matches_kind,
-    _require_non_empty,
 )
 from core.actions.reference_authorization import ReferenceAuthorizationSnapshot
 from core.actions.reference_snapshots import (
-    C2ReferenceSnapshot,
     CredentialReferenceSnapshot,
-    DeploymentReferenceSnapshot,
-    NonSensitiveArtifactReferenceSnapshot,
-    PivotRouteReferenceSnapshot,
-    SessionReferenceSnapshot,
-)
-from core.actions.reference_types import (
-    ArtifactKind,
-    C2ResourceKind,
-    C2ResourceState,
-    DeploymentState,
-    RouteState,
-    SessionState,
 )
 from core.actions.target_scope import (
     TargetKind,
-    TargetRole,
-    TargetScopeCanonicalizer,
     TargetScopeRule,
     TargetScopeSnapshot,
 )
@@ -278,7 +255,7 @@ def test_cancellation_recovery_and_service():
 
     # Bind live controller
     mock_ctrl = MagicMock(spec=ExecutorCancellationController)
-    rec_bound, binding = store.bind_live_controller(c_ref, mock_ctrl)
+    _rec_bound, binding = store.bind_live_controller(c_ref, mock_ctrl)
     assert binding.reference == "cancel://1"
 
     # Unbind controller

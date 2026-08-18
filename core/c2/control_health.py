@@ -8,7 +8,7 @@ import stat
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
@@ -112,7 +112,7 @@ def load_health_trust_descriptor(file_path: str | None = None) -> HealthTrustDes
     if st.st_size > 16384:
         raise RuntimeError("health trust descriptor exceeds size limit")
 
-    with open(path, "r", encoding="utf-8") as handle:
+    with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
 
     if not isinstance(data, dict):
@@ -120,10 +120,7 @@ def load_health_trust_descriptor(file_path: str | None = None) -> HealthTrustDes
 
     raw_pub = data.get("public_key") or data.get("public_key_b64u") or data.get("public_key_hex")
     if isinstance(raw_pub, str):
-        if len(raw_pub) == 64:
-            pub_bytes = bytes.fromhex(raw_pub)
-        else:
-            pub_bytes = strict_b64url_decode(raw_pub)
+        pub_bytes = bytes.fromhex(raw_pub) if len(raw_pub) == 64 else strict_b64url_decode(raw_pub)
     elif isinstance(raw_pub, (bytes, bytearray)):
         pub_bytes = bytes(raw_pub)
     else:
@@ -180,8 +177,8 @@ def query_health_status(
                     reason_code="trust_descriptor_expired",
                 )
         elif hasattr(trust_descriptor, "public_key") and hasattr(trust_descriptor, "service_id"):
-            resolved_pub = getattr(trust_descriptor, "public_key")
-            resolved_srv = getattr(trust_descriptor, "service_id")
+            resolved_pub = trust_descriptor.public_key
+            resolved_srv = trust_descriptor.service_id
 
     if resolved_pub is None or resolved_srv is None:
         try:

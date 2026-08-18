@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from unittest.mock import MagicMock
+
 import pytest
 
 from core.actions.request_v2 import BoundedTypedInputPayloadV2
@@ -14,7 +14,6 @@ from core.actions.typed_input_decoders import (
     TypedInputDecoderNotRegistered,
     TypedInputDecoderRegistry,
     _coerce_value,
-    _decode_dataclass,
     _decode_json,
 )
 

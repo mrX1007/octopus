@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+
 import pytest
 
 from core.actions.reference_authorization import (
@@ -12,14 +13,10 @@ from core.actions.reference_authorization import (
 )
 from core.actions.reference_snapshots import CredentialReferenceSnapshot
 from core.actions.request_v2 import (
-    ActionRequestV2,
     ActionRequestV2EnvelopeDecoder,
     ActionRequestV2EnvelopeValidationError,
-    BoundedActionRequestV2Envelope,
-    BoundedTypedInputPayloadV2,
 )
 from core.actions.target_scope import (
-    ExtractedActionTarget,
     TargetKind,
     TargetRole,
     TargetScopeCanonicalizer,
@@ -27,14 +24,8 @@ from core.actions.target_scope import (
     TargetScopeSnapshot,
 )
 from core.actions.trusted_facts import (
-    AssessmentStatus,
-    EvidenceCoverageStatus,
-    FactFreshnessStatus,
     StoredFactRecord,
     TrustedFactDecoder,
-    TrustedFactSnapshot,
-    TrustedFactTrustLevelV2,
-    TrustedFactType,
     canonical_stored_fact_payload_digest,
 )
 from core.auth.types import SubjectType

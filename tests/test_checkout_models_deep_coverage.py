@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+
 import pytest
 
 from core.actions.checkout_models import (
@@ -21,19 +22,14 @@ from core.actions.checkout_models import (
     ReferenceKind,
     ReferenceLeaseToken,
 )
-from core.actions.reference_snapshots import CredentialReferenceSnapshot
 from core.actions.target_scope import (
-    ExtractedActionTarget,
-    TargetKind,
     TargetRole,
     TargetScopeCanonicalizer,
 )
-from core.auth.approval_leases import ApprovalExecutionLease
 from core.auth.ingress import AuthenticationMethod, IngressKind, IngressSessionAuthorizationSnapshot
 from core.auth.missions import MissionAuthorizationSnapshot
 from core.auth.principals import PrincipalAuthorizationSnapshot
 from core.auth.types import SubjectType
-from core.credentials import CredentialAuthKind
 
 pytestmark = pytest.mark.unit
 

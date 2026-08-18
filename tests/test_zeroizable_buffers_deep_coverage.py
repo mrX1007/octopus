@@ -127,7 +127,8 @@ def test_owned_sensitive_buffer_direct_and_error_paths():
 
     # In use and zeroized buffer errors
     buf2 = factory.from_owned_mutable(source=bytearray(b"secret2"), domain="dom")
-    l1 = buf2.acquire_single_use(consumer_id="c1")
+    lease1 = buf2.acquire_single_use(consumer_id="c1")
+    assert lease1.closed is False
     with pytest.raises(ZeroizableBufferError, match="owned_buffer_already_leased"):
         buf2.acquire_single_use(consumer_id="c2")
 

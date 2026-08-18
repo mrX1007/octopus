@@ -36,7 +36,6 @@ from core.c2.control_signing import (
     ControlVerifierV2,
     DaemonResponseSigner,
     DaemonResponseVerifier,
-    TrustedDaemonResponseKey,
 )
 from tests.helpers.c2_client import make_trusted_daemon_key
 
@@ -50,7 +49,7 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "c2_v2_golden_vectors.json"
 
 @pytest.fixture(scope="module")
 def golden_vectors() -> dict:
-    with open(FIXTURE_PATH, "r", encoding="utf-8") as f:
+    with open(FIXTURE_PATH, encoding="utf-8") as f:
         data = json.load(f)
     assert data.get("format_version") == "2.0"
 

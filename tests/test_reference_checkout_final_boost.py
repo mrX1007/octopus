@@ -3,53 +3,34 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+
 import pytest
 
 from core.actions.checkout_models import (
-    ApprovalCheckoutRequest,
     ExecutionAttemptGroup,
     ExecutorCheckoutBundle,
     ExecutorCheckoutRequestBundle,
-    FactCheckoutRequest,
     IngressSessionCheckoutRequest,
     MissionCheckoutRequest,
     PrincipalCheckoutRequest,
-    ReferenceAccessMode,
-    ReferenceCheckout,
-    ReferenceCheckoutRequest,
     ReferenceKind,
-    ReferenceLeaseToken,
 )
-from core.actions.reference_authorization import ReferenceAuthorizationSnapshot
 from core.actions.reference_checkout import (
     CheckoutLockParticipantV2,
     ReferenceCheckoutCoordinator,
     ReferenceCheckoutError,
 )
-from core.actions.reference_snapshots import CredentialReferenceSnapshot, SessionReferenceSnapshot
-from core.actions.reference_types import SessionState
 from core.actions.target_scope import (
-    ExtractedActionTarget,
     TargetKind,
     TargetRole,
     TargetScopeCanonicalizer,
     TargetScopeRule,
     TargetScopeSnapshot,
 )
-from core.actions.trusted_facts import (
-    AssessmentStatus,
-    EvidenceCoverageStatus,
-    FactFreshnessStatus,
-    TrustedFactSnapshot,
-    TrustedFactTrustLevelV2,
-    TrustedFactType,
-)
-from core.auth.approval_leases import ApprovalExecutionLease
 from core.auth.ingress import AuthenticationMethod, IngressKind, IngressSessionAuthorizationSnapshot
 from core.auth.missions import MissionAuthorizationSnapshot
 from core.auth.principals import PrincipalAuthorizationSnapshot
 from core.auth.types import SubjectType
-from core.credentials import CredentialAuthKind
 
 pytestmark = pytest.mark.unit
 
@@ -450,7 +431,6 @@ def test_coordinator_deep_validation_branches():
 
 def test_coordinator_reopen_and_record_branches():
     from core.actions.checkout_models import CheckoutRecoveryRefV2
-    from core.actions.reference_checkout import _CheckoutRecord, _ReferenceBinding
 
     part = MockParticipant()
     coord = ReferenceCheckoutCoordinator(

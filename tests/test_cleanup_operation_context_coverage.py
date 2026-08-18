@@ -5,11 +5,9 @@ from __future__ import annotations
 import pytest
 
 from core.actions.cleanup_operation_context import (
-    CleanupOperationContextV2,
     CleanupRecoveryPolicyV2,
     CleanupRecoverySubjectV2,
     DefaultCleanupOperationAuthorityV2,
-    ParticipantRetryPolicyV2,
     canonical_cleanup_subject_digest,
 )
 

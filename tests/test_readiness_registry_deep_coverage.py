@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import time
-from unittest.mock import MagicMock
 import pytest
 
 from core.actions.provider_mounts import DefaultProviderMountRegistry

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import os
 import socket
 import struct
 import threading
@@ -29,9 +30,7 @@ from core.c2.control_models import (
 )
 from core.c2.control_protocol import FRAME_MAGIC, ControlProtocolCodec, strict_json_loads
 from core.c2.control_signing import ControlSignerV2
-
 from tests.helpers.c2_authority import provision_test_authority
-import os
 
 pytestmark = pytest.mark.unit
 

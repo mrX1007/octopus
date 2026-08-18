@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
+
 import pytest
 
 from core.actions.catalog import ActionCatalog
 from core.actions.child_execution import (
-    ChildExecutionBridge,
-    RootExecutionAuthorityBundleV2,
     RootExecutionBridge,
 )
 from core.actions.execution_budget import (
@@ -16,16 +15,13 @@ from core.actions.execution_budget import (
     OwnedExecutionBudgetAuthorityV2,
 )
 from core.actions.executor import ActionExecutor, V2ExecutionUnavailableError
-from core.execution.policy import ExecutionPolicy
 from core.actions.request_v2 import (
-    ActionRequestV2,
     ActionRequestV2EnvelopeDecoder,
-    BoundedActionRequestV2Envelope,
 )
-from core.actions.schema_bindings import get_v2_schema_binding
 from core.auth.ingress import IngressSession
 from core.auth.ingress_store import IngressSessionStore
 from core.auth.types import IngressChannelBinding, Principal, PrincipalRole
+from core.execution.policy import ExecutionPolicy
 
 pytestmark = pytest.mark.unit
 
@@ -121,7 +117,7 @@ def test_execute_v2_root_provider_not_mounted():
 
 
 def test_execute_v2_root_request_mismatch():
-    executor, envelope, bridge = _setup_executor_and_root_bridge()
+    executor, _envelope, bridge = _setup_executor_and_root_bridge()
     wrong_envelope = ActionRequestV2EnvelopeDecoder.decode(
         json.dumps(
             {

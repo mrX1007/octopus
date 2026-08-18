@@ -7,22 +7,12 @@ import pytest
 from core.actions.checkout_models import (
     ApprovalCheckoutRequest,
     FactCheckoutRequest,
-    ReferenceAccessMode,
     ReferenceKind,
 )
 from core.actions.reference_checkout import (
     ReferenceCheckoutCoordinator,
     ReferenceCheckoutError,
     _metadata_matches_kind,
-)
-from core.actions.reference_snapshots import (
-    C2ReferenceSnapshot,
-    CredentialReferenceSnapshot,
-    DeploymentReferenceSnapshot,
-    NonSensitiveArtifactReferenceSnapshot,
-    PivotRouteReferenceSnapshot,
-    SensitiveArtifactReferenceSnapshot,
-    SessionReferenceSnapshot,
 )
 from tests.checkout_test_support import build_fixture
 

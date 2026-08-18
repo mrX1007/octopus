@@ -11,7 +11,6 @@ from core.actions.provider_mounts import (
     ProviderMountSpec,
     ProviderTransport,
     V2ActionNotFoundInMountRegistry,
-    canonical_provider_mount_snapshot_digest,
     get_provider_mount_registry,
 )
 from core.actions.readiness import (
@@ -20,7 +19,6 @@ from core.actions.readiness import (
 )
 from core.actions.readiness_registry import (
     ReadinessRegistry,
-    canonical_provider_readiness_digest,
 )
 
 pytestmark = pytest.mark.unit
@@ -133,7 +131,6 @@ def test_readiness_registry_unregistered_and_cache():
         reason_codes=snap.reason_codes,
         snapshot_digest="",
     )
-    from core.actions.readiness import seal_provider_readiness_snapshot
 
     sealed_expired = seal_provider_readiness_snapshot(expired_snap)
     with pytest.raises(ValueError, match="expired_readiness_snapshot"):

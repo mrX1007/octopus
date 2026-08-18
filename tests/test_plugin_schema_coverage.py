@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import math
 import pytest
 
 from core.plugins.schema import (
-    INPUT_SCHEMA_STRING_FORMATS,
-    INPUT_SCHEMA_TYPES,
     empty_input_schema,
     normalize_input_schema,
     validate_input_parameters,
@@ -72,7 +69,7 @@ def test_normalize_input_schema_invalid():
         normalize_input_schema({"type": "object", "properties": {}, "required": [], "additionalProperties": True})
 
     # properties not a dict
-    with pytest.raises(ValueError, match="input_schema.properties"):
+    with pytest.raises(ValueError, match=r"input_schema\.properties"):
         normalize_input_schema(
             {"type": "object", "properties": "not a dict", "required": [], "additionalProperties": False}
         )

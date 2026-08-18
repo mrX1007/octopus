@@ -11,7 +11,6 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from core.c2.control_commands import (
-    C2ControlAction,
     ParticipantControlReceiptV2,
     SignedControlResponseV2,
 )

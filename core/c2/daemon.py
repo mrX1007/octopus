@@ -22,7 +22,6 @@ from contextlib import asynccontextmanager, suppress
 from typing import Any, Literal, cast
 
 import uvicorn
-from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import FastAPI, HTTPException, Request
 

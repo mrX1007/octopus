@@ -117,7 +117,7 @@ def test_authenticator_and_stream_lifecycle():
         auth.verify(expected="not_a_tag", source=view)  # type: ignore
 
     # Verify with invalid algorithm
-    bad_algo_tag = SensitiveIntegrityTagV2(
+    SensitiveIntegrityTagV2(
         key_id="k1",
         algorithm="hmac-sha256-v2",
         domain="domain.v1",

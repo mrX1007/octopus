@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+
 import pytest
 
 from core.actions.execution_results_v2 import (
@@ -17,15 +18,12 @@ from core.actions.execution_results_v2 import (
     ExecutionResultRefV2,
     ExecutionResultV2,
     ExecutionStatusV2,
-    FinalizationPersistedV2,
-    FinalizationRetryEnqueuedV2,
     InvocationFinalizationFactoryV2,
     InvocationFinalizationRecordV2,
     InvocationFinalizationRefV2,
     InvocationFinalizationRetryRefV2,
     _require_non_empty_strings,
     _require_unique_string_tuple,
-    canonical_execution_result_digest,
     canonical_invocation_finalization_digest,
     derive_effective_status_and_reasons,
 )

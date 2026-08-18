@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -139,21 +139,23 @@ def test_cmd_functions(tmp_path: Path):
 
 
 def test_main_cli_subcommands():
-    with patch(
-        "scripts.quality.mypy_gate.inventory_repository",
-        return_value=SimpleNamespace(ok=True, violations=[], references=[]),
+    with (
+        patch(
+            "scripts.quality.mypy_gate.inventory_repository",
+            return_value=SimpleNamespace(ok=True, violations=[], references=[]),
+        ),
+        patch("scripts.quality.mypy_gate.run_mypy_check", return_value=0),
     ):
-        with patch("scripts.quality.mypy_gate.run_mypy_check", return_value=0):
-            assert mypy_gate.main(["check"]) == 0
-            assert mypy_gate.main(["inventory"]) == 0
-            assert mypy_gate.main(["freeze"]) == 1
-            assert mypy_gate.main(["authorize-modify", "--path", "test.py"]) == 1
-            assert mypy_gate.main(["authorize-stub", "--path", "test.py"]) == 1
-            assert mypy_gate.main(["deauthorize", "--path", "test.py"]) == 1
-            assert mypy_gate.main(["verify-overrides"]) in (0, 1)
-            assert mypy_gate.main(["verify-config-consumers"]) == 0
-            assert mypy_gate.main(["finalization-ready"]) in (0, 1)
-            assert mypy_gate.main(["complete"]) == 1
+        assert mypy_gate.main(["check"]) == 0
+        assert mypy_gate.main(["inventory"]) == 0
+        assert mypy_gate.main(["freeze"]) == 1
+        assert mypy_gate.main(["authorize-modify", "--path", "test.py"]) == 1
+        assert mypy_gate.main(["authorize-stub", "--path", "test.py"]) == 1
+        assert mypy_gate.main(["deauthorize", "--path", "test.py"]) == 1
+        assert mypy_gate.main(["verify-overrides"]) in (0, 1)
+        assert mypy_gate.main(["verify-config-consumers"]) == 0
+        assert mypy_gate.main(["finalization-ready"]) in (0, 1)
+        assert mypy_gate.main(["complete"]) == 1
 
 
 def test_run_mypy_check(tmp_path: Path):
@@ -167,7 +169,7 @@ def test_run_mypy_check(tmp_path: Path):
     )
 
     # Missing pyproject.toml
-    with pytest.raises(mypy_gate.MypyGateError, match="missing pyproject.toml"):
+    with pytest.raises(mypy_gate.MypyGateError, match=r"missing pyproject\.toml"):
         mypy_gate.run_mypy_check(tmp_path)
 
     # Valid pyproject.toml

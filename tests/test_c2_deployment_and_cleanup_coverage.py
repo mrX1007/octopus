@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-import json
-from unittest.mock import MagicMock
+
 import pytest
 
 from core.c2.artifact_bindings import (
@@ -12,27 +11,18 @@ from core.c2.artifact_bindings import (
     compute_artifact_binding_digest,
 )
 from core.c2.cleanup_effect_models import (
-    C2CleanupAttemptRecordV1,
-    C2CleanupAttemptStateV1,
-    C2CleanupBackendRequestV1,
-    C2CleanupEffectOutcomeV1,
-    C2CleanupEffectProbeV1,
-    C2CleanupEffectReceiptV1,
     C2CleanupPlanV1,
 )
 from core.c2.cleanup_effect_participant import C2CleanupExternalEffectParticipant
 from core.c2.deployment_attempts import (
-    DeploymentAttemptProbe,
     DeploymentAttemptRecord,
     DeploymentAttemptState,
-    DeploymentProbeOutcome,
-    DeploymentStartReceipt,
 )
-from core.c2.deployment_cleanup import DeploymentCleanupManager, DeploymentCleanupRecipe
+from core.c2.deployment_cleanup import DeploymentCleanupManager
 from core.c2.deployment_effect_participant import DeploymentEffectParticipant
-from core.c2.deployment_outbox import DeploymentOutboxMessage, DeploymentOutboxStore
-from core.c2.deployment_store import DeploymentRecordV1, DeploymentStore
-from core.c2.enrollment_service import EnrollmentRecordV1, EnrollmentService, EnrollmentStateV1
+from core.c2.deployment_outbox import DeploymentOutboxStore
+from core.c2.deployment_store import DeploymentStore
+from core.c2.enrollment_service import EnrollmentService, EnrollmentStateV1
 from core.c2.enrollment_transaction_participant import C2EnrollmentTransactionParticipant
 from core.c2.resource_models import ManagedC2ResourceKind, ManagedC2ResourceStateV1
 from core.c2.resource_payload_registry import (
@@ -40,7 +30,7 @@ from core.c2.resource_payload_registry import (
     ResourcePayloadDigestMismatchError,
     UnknownResourceSchemaError,
 )
-from core.cli.auth_session import CLIAuthSessionManager, get_cli_auth_manager
+from core.cli.auth_session import get_cli_auth_manager
 
 pytestmark = pytest.mark.unit
 

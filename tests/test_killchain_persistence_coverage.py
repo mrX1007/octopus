@@ -43,7 +43,7 @@ def test_plant_persistence_root_all_methods(tmp_path: Path):
 
     with patch("core.killchain.persistence._ssh_connect", return_value=(mock_client, None)):
         with patch("core.killchain.persistence._ssh_exec", side_effect=fake_exec):
-            with patch("os.path.isfile", side_effect=lambda p: True if "pub" in p else False):
+            with patch("os.path.isfile", side_effect=lambda p: "pub" in p):
                 with patch("subprocess.run"):
                     with patch("builtins.open", mock_open(read_data="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA test\n")):
                         with patch("core.opsec.artifact_mgr.ArtifactManager"):
