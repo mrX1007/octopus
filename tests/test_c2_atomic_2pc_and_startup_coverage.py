@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import os
 import time
 from unittest.mock import MagicMock
@@ -10,6 +11,7 @@ import pytest
 
 from core.actions.provider_mounts import DefaultProviderMountRegistry
 from core.c2 import daemon
+from core.c2.control_auth import VerifiedMutationAuthority
 from core.c2.control_commands import (
     BoundedControlErrorV1,
     BoundedControlErrorV2,
@@ -65,7 +67,26 @@ def test_control_transaction_coordinator_lifecycle():
         payload_digest=auth.request_digest,
         canonical_payload_b64u="e30",
     )
-    err = coord.execute_transaction(req)
+    mut_auth = VerifiedMutationAuthority(
+        operator_id="op_test",
+        subject_id=auth.subject_id,
+        mission_id=auth.mission_id,
+        peer_pid=os.getpid(),
+        peer_uid=os.getuid(),
+        peer_gid=os.getgid(),
+        key_id=auth.key_id,
+        key_revision=1,
+        operator_revision=1,
+        peer_binding_revision=1,
+        mission_grant_revision=1,
+        request_digest=auth.request_digest,
+        authorization_issued_at_ms=auth.issued_at_ms,
+        authorization_expires_at_ms=auth.expires_at_ms,
+        transaction_id=auth.transaction_id,
+        participant_id=auth.participant_id,
+        action_id=auth.action_id,
+    )
+    err = coord.execute_transaction(req, authority=mut_auth)
     assert isinstance(err, (BoundedControlErrorV1, BoundedControlErrorV2))
     assert err.reason_code in (C2ControlErrorCodeV1.UNAVAILABLE, C2ControlErrorCodeV2.UNAVAILABLE)
     assert "unregistered_participant" in str(err.detail_ref)
@@ -113,7 +134,7 @@ def test_control_transaction_coordinator_lifecycle():
     mock_participant.finalize_visibility.return_value = final_receipt
 
     coord.register_participant("part_c2_test", mock_participant)
-    result = coord.execute_transaction(req)
+    result = coord.execute_transaction(req, authority=mut_auth)
     assert result == final_receipt
     assert mock_participant.prepare.called
     assert mock_participant.commit.called
@@ -125,7 +146,7 @@ def test_control_transaction_coordinator_lifecycle():
         reason_code=C2ControlErrorCodeV2.MALFORMED, retryable=False, detail_ref="prep_failed"
     )
     mock_participant.prepare.return_value = prep_err
-    res_err = coord.execute_transaction(req)
+    res_err = coord.execute_transaction(req, authority=mut_auth)
     assert res_err == prep_err
     assert not mock_participant.commit.called
     assert not mock_participant.finalize_visibility.called
@@ -137,9 +158,10 @@ def test_control_transaction_coordinator_lifecycle():
         reason_code=C2ControlErrorCodeV2.IDEMPOTENCY_CONFLICT, retryable=False, detail_ref="commit_failed"
     )
     mock_participant.commit.return_value = commit_err
-    res_commit_err = coord.execute_transaction(req)
+    res_commit_err = coord.execute_transaction(req, authority=mut_auth)
     assert res_commit_err == commit_err
-    mock_participant.rollback.assert_called_once_with(prep_receipt)
+    expected_abort_auth = dataclasses.replace(mut_auth, action_id="abort_c2_resource")
+    mock_participant.rollback.assert_called_once_with(prep_receipt, authority=expected_abort_auth)
     assert not mock_participant.finalize_visibility.called
 
 
@@ -156,7 +178,8 @@ def test_daemon_startup_fails_closed_on_invalid_socket(monkeypatch):
 
 
 def test_v2_execution_containment_invariants():
-    """Verify all 20 V2 providers remain mounted=False."""
+    """Verify 4 leaf V2 providers are mounted and remaining 16 remain mounted=False."""
     registry = DefaultProviderMountRegistry()
     assert len(registry.snapshots()) == 20
-    assert all(snap.spec.mounted is False for snap in registry.snapshots())
+    mounted = {snap.spec.action_id for snap in registry.snapshots() if snap.spec.mounted}
+    assert mounted == {"c2:c2_enroll", "c2:c2_deploy", "c2:c2_task", "c2:c2_cleanup"}

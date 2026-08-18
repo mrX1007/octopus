@@ -77,13 +77,15 @@ def test_gate_no_production_v1_v2_aliasing():
 
 
 def test_gate_all_twenty_v2_providers_unmounted_and_fail_closed():
-    """Assert all 20 V2 providers remain mounted=False."""
+    """Assert 4 leaf providers mounted and 16 remaining V2 providers remain mounted=False."""
     registry = DefaultProviderMountRegistry()
     snapshots = registry.snapshots()
     assert len(snapshots) == 20, f"Expected exactly 20 V2 provider mount snapshots, got {len(snapshots)}"
 
+    mounted = {snapshot.spec.action_id for snapshot in snapshots if snapshot.spec.mounted}
+    assert mounted == {"c2:c2_enroll", "c2:c2_deploy", "c2:c2_task", "c2:c2_cleanup"}
+
     for snapshot in snapshots:
-        assert snapshot.spec.mounted is False, f"Provider {snapshot.spec.action_id} must have mounted=False"
         assert snapshot.spec.configured is True, f"Provider {snapshot.spec.action_id} must be configured"
         assert snapshot.spec.typed_action_supported is True
         assert snapshot.spec.raw_command_supported is False

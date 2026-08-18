@@ -37,7 +37,17 @@ def test_provider_mount_registry_has_20_v2_entries() -> None:
 
 def test_provider_rollout_does_not_claim_premature_mounts() -> None:
     snapshots = get_provider_mount_registry().snapshots()
-    assert not any(snapshot.spec.mounted for snapshot in snapshots)
+    mounted_actions = {snapshot.spec.action_id for snapshot in snapshots if snapshot.spec.mounted}
+    assert mounted_actions == {
+        "c2:c2_enroll",
+        "c2:c2_deploy",
+        "c2:c2_task",
+        "c2:c2_cleanup",
+    }
+    assert not any(
+        snapshot.spec.action_id in ("c2:dns_c2_channel", "c2:c2_channel_create") and snapshot.spec.mounted
+        for snapshot in snapshots
+    )
 
 
 def test_mount_revisions_digests_and_current_checks_are_exact() -> None:
@@ -84,5 +94,5 @@ def test_manifest_snapshot_matches_runtime_registry() -> None:
     checked_in = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert checked_in == generate_mount_manifest()
     assert checked_in["entry_count"] == 20
-    assert not any(entry["spec"]["mounted"] for entry in checked_in["entries"])
+    assert sum(1 for entry in checked_in["entries"] if entry["spec"]["mounted"]) == 4
     assert not any("available" in entry["spec"] for entry in checked_in["entries"])

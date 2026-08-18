@@ -1,5 +1,4 @@
 {
-  "entry_count": 20,
   "entries": [
     {
       "mount_digest": "sha256:93d1a9051849f4a26b9693b6cae476e9a0e67f99a2e10c1a9c9091fbfe45ba6b",
@@ -20,7 +19,7 @@
       }
     },
     {
-      "mount_digest": "sha256:0a425485ced8abd5aa64c68819b360633b37ff3d76d24dca33911e06885afa06",
+      "mount_digest": "sha256:024fcbbada2a1a952789539cfa2ba9fe2b93a518841f8c40800f61cb22df1d51",
       "revision": 2,
       "spec": {
         "action_id": "c2:c2_cleanup",
@@ -28,7 +27,7 @@
         "adapter_class": "core.actions.adapters_c2.C2CleanupAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": false,
+        "mounted": true,
         "provider_owner": "c2_cleanup",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -38,7 +37,7 @@
       }
     },
     {
-      "mount_digest": "sha256:0563b9c97e3021cb1ccb796603d5370c94b1908baded1c4e39144f380220e682",
+      "mount_digest": "sha256:ec4076507addbedcb4d8135c78ec8d09ac7d6b7d2e53c5294035f90e169beb94",
       "revision": 3,
       "spec": {
         "action_id": "c2:c2_deploy",
@@ -46,7 +45,7 @@
         "adapter_class": "core.actions.adapters_c2.C2DeployAdapter",
         "configured": true,
         "execution_mode": "cooperative_in_process",
-        "mounted": false,
+        "mounted": true,
         "provider_owner": "c2_deploy",
         "provider_transport": "in_process",
         "raw_command_supported": false,
@@ -56,7 +55,7 @@
       }
     },
     {
-      "mount_digest": "sha256:ad94ad8e53ad78b2bdb9b79a0559f9b644eae634d504679d106d9e9916c38770",
+      "mount_digest": "sha256:c25832cd420f8ac557ce621e5d37f7987995232d7fedf8d34b2a6d1c74ac451a",
       "revision": 4,
       "spec": {
         "action_id": "c2:c2_enroll",
@@ -64,7 +63,7 @@
         "adapter_class": "core.actions.adapters_c2.C2EnrollAdapter",
         "configured": true,
         "execution_mode": "deadline_local_ipc",
-        "mounted": false,
+        "mounted": true,
         "provider_owner": "c2_enroll",
         "provider_transport": "local_daemon_ipc",
         "raw_command_supported": false,
@@ -74,7 +73,7 @@
       }
     },
     {
-      "mount_digest": "sha256:ec2245064f4d8c5a9cc9fe4a527a23a9e7caeb584767397b89299e96d7f32b9b",
+      "mount_digest": "sha256:2e388a90f22c82d79cf852913d1095283d8bba4b6676668a955cdde7fd2327b2",
       "revision": 5,
       "spec": {
         "action_id": "c2:c2_task",
@@ -82,7 +81,7 @@
         "adapter_class": "core.actions.adapters_c2.C2TaskAdapter",
         "configured": true,
         "execution_mode": "deadline_local_ipc",
-        "mounted": false,
+        "mounted": true,
         "provider_owner": "c2_task",
         "provider_transport": "local_daemon_ipc",
         "raw_command_supported": false,
@@ -362,5 +361,6 @@
       }
     }
   ],
+  "entry_count": 20,
   "schema_version": "2.0"
 }

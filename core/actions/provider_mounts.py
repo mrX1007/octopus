@@ -169,6 +169,7 @@ def _spec(
     provider_transport: ProviderTransport,
     execution_mode: ProviderExecutionModeV2,
     readiness_probe_id: str,
+    mounted: bool = False,
 ) -> ProviderMountSpec:
     return ProviderMountSpec(
         schema_version=PROVIDER_MOUNT_SPEC_SCHEMA_VERSION,
@@ -180,7 +181,7 @@ def _spec(
         execution_mode=execution_mode,
         readiness_probe_id=readiness_probe_id,
         configured=True,
-        mounted=False,
+        mounted=mounted,
         typed_action_supported=True,
         raw_command_supported=False,
     )
@@ -321,6 +322,7 @@ _DEFAULT_V2_MOUNT_SPECS: tuple[ProviderMountSpec, ...] = (
         _DAEMON,
         _DEADLINE_IPC,
         "probe:c2_enroll",
+        mounted=True,
     ),
     _spec(
         "c2:c2_deploy",
@@ -329,6 +331,7 @@ _DEFAULT_V2_MOUNT_SPECS: tuple[ProviderMountSpec, ...] = (
         _IN_PROCESS,
         _COOPERATIVE,
         "probe:c2_deploy",
+        mounted=True,
     ),
     _spec(
         "c2:c2_channel_create",
@@ -345,6 +348,7 @@ _DEFAULT_V2_MOUNT_SPECS: tuple[ProviderMountSpec, ...] = (
         _DAEMON,
         _DEADLINE_IPC,
         "probe:c2_task",
+        mounted=True,
     ),
     _spec(
         "c2:c2_cleanup",
@@ -353,6 +357,7 @@ _DEFAULT_V2_MOUNT_SPECS: tuple[ProviderMountSpec, ...] = (
         _IN_PROCESS,
         _COOPERATIVE,
         "probe:c2_cleanup",
+        mounted=True,
     ),
 )
 
