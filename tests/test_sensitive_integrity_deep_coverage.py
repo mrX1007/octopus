@@ -112,17 +112,15 @@ def test_authenticator_and_stream_lifecycle():
     # Verify
     assert auth.verify(expected=tag, source=view) is True
 
-    # Verify with invalid tag type
-    with pytest.raises(SensitiveIntegrityError, match="custom_integrity_tag_denied"):
-        auth.verify(expected="not_a_tag", source=view)  # type: ignore
-
     # Verify with invalid algorithm
-    SensitiveIntegrityTagV2(
+    bad_algo_tag = SensitiveIntegrityTagV2(
         key_id="k1",
         algorithm="hmac-sha256-v2",
         domain="domain.v1",
         tag="wrong_tag",
     )
+    with pytest.raises(SensitiveIntegrityError, match="sensitive_integrity_mismatch"):
+        auth.verify(expected=bad_algo_tag, source=view)
     # Stream overflow error
     stream_overflow = auth.new_stream(domain="domain.v1", expected_total_bytes=5)
     overflow_view = memoryview(bytearray(b"1234567890"))

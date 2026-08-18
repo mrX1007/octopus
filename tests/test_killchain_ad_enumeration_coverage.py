@@ -109,8 +109,13 @@ def test_ldap_search_cli_and_fallbacks():
     target = "10.0.0.1"
     creds = {"user": "admin", "password": "pwd", "domain": "corp.local", "nthash": ""}
 
-    res = enum_mod._ldap_search_cli(target, "DC=corp,DC=local", "(objectClass=*)", ["sAMAccountName"], creds)
-    assert "Credential-bearing ldapsearch CLI fallback is disabled" in res
+    with patch("shutil.which", return_value="/bin/ldapsearch"):
+        res = enum_mod._ldap_search_cli(target, "DC=corp,DC=local", "(objectClass=*)", ["sAMAccountName"], creds)
+        assert "Credential-bearing ldapsearch CLI fallback is disabled" in res
+
+    with patch("shutil.which", return_value=None):
+        res_none = enum_mod._ldap_search_cli(target, "DC=corp,DC=local", "(objectClass=*)", ["sAMAccountName"], creds)
+        assert "ldapsearch not found in PATH" in res_none
 
     with patch("core.killchain.ad.enumeration._ldap_search_impacket", return_value=None):
         with patch("core.killchain.ad.enumeration._ldap_search_ldap3", return_value=None):

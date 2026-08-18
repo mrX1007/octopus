@@ -9,6 +9,7 @@ import os
 import re
 import stat
 import uuid
+from contextlib import suppress
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization

@@ -230,6 +230,7 @@ def test_budget_authority_validation_branches():
         max_child_depth=2,
         cancellation_token=token,
     )
+    assert root_budget.max_output_bytes == 1000
 
     store = IngressSessionStore()
     from core.auth.ingress import IngressSession
