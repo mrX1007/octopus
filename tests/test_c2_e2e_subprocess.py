@@ -198,11 +198,13 @@ def test_c2_socketpair_lifecycle_and_restart_persistence(tmp_path, monkeypatch):
 
 def test_c2_subprocess_restart_recovery_and_replay_gate(tmp_path: pytest.TempPathFactory):
     data_dir = str(tmp_path)
+    key_dir = os.path.join(data_dir, "keys")
+    os.makedirs(key_dir, mode=0o700, exist_ok=True)
     db_path = os.path.join(data_dir, "octopus_c2_test.db")
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
     sock_path = os.path.join(project_root, "tests", f"s_{uuid.uuid4().hex[:4]}.sock")
-    key_file = os.path.join(data_dir, "daemon_response_ed25519.key")
-    service_id_file = os.path.join(data_dir, "service_id")
+    key_file = os.path.join(key_dir, "control-response.key")
+    service_id_file = os.path.join(key_dir, "service_id")
 
     # Setup database with operator and authority state
     _setup_operator_state(db_path)
@@ -220,10 +222,12 @@ def test_c2_subprocess_restart_recovery_and_replay_gate(tmp_path: pytest.TempPat
     )
     with open(key_file, "wb") as f:
         f.write(raw_resp_seed)
+    os.chmod(key_file, 0o600)
 
     subproc_service_id = f"srv_subproc_{uuid.uuid4().hex[:8]}"
     with open(service_id_file, "w") as f:
         f.write(subproc_service_id)
+    os.chmod(service_id_file, 0o600)
 
     python_path = os.pathsep.join(p for p in [project_root, os.environ.get("PYTHONPATH", "")] if p)
 
