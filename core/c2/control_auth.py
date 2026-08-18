@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ from typing import Any, Protocol, runtime_checkable
 from core.c2.control_commands import C2ControlAction
 from core.c2.control_peer import PeerPrincipal
 from core.secrets import SecretValue
+
+_HEX_64_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class OperatorRole(str, Enum):
@@ -47,7 +50,15 @@ class AuthenticatedControlPrincipal:
 
 @dataclass(frozen=True)
 class VerifiedMutationAuthority:
-    """Immutable verified mutation authority required for all state mutations (§14.3, §14.4)."""
+    """Immutable verified mutation authority required for all state mutations (§14.3, §14.4).
+
+    Security invariants:
+    - peer_pid comes only from server-observed OS peer credentials and cannot be
+      provided by untrusted request payloads.
+    - peer_uid and peer_gid represent the durable grant identity.
+    - peer_pid represents accepted-socket/session evidence for the active connection.
+    - All revision, ID, and digest bindings are mandatory without defaults.
+    """
 
     operator_id: str
     subject_id: str
@@ -63,9 +74,68 @@ class VerifiedMutationAuthority:
     request_digest: str
     authorization_issued_at_ms: int
     authorization_expires_at_ms: int
-    transaction_id: str = ""
-    participant_id: str = ""
-    action_id: str = ""
+    transaction_id: str
+    participant_id: str
+    action_id: str
+
+    def __post_init__(self) -> None:
+        # 1. Exact bounded string validation
+        for field_name in (
+            "operator_id",
+            "subject_id",
+            "mission_id",
+            "key_id",
+            "transaction_id",
+            "participant_id",
+            "action_id",
+        ):
+            val = getattr(self, field_name)
+            if type(val) is not str:
+                raise TypeError(f"{field_name} must be str, got {type(val).__name__}")
+            if not (1 <= len(val) <= 256):
+                raise ValueError(f"{field_name} length must be between 1 and 256")
+
+        # 2. Lowercase 64-char SHA-256 request_digest
+        if type(self.request_digest) is not str:
+            raise TypeError("request_digest must be str")
+        if len(self.request_digest) != 64 or not _HEX_64_RE.match(self.request_digest):
+            raise ValueError("request_digest must be a 64-character lowercase hex string")
+
+        # 3. Positive integer revisions
+        for field_name in (
+            "key_revision",
+            "operator_revision",
+            "peer_binding_revision",
+            "mission_grant_revision",
+        ):
+            val = getattr(self, field_name)
+            if type(val) is not int or isinstance(val, bool):
+                raise TypeError(f"{field_name} must be int")
+            if val < 1:
+                raise ValueError(f"{field_name} must be >= 1")
+
+        # 4. Valid peer IDs (peer_pid >= 0, peer_uid >= 0, peer_gid >= 0)
+        for field_name in ("peer_pid", "peer_uid", "peer_gid"):
+            val = getattr(self, field_name)
+            if type(val) is not int or isinstance(val, bool):
+                raise TypeError(f"{field_name} must be int")
+            if val < 0:
+                raise ValueError(f"{field_name} must be non-negative")
+
+        # 5. Issued / expires timestamp validation and TTL
+        if type(self.authorization_issued_at_ms) is not int or isinstance(self.authorization_issued_at_ms, bool):
+            raise TypeError("authorization_issued_at_ms must be int")
+        if self.authorization_issued_at_ms <= 0:
+            raise ValueError("authorization_issued_at_ms must be positive")
+
+        if type(self.authorization_expires_at_ms) is not int or isinstance(self.authorization_expires_at_ms, bool):
+            raise TypeError("authorization_expires_at_ms must be int")
+        if self.authorization_expires_at_ms <= self.authorization_issued_at_ms:
+            raise ValueError("authorization_expires_at_ms must be greater than authorization_issued_at_ms")
+
+        # Protocol max TTL: 300,000 ms (5 minutes)
+        if (self.authorization_expires_at_ms - self.authorization_issued_at_ms) > 300_000:
+            raise ValueError("TTL cannot exceed 300,000 ms (5 minutes)")
 
 
 @runtime_checkable
@@ -108,7 +178,7 @@ class AuthorityFence:
         resolved_key: Any = None,
         now_ms: int | None = None,
     ) -> None:
-        if type(authority) is not VerifiedMutationAuthority and not isinstance(authority, VerifiedMutationAuthority):
+        if type(authority) is not VerifiedMutationAuthority:
             raise TypeError("authority must be an exact VerifiedMutationAuthority instance")
 
         op_id = authority.operator_id

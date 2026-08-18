@@ -8,6 +8,7 @@ import hmac
 import os
 import sqlite3
 import time
+import uuid
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -94,8 +95,9 @@ TEST_KEY_ID = "k_test_62"
 def _make_auth_v2(
     action: str | C2ControlAction = "ping",
     tx_id: str = "tx_62",
-    nonce: str = "nonce_12345678901234",
+    nonce: str | None = None,
     key_id: str = TEST_KEY_ID,
+    participant_id: str = "part_2pc",
     subject_id: str = "s_test",
     mission_id: str = "m_test",
     action_id: str | None = None,
@@ -111,6 +113,7 @@ def _make_auth_v2(
     iss = now_ms if issued_at_ms is None else issued_at_ms
     exp = (now_ms + 60000) if expires_at_ms is None else expires_at_ms
     act_enum = C2ControlAction(action) if isinstance(action, str) else action
+    req_nonce = nonce or f"nonce_{uuid.uuid4().hex[:14]}"
 
     signer = ControlSignerV2(key_id, TEST_ED_PRIV)
     aid = action_id or act_enum.value
@@ -121,14 +124,14 @@ def _make_auth_v2(
             protocol_version="2.0",
             key_id=key_id,
             transaction_id=tx_id,
-            participant_id="c2_daemon",
+            participant_id=participant_id,
             mission_id=mission_id,
             subject_id=subject_id,
             action_id=aid,
             coordinator_revision=1,
             issued_at_ms=iss,
             expires_at_ms=exp,
-            nonce=nonce,
+            nonce=req_nonce,
         ),
         payload_schema_id=payload_schema_id,
         payload_digest=payload_digest
@@ -990,9 +993,9 @@ def _setup_participant_with_auth(
         request_digest="0" * 64,
         authorization_issued_at_ms=now_ms - 1000,
         authorization_expires_at_ms=now_ms + 100000,
-        transaction_id="",
+        transaction_id="tx_default",
         participant_id=participant_id,
-        action_id="",
+        action_id="prepare_c2_resource",
     )
     return part, auth
 
@@ -1168,7 +1171,7 @@ def test_different_operator_or_key_revision_rejected():
 def test_exception_after_cas_rolls_transaction_back():
     """Verify deterministic rollback on failpoint injection after CAS."""
     part, _ = _setup_participant_with_auth("part_fp_1")
-    auth = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_fp_1")
+    auth = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_fp_1", participant_id="part_fp_1")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1182,7 +1185,7 @@ def test_exception_after_cas_rolls_transaction_back():
     assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
     part.set_failpoint(TransactionFailpoint.AFTER_CAS)
-    commit_auth = _make_auth_v2(action="commit_c2_resource", tx_id="tx_fp_1")
+    commit_auth = _make_auth_v2(action="commit_c2_resource", tx_id="tx_fp_1", participant_id="part_fp_1")
     commit_res = part.commit(
         ParticipantControlRequestV2(
             action=C2ControlAction.COMMIT_C2_RESOURCE,
@@ -1226,7 +1229,7 @@ def test_crash_after_cas_recovers_deterministically():
 def test_abort_finalized_transaction_rejected():
     """Verify that a finalized visible transaction cannot be aborted."""
     part, _ = _setup_participant_with_auth("part_ab_1")
-    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_ab_1")
+    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_ab_1", participant_id="part_ab_1")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1239,7 +1242,7 @@ def test_abort_finalized_transaction_rejected():
     )
     assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_ab_1")
+    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_ab_1", participant_id="part_ab_1")
     commit = part.commit(
         ParticipantControlRequestV2(
             action=C2ControlAction.COMMIT_C2_RESOURCE,
@@ -1254,7 +1257,9 @@ def test_abort_finalized_transaction_rejected():
     )
     assert isinstance(commit, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth3 = _make_auth_v2(action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_ab_1")
+    auth3 = _make_auth_v2(
+        action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_ab_1", participant_id="part_ab_1"
+    )
     fin = part.finalize_visibility(
         ParticipantControlRequestV2(
             action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
@@ -1269,7 +1274,7 @@ def test_abort_finalized_transaction_rejected():
     )
     assert isinstance(fin, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth4 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_ab_1")
+    auth4 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_ab_1", participant_id="part_ab_1")
     ab_res = part.abort(
         ParticipantControlRequestV2(
             action=C2ControlAction.ABORT_C2_RESOURCE,
@@ -1287,11 +1292,10 @@ def test_abort_finalized_transaction_rejected():
 
 
 def test_query_without_transaction_returns_error():
-    """Verify querying non-existent transaction returns not found."""
-    part = C2DaemonResourceParticipant("part_q_1")
-    auth = _make_auth_v2(action="ping", tx_id="tx_non_existent_123")
+    part, _ = _setup_participant_with_auth("part_2pc")
+    auth = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_no_exist")
     req = ParticipantControlRequestV2(
-        action=C2ControlAction.PING,
+        action=C2ControlAction.PREPARE_C2_RESOURCE,
         authorization=auth,
         payload_schema_id="schema:test",
         payload_digest=auth.request_digest,
@@ -1305,7 +1309,7 @@ def test_query_without_transaction_returns_error():
 def test_identical_commit_retry_returns_identical_persisted_receipt():
     """Verify commit retry with matching request digest returns idempotent stored receipt."""
     part, _ = _setup_participant_with_auth("part_idem_commit")
-    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_c")
+    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_c", participant_id="part_idem_commit")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1318,7 +1322,7 @@ def test_identical_commit_retry_returns_identical_persisted_receipt():
     )
     assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_idem_c")
+    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_idem_c", participant_id="part_idem_commit")
     req = ParticipantControlRequestV2(
         action=C2ControlAction.COMMIT_C2_RESOURCE,
         authorization=auth2,
@@ -1340,7 +1344,7 @@ def test_identical_commit_retry_returns_identical_persisted_receipt():
 def test_changed_commit_retry_returns_idempotency_conflict():
     """Verify commit retry with different request digest returns IDEMPOTENCY_CONFLICT."""
     part, _ = _setup_participant_with_auth("part_idem_conf")
-    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_conf")
+    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_conf", participant_id="part_idem_conf")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1357,6 +1361,7 @@ def test_changed_commit_retry_returns_idempotency_conflict():
         action="commit_c2_resource",
         tx_id="tx_idem_conf",
         nonce="nonce_orig_12345678",
+        participant_id="part_idem_conf",
     )
     req1 = ParticipantControlRequestV2(
         action=C2ControlAction.COMMIT_C2_RESOURCE,
@@ -1374,6 +1379,7 @@ def test_changed_commit_retry_returns_idempotency_conflict():
         action="commit_c2_resource",
         tx_id="tx_idem_conf",
         nonce="nonce_changed_123456",
+        participant_id="part_idem_conf",
     )
     req2 = ParticipantControlRequestV2(
         action=C2ControlAction.COMMIT_C2_RESOURCE,
@@ -1392,7 +1398,7 @@ def test_changed_commit_retry_returns_idempotency_conflict():
 def test_identical_finalize_retry_returns_identical_receipt():
     """Verify finalize retry with identical request returns identical receipt."""
     part, _ = _setup_participant_with_auth("part_idem_fin")
-    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_f")
+    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_f", participant_id="part_idem_fin")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1405,7 +1411,7 @@ def test_identical_finalize_retry_returns_identical_receipt():
     )
     assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_idem_f")
+    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_idem_f", participant_id="part_idem_fin")
     commit = part.commit(
         ParticipantControlRequestV2(
             action=C2ControlAction.COMMIT_C2_RESOURCE,
@@ -1420,7 +1426,9 @@ def test_identical_finalize_retry_returns_identical_receipt():
     )
     assert isinstance(commit, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth3 = _make_auth_v2(action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_idem_f")
+    auth3 = _make_auth_v2(
+        action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY, tx_id="tx_idem_f", participant_id="part_idem_fin"
+    )
     req = ParticipantControlRequestV2(
         action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
         authorization=auth3,
@@ -1441,7 +1449,7 @@ def test_identical_finalize_retry_returns_identical_receipt():
 def test_changed_abort_retry_returns_idempotency_conflict():
     """Verify abort retry with different request digest returns IDEMPOTENCY_CONFLICT."""
     part, _ = _setup_participant_with_auth("part_idem_ab")
-    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_ab")
+    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_idem_ab", participant_id="part_idem_ab")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1454,7 +1462,9 @@ def test_changed_abort_retry_returns_idempotency_conflict():
     )
     assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth2 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_idem_ab", nonce="nonce_ab_1_1234567")
+    auth2 = _make_auth_v2(
+        action="abort_c2_resource", tx_id="tx_idem_ab", nonce="nonce_ab_1_1234567", participant_id="part_idem_ab"
+    )
     req1 = ParticipantControlRequestV2(
         action=C2ControlAction.ABORT_C2_RESOURCE,
         authorization=auth2,
@@ -1467,7 +1477,9 @@ def test_changed_abort_retry_returns_idempotency_conflict():
     ab1 = part.abort(req1, authority=_make_mutation_auth(auth2, "part_idem_ab"))
     assert isinstance(ab1, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth3 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_idem_ab", nonce="nonce_ab_2_1234567")
+    auth3 = _make_auth_v2(
+        action="abort_c2_resource", tx_id="tx_idem_ab", nonce="nonce_ab_2_1234567", participant_id="part_idem_ab"
+    )
     req2 = ParticipantControlRequestV2(
         action=C2ControlAction.ABORT_C2_RESOURCE,
         authorization=auth3,
@@ -1485,7 +1497,7 @@ def test_changed_abort_retry_returns_idempotency_conflict():
 def test_committed_hidden_abort_with_failed_compensation_sets_recovery_required():
     """Verify phase transitions to ABORTED on valid abort of committed hidden."""
     part, _ = _setup_participant_with_auth("part_ab_rec")
-    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_comp_1")
+    auth1 = _make_auth_v2(action="prepare_c2_resource", tx_id="tx_comp_1", participant_id="part_ab_rec")
     prep = part.prepare(
         ParticipantControlRequestV2(
             action=C2ControlAction.PREPARE_C2_RESOURCE,
@@ -1498,7 +1510,7 @@ def test_committed_hidden_abort_with_failed_compensation_sets_recovery_required(
     )
     assert isinstance(prep, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_comp_1")
+    auth2 = _make_auth_v2(action="commit_c2_resource", tx_id="tx_comp_1", participant_id="part_ab_rec")
     commit = part.commit(
         ParticipantControlRequestV2(
             action=C2ControlAction.COMMIT_C2_RESOURCE,
@@ -1513,7 +1525,7 @@ def test_committed_hidden_abort_with_failed_compensation_sets_recovery_required(
     )
     assert isinstance(commit, (ParticipantControlReceiptV2, ParticipantControlReceiptV1))
 
-    auth3 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_comp_1")
+    auth3 = _make_auth_v2(action="abort_c2_resource", tx_id="tx_comp_1", participant_id="part_ab_rec")
     ab = part.abort(
         ParticipantControlRequestV2(
             action=C2ControlAction.ABORT_C2_RESOURCE,

@@ -16,9 +16,13 @@ from core.c2.control_auth import (
     AuthorityFence,
     VerifiedMutationAuthority,
 )
+from core.c2.control_boundary import (
+    ControlReplayStore,
+    NotAuthorizedControlRequest,
+    ReplayControlRequest,
+)
 from core.c2.control_commands import (
     BoundedControlErrorV2,
-    C2ControlAction,
     C2ControlErrorCodeV2,
     ParticipantControlPhaseV2,
     ParticipantControlQuerySnapshotV2,
@@ -35,9 +39,11 @@ from core.c2.control_models import (
 
 class TransactionFailpoint(str, Enum):
     AFTER_BEGIN = "after_begin"
+    AFTER_REPLAY_INSERT = "after_replay_insert"
     AFTER_CAS = "after_cas"
     AFTER_PHASE_PERSIST = "after_phase_persist"
     AFTER_RECEIPT_PERSIST = "after_receipt_persist"
+    BEFORE_COMMIT = "before_commit"
 
 
 def _extract_and_validate_authority(
@@ -45,9 +51,7 @@ def _extract_and_validate_authority(
     request_or_receipt: Any,
     participant_id: str,
 ) -> tuple[VerifiedMutationAuthority | None, BoundedControlErrorV2 | None]:
-    if authority is None or (
-        type(authority) is not VerifiedMutationAuthority and not isinstance(authority, VerifiedMutationAuthority)
-    ):
+    if type(authority) is not VerifiedMutationAuthority:
         return None, BoundedControlErrorV2(
             reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
             retryable=False,
@@ -55,50 +59,50 @@ def _extract_and_validate_authority(
         )
 
     if isinstance(request_or_receipt, ParticipantControlRequestV2):
-        tx_id = request_or_receipt.authorization.transaction_id
-        if authority.transaction_id and authority.transaction_id != tx_id:
+        auth_hdr = request_or_receipt.authorization
+        req_act = (
+            request_or_receipt.action.value
+            if hasattr(request_or_receipt.action, "value")
+            else str(request_or_receipt.action)
+        )
+        if authority.transaction_id != auth_hdr.transaction_id:
             return None, BoundedControlErrorV2(
                 reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
                 retryable=False,
                 detail_ref="authority_transaction_mismatch",
             )
-        if authority.participant_id and authority.participant_id != participant_id:
+        if authority.participant_id != auth_hdr.participant_id or authority.participant_id != participant_id:
             return None, BoundedControlErrorV2(
                 reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
                 retryable=False,
                 detail_ref="authority_participant_mismatch",
             )
-        req_act = getattr(request_or_receipt.action, "value", str(request_or_receipt.action))
-        if authority.action_id and authority.action_id != req_act:
+        if authority.action_id != auth_hdr.action_id or authority.action_id != req_act:
             return None, BoundedControlErrorV2(
                 reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
                 retryable=False,
                 detail_ref="authority_action_mismatch",
             )
-        if (
-            authority.mission_id != request_or_receipt.authorization.mission_id
-            or authority.subject_id != request_or_receipt.authorization.subject_id
-        ):
+        if authority.mission_id != auth_hdr.mission_id or authority.subject_id != auth_hdr.subject_id:
             return None, BoundedControlErrorV2(
                 reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
                 retryable=False,
                 detail_ref="authority_scope_mismatch",
             )
-        if authority.request_digest != request_or_receipt.authorization.request_digest:
+        if authority.request_digest != auth_hdr.request_digest:
             return None, BoundedControlErrorV2(
                 reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
                 retryable=False,
                 detail_ref="authority_request_digest_mismatch",
             )
     elif isinstance(request_or_receipt, ParticipantControlReceiptV2):
-        tx_id = request_or_receipt.transaction_id
-        if authority.transaction_id and authority.transaction_id != tx_id:
+        if authority.transaction_id != request_or_receipt.transaction_id:
             return None, BoundedControlErrorV2(
                 reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
                 retryable=False,
                 detail_ref="authority_transaction_mismatch",
             )
-        if authority.participant_id and authority.participant_id != participant_id:
+        if authority.participant_id != request_or_receipt.participant_id or authority.participant_id != participant_id:
             return None, BoundedControlErrorV2(
                 reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
                 retryable=False,
@@ -246,13 +250,11 @@ class C2DaemonResourceParticipant:
     def prepare(
         self,
         request: ParticipantControlRequestV2,
-        authority_or_principal: Any = None,
-        resolved_key: Any = None,
-        authority: Any = None,
+        *,
+        authority: VerifiedMutationAuthority,
     ) -> ParticipantControlReceiptV2 | BoundedControlErrorV2:
         """Prepare phase of 2PC transaction."""
-        passed_auth = authority if authority is not None else authority_or_principal
-        auth, auth_err = _extract_and_validate_authority(passed_auth, request, self.participant_id)
+        auth, auth_err = _extract_and_validate_authority(authority, request, self.participant_id)
         if auth_err is not None:
             return auth_err
         assert auth is not None
@@ -354,6 +356,32 @@ class C2DaemonResourceParticipant:
                             result_payload_b64u=request.canonical_payload_b64u,
                         )
 
+                    # Replay store consumption inside local write transaction for new transaction
+                    try:
+                        ControlReplayStore.consume_once_on_connection(
+                            conn,
+                            key_id=auth.key_id,
+                            nonce=request.authorization.nonce,
+                            request_digest=auth.request_digest,
+                            subject_id=auth.subject_id,
+                            mission_id=auth.mission_id,
+                            expires_at_ms=auth.authorization_expires_at_ms,
+                            created_at_ms=now_ms,
+                        )
+                    except (ReplayControlRequest, NotAuthorizedControlRequest) as exc:
+                        reason = (
+                            C2ControlErrorCodeV2.REPLAY
+                            if "replay" in str(exc).lower()
+                            else C2ControlErrorCodeV2.NOT_AUTHORIZED
+                        )
+                        return BoundedControlErrorV2(
+                            reason_code=reason,
+                            retryable=False,
+                            detail_ref=str(exc),
+                        )
+
+                    self._trigger_failpoint(TransactionFailpoint.AFTER_REPLAY_INSERT)
+
                     # 2. If new: validate expected revision
                     current_rev = self._get_resource_revision(conn, res_ref)
                     if (
@@ -447,6 +475,7 @@ class C2DaemonResourceParticipant:
                         "request": request,
                         "receipt": res,
                     }
+                    self._trigger_failpoint(TransactionFailpoint.BEFORE_COMMIT)
                     return res
             except Exception as exc:
                 return BoundedControlErrorV2(
@@ -458,13 +487,11 @@ class C2DaemonResourceParticipant:
     def commit(
         self,
         request: ParticipantControlRequestV2,
-        authority_or_principal: Any = None,
-        resolved_key: Any = None,
-        authority: Any = None,
+        *,
+        authority: VerifiedMutationAuthority,
     ) -> ParticipantControlReceiptV2 | BoundedControlErrorV2:
         """Commit phase of 2PC transaction."""
-        passed_auth = authority if authority is not None else authority_or_principal
-        auth, auth_err = _extract_and_validate_authority(passed_auth, request, self.participant_id)
+        auth, auth_err = _extract_and_validate_authority(authority, request, self.participant_id)
         if auth_err is not None:
             return auth_err
         assert auth is not None
@@ -601,6 +628,32 @@ class C2DaemonResourceParticipant:
                             detail_ref="intent_mismatch_across_phases",
                         )
 
+                    # Replay store consumption inside local write transaction for commit
+                    try:
+                        ControlReplayStore.consume_once_on_connection(
+                            conn,
+                            key_id=auth.key_id,
+                            nonce=request.authorization.nonce,
+                            request_digest=auth.request_digest,
+                            subject_id=auth.subject_id,
+                            mission_id=auth.mission_id,
+                            expires_at_ms=auth.authorization_expires_at_ms,
+                            created_at_ms=now_ms,
+                        )
+                    except (ReplayControlRequest, NotAuthorizedControlRequest) as exc:
+                        reason = (
+                            C2ControlErrorCodeV2.REPLAY
+                            if "replay" in str(exc).lower()
+                            else C2ControlErrorCodeV2.NOT_AUTHORIZED
+                        )
+                        return BoundedControlErrorV2(
+                            reason_code=reason,
+                            retryable=False,
+                            detail_ref=str(exc),
+                        )
+
+                    self._trigger_failpoint(TransactionFailpoint.AFTER_REPLAY_INSERT)
+
                     # Perform atomic CAS on resource revision
                     new_rev = base_rev + 1
                     cas_cur = conn.execute(
@@ -669,6 +722,7 @@ class C2DaemonResourceParticipant:
                         "request": request,
                         "receipt": res,
                     }
+                    self._trigger_failpoint(TransactionFailpoint.BEFORE_COMMIT)
                     return res
             except Exception as exc:
                 return BoundedControlErrorV2(
@@ -679,48 +733,28 @@ class C2DaemonResourceParticipant:
 
     def finalize_visibility(
         self,
-        request_or_receipt: Any,
-        commit_receipt_or_authority: Any = None,
-        resolved_key: Any = None,
-        authority: Any = None,
+        request: ParticipantControlRequestV2,
+        *,
+        authority: VerifiedMutationAuthority,
     ) -> ParticipantControlReceiptV2 | BoundedControlErrorV2:
         """Finalize visibility of committed resource."""
-        passed_auth = (
-            authority
-            if authority is not None
-            else (
-                commit_receipt_or_authority
-                if isinstance(commit_receipt_or_authority, VerifiedMutationAuthority)
-                else None
-            )
-        )
-        auth, auth_err = _extract_and_validate_authority(passed_auth, request_or_receipt, self.participant_id)
+        auth, auth_err = _extract_and_validate_authority(authority, request, self.participant_id)
         if auth_err is not None:
             return auth_err
         assert auth is not None
 
-        commit_receipt = (
-            commit_receipt_or_authority
-            if isinstance(commit_receipt_or_authority, ParticipantControlReceiptV2)
-            else None
-        )
+        if not isinstance(request, ParticipantControlRequestV2):
+            return BoundedControlErrorV2(
+                reason_code=C2ControlErrorCodeV2.UNAVAILABLE,
+                retryable=False,
+                detail_ref="invalid_v2_request_instance",
+            )
 
-        if isinstance(request_or_receipt, ParticipantControlRequestV2):
-            tx_id = request_or_receipt.authorization.transaction_id
-            prior_ref = request_or_receipt.prior_receipt_ref
-            prior_dig = request_or_receipt.prior_receipt_digest
-            req_dig = request_or_receipt.authorization.request_digest
-            action = request_or_receipt.action
-        else:
-            tx_id = getattr(request_or_receipt, "transaction_id", "")
-            if commit_receipt is not None:
-                prior_ref = commit_receipt.receipt_ref
-                prior_dig = commit_receipt.receipt_digest
-            else:
-                prior_ref = getattr(request_or_receipt, "receipt_ref", None)
-                prior_dig = getattr(request_or_receipt, "receipt_digest", None)
-            req_dig = ""
-            action = getattr(request_or_receipt, "action", C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY)
+        tx_id = request.authorization.transaction_id
+        prior_ref = request.prior_receipt_ref
+        prior_dig = request.prior_receipt_digest
+        req_dig = request.authorization.request_digest
+        action = request.action
 
         # Mandatory caller-provided receipt chaining
         if not prior_ref or not prior_dig:
@@ -825,6 +859,32 @@ class C2DaemonResourceParticipant:
                             detail_ref="prior_receipt_chain_validation_failed",
                         )
 
+                    # Replay store consumption inside local write transaction for finalize
+                    try:
+                        ControlReplayStore.consume_once_on_connection(
+                            conn,
+                            key_id=auth.key_id,
+                            nonce=request.authorization.nonce,
+                            request_digest=auth.request_digest,
+                            subject_id=auth.subject_id,
+                            mission_id=auth.mission_id,
+                            expires_at_ms=auth.authorization_expires_at_ms,
+                            created_at_ms=now_ms,
+                        )
+                    except (ReplayControlRequest, NotAuthorizedControlRequest) as exc:
+                        reason = (
+                            C2ControlErrorCodeV2.REPLAY
+                            if "replay" in str(exc).lower()
+                            else C2ControlErrorCodeV2.NOT_AUTHORIZED
+                        )
+                        return BoundedControlErrorV2(
+                            reason_code=reason,
+                            retryable=False,
+                            detail_ref=str(exc),
+                        )
+
+                    self._trigger_failpoint(TransactionFailpoint.AFTER_REPLAY_INSERT)
+
                     rcpt_ref = f"rcpt_fin_{uuid.uuid4().hex[:8]}"
                     rcpt_digest = calculate_receipt_digest(
                         transaction_id=tx_id,
@@ -873,6 +933,7 @@ class C2DaemonResourceParticipant:
                     )
                     if tx_id in self._committed_resources:
                         self._committed_resources[tx_id]["phase"] = ParticipantControlPhaseV2.FINALIZED_VISIBLE
+                    self._trigger_failpoint(TransactionFailpoint.BEFORE_COMMIT)
                     return res
             except Exception as exc:
                 return BoundedControlErrorV2(
@@ -883,14 +944,12 @@ class C2DaemonResourceParticipant:
 
     def rollback(
         self,
-        request_or_receipt: Any,
-        authority_or_principal: Any = None,
-        resolved_key: Any = None,
-        authority: Any = None,
+        request_or_receipt: ParticipantControlRequestV2 | ParticipantControlReceiptV2,
+        *,
+        authority: VerifiedMutationAuthority,
     ) -> ParticipantControlReceiptV2 | BoundedControlErrorV2:
         """Abort/rollback a transaction with compensation validation."""
-        passed_auth = authority if authority is not None else authority_or_principal
-        auth, auth_err = _extract_and_validate_authority(passed_auth, request_or_receipt, self.participant_id)
+        auth, auth_err = _extract_and_validate_authority(authority, request_or_receipt, self.participant_id)
         if auth_err is not None:
             return auth_err
         assert auth is not None
@@ -902,11 +961,11 @@ class C2DaemonResourceParticipant:
             req_dig = request_or_receipt.authorization.request_digest
             action = request_or_receipt.action
         else:
-            tx_id = getattr(request_or_receipt, "transaction_id", "")
-            prior_ref = getattr(request_or_receipt, "receipt_ref", None)
-            prior_dig = getattr(request_or_receipt, "receipt_digest", None)
+            tx_id = request_or_receipt.transaction_id
+            prior_ref = request_or_receipt.receipt_ref
+            prior_dig = request_or_receipt.receipt_digest
             req_dig = ""
-            action = getattr(request_or_receipt, "action", C2ControlAction.ABORT_C2_RESOURCE)
+            action = request_or_receipt.action
 
         res_ref = f"resource:{self.participant_id}"
         now_ms = int(time.time() * 1000)
@@ -1026,6 +1085,33 @@ class C2DaemonResourceParticipant:
                                 detail_ref="commit_receipt_digest_mismatch_for_abort",
                             )
 
+                    # If rollback is invoked with a control request containing a nonce, consume it
+                    if isinstance(request_or_receipt, ParticipantControlRequestV2):
+                        try:
+                            ControlReplayStore.consume_once_on_connection(
+                                conn,
+                                key_id=auth.key_id,
+                                nonce=request_or_receipt.authorization.nonce,
+                                request_digest=auth.request_digest,
+                                subject_id=auth.subject_id,
+                                mission_id=auth.mission_id,
+                                expires_at_ms=auth.authorization_expires_at_ms,
+                                created_at_ms=now_ms,
+                            )
+                        except (ReplayControlRequest, NotAuthorizedControlRequest) as exc:
+                            reason = (
+                                C2ControlErrorCodeV2.REPLAY
+                                if "replay" in str(exc).lower()
+                                else C2ControlErrorCodeV2.NOT_AUTHORIZED
+                            )
+                            return BoundedControlErrorV2(
+                                reason_code=reason,
+                                retryable=False,
+                                detail_ref=str(exc),
+                            )
+
+                    self._trigger_failpoint(TransactionFailpoint.AFTER_REPLAY_INSERT)
+
                     rcpt_ref = f"rcpt_abort_{uuid.uuid4().hex[:8]}"
                     rcpt_digest = calculate_receipt_digest(
                         transaction_id=tx_id,
@@ -1059,6 +1145,8 @@ class C2DaemonResourceParticipant:
 
                     self._pending_transactions.pop(tx_id, None)
                     self._committed_resources.pop(tx_id, None)
+
+                    self._trigger_failpoint(TransactionFailpoint.BEFORE_COMMIT)
 
                     return ParticipantControlReceiptV2(
                         transaction_id=tx_id,

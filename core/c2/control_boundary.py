@@ -25,6 +25,7 @@ from core.c2.control_auth import (
     VerifiedMutationAuthority,
 )
 from core.c2.control_commands import (
+    C2ControlAction,
     ParticipantControlRequestV2,
 )
 from core.c2.control_migrations import apply_control_migrations
@@ -472,6 +473,76 @@ class ControlReplayStore:
             )
             return cur.rowcount
 
+    @classmethod
+    def consume_once_on_connection(
+        cls,
+        conn: sqlite3.Connection,
+        *,
+        key_id: str,
+        nonce: str,
+        request_digest: str,
+        subject_id: str,
+        mission_id: str,
+        expires_at_ms: int,
+        created_at_ms: int | None = None,
+    ) -> None:
+        now_ms = int(time.time() * 1000) if created_at_ms is None else created_at_ms
+
+        # Purge a batch of expired rows
+        conn.execute(
+            """
+            DELETE FROM control_replay_nonces
+            WHERE rowid IN (
+                SELECT rowid FROM control_replay_nonces
+                WHERE expires_at_ms <= ?
+                LIMIT 256
+            )
+            """,
+            (now_ms,),
+        )
+
+        # Check total active rows capacity limit
+        count_row = conn.execute("SELECT count(*) FROM control_replay_nonces").fetchone()
+        if count_row and count_row[0] >= MAX_REPLAY_ACTIVE_NONCES:
+            raise NotAuthorizedControlRequest("replay_capacity_exhausted")
+
+        row = conn.execute(
+            "SELECT request_digest, expires_at_ms FROM control_replay_nonces WHERE key_id = ? AND nonce = ?",
+            (key_id, nonce),
+        ).fetchone()
+
+        if row is not None:
+            _stored_digest, stored_expires_ms = row
+            if stored_expires_ms <= now_ms:
+                conn.execute(
+                    "DELETE FROM control_replay_nonces WHERE key_id = ? AND nonce = ?",
+                    (key_id, nonce),
+                )
+            else:
+                raise ReplayControlRequest(f"nonce_replayed: nonce '{nonce}' already consumed for key_id '{key_id}'")
+
+        try:
+            conn.execute(
+                """
+                INSERT INTO control_replay_nonces (
+                    key_id, nonce, request_digest, subject_id, mission_id, expires_at_ms, created_at_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    key_id,
+                    nonce,
+                    request_digest,
+                    subject_id,
+                    mission_id,
+                    expires_at_ms,
+                    now_ms,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ReplayControlRequest(
+                f"nonce_replayed: nonce '{nonce}' already consumed for key_id '{key_id}'"
+            ) from exc
+
     def consume_once(
         self,
         *,
@@ -483,64 +554,17 @@ class ControlReplayStore:
         expires_at_ms: int,
         created_at_ms: int | None = None,
     ) -> None:
-        now_ms = int(time.time() * 1000) if created_at_ms is None else created_at_ms
         with self._lock, self._connection() as conn:
-            # Purge a batch of expired rows
-            conn.execute(
-                """
-                DELETE FROM control_replay_nonces
-                WHERE rowid IN (
-                    SELECT rowid FROM control_replay_nonces
-                    WHERE expires_at_ms <= ?
-                    LIMIT 256
-                )
-                """,
-                (now_ms,),
+            self.consume_once_on_connection(
+                conn,
+                key_id=key_id,
+                nonce=nonce,
+                request_digest=request_digest,
+                subject_id=subject_id,
+                mission_id=mission_id,
+                expires_at_ms=expires_at_ms,
+                created_at_ms=created_at_ms,
             )
-
-            # Check total active rows capacity limit
-            count_row = conn.execute("SELECT count(*) FROM control_replay_nonces").fetchone()
-            if count_row and count_row[0] >= MAX_REPLAY_ACTIVE_NONCES:
-                raise NotAuthorizedControlRequest("replay_capacity_exhausted")
-
-            row = conn.execute(
-                "SELECT request_digest, expires_at_ms FROM control_replay_nonces WHERE key_id = ? AND nonce = ?",
-                (key_id, nonce),
-            ).fetchone()
-
-            if row is not None:
-                _stored_digest, stored_expires_ms = row
-                if stored_expires_ms <= now_ms:
-                    conn.execute(
-                        "DELETE FROM control_replay_nonces WHERE key_id = ? AND nonce = ?",
-                        (key_id, nonce),
-                    )
-                else:
-                    raise ReplayControlRequest(
-                        f"nonce_replayed: nonce '{nonce}' already consumed for key_id '{key_id}'"
-                    )
-
-            try:
-                conn.execute(
-                    """
-                    INSERT INTO control_replay_nonces (
-                        key_id, nonce, request_digest, subject_id, mission_id, expires_at_ms, created_at_ms
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        key_id,
-                        nonce,
-                        request_digest,
-                        subject_id,
-                        mission_id,
-                        expires_at_ms,
-                        now_ms,
-                    ),
-                )
-            except sqlite3.IntegrityError as exc:
-                raise ReplayControlRequest(
-                    f"nonce_replayed: nonce '{nonce}' already consumed for key_id '{key_id}'"
-                ) from exc
 
 
 class FramedControlBoundary:
@@ -662,7 +686,34 @@ class FramedControlBoundary:
         except PermissionError as exc:
             raise NotAuthorizedControlRequest("rbac_denied") from exc
 
-        # 10. Construct VerifiedMutationAuthority
+        # 10. Replay consumption for non-2PC actions (2PC actions consume atomically inside participant write tx)
+        is_2pc_action = request.action in (
+            C2ControlAction.PREPARE_C2_RESOURCE,
+            C2ControlAction.COMMIT_C2_RESOURCE,
+            C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
+            C2ControlAction.ABORT_C2_RESOURCE,
+            C2ControlAction.PREPARE_ENROLLMENT_DEPLOYMENT,
+            C2ControlAction.COMMIT_ENROLLMENT_DEPLOYMENT,
+            C2ControlAction.FINALIZE_ENROLLMENT_DEPLOYMENT,
+            C2ControlAction.ABORT_ENROLLMENT_DEPLOYMENT,
+        )
+        if not is_2pc_action:
+            try:
+                self._replay_store.consume_once(
+                    key_id=auth.key_id,
+                    nonce=auth.nonce,
+                    request_digest=actual_request_digest,
+                    subject_id=auth.subject_id,
+                    mission_id=auth.mission_id,
+                    expires_at_ms=expires_ms,
+                    created_at_ms=now_ms,
+                )
+            except ControlBoundaryError:
+                raise
+            except Exception as exc:
+                raise ReplayControlRequest("nonce_replayed") from exc
+
+        # 11. Construct VerifiedMutationAuthority (all security bindings mandatory)
         mutation_authority = VerifiedMutationAuthority(
             operator_id=principal.operator_id,
             subject_id=principal.subject_id,
@@ -681,17 +732,6 @@ class FramedControlBoundary:
             transaction_id=auth.transaction_id,
             participant_id=auth.participant_id,
             action_id=auth.action_id,
-        )
-
-        # 11. Atomic durable replay reservation
-        self._replay_store.consume_once(
-            key_id=auth.key_id,
-            nonce=auth.nonce,
-            request_digest=actual_request_digest,
-            subject_id=auth.subject_id,
-            mission_id=auth.mission_id,
-            expires_at_ms=expires_ms,
-            created_at_ms=now_ms,
         )
 
         # 12. Return authenticated & verified request

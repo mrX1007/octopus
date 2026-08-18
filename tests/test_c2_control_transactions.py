@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sqlite3
 import time
+import uuid
 
 import pytest
 
@@ -56,15 +57,16 @@ def _setup_participant_and_auth(
         request_digest="a" * 64,
         authorization_issued_at_ms=now_ms - 1000,
         authorization_expires_at_ms=now_ms + 100000,
-        transaction_id="",
+        transaction_id="tx_default",
         participant_id=part_id,
-        action_id="",
+        action_id="prepare_c2_resource",
     )
     return participant, auth
 
 
-def _make_req(tx_id: str = "tx_1", part_id: str = "part_test") -> ParticipantControlRequestV2:
+def _make_req(tx_id: str = "tx_1", part_id: str = "part_test", nonce: str | None = None) -> ParticipantControlRequestV2:
     now_ms = int(time.time() * 1000)
+    req_nonce = nonce or f"nonce_{uuid.uuid4().hex[:14]}"
     auth = ParticipantControlAuthorizationV2(
         protocol_version="2.0",
         key_id="k1",
@@ -77,7 +79,7 @@ def _make_req(tx_id: str = "tx_1", part_id: str = "part_test") -> ParticipantCon
         request_digest="a" * 64,
         issued_at_ms=now_ms,
         expires_at_ms=now_ms + 100000,
-        nonce="nonce_12345678901234",
+        nonce=req_nonce,
         signature="c" * 86,
     )
     return ParticipantControlRequestV2(
@@ -112,7 +114,7 @@ def test_coordinator_execute_transaction_success():
         authorization_expires_at_ms=req.authorization.expires_at_ms,
         transaction_id="tx_coord_1",
         participant_id="part_test",
-        action_id="",
+        action_id="prepare_c2_resource",
     )
     receipt = coord.execute_transaction(req, authority=mut_auth)
     assert isinstance(receipt, ParticipantControlReceiptV2)
@@ -122,11 +124,36 @@ def test_coordinator_execute_transaction_success():
 
 def test_coordinator_rejects_unregistered_participant():
     coord = ControlTransactionCoordinator()
+    participant, auth = _setup_participant_and_auth("part_test")
     req = _make_req("tx_unregistered_1", "part_unregistered")
-    res = coord.execute_transaction(req)
+    mut_auth = VerifiedMutationAuthority(
+        operator_id=auth.operator_id,
+        subject_id=auth.subject_id,
+        mission_id=auth.mission_id,
+        peer_pid=auth.peer_pid,
+        peer_uid=auth.peer_uid,
+        peer_gid=auth.peer_gid,
+        key_id=auth.key_id,
+        key_revision=auth.key_revision,
+        operator_revision=auth.operator_revision,
+        peer_binding_revision=auth.peer_binding_revision,
+        mission_grant_revision=auth.mission_grant_revision,
+        request_digest=req.authorization.request_digest,
+        authorization_issued_at_ms=req.authorization.issued_at_ms,
+        authorization_expires_at_ms=req.authorization.expires_at_ms,
+        transaction_id="tx_unregistered_1",
+        participant_id="part_unregistered",
+        action_id="prepare_c2_resource",
+    )
+    # 1. Unregistered participant with authority returns UNAVAILABLE
+    res = coord.execute_transaction(req, authority=mut_auth)
     assert not isinstance(res, ParticipantControlReceiptV2)
     assert res.reason_code == C2ControlErrorCodeV2.UNAVAILABLE
     assert "unregistered_participant" in res.detail_ref
+
+    # 2. V2 request without authority returns NOT_AUTHORIZED
+    res_no_auth = coord.execute_transaction(req)
+    assert res_no_auth.reason_code == C2ControlErrorCodeV2.NOT_AUTHORIZED
 
 
 def test_coordinator_multiple_transactions():
@@ -152,7 +179,7 @@ def test_coordinator_multiple_transactions():
         authorization_expires_at_ms=req1.authorization.expires_at_ms,
         transaction_id="tx_multi_1",
         participant_id="part_test",
-        action_id="",
+        action_id="prepare_c2_resource",
     )
     req2 = _make_req("tx_multi_2", "part_test")
     mut_auth2 = VerifiedMutationAuthority(
@@ -172,7 +199,7 @@ def test_coordinator_multiple_transactions():
         authorization_expires_at_ms=req2.authorization.expires_at_ms,
         transaction_id="tx_multi_2",
         participant_id="part_test",
-        action_id="",
+        action_id="prepare_c2_resource",
     )
 
     r1 = coord.execute_transaction(req1, authority=mut_auth1)
@@ -233,8 +260,28 @@ def test_coordinator_v1_unregistered_and_failure_rollbacks():
     )
     coord.register_participant("part_mock", mock_part)
 
+    now_ms = int(time.time() * 1000)
+    real_auth = VerifiedMutationAuthority(
+        operator_id="op_coord",
+        subject_id="s1",
+        mission_id="m1",
+        peer_pid=os.getpid(),
+        peer_uid=os.getuid(),
+        peer_gid=os.getgid(),
+        key_id="k1",
+        key_revision=1,
+        operator_revision=1,
+        peer_binding_revision=1,
+        mission_grant_revision=1,
+        request_digest="a" * 64,
+        authorization_issued_at_ms=now_ms - 1000,
+        authorization_expires_at_ms=now_ms + 100000,
+        transaction_id="tx_fail_prep",
+        participant_id="part_mock",
+        action_id="prepare_c2_resource",
+    )
     req_v2 = _make_req("tx_fail_prep", "part_mock")
-    res_prep_fail = coord.execute_transaction(req_v2)
+    res_prep_fail = coord.execute_transaction(req_v2, authority=real_auth)
     assert isinstance(res_prep_fail, BoundedControlErrorV2)
     assert res_prep_fail.detail_ref == "prep_failed"
 
@@ -258,14 +305,35 @@ def test_coordinator_v1_unregistered_and_failure_rollbacks():
         detail_ref="commit_failed",
     )
 
-    dummy_auth = MagicMock(spec=VerifiedMutationAuthority)
+    real_commit_auth = VerifiedMutationAuthority(
+        operator_id="op_coord",
+        subject_id="s1",
+        mission_id="m1",
+        peer_pid=os.getpid(),
+        peer_uid=os.getuid(),
+        peer_gid=os.getgid(),
+        key_id="k1",
+        key_revision=1,
+        operator_revision=1,
+        peer_binding_revision=1,
+        mission_grant_revision=1,
+        request_digest="a" * 64,
+        authorization_issued_at_ms=now_ms - 1000,
+        authorization_expires_at_ms=now_ms + 100000,
+        transaction_id="tx_fail_commit",
+        participant_id="part_mock",
+        action_id="prepare_c2_resource",
+    )
     req_commit_fail = _make_req("tx_fail_commit", "part_mock")
-    res_commit_fail = coord.execute_transaction(req_commit_fail, authority=dummy_auth)
+    res_commit_fail = coord.execute_transaction(req_commit_fail, authority=real_commit_auth)
     assert isinstance(res_commit_fail, BoundedControlErrorV2)
     assert res_commit_fail.detail_ref == "commit_failed"
-    mock_part.rollback.assert_called_with(prep_receipt, authority=dummy_auth)
+    import dataclasses
+
+    expected_abort_auth = dataclasses.replace(real_commit_auth, action_id="abort_c2_resource")
+    mock_part.rollback.assert_called_with(prep_receipt, authority=expected_abort_auth)
 
     # 4. Commit fails without authority
     res_commit_fail_no_auth = coord.execute_transaction(req_commit_fail, authority=None)
     assert isinstance(res_commit_fail_no_auth, BoundedControlErrorV2)
-    mock_part.rollback.assert_called_with(prep_receipt)
+    assert res_commit_fail_no_auth.reason_code == C2ControlErrorCodeV2.NOT_AUTHORIZED
