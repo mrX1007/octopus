@@ -980,16 +980,16 @@ def _dispatch_verified_request(
         )
 
     if action == C2ControlAction.PREPARE_C2_RESOURCE:
-        return participant.prepare(req, verified.principal, verified.resolved_key)
+        return participant.prepare(req, verified.authority or verified.principal, verified.resolved_key)
 
     if action == C2ControlAction.COMMIT_C2_RESOURCE:
-        return participant.commit(req, verified.principal, verified.resolved_key)
+        return participant.commit(req, verified.authority or verified.principal, verified.resolved_key)
 
     if action == C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY:
-        return participant.finalize_visibility(req, verified.principal, verified.resolved_key)
+        return participant.finalize_visibility(req, verified.authority or verified.principal, verified.resolved_key)
 
     if action == C2ControlAction.ABORT_C2_RESOURCE:
-        return participant.rollback(req, verified.principal, verified.resolved_key)
+        return participant.rollback(req, verified.authority or verified.principal, verified.resolved_key)
 
     if action == C2ControlAction.QUERY_C2_RESOURCE:
         return participant.reconcile(req)
@@ -1172,6 +1172,10 @@ def run_socket_server(socket_override: str | None = None) -> None:
             server.bind(sock_path)
             server.listen(32)
         except Exception as exc:
+            if server is not None:
+                with suppress(Exception):
+                    server.close()
+                server = None
             raise RuntimeError(f"failed to bind control socket: {exc}") from exc
         with suppress(Exception):
             os.chmod(sock_path, 0o660)

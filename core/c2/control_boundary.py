@@ -22,6 +22,7 @@ from core.c2.control_auth import (
     OperatorReader,
     OperatorRole,
     PeerPrincipal,
+    VerifiedMutationAuthority,
 )
 from core.c2.control_commands import (
     ParticipantControlRequestV2,
@@ -93,6 +94,7 @@ class VerifiedControlRequest:
     payload_bytes: bytes
     request_digest: str
     resolved_key: ResolvedControlKey
+    authority: VerifiedMutationAuthority | None = None
 
 
 VerifiedControlRequestV2 = VerifiedControlRequest
@@ -660,7 +662,25 @@ class FramedControlBoundary:
         except PermissionError as exc:
             raise NotAuthorizedControlRequest("rbac_denied") from exc
 
-        # 10. Atomic durable replay reservation
+        # 10. Construct VerifiedMutationAuthority
+        mutation_authority = VerifiedMutationAuthority(
+            operator_id=principal.operator_id,
+            subject_id=principal.subject_id,
+            mission_id=principal.mission_id,
+            peer_pid=peer.pid,
+            peer_uid=peer.uid,
+            peer_gid=peer.gid,
+            key_id=auth.key_id,
+            key_revision=resolved_key.key_revision,
+            operator_revision=principal.operator_revision,
+            peer_binding_revision=principal.peer_binding_revision,
+            mission_grant_revision=principal.mission_grant_revision,
+            request_digest=actual_request_digest,
+            authorization_issued_at_ms=auth.issued_at_ms,
+            authorization_expires_at_ms=expires_ms,
+        )
+
+        # 11. Atomic durable replay reservation
         self._replay_store.consume_once(
             key_id=auth.key_id,
             nonce=auth.nonce,
@@ -671,7 +691,7 @@ class FramedControlBoundary:
             created_at_ms=now_ms,
         )
 
-        # 11. Return authenticated & verified request
+        # 12. Return authenticated & verified request
         return VerifiedControlRequest(
             request=request,
             peer=peer,
@@ -679,6 +699,7 @@ class FramedControlBoundary:
             payload_bytes=payload_bytes,
             request_digest=actual_request_digest,
             resolved_key=resolved_key,
+            authority=mutation_authority,
         )
 
 
@@ -704,5 +725,6 @@ __all__ = [
     "VerifiedControlRequest",
     "VerifiedControlRequestV2",
     "VerifiedKeyPrincipalResolver",
+    "VerifiedMutationAuthority",
     "extract_peer_principal",
 ]

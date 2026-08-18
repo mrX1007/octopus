@@ -15,16 +15,15 @@ from typing import Any
 from core.c2.control_auth import (
     AuthenticatedControlPrincipal,
     AuthorityFence,
+    VerifiedMutationAuthority,
 )
 from core.c2.control_commands import (
     BoundedControlErrorV2,
+    C2ControlAction,
     C2ControlErrorCodeV2,
-    ParticipantControlPhaseV1,
     ParticipantControlPhaseV2,
     ParticipantControlQuerySnapshotV2,
-    ParticipantControlReceiptV1,
     ParticipantControlReceiptV2,
-    ParticipantControlRequestV1,
     ParticipantControlRequestV2,
 )
 from core.c2.control_migrations import apply_control_migrations
@@ -146,7 +145,7 @@ class C2DaemonResourceParticipant:
         return row[0] if row else 0
 
     def recover_startup_state(self) -> list[str]:
-        """Scan and quarantine any ambiguous unfinalized transactions at startup."""
+        """Scan and quarantine any ambiguous unfinalized transactions at startup without guessing."""
         quarantined: list[str] = []
         now_ms = int(time.time() * 1000)
         with self._lock, self._connection() as conn:
@@ -158,21 +157,7 @@ class C2DaemonResourceParticipant:
                 (self.participant_id,),
             ).fetchall()
             for tx_id, phase in rows:
-                if phase in ("prepared", "pending"):
-                    conn.execute(
-                        """
-                        UPDATE control_2pc_transactions
-                        SET phase = ?, updated_at_ms = ?
-                        WHERE participant_id = ? AND transaction_id = ?
-                        """,
-                        (
-                            ParticipantControlPhaseV2.ABORTED.value,
-                            now_ms,
-                            self.participant_id,
-                            tx_id,
-                        ),
-                    )
-                elif phase == "committed_hidden":
+                if phase in ("prepared", "pending", "committed_hidden"):
                     conn.execute(
                         """
                         UPDATE control_2pc_transactions
@@ -193,15 +178,15 @@ class C2DaemonResourceParticipant:
 
     def prepare(
         self,
-        request: ParticipantControlRequestV1 | ParticipantControlRequestV2,
-        principal: AuthenticatedControlPrincipal | None = None,
+        request: ParticipantControlRequestV2,
+        authority_or_principal: Any = None,
         resolved_key: Any = None,
     ) -> ParticipantControlReceiptV2 | BoundedControlErrorV2:
         """Prepare phase of 2PC transaction."""
         tx_id = request.authorization.transaction_id
         res_ref = f"resource:{self.participant_id}"
         now_ms = int(time.time() * 1000)
-        operator_id = principal.operator_id if principal else ""
+        operator_id = getattr(authority_or_principal, "operator_id", "")
 
         intent_digest = calculate_transaction_intent_digest(
             participant_id=self.participant_id,
@@ -219,9 +204,9 @@ class C2DaemonResourceParticipant:
                     self._trigger_failpoint(TransactionFailpoint.AFTER_BEGIN)
 
                     # TOCTOU Authority Fence
-                    if principal is not None and resolved_key is not None:
+                    if authority_or_principal is not None:
                         try:
-                            AuthorityFence.verify_current(conn, principal, resolved_key)
+                            AuthorityFence.verify_current(conn, authority_or_principal, resolved_key)
                         except PermissionError as exc:
                             return BoundedControlErrorV2(
                                 reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
@@ -273,7 +258,7 @@ class C2DaemonResourceParticipant:
 
                         if phase not in (
                             ParticipantControlPhaseV2.PREPARED.value,
-                            ParticipantControlPhaseV1.PENDING.value,
+                            "pending",
                         ):
                             return BoundedControlErrorV2(
                                 reason_code=C2ControlErrorCodeV2.WRONG_PHASE,
@@ -331,7 +316,7 @@ class C2DaemonResourceParticipant:
                         result_payload_digest=request.payload_digest,
                     )
 
-                    key_rev = getattr(resolved_key, "key_revision", 1) if resolved_key else 1
+                    key_rev = getattr(resolved_key, "key_revision", getattr(authority_or_principal, "key_revision", 1))
 
                     conn.execute(
                         """
@@ -399,8 +384,8 @@ class C2DaemonResourceParticipant:
 
     def commit(
         self,
-        request: ParticipantControlRequestV1 | ParticipantControlRequestV2,
-        principal: AuthenticatedControlPrincipal | None = None,
+        request: ParticipantControlRequestV2,
+        authority_or_principal: Any = None,
         resolved_key: Any = None,
     ) -> ParticipantControlReceiptV2 | BoundedControlErrorV2:
         """Commit phase of 2PC transaction."""
@@ -411,7 +396,7 @@ class C2DaemonResourceParticipant:
         # Mandatory caller-provided receipt chaining
         prior_ref = request.prior_receipt_ref
         prior_dig = request.prior_receipt_digest
-        if (not prior_ref or not prior_dig) and not isinstance(request, ParticipantControlRequestV1):
+        if not prior_ref or not prior_dig:
             return BoundedControlErrorV2(
                 reason_code=C2ControlErrorCodeV2.WRONG_PHASE,
                 retryable=False,
@@ -424,9 +409,9 @@ class C2DaemonResourceParticipant:
                     self._trigger_failpoint(TransactionFailpoint.AFTER_BEGIN)
 
                     # TOCTOU Authority Fence
-                    if principal is not None and resolved_key is not None:
+                    if authority_or_principal is not None:
                         try:
-                            AuthorityFence.verify_current(conn, principal, resolved_key)
+                            AuthorityFence.verify_current(conn, authority_or_principal, resolved_key)
                         except PermissionError as exc:
                             return BoundedControlErrorV2(
                                 reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
@@ -473,8 +458,8 @@ class C2DaemonResourceParticipant:
                     if phase_val in (
                         ParticipantControlPhaseV2.COMMITTED_HIDDEN.value,
                         ParticipantControlPhaseV2.FINALIZED_VISIBLE.value,
-                        ParticipantControlPhaseV1.COMMITTED_HIDDEN.value,
-                        ParticipantControlPhaseV1.FINALIZED_VISIBLE.value,
+                        "committed_hidden",
+                        "finalized_visible",
                     ):
                         # Idempotency validation
                         if stored_comm_req_dig and stored_comm_req_dig != request.authorization.request_digest:
@@ -508,7 +493,8 @@ class C2DaemonResourceParticipant:
 
                     if phase_val not in (
                         ParticipantControlPhaseV2.PREPARED.value,
-                        ParticipantControlPhaseV1.PENDING.value,
+                        "pending",
+                        "prepared",
                     ):
                         return BoundedControlErrorV2(
                             reason_code=C2ControlErrorCodeV2.WRONG_PHASE,
@@ -517,9 +503,7 @@ class C2DaemonResourceParticipant:
                         )
 
                     # Validate prepare receipt chain
-                    if not isinstance(request, ParticipantControlRequestV1) and (
-                        prior_ref != prep_ref or prior_dig != prep_dig
-                    ):
+                    if prior_ref != prep_ref or prior_dig != prep_dig:
                         return BoundedControlErrorV2(
                             reason_code=C2ControlErrorCodeV2.WRONG_PHASE,
                             retryable=False,
@@ -616,46 +600,41 @@ class C2DaemonResourceParticipant:
 
     def finalize_visibility(
         self,
-        request_or_receipt: ParticipantControlRequestV1
-        | ParticipantControlRequestV2
-        | ParticipantControlReceiptV1
-        | ParticipantControlReceiptV2,
-        commit_receipt_or_principal: Any = None,
+        request_or_receipt: Any,
+        commit_receipt_or_authority: Any = None,
         resolved_key: Any = None,
     ) -> ParticipantControlReceiptV2 | BoundedControlErrorV2:
         """Finalize visibility of committed resource."""
-        principal = (
-            commit_receipt_or_principal
-            if isinstance(commit_receipt_or_principal, AuthenticatedControlPrincipal)
+        authority = (
+            commit_receipt_or_authority
+            if isinstance(commit_receipt_or_authority, (VerifiedMutationAuthority, AuthenticatedControlPrincipal))
             else None
         )
         commit_receipt = (
-            commit_receipt_or_principal
-            if isinstance(commit_receipt_or_principal, (ParticipantControlReceiptV1, ParticipantControlReceiptV2))
+            commit_receipt_or_authority
+            if isinstance(commit_receipt_or_authority, ParticipantControlReceiptV2)
             else None
         )
 
-        if isinstance(request_or_receipt, (ParticipantControlRequestV1, ParticipantControlRequestV2)):
+        if isinstance(request_or_receipt, ParticipantControlRequestV2):
             tx_id = request_or_receipt.authorization.transaction_id
             prior_ref = request_or_receipt.prior_receipt_ref
             prior_dig = request_or_receipt.prior_receipt_digest
             req_dig = request_or_receipt.authorization.request_digest
             action = request_or_receipt.action
         else:
-            tx_id = request_or_receipt.transaction_id
+            tx_id = getattr(request_or_receipt, "transaction_id", "")
             if commit_receipt is not None:
                 prior_ref = commit_receipt.receipt_ref
                 prior_dig = commit_receipt.receipt_digest
             else:
-                prior_ref = request_or_receipt.receipt_ref
-                prior_dig = request_or_receipt.receipt_digest
+                prior_ref = getattr(request_or_receipt, "receipt_ref", None)
+                prior_dig = getattr(request_or_receipt, "receipt_digest", None)
             req_dig = ""
-            action = request_or_receipt.action
+            action = getattr(request_or_receipt, "action", C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY)
 
         # Mandatory caller-provided receipt chaining
-        if (not prior_ref or not prior_dig) and not isinstance(
-            request_or_receipt, (ParticipantControlRequestV1, ParticipantControlReceiptV1)
-        ):
+        if not prior_ref or not prior_dig:
             return BoundedControlErrorV2(
                 reason_code=C2ControlErrorCodeV2.WRONG_PHASE,
                 retryable=False,
@@ -671,9 +650,9 @@ class C2DaemonResourceParticipant:
                     self._trigger_failpoint(TransactionFailpoint.AFTER_BEGIN)
 
                     # TOCTOU Authority Fence
-                    if principal is not None and resolved_key is not None:
+                    if authority is not None:
                         try:
-                            AuthorityFence.verify_current(conn, principal, resolved_key)
+                            AuthorityFence.verify_current(conn, authority, resolved_key)
                         except PermissionError as exc:
                             return BoundedControlErrorV2(
                                 reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
@@ -714,7 +693,7 @@ class C2DaemonResourceParticipant:
 
                     if phase in (
                         ParticipantControlPhaseV2.FINALIZED_VISIBLE.value,
-                        ParticipantControlPhaseV1.FINALIZED_VISIBLE.value,
+                        "finalized_visible",
                     ):
                         # Idempotency check
                         if req_dig and stored_fin_req_dig and stored_fin_req_dig != req_dig:
@@ -743,7 +722,7 @@ class C2DaemonResourceParticipant:
 
                     if phase not in (
                         ParticipantControlPhaseV2.COMMITTED_HIDDEN.value,
-                        ParticipantControlPhaseV1.COMMITTED_HIDDEN.value,
+                        "committed_hidden",
                     ):
                         return BoundedControlErrorV2(
                             reason_code=C2ControlErrorCodeV2.WRONG_PHASE,
@@ -751,9 +730,7 @@ class C2DaemonResourceParticipant:
                             detail_ref=f"Cannot finalize transaction in phase {phase}",
                         )
 
-                    if not isinstance(
-                        request_or_receipt, (ParticipantControlRequestV1, ParticipantControlReceiptV1)
-                    ) and (prior_ref != comm_ref or prior_dig != comm_dig):
+                    if prior_ref != comm_ref or prior_dig != comm_dig:
                         return BoundedControlErrorV2(
                             reason_code=C2ControlErrorCodeV2.WRONG_PHASE,
                             retryable=False,
@@ -818,26 +795,23 @@ class C2DaemonResourceParticipant:
 
     def rollback(
         self,
-        request_or_receipt: ParticipantControlRequestV1
-        | ParticipantControlRequestV2
-        | ParticipantControlReceiptV1
-        | ParticipantControlReceiptV2,
-        principal: AuthenticatedControlPrincipal | None = None,
+        request_or_receipt: Any,
+        authority_or_principal: Any = None,
         resolved_key: Any = None,
     ) -> ParticipantControlReceiptV2 | BoundedControlErrorV2:
         """Abort/rollback a transaction with compensation validation."""
-        if isinstance(request_or_receipt, (ParticipantControlRequestV1, ParticipantControlRequestV2)):
+        if isinstance(request_or_receipt, ParticipantControlRequestV2):
             tx_id = request_or_receipt.authorization.transaction_id
             prior_ref = request_or_receipt.prior_receipt_ref
             prior_dig = request_or_receipt.prior_receipt_digest
             req_dig = request_or_receipt.authorization.request_digest
             action = request_or_receipt.action
         else:
-            tx_id = request_or_receipt.transaction_id
+            tx_id = getattr(request_or_receipt, "transaction_id", "")
             prior_ref = getattr(request_or_receipt, "receipt_ref", None)
             prior_dig = getattr(request_or_receipt, "receipt_digest", None)
             req_dig = ""
-            action = request_or_receipt.action
+            action = getattr(request_or_receipt, "action", C2ControlAction.ABORT_C2_RESOURCE)
 
         res_ref = f"resource:{self.participant_id}"
         now_ms = int(time.time() * 1000)
@@ -848,9 +822,9 @@ class C2DaemonResourceParticipant:
                     self._trigger_failpoint(TransactionFailpoint.AFTER_BEGIN)
 
                     # TOCTOU Authority Fence
-                    if principal is not None and resolved_key is not None:
+                    if authority_or_principal is not None:
                         try:
-                            AuthorityFence.verify_current(conn, principal, resolved_key)
+                            AuthorityFence.verify_current(conn, authority_or_principal, resolved_key)
                         except PermissionError as exc:
                             return BoundedControlErrorV2(
                                 reason_code=C2ControlErrorCodeV2.NOT_AUTHORIZED,
@@ -894,7 +868,7 @@ class C2DaemonResourceParticipant:
 
                     if phase in (
                         ParticipantControlPhaseV2.ABORTED.value,
-                        ParticipantControlPhaseV1.ABORTED.value,
+                        "aborted",
                     ):
                         if req_dig and stored_ab_req_dig and stored_ab_req_dig != req_dig:
                             return BoundedControlErrorV2(
@@ -919,7 +893,7 @@ class C2DaemonResourceParticipant:
 
                     if phase in (
                         ParticipantControlPhaseV2.FINALIZED_VISIBLE.value,
-                        ParticipantControlPhaseV1.FINALIZED_VISIBLE.value,
+                        "finalized_visible",
                     ):
                         return BoundedControlErrorV2(
                             reason_code=C2ControlErrorCodeV2.WRONG_PHASE,
@@ -928,7 +902,7 @@ class C2DaemonResourceParticipant:
                         )
 
                     # Validate receipt chain for abort
-                    if phase in (ParticipantControlPhaseV2.PREPARED.value, ParticipantControlPhaseV1.PENDING.value):
+                    if phase in (ParticipantControlPhaseV2.PREPARED.value, "pending", "prepared"):
                         if prior_ref and prior_ref != prep_ref:
                             return BoundedControlErrorV2(
                                 reason_code=C2ControlErrorCodeV2.WRONG_PHASE,
@@ -943,7 +917,7 @@ class C2DaemonResourceParticipant:
                             )
                     elif phase in (
                         ParticipantControlPhaseV2.COMMITTED_HIDDEN.value,
-                        ParticipantControlPhaseV1.COMMITTED_HIDDEN.value,
+                        "committed_hidden",
                     ):
                         if prior_ref and prior_ref != comm_ref:
                             return BoundedControlErrorV2(
@@ -1021,7 +995,7 @@ class C2DaemonResourceParticipant:
     ) -> ParticipantControlQuerySnapshotV2 | BoundedControlErrorV2:
         """Query current state snapshot of the resource participant."""
         tx_id = getattr(operation, "transaction_id", None)
-        if isinstance(operation, (ParticipantControlRequestV1, ParticipantControlRequestV2)):
+        if isinstance(operation, ParticipantControlRequestV2):
             tx_id = operation.authorization.transaction_id
 
         if not tx_id or tx_id == "query":
@@ -1043,7 +1017,7 @@ class C2DaemonResourceParticipant:
                     receipt_ref="rcpt_0",
                     receipt_digest="0" * 64,
                     snapshot_digest=snap_dig,
-                    result_payload_schema_id="schema:c2_control_v1",
+                    result_payload_schema_id="schema:c2_control_v2",
                     result_payload_digest="0" * 64,
                     result_payload_b64u="",
                 )

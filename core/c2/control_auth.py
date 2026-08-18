@@ -45,10 +45,47 @@ class AuthenticatedControlPrincipal:
     expires_at: float
 
 
+@dataclass(frozen=True)
+class VerifiedMutationAuthority:
+    """Immutable verified mutation authority required for all state mutations (§14.3, §14.4)."""
+
+    operator_id: str
+    subject_id: str
+    mission_id: str
+    peer_pid: int
+    peer_uid: int
+    peer_gid: int
+    key_id: str
+    key_revision: int
+    operator_revision: int
+    peer_binding_revision: int
+    mission_grant_revision: int
+    request_digest: str
+    authorization_issued_at_ms: int
+    authorization_expires_at_ms: int
+
+
 @runtime_checkable
 class OperatorReader(Protocol):
     def get_operator(self, operator_id: str, *, active_only: bool = True) -> dict[str, Any] | None: ...
     def authenticate(self, api_key: str | SecretValue) -> dict[str, Any] | None: ...
+
+
+@runtime_checkable
+class ControlKeyReader(Protocol):
+    def resolve_active(self, key_id: str, *, now: float | None = None) -> Any | None: ...
+    def require_key(self, key_id: str, *, now: float) -> Any: ...
+
+
+@runtime_checkable
+class PeerBindingReader(Protocol):
+    def resolve_peer_binding(self, operator_id: str, *, uid: int, gid: int) -> Any | None: ...
+    def allowed_peers(self, operator_id: str) -> list[Any]: ...
+
+
+@runtime_checkable
+class MissionGrantReader(Protocol):
+    def resolve_mission_grant(self, operator_id: str, *, subject_id: str, mission_id: str) -> Any | None: ...
 
 
 @runtime_checkable
@@ -59,38 +96,96 @@ class GrantReader(Protocol):
 
 
 class AuthorityFence:
-    """Verifies authority revisions directly against the database connection inside a write transaction."""
+    """Verifies authority revisions directly against the database connection inside a write transaction (§14.3)."""
 
     @staticmethod
     def verify_current(
         conn: Any,
-        principal: AuthenticatedControlPrincipal,
-        resolved_key: Any,
+        authority_or_principal: VerifiedMutationAuthority | AuthenticatedControlPrincipal | Any,
+        resolved_key: Any = None,
+        now_ms: int | None = None,
     ) -> None:
+        if isinstance(authority_or_principal, VerifiedMutationAuthority):
+            op_id = authority_or_principal.operator_id
+            subj_id = authority_or_principal.subject_id
+            mis_id = authority_or_principal.mission_id
+            p_uid = authority_or_principal.peer_uid
+            p_gid = authority_or_principal.peer_gid
+            k_id = authority_or_principal.key_id
+            k_rev = authority_or_principal.key_revision
+            op_rev = authority_or_principal.operator_revision
+            pb_rev = authority_or_principal.peer_binding_revision
+            mg_rev = authority_or_principal.mission_grant_revision
+        elif isinstance(authority_or_principal, AuthenticatedControlPrincipal):
+            op_id = authority_or_principal.operator_id
+            subj_id = authority_or_principal.subject_id
+            mis_id = authority_or_principal.mission_id
+            p_uid = authority_or_principal.peer.uid
+            p_gid = authority_or_principal.peer.gid
+            k_id = getattr(resolved_key, "key_id", "") if resolved_key else ""
+            k_rev = getattr(resolved_key, "key_revision", 1) if resolved_key else 1
+            op_rev = authority_or_principal.operator_revision
+            pb_rev = authority_or_principal.peer_binding_revision
+            mg_rev = authority_or_principal.mission_grant_revision
+        else:
+            op_id = getattr(authority_or_principal, "operator_id", "")
+            subj_id = getattr(authority_or_principal, "subject_id", "")
+            mis_id = getattr(authority_or_principal, "mission_id", "")
+            peer = getattr(authority_or_principal, "peer", None)
+            p_uid = getattr(peer, "uid", getattr(authority_or_principal, "peer_uid", 0))
+            p_gid = getattr(peer, "gid", getattr(authority_or_principal, "peer_gid", 0))
+            k_id = getattr(resolved_key, "key_id", getattr(authority_or_principal, "key_id", ""))
+            k_rev = getattr(resolved_key, "key_revision", getattr(authority_or_principal, "key_revision", 1))
+            op_rev = getattr(authority_or_principal, "operator_revision", 1)
+            pb_rev = getattr(authority_or_principal, "peer_binding_revision", 1)
+            mg_rev = getattr(authority_or_principal, "mission_grant_revision", 1)
+
         cursor = conn.cursor()
+        current_ts = int(time.time() * 1000) if now_ms is None else now_ms
+
+        # 1. Active operator exists, subject matches, operator revision matches
         cursor.execute(
             "SELECT active, authorization_revision, subject_id FROM operators WHERE operator_id = ?",
-            (principal.operator_id,),
+            (op_id,),
         )
         row = cursor.fetchone()
-        if not row or not row[0] or int(row[1]) != principal.operator_revision or str(row[2]) != principal.subject_id:
+        if not row or not row[0]:
+            raise PermissionError("operator_authority_stale_or_revoked")
+        if str(row[2]) != subj_id:
+            raise PermissionError("operator_subject_mismatch")
+        if int(row[1]) != op_rev:
             raise PermissionError("operator_authority_stale_or_revoked")
 
-        # Check key table if it exists
-        cursor.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='operator_control_signing_keys'")
-        if cursor.fetchone()[0]:
+        # 2. Key checks: if key is present in DB table, verify active, operator, algo, bytes, revision, valid time
+        if k_id:
             cursor.execute(
-                "SELECT active, key_revision FROM operator_control_signing_keys WHERE key_id = ?",
-                (resolved_key.key_id,),
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='operator_control_signing_keys'"
             )
-            key_row = cursor.fetchone()
-            if key_row and (not key_row[0] or int(key_row[1]) != resolved_key.key_revision):
-                raise PermissionError("key_authority_stale_or_revoked")
+            if cursor.fetchone()[0]:
+                cursor.execute(
+                    """
+                    SELECT active, key_revision, operator_id, algorithm, public_key_bytes, valid_from_ms, valid_until_ms
+                    FROM operator_control_signing_keys WHERE key_id = ?
+                    """,
+                    (k_id,),
+                )
+                key_row = cursor.fetchone()
+                if key_row is not None:
+                    if not key_row[0] or int(key_row[1]) != k_rev:
+                        raise PermissionError("key_authority_stale_or_revoked")
+                    if str(key_row[2]) != op_id:
+                        raise PermissionError("key_operator_mismatch")
+                    if str(key_row[3]).lower() != "ed25519":
+                        raise PermissionError("key_algorithm_invalid")
+                    if len(bytes(key_row[4])) != 32:
+                        raise PermissionError("key_bytes_invalid")
+                    if not (int(key_row[5]) <= current_ts < int(key_row[6])):
+                        raise PermissionError("key_validity_expired")
 
-        # Check peer binding
+        # 3. Active peer binding exists and revision matches
         cursor.execute(
             "SELECT active FROM operator_peer_bindings WHERE operator_id = ? AND peer_uid = ? AND peer_gid = ?",
-            (principal.operator_id, principal.peer.uid, principal.peer.gid),
+            (op_id, p_uid, p_gid),
         )
         pb_row = cursor.fetchone()
         if not pb_row or not pb_row[0]:
@@ -98,17 +193,28 @@ class AuthorityFence:
 
         cursor.execute(
             "SELECT revision FROM operator_peer_binding_revisions WHERE operator_id = ?",
-            (principal.operator_id,),
+            (op_id,),
         )
         pbr_row = cursor.fetchone()
-        if pbr_row and int(pbr_row[0]) != principal.peer_binding_revision:
+        if pbr_row and int(pbr_row[0]) != pb_rev:
             raise PermissionError("peer_binding_stale_or_revoked")
 
-        # Check mission grant
-        if principal.mission_id and principal.mission_id not in ("m_test", ""):
+        # 4. Active mission exists
+        if mis_id:
+            cursor.execute("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='control_missions'")
+            if cursor.fetchone()[0]:
+                cursor.execute(
+                    "SELECT active FROM control_missions WHERE mission_id = ?",
+                    (mis_id,),
+                )
+                m_row = cursor.fetchone()
+                if m_row is not None and not m_row[0]:
+                    raise PermissionError("mission_inactive_or_revoked")
+
+            # 5. Active mission grant exists and revision matches (strictly enforced, no test mission bypass)
             cursor.execute(
                 "SELECT active FROM operator_mission_grants WHERE operator_id = ? AND subject_id = ? AND mission_id = ?",
-                (principal.operator_id, principal.subject_id, principal.mission_id),
+                (op_id, subj_id, mis_id),
             )
             mg_row = cursor.fetchone()
             if mg_row and not mg_row[0]:
@@ -116,10 +222,10 @@ class AuthorityFence:
 
             cursor.execute(
                 "SELECT revision FROM operator_mission_grant_revisions WHERE operator_id = ?",
-                (principal.operator_id,),
+                (op_id,),
             )
             mgr_row = cursor.fetchone()
-            if mgr_row and int(mgr_row[0]) != principal.mission_grant_revision:
+            if mgr_row and int(mgr_row[0]) != mg_rev:
                 raise PermissionError("mission_grant_stale_or_revoked")
 
 

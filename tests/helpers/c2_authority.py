@@ -308,3 +308,39 @@ def provision_test_authority(
     finally:
         if should_close:
             conn.close()
+
+
+def make_test_mutation_authority(
+    operator_id: str = "op_test_admin",
+    subject_id: str = "s_test",
+    mission_id: str = "m_test",
+    key_id: str = "k_test_1",
+    key_revision: int = 1,
+    operator_revision: int = 1,
+    peer_binding_revision: int = 1,
+    mission_grant_revision: int = 1,
+    peer_pid: int | None = None,
+    peer_uid: int | None = None,
+    peer_gid: int | None = None,
+    request_digest: str = "0" * 64,
+) -> Any:
+    """Create a VerifiedMutationAuthority instance for testing."""
+    from core.c2.control_auth import VerifiedMutationAuthority
+
+    now_ms = int(time.time() * 1000)
+    return VerifiedMutationAuthority(
+        operator_id=operator_id,
+        subject_id=subject_id,
+        mission_id=mission_id,
+        peer_pid=os.getpid() if peer_pid is None else peer_pid,
+        peer_uid=os.getuid() if peer_uid is None else peer_uid,
+        peer_gid=os.getgid() if peer_gid is None else peer_gid,
+        key_id=key_id,
+        key_revision=key_revision,
+        operator_revision=operator_revision,
+        peer_binding_revision=peer_binding_revision,
+        mission_grant_revision=mission_grant_revision,
+        request_digest=request_digest,
+        authorization_issued_at_ms=now_ms,
+        authorization_expires_at_ms=now_ms + 60000,
+    )
