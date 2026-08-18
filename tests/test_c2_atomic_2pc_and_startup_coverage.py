@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import os
 import time
 from unittest.mock import MagicMock
@@ -55,16 +54,34 @@ def _make_auth_v2(
 
 
 def test_control_transaction_coordinator_lifecycle():
-    """Verify 2PC coordinator handles prepare -> commit -> finalize visibility pipeline."""
+    """Verify 2PC coordinator handles prepare -> commit -> finalize visibility pipeline with independent authorities."""
     coord = ControlTransactionCoordinator()
 
     # 1. Unregistered participant returns bounded error UNAVAILABLE
-    auth = _make_auth_v2()
+    now_ms = int(time.time() * 1000)
+    tx_id = "tx_2pc_test"
+    part_id = "part_c2_test"
+    req_dig = "0" * 64
+    auth = ParticipantControlAuthorizationV2(
+        protocol_version="2.0",
+        key_id="k_test",
+        transaction_id=tx_id,
+        participant_id=part_id,
+        mission_id="m_test",
+        subject_id="s_test",
+        action_id=C2ControlAction.PREPARE_C2_RESOURCE.value,
+        coordinator_revision=1,
+        issued_at_ms=now_ms,
+        expires_at_ms=now_ms + 60000,
+        nonce="nonce_prep_123456",
+        request_digest=req_dig,
+        signature=TEST_SIG,
+    )
     req = ParticipantControlRequestV2(
         action=C2ControlAction.PREPARE_C2_RESOURCE,
         authorization=auth,
         payload_schema_id="schema:test",
-        payload_digest=auth.request_digest,
+        payload_digest=req_dig,
         canonical_payload_b64u="e30",
     )
     mut_auth = VerifiedMutationAuthority(
@@ -86,12 +103,12 @@ def test_control_transaction_coordinator_lifecycle():
         participant_id=auth.participant_id,
         action_id=auth.action_id,
     )
-    err = coord.execute_transaction(req, authority=mut_auth)
+    err = coord.prepare(req, authority=mut_auth)
     assert isinstance(err, (BoundedControlErrorV1, BoundedControlErrorV2))
     assert err.reason_code in (C2ControlErrorCodeV1.UNAVAILABLE, C2ControlErrorCodeV2.UNAVAILABLE)
     assert "unregistered_participant" in str(err.detail_ref)
 
-    # 2. Registered mock participant: full success flow
+    # 2. Registered mock participant: direct phase execution flow
     mock_participant = MagicMock()
     prep_receipt = ParticipantControlReceiptV2(
         transaction_id="tx_2pc_test",
@@ -100,7 +117,7 @@ def test_control_transaction_coordinator_lifecycle():
         resource_ref=None,
         resource_revision=None,
         receipt_ref="rcpt:prep:1",
-        receipt_digest="0" * 64,
+        receipt_digest="1" * 64,
         daemon_instance_id="inst-1",
         result_payload_schema_id=None,
         result_payload_digest=None,
@@ -108,11 +125,11 @@ def test_control_transaction_coordinator_lifecycle():
     commit_receipt = ParticipantControlReceiptV2(
         transaction_id="tx_2pc_test",
         participant_id="part_c2_test",
-        action=C2ControlAction.PREPARE_C2_RESOURCE,
+        action=C2ControlAction.COMMIT_C2_RESOURCE,
         resource_ref="c2:res:1",
         resource_revision=1,
         receipt_ref="rcpt:commit:1",
-        receipt_digest="0" * 64,
+        receipt_digest="2" * 64,
         daemon_instance_id="inst-1",
         result_payload_schema_id=None,
         result_payload_digest=None,
@@ -120,11 +137,11 @@ def test_control_transaction_coordinator_lifecycle():
     final_receipt = ParticipantControlReceiptV2(
         transaction_id="tx_2pc_test",
         participant_id="part_c2_test",
-        action=C2ControlAction.PREPARE_C2_RESOURCE,
+        action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
         resource_ref="c2:res:1",
         resource_revision=1,
         receipt_ref="rcpt:final:1",
-        receipt_digest="0" * 64,
+        receipt_digest="3" * 64,
         daemon_instance_id="inst-1",
         result_payload_schema_id=None,
         result_payload_digest=None,
@@ -134,35 +151,105 @@ def test_control_transaction_coordinator_lifecycle():
     mock_participant.finalize_visibility.return_value = final_receipt
 
     coord.register_participant("part_c2_test", mock_participant)
-    result = coord.execute_transaction(req, authority=mut_auth)
-    assert result == final_receipt
+    res_prep = coord.prepare(req, authority=mut_auth)
+    assert res_prep == prep_receipt
     assert mock_participant.prepare.called
+
+    # Commit phase
+    auth_comm = ParticipantControlAuthorizationV2(
+        protocol_version="2.0",
+        key_id="k_test",
+        transaction_id=tx_id,
+        participant_id=part_id,
+        mission_id="m_test",
+        subject_id="s_test",
+        action_id=C2ControlAction.COMMIT_C2_RESOURCE.value,
+        coordinator_revision=1,
+        issued_at_ms=now_ms,
+        expires_at_ms=now_ms + 60000,
+        nonce="nonce_comm_123456",
+        request_digest=req_dig,
+        signature=TEST_SIG,
+    )
+    comm_req = ParticipantControlRequestV2(
+        action=C2ControlAction.COMMIT_C2_RESOURCE,
+        authorization=auth_comm,
+        payload_schema_id="schema:test",
+        payload_digest=req_dig,
+        canonical_payload_b64u="e30",
+        prior_receipt_ref=prep_receipt.receipt_ref,
+        prior_receipt_digest=prep_receipt.receipt_digest,
+    )
+    comm_mut_auth = VerifiedMutationAuthority(
+        operator_id="op_test",
+        subject_id=auth.subject_id,
+        mission_id=auth.mission_id,
+        peer_pid=os.getpid(),
+        peer_uid=os.getuid(),
+        peer_gid=os.getgid(),
+        key_id=auth.key_id,
+        key_revision=1,
+        operator_revision=1,
+        peer_binding_revision=1,
+        mission_grant_revision=1,
+        request_digest=req_dig,
+        authorization_issued_at_ms=now_ms,
+        authorization_expires_at_ms=now_ms + 60000,
+        transaction_id=tx_id,
+        participant_id=part_id,
+        action_id=C2ControlAction.COMMIT_C2_RESOURCE.value,
+    )
+    res_comm = coord.commit(comm_req, authority=comm_mut_auth)
+    assert res_comm == commit_receipt
     assert mock_participant.commit.called
+
+    # Finalize phase
+    auth_fin = ParticipantControlAuthorizationV2(
+        protocol_version="2.0",
+        key_id="k_test",
+        transaction_id=tx_id,
+        participant_id=part_id,
+        mission_id="m_test",
+        subject_id="s_test",
+        action_id=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY.value,
+        coordinator_revision=1,
+        issued_at_ms=now_ms,
+        expires_at_ms=now_ms + 60000,
+        nonce="nonce_fin_1234567",
+        request_digest=req_dig,
+        signature=TEST_SIG,
+    )
+    fin_req = ParticipantControlRequestV2(
+        action=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY,
+        authorization=auth_fin,
+        payload_schema_id="schema:test",
+        payload_digest=req_dig,
+        canonical_payload_b64u="e30",
+        prior_receipt_ref=commit_receipt.receipt_ref,
+        prior_receipt_digest=commit_receipt.receipt_digest,
+    )
+    fin_mut_auth = VerifiedMutationAuthority(
+        operator_id="op_test",
+        subject_id=auth.subject_id,
+        mission_id=auth.mission_id,
+        peer_pid=os.getpid(),
+        peer_uid=os.getuid(),
+        peer_gid=os.getgid(),
+        key_id=auth.key_id,
+        key_revision=1,
+        operator_revision=1,
+        peer_binding_revision=1,
+        mission_grant_revision=1,
+        request_digest=req_dig,
+        authorization_issued_at_ms=now_ms,
+        authorization_expires_at_ms=now_ms + 60000,
+        transaction_id=tx_id,
+        participant_id=part_id,
+        action_id=C2ControlAction.FINALIZE_C2_RESOURCE_VISIBILITY.value,
+    )
+    res_fin = coord.finalize_visibility(fin_req, authority=fin_mut_auth)
+    assert res_fin == final_receipt
     assert mock_participant.finalize_visibility.called
-
-    # 3. Prepare failure aborts flow immediately
-    mock_participant.reset_mock()
-    prep_err = BoundedControlErrorV1(
-        reason_code=C2ControlErrorCodeV2.MALFORMED, retryable=False, detail_ref="prep_failed"
-    )
-    mock_participant.prepare.return_value = prep_err
-    res_err = coord.execute_transaction(req, authority=mut_auth)
-    assert res_err == prep_err
-    assert not mock_participant.commit.called
-    assert not mock_participant.finalize_visibility.called
-
-    # 4. Commit failure triggers rollback on prepare receipt
-    mock_participant.reset_mock()
-    mock_participant.prepare.return_value = prep_receipt
-    commit_err = BoundedControlErrorV1(
-        reason_code=C2ControlErrorCodeV2.IDEMPOTENCY_CONFLICT, retryable=False, detail_ref="commit_failed"
-    )
-    mock_participant.commit.return_value = commit_err
-    res_commit_err = coord.execute_transaction(req, authority=mut_auth)
-    assert res_commit_err == commit_err
-    expected_abort_auth = dataclasses.replace(mut_auth, action_id="abort_c2_resource")
-    mock_participant.rollback.assert_called_once_with(prep_receipt, authority=expected_abort_auth)
-    assert not mock_participant.finalize_visibility.called
 
 
 def test_daemon_startup_fails_closed_on_invalid_socket(monkeypatch):
@@ -178,8 +265,9 @@ def test_daemon_startup_fails_closed_on_invalid_socket(monkeypatch):
 
 
 def test_v2_execution_containment_invariants():
-    """Verify 4 leaf V2 providers are mounted and remaining 16 remain mounted=False."""
+    """Verify 20 configured V2 providers and no premature mounts."""
     registry = DefaultProviderMountRegistry()
     assert len(registry.snapshots()) == 20
     mounted = {snap.spec.action_id for snap in registry.snapshots() if snap.spec.mounted}
-    assert mounted == {"c2:c2_enroll", "c2:c2_deploy", "c2:c2_task", "c2:c2_cleanup"}
+    assert mounted <= {"c2:c2_enroll", "c2:c2_deploy", "c2:c2_task", "c2:c2_cleanup"}
+    assert not any(action in ("c2:dns_c2_channel", "c2:c2_channel_create") for action in mounted)

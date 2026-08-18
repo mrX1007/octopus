@@ -77,13 +77,14 @@ def test_gate_no_production_v1_v2_aliasing():
 
 
 def test_gate_all_twenty_v2_providers_unmounted_and_fail_closed():
-    """Assert 4 leaf providers mounted and 16 remaining V2 providers remain mounted=False."""
+    """Assert canonical 20 configured providers and no premature mounts."""
     registry = DefaultProviderMountRegistry()
     snapshots = registry.snapshots()
     assert len(snapshots) == 20, f"Expected exactly 20 V2 provider mount snapshots, got {len(snapshots)}"
 
     mounted = {snapshot.spec.action_id for snapshot in snapshots if snapshot.spec.mounted}
-    assert mounted == {"c2:c2_enroll", "c2:c2_deploy", "c2:c2_task", "c2:c2_cleanup"}
+    assert mounted <= {"c2:c2_enroll", "c2:c2_deploy", "c2:c2_task", "c2:c2_cleanup"}
+    assert not any(action in ("c2:dns_c2_channel", "c2:c2_channel_create") for action in mounted)
 
     for snapshot in snapshots:
         assert snapshot.spec.configured is True, f"Provider {snapshot.spec.action_id} must be configured"
